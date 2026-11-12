@@ -15,7 +15,7 @@ function tmp() {
   return d;
 }
 test.after(() => {
-  for (const d of createdDirs) fs.rmSync(d, { recursive: true, force: true });
+  for (const d of createdDirs) fs.rmSync(d, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
 test('resolvePackageBin reads a string bin', () => {

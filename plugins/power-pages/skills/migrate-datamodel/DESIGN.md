@@ -103,7 +103,7 @@ The skill is organized into **4 high-level phases**. Each phase contains numbere
 | 2.1 | `pac pages migrate-datamodel --webSiteId <…> --siteCustomizationReportPath <OUTPUT_DIR>`, `node generate-migration-reports.js` |
 | 2.2 | `pac pages download --webSiteId <…> --path ./mysite`, `node generate-migration-reports.js --automate-fetchxml --automate-liquid`, `pac pages upload --path <SITE_ROOT> --modelVersion 1` |
 | 3.1 | `pac pages migrate-datamodel --webSiteId <…> --mode <SELECTED>`, `--checkMigrationStatus` (polling) |
-| 3.2 | `pac pages migrate-datamodel --webSiteId <…> --updateDatamodelVersion --portalId <…>` |
+| 3.2 | `pac pages migrate-datamodel --webSiteId <…> --updateDataModelVersion --portalId <…>` |
 | 4.1 | `pac pages migrate-datamodel --revertToStandardDataModel --portalId` (only if rollback), `node update-state.js` (final live-report render) |
 
 ### Why Customization Remediation (Phase 2) sits before Migration (Phase 3)
@@ -265,7 +265,7 @@ The customization report (step 2.1) categorizes findings into five types. step 2
 8. Final readiness gate                → user confirms before step 3.1 (migration)
 ```
 
-The auto-rewriter is non-destructive by construction: it never writes to `<SITE_ROOT>`. All proposed changes live under `<OUTPUT_DIR>/remediation-staged/` until the user explicitly approves. `apply-remediation.js` is the only script that touches `<SITE_ROOT>` after the user picks "Approve" — and even then only with `copyFileSync` from the staged copy, so a partial apply leaves the staged tree intact for re-runs.
+The auto-rewriter is non-destructive by construction: it never writes to `<SITE_ROOT>`. All proposed changes live under `<OUTPUT_DIR>/remediation-staged/` until the user explicitly approves. `apply-remediation.js` binds the manifest to the canonical site root, rejects linked descendants and hard-linked files, and checks all sources and destinations before writing. It saves original file bytes/modes in memory and an indexed backup directory before writing, then rolls back touched files and newly created directories after a caught copy failure. An incomplete rollback is an explicit manual-recovery error; original backups, staged proposals and the manifest remain available. This is not a crash-safe filesystem transaction: do not modify either tree concurrently or assume automatic recovery after process termination.
 
 ### Per-finding categorization logic
 
@@ -402,7 +402,7 @@ pac pages migrate-datamodel --webSiteId <GUID> --mode all
 pac pages migrate-datamodel --webSiteId <GUID> --checkMigrationStatus
 
 # Flip data model version
-pac pages migrate-datamodel --webSiteId <GUID> --updateDatamodelVersion --portalId <PORTAL_GUID>
+pac pages migrate-datamodel --webSiteId <GUID> --updateDataModelVersion --portalId <PORTAL_GUID>
 
 # Rollback to SDM
 pac pages migrate-datamodel --webSiteId <GUID> --revertToStandardDataModel --portalId <PORTAL_GUID>

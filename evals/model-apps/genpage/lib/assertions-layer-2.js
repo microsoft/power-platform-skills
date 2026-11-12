@@ -32,6 +32,7 @@ const {
 } = require('./page-checks.js');
 const { nestedDefinitionProblems, renderedSource, unreadableElementProblems } = require('./tsx-structure.js');
 const { columnProblems } = require('./column-contract.js');
+const { SCROLL_CONTEXT_ASSERTION, gradeScrollContext } = require('./scroll-context.js');
 
 let _verifiedIcons = null;
 function getVerifiedIcons() {
@@ -527,6 +528,12 @@ ASSERTIONS.set(
       : pass();
   }
 );
+
+// ── scroll context (AB#6793599) ──
+// Graded by the plugin's own rule (lib/scroll-context.js), with the pages captured before the rule
+// reported as skips that name their verdict.
+ASSERTIONS.set(SCROLL_CONTEXT_ASSERTION, gradeScrollContext);
+// ── end scroll context ──
 
 const PHASE5_EXPECTATIONS = new Map();
 

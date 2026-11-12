@@ -920,11 +920,18 @@ Script behavior:
 - **Inserts a suggested rewrite as a Liquid comment next to the original** — does NOT overwrite the original line. User decides what to keep.
 - **Writes the annotated file to `<OUTPUT_DIR>/remediation-staged/<relative path>`** (merging on top of the FetchXML pass if the same file was touched there).
 
-After both rewriters run, the script emits **`<OUTPUT_DIR>/remediation-diff.json`** — a lean, skill-owned manifest consumed by the live execution report's Remediation Diff card. It carries `generatedAt`, `siteRoot`, `stagedDir`, and `files[]` (each with `relativePath`, `kind: "fetchxml" | "liquid" | "fetchxml+liquid"`, `status: "modified"`, `linesAdded`, `linesRemoved`, `hunks[]`, `changeSummary[]`, and **absolute** `livePath` / `stagedPath`). The report renders one expandable row per touched file with inline hunks plus a **Copy diff command** button that copies `code --diff '<live>' '<staged>'` — paste it into any terminal to open VS Code's built-in side-by-side diff editor (current vs proposed). No VS Code extension is required.
+After both rewriters run, the script emits **`<OUTPUT_DIR>/remediation-diff.json`** — a lean, skill-owned manifest consumed by the live execution report's Remediation Diff card. It carries `generatedAt`, `siteRoot`, `stagedDir`, and `files[]` (each with `relativePath`, `kind: "fetchxml" | "liquid" | "fetchxml+liquid"`, `status: "modified"`, `linesAdded`, `linesRemoved`, `hunks[]`, `changeSummary[]`, and **absolute** `livePath` / `stagedPath`). The report renders one expandable row per touched file with inline hunks plus separate **Copy PowerShell diff command** and **Copy Bash diff command** buttons. Paste the command into the named shell to open VS Code's built-in side-by-side diff editor (current vs proposed); quoting differs between shells, so do not use either command in Command Prompt. No VS Code extension is required.
 
 ### 5. Generate augmented prompts for manual categories
 
 The customization report's plugin and DME findings get exported as paste-ready prompts for fresh Claude Code sessions (the skill never modifies customer-owned plugin source or Dataverse schema directly).
+
+DME schema preparation is separate from data copy. Before any extension-row writes,
+confirm metadata migration (or the downstream metadata solution import) has completed
+for this site/environment and verify every source-to-`powerpagecomponent` mapping.
+Missing metadata or mappings require a pause in this conversation, not another
+migration command from the standalone prompt. Review data-copy results before
+continuing the existing reference-migration and activation approval gates.
 
 The script in step 3/4 also emits:
 - `<OUTPUT_DIR>/plugin-remediation-prompt.txt` (if plugin findings exist)
@@ -1372,7 +1379,7 @@ Phase 3 has **two different shapes** depending on the migration track. The Autho
 
    ```text
    node update-state.js --output-dir "<OUTPUT_DIR>" --set-operation '{"label":"Activating Enhanced Data Model"}'
-   pac pages migrate-datamodel --webSiteId "<WEBSITE_ID>" --updateDatamodelVersion --portalId "<PORTAL_ID>"
+   pac pages migrate-datamodel --webSiteId "<WEBSITE_ID>" --updateDataModelVersion --portalId "<PORTAL_ID>"
    node update-state.js --output-dir "<OUTPUT_DIR>" --clear-operation
    ```
 

@@ -236,11 +236,19 @@ test('hook process reads UTF-8 JSON, reports malformed input, and runs from bund
   assert.match('Bash', new RegExp(`^(?:${claudeHook.matcher})$`));
   for (const tool of ['bash', 'powershell']) assert.match(tool, new RegExp(`^(?:${copilotHook.matcher})$`));
   for (const tool of ['Write', 'shell']) assert.doesNotMatch(tool, new RegExp(`^(?:${copilotHook.matcher})$`));
+  // Node's shell:true defaults to cmd.exe on Windows, but these hooks run in
+  // PowerShell there. cmd.exe does not treat single quotes as quoting.
+  const shell = process.platform === 'win32' ? 'powershell.exe' : '/bin/sh';
+  const launch = (command, options) => spawnSync(shell,
+    process.platform === 'win32'
+      ? ['-NoLogo', '-NoProfile', '-Command', command]
+      : ['-c', command],
+    options);
   for (const [launcher, data] of [
     [claudeHook.hooks[0].command, payload],
     [copilotHook.command, copilot('npx --no-install pa app list')],
   ]) {
-    const launched = spawnSync(launcher, { shell: true, input: JSON.stringify(data), env, encoding: 'utf8' });
+    const launched = launch(launcher, { input: JSON.stringify(data), env, encoding: 'utf8' });
     assert.equal(launched.status, 0, launched.stderr);
     assert.ok(updated(JSON.parse(launched.stdout)).command.endsWith(data.tool_input?.command || data.toolArgs.command));
     for (const root of [undefined, path.join(pluginRoot, 'missing-plugin-root')]) {
@@ -248,7 +256,7 @@ test('hook process reads UTF-8 JSON, reports malformed input, and runs from bund
       delete badEnv.PLUGIN_ROOT;
       delete badEnv.CLAUDE_PLUGIN_ROOT;
       if (root) badEnv.PLUGIN_ROOT = root;
-      const failed = spawnSync(launcher, { shell: true, input: JSON.stringify(data), env: badEnv, encoding: 'utf8' });
+      const failed = launch(launcher, { input: JSON.stringify(data), env: badEnv, encoding: 'utf8' });
       assert.equal(failed.status, 0, failed.stderr);
       assert.equal(failed.stdout, '');
       assert.match(failed.stderr, /CLI attribution was not applied/);

@@ -104,7 +104,11 @@ Outputs:
 
 Data Model Extensions are manual: create a reviewed custom table with a lookup to
 `powerpagecomponent`, preserve the custom column types, migrate all pages of source
-rows, and update consumers. Non-metadata or unmapped findings require separate manual
+rows, and update consumers. Schema preparation can precede metadata migration, but
+data copy requires completed metadata migration (or downstream metadata import)
+and a read-only preflight verifying all source-to-component mappings in the intended
+site/environment. Missing mappings require a pause, not a second metadata migration
+after data copy. Non-metadata or unmapped findings require separate manual
 review and must not receive the metadata-table transformation. No direct schema writes
 are made by this generator. Plugin guidance preserves the legacy `adx_*` logical
 attribute names exposed by EDM while changing the registered entity/type handling.
@@ -115,8 +119,23 @@ Only after explicit review and approval, apply staged files to the same site:
 node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-datamodel/scripts/apply-remediation.js" --output-dir "<OUTPUT_DIR>" --site-root "<SITE_ROOT>"
 ```
 
-Applying to a different root is rejected. Follow the track-specific upload and
-approval sequence in [SKILL.md](./SKILL.md); applying local files is not deployment.
+Applying to a different root, a linked staged root, linked descendants or hard-linked
+files is rejected.
+All source/destination paths are checked before writing. A caught copy failure
+restores original bytes/modes and removes newly created files and directories;
+rollback errors explicitly require manual recovery. Any copy/rollback failure
+preserves staged proposals and an indexed `remediation-backup-*` directory of
+original bytes/modes under the output directory; its location is printed in the
+error. Successful apply removes the backup. A backup preparation failure aborts
+before live writes.
+Keep both trees unchanged during apply. This rollback does not cover process crashes.
+Follow the track-specific upload and approval sequence in [SKILL.md](./SKILL.md);
+applying local files is not deployment.
+
+The diff card has separate PowerShell and Bash copy buttons with shell-specific
+path quoting. Use the named shell, not Command Prompt. Customization/prompt links
+accept local files only; portal links require HTTPS without embedded credentials.
+Unsupported links remain inert and display an explanation.
 
 ## Snapshot comparison in the live report
 
@@ -127,7 +146,13 @@ configuration under `.powerpages-site/` are recognized.
 The Pages & Components card uses the same identity/state/value/hash comparison
 as the diff CLI, not just equal counts. Navigation includes inactive links,
 state, target and display order. Site settings support aggregate and per-record
-layouts. Parse errors and ambiguous identities prevent a verified match;
+layouts. Navigation recognizes canonical `web-link-sets` and legacy `weblink-sets`.
+Prefixed/unprefixed state fields are normalized. Nested advanced-form steps have
+their own inventory keyed by logical parent form and step name, with routing/target
+values compared. Page-access rules support aggregate and per-record layouts and
+compare page, right, scope and role assignments. Regenerate both snapshots with
+the current scanner when resuming an older migration to capture these inventories.
+Parse errors and ambiguous identities prevent a verified match;
 expected SDM-only download differences remain reviewable warnings.
 
 ## Execution report and final summary

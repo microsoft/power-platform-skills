@@ -41,7 +41,7 @@ test('parse failures, ambiguous identities and one-sided content loss cannot ren
 
 test('prompt links allow local files but never executable URI schemes', () => {
   const state = buildInitialState({ webSiteId: 'site-id', outputDir: 'migration-reports' });
-  for (const promptPath of ['javascript:alert(1)', 'data:text/html,test', '\tjavascript:alert(1)', '//contoso.com/x']) {
+  for (const promptPath of ['javascript:alert(1)', 'data:text/html,test', '\tjavascript:alert(1)', '//contoso.com/x', 'file://contoso.com/share/prompt.txt']) {
     state.augmentedPrompts.plugin = { status: 'ready', path: promptPath };
     const html = renderLiveReport(state);
     assert.ok(!html.includes(`href="${promptPath}"`));
@@ -51,6 +51,69 @@ test('prompt links allow local files but never executable URI schemes', () => {
     state.augmentedPrompts.plugin.path = promptPath;
     assert.ok(renderLiveReport(state).includes(`href="${promptPath}"`));
   }
+});
+
+test('customization report links reuse local-file validation and visibly reject unsupported links', () => {
+  const state = buildInitialState({ webSiteId: 'site-id', outputDir: 'migration-reports' });
+  state.customizationReport = { totalFindings: 1, breakdown: { liquid: 1 } };
+  for (const value of ['javascript:alert(1)', 'data:text/html,test', '//contoso.com/x',
+    'file://contoso.com/share/report.html', 'java\nscript:alert(1)']) {
+    state.customizationReport.path = value;
+    const html = renderLiveReport(state);
+    assert.doesNotMatch(html, /class="cust-open-btn"/);
+    assert.match(html, /Customization report unavailable: unsupported link/);
+  }
+  for (const value of ['customization-report.html', 'file:///tmp/report.html']) {
+    state.customizationReport.path = value;
+    assert.ok(renderLiveReport(state).includes(`class="cust-open-btn" href="${value}"`));
+  }
+});
+
+test('portal links allow HTTPS without credentials and otherwise render inert text with an explanation', () => {
+  const state = buildInitialState({ webSiteId: 'site-id', outputDir: 'migration-reports' });
+  for (const value of ['javascript:alert(1)', 'data:text/html,test', '//contoso.com',
+    'http://contoso.com', 'https://maker@contoso.com', 'https://contoso.com/\npath']) {
+    state.site.portalUrl = value;
+    const html = renderLiveReport(state);
+    assert.doesNotMatch(html, /<a class="context-value"/);
+    assert.match(html, /Unsupported portal link; HTTPS URL required/);
+  }
+  state.site.portalUrl = 'https://contoso.powerappsportals.com/';
+  assert.match(renderLiveReport(state), /<a class="context-value" href="https:\/\/contoso\.powerappsportals\.com\/"/);
+});
+
+test('diff commands encode apostrophes separately for PowerShell and Bash and preserve other shell characters', () => {
+  const state = buildInitialState({ webSiteId: 'site-id', outputDir: 'migration-reports' });
+  const livePath = "C:\\O'Brien\\$(literal); & page.html";
+  const stagedPath = "C:\\O'Brien\\staged `file`.html";
+  const html = renderLiveReport(state, { remediationDiff: { files: [{
+    relativePath: 'page.html', livePath, stagedPath, hunks: [],
+  }] } });
+  const commands = Object.fromEntries([...html.matchAll(
+    /data-label="Copy (PowerShell|Bash) diff command" data-copy="([^"]*)"/g,
+  )].map((match) => [match[1], match[2].replace(/&#39;/g, "'").replace(/&quot;/g, '"')
+    .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&')]));
+  assert.deepEqual(commands, {
+    PowerShell: `code --diff '${livePath.replace(/'/g, "''")}' '${stagedPath.replace(/'/g, "''")}'`,
+    Bash: `code --diff '${livePath.replace(/'/g, "'\\''")}' '${stagedPath.replace(/'/g, "'\\''")}'`,
+  });
+  const invalid = renderLiveReport(state, { remediationDiff: { files: [{
+    relativePath: 'page.html', livePath: 'bad\npath', stagedPath,
+  }] } });
+  assert.doesNotMatch(invalid, /data-label="Copy (PowerShell|Bash) diff command"/);
+  assert.match(invalid, /Diff command unavailable: missing or unsupported file path/);
+});
+
+test('form steps and access-rule changes participate in the live comparison', () => {
+  const step = { name: 'Details', parentForm: 'Order', targetEntity: 'account' };
+  const missing = components({ advancedFormSteps: [step] }, { advancedFormSteps: [] });
+  assert.match(missing, /Forms &amp; Lists/);
+  assert.match(missing, /comp-pill mismatch/);
+  assert.match(missing, /Details in Order/);
+  const changed = components({ webpageRules: [{ name: 'Restrict', right: 2 }] },
+    { webpageRules: [{ name: 'Restrict', right: 0 }] });
+  assert.match(changed, /comp-pill warn/);
+  assert.match(changed, /Changed records/);
 });
 
 for (const track of ['A', 'B']) {

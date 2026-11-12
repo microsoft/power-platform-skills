@@ -181,9 +181,14 @@ function createConfigurationRuntime({ spec, sdk, provision, opts = {}, appUnique
       const others = halts.filter((h) => h !== first).map((h) => `${h.kind} ${h.key} (${h.code})`);
       // A row of an earlier, unfinished create that no answer proved this build's own is adopted only under the maker's
       // exact approval token, one per row (managed-create-context.js judgeRows), never wholesale.
-      const approvals = [...new Set(halts.flatMap((h) => h.approvals || []))];
+      const approvals = [...new Set(halts.filter((h) => !h.adoption).flatMap((h) => h.approvals || []))];
       const approve = approvals.length ? ` Its rows are bound only under these exact approvals, given after checking those rows are yours: ${approvals.map((t) => JSON.stringify(t)).join(', ')}.` : '';
-      throw fail(first.code, `${first.kind} ${first.key}: ${first.message}${others.length ? ` Also stopped: ${others.join(', ')}.` : ''}${approve}`);
+      // A namesake made before the opt-in (configuration-protected.js adoptionHalt) is adopted only under its own exact
+      // approvals, and they are printed for EVERY such item of the stop with what they approve — its kind, key and id,
+      // the id of each row (in the approvals themselves) and every field the build would then change — never a bare
+      // token for an item whose own sentence is not the one shown.
+      const adoptions = halts.filter((h) => h.adoption).map((h) => ` Adopt ${h.kind} ${h.key} at its id ${h.adoption.id} (the build would then change ${h.adoption.change}) only under these exact approvals, given after checking those rows are yours: ${h.adoption.approvals.map((t) => JSON.stringify(t)).join(', ')}.`).join('');
+      throw fail(first.code, `${first.kind} ${first.key}: ${first.message}${others.length ? ` Also stopped: ${others.join(', ')}.` : ''}${approve}${adoptions}`);
     },
     // Plan, apply and observe ONE phase's items. Returns {outcome, blocking, halt, plan}.
     async apply(phase) {
@@ -238,4 +243,4 @@ function createConfigurationRuntime({ spec, sdk, provision, opts = {}, appUnique
   };
 }
 
-module.exports = { createConfigurationRuntime, sweepPendingConfiguration };
+module.exports = { createConfigurationRuntime, sweepPendingConfiguration, namedByPages };

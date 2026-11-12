@@ -15,7 +15,10 @@ Keep `migrate-datamodel`'s four phases, track selection, and approval gates unch
 when maintaining its scripts. Snapshot comparisons must not pass incomplete parses
 or ambiguous duplicate identities. Reuse the strict aggregate parser and site-root
 resolver; retain inactive navigation links, target/order/state, and both site-setting
-layouts. The live comparison must use record-level diff semantics, not just counts.
+layouts. Capture canonical `web-link-sets` (plus legacy layout compatibility),
+prefixed/unprefixed states, nested advanced-form steps and per-record page-access
+rules. Wire new inventories through diff identities, meaningful values and report
+grouping. The live comparison must use record-level diff semantics, not just counts.
 Initialization must verify the website and
 environment identity before resuming or resetting an existing folder. Remediation
 reruns rebuild the selected FetchXML/Liquid passes from current source, preserving
@@ -23,7 +26,13 @@ both passes without modifying live files before the approved apply step.
 Validate saved state and snapshot/remediation records before dereferencing them;
 invalid input must produce a clear error without replacing usable state or partially
 applying a proposal with missing staged files.
-Bind remediation apply to the manifest's canonical site root. DME checklists apply
+Bind remediation apply to the manifest's canonical site root, reject linked
+descendants and restore originals after caught copy failures. Report rollback
+failures explicitly and preserve recovery inputs. Do not mutate either tree
+concurrently. Report links need scheme validation, and copyable terminal commands
+must identify their shell and quote paths accordingly. DME data copy requires
+verified metadata migration and complete source-to-component mappings.
+DME checklists apply
 only to mapped metadata tables; unsupported findings remain explicit manual review.
 Completion telemetry uses existing approved fields and shared regional dispatch;
 do not transmit migration-specific phase/template data through `eventInfo`.
@@ -379,6 +388,12 @@ Auto-triggered by the main conversation when relevant:
 
 User-invocable via `/power-pages:<skill-name>`:
 
+- `compare-site-configurations`: Read-only comparison of the Power Pages configuration in two sites, downloaded from explicit environments or supplied locally.
+  `SKILL.md` holds the steps; remote-site verification and download live in `references/remote-sites.md`, and explanation rules in `references/explain-differences.md`.
+  Keep the comparison logic, HTML renderer and VS Code JSON export in `skills/compare-site-configurations/scripts/compare-site-configurations.js`, with tests in its sibling `tests/` folder.
+  Preserve the upstream Local/Remote status direction, HTML renderer and export format (the extension's `IMetadataDiffExport` 1.0, so **Import Comparison** opens it).
+  Compare only PAC component folders and root-level `.yml` files; report other differences as `skipped`.
+  Reports and snapshots remain outside both sites; this skill does not update their usage settings.
 - `create-site`: Routes between two eight-phase workflows. The existing SPA path retains requirements
   discovery, early React/Vue/Angular/Astro scaffolding, component and design planning, implementation
   with live Playwright preview, experience brief, narrative blueprints, batched visual critique,

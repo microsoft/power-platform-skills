@@ -288,6 +288,17 @@ function surfaces(spec) {
     }
     out.push('');
   }
+  // Existing buttons whose hidden/disabled flags the build sets (commandStates[]). Only a spec that declares some gets this section. A flag the
+  // entry leaves out is one the build does not touch, so it reads "unchanged", not a value.
+  const commandStates = objs(spec.commandStates);
+  if (commandStates.length) {
+    const flag = (v) => (v === true ? 'yes' : v === false ? 'no' : 'unchanged');
+    out.push('### Existing command buttons shown or hidden', '', '| Row | Table | Bar | Scope | Hidden | Disabled |', '|---|---|---|---|---|---|');
+    for (const s of commandStates) {
+      out.push(`| \`${cell(s.rowId)}\` | ${cell(lc(s.entity))} | ${cell(s.location)} | ${cell(s.scope)} | ${flag(s.hidden)} | ${flag(s.disabled)} |`);
+    }
+    out.push('', '> Each change is applied only with approval of that exact row, and publishing its table changes the button for every app that shows the table.', '');
+  }
   return out;
 }
 

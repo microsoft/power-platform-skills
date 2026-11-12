@@ -296,7 +296,7 @@ test('verify-pcf rejects intent bindings whose client list normalizes to empty b
     assert.equal(madeSdk, false);
     assert.equal(cli.stdoutText(), '');
   } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
 

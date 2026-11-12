@@ -1629,6 +1629,15 @@ function connectorName(value) {
   return match ? match[1] : text;
 }
 
+// The binding a page's gate reads for one connection reference whose row a caller read itself (the managed download's restore,
+// lib/configuration-protected.js restoreProofOf): 'bound', 'unbound' or 'unknown', from the same definition (observe) as every
+// build's, so a restore cannot call ready what a rebuild would stop on. `row` is { connectionId, connectorId } as the row holds them,
+// `entry` the reference's App Spec declaration, and `inventory` what connectionInventory answers (a Map, or null when unread). Only
+// the verdict leaves: the connection id is compared in memory.
+function referenceBinding(row, entry, inventory) {
+  return observe('connectionReference', '', null, entry, row, 'plan-read', inventory).binding;
+}
+
 // The connections a binding can be proven against: a Map of lower-cased connection id -> connector name (null
 // when the row does not say), read once per run through `ctx.connections()` (the caller's inventory reader, rows
 // as list-connections.js answers them: { connectionId, connectorId, displayName }). Without a reader, or when the
@@ -2625,6 +2634,24 @@ const OVERWRITE_TOKEN = /^overwrite:(environmentVariable|connectionReference|cus
 //   adopt:duplicateRuleCondition:email/e
 // Read only under the opt-in, checked against the App Spec (the root and the child must be declared) and normalized back
 // to that spelling, so a key typed in another case still names the one row; a root's approval never covers its children.
+// The same tokens with `@<row id>` appended adopt a row a maker made BEFORE the opt-in, at an id the plugin did not derive
+// (configuration-protected.js adoptionOf), for an environment variable, a connection reference or a Custom API and their
+// children. The id ties the approval to that one row, so it never binds a row deleted and made again, and a root token
+// also carries `+<16 hex>` when the build would then change fields of that row, the first 16 hex of the SHA-256 of the
+// list of field pointers it printed, so the approval lapses when that list changes, e.g.
+//   adopt:customApi:contoso_calc@0b7c6f5e-0000-4000-8000-000000000001+3f2a9c0d1e2b4a59
+//   adopt:customApiRequestParameter:contoso_calc/request%3Aa@0b7c6f5e-0000-4000-8000-000000000002
+// The two meanings never meet: a plain approval lands in `rowApprovals` as `adopt:...` exactly as before, and an
+// `@<row id>` one as `adopt-row:...` (the same text after the verb), a spelling no plain approval normalizes to, so a
+// token read one way is never consumed the other way. A declared key may itself end in what reads like `@<id>`: when the
+// whole text names a declared item AND the text before `@<id>` names another, the token is refused as ambiguous
+// (CONFIGURATION_ADOPT_AMBIGUOUS) rather than read either way, and the stop never prints an `@<id>` approval that would
+// read so (adoptionOf refuses that adoption, saying why). A plugin before this form reads the root suffix as part of the
+// declared key, names no declared item and refuses the token before any write.
+// A duplicate rule and its conditions are never adopted (adoptionOf), so their tokens keep only the plain reading,
+// exactly as before this form: a rule or condition key may contain '@' (it is free text), and `odd@<id>` is just that key.
+const ADOPT_AT = /^([\s\S]*)@([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:\+([0-9a-f]{16}))?$/i;
+const ADOPT_CHILD_AT = /^([\s\S]*)@([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
 const ADOPT_ROOT_TOKEN = /^adopt:(environmentVariable|connectionReference|customApi|duplicateRule):([\s\S]+)$/;
 const ADOPT_CHILD_TOKEN = /^adopt:(environmentVariableValue|customApiRequestParameter|customApiResponseProperty|duplicateRuleCondition):([\s\S]+)$/;
 const ADOPT_CHILD_PARENT = Object.freeze({
@@ -2673,26 +2700,43 @@ function configurationAuthorizationKeys(tokens, spec) {
     const adoptRoot = ADOPT_ROOT_TOKEN.exec(text);
     if (adoptRoot) {
       const [, kind, name] = adoptRoot;
-      const root = rootOf(kind, name);
-      if (!root) problems.push({ token: text, code: 'CONFIGURATION_AUTHORIZATION_UNKNOWN_ITEM' });
-      else if (!protectedSpec) problems.push({ token: text, code: 'CONFIGURATION_ADOPT_UNPROTECTED' });
-      else rowApprovals.add(`adopt:${kind}:${portKeyOf(kind, root)}`);
+      const plain = rootOf(kind, name);
+      const atRow = kind === 'duplicateRule' ? null : ADOPT_AT.exec(name);
+      const atRoot = atRow ? rootOf(kind, atRow[1]) : undefined;
+      if (plain && atRoot) { problems.push({ token: text, code: 'CONFIGURATION_ADOPT_AMBIGUOUS' }); continue; }
+      const root = plain || atRoot;
+      if (!root) { problems.push({ token: text, code: 'CONFIGURATION_AUTHORIZATION_UNKNOWN_ITEM' }); continue; }
+      if (!protectedSpec) { problems.push({ token: text, code: 'CONFIGURATION_ADOPT_UNPROTECTED' }); continue; }
+      rowApprovals.add(plain ? `adopt:${kind}:${portKeyOf(kind, root)}`
+        : `adopt-row:${kind}:${portKeyOf(kind, root)}@${atRow[2].toLowerCase()}${atRow[3] ? `+${atRow[3].toLowerCase()}` : ''}`);
       continue;
     }
     const adoptChild = ADOPT_CHILD_TOKEN.exec(text);
     if (adoptChild) {
-      const [, childKind, rest] = adoptChild;
+      const [, childKind, whole] = adoptChild;
       const parent = ADOPT_CHILD_PARENT[childKind];
       // Both parts are percent-encoded, so the one '/' is the separator; anything else is not a key the build printed.
-      const parts = rest.split('/');
-      const name = parts.length === 2 ? decode(parts[0]) : null;
-      const slot = parts.length === 2 ? decode(parts[1]) : null;
-      if (!nonEmptyString(name) || !nonEmptyString(slot)) { problems.push({ token: text, code: 'CONFIGURATION_ADOPT_INVALID' }); continue; }
-      const root = rootOf(parent, name);
-      const child = root ? slotOf(childKind, declaredEntry(parent, root), slot) : null;
+      const named = (rest) => {
+        const parts = rest.split('/');
+        const name = parts.length === 2 ? decode(parts[0]) : null;
+        const slot = parts.length === 2 ? decode(parts[1]) : null;
+        if (!nonEmptyString(name) || !nonEmptyString(slot)) return { invalid: true };
+        const root = rootOf(parent, name);
+        return { root, child: root ? slotOf(childKind, declaredEntry(parent, root), slot) : null };
+      };
+      // Both readings, as for a root: the whole text (exactly as before the `@<row id>` form), and the text before a
+      // trailing `@<id>` with that id (a printed slot is percent-encoded, '@' as %40, so a printed id is never part of it).
+      const plain = named(whole);
+      const atRow = childKind === 'duplicateRuleCondition' ? null : ADOPT_CHILD_AT.exec(whole);
+      const withId = atRow ? named(atRow[1]) : { child: null };
+      if (plain.child && withId.child) { problems.push({ token: text, code: 'CONFIGURATION_ADOPT_AMBIGUOUS' }); continue; }
+      const found = plain.child || !withId.child ? plain : withId;
+      if (found.invalid) { problems.push({ token: text, code: 'CONFIGURATION_ADOPT_INVALID' }); continue; }
+      const { root, child } = found;
+      const tail = `${childKind}:${encodeURIComponent(portKeyOf(parent, root))}/${encodeURIComponent(child)}`;
       if (!child) problems.push({ token: text, code: 'CONFIGURATION_AUTHORIZATION_UNKNOWN_ITEM' });
       else if (!protectedSpec) problems.push({ token: text, code: 'CONFIGURATION_ADOPT_UNPROTECTED' });
-      else rowApprovals.add(`adopt:${childKind}:${encodeURIComponent(portKeyOf(parent, root))}/${encodeURIComponent(child)}`);
+      else rowApprovals.add(found === plain ? `adopt:${tail}` : `adopt-row:${tail}@${atRow[2].toLowerCase()}`);
       continue;
     }
     const kind = text.slice(0, text.indexOf(':'));
@@ -2890,9 +2934,58 @@ async function locateExactly(ctx, port, kind, key) {
   const resolved = await port.resolve({ kind, key: portKeyOf(kind, key) });
   if (!resolved || resolved.state !== 'present' || typeof resolved.id !== 'string' || !resolved.id) throw identityStop('create-identity-unverified');
   await refuseLocalDraft(ctx.sdk, kind, resolved.id);
-  return { id: resolved.id, remote: await ctx.sdk.fetchArtifact(kind, resolved.id, { overwrite: true }), origin: 'resolved' };
+  // A protected rule's conditions are paired at the ids its binding holds, as the build's plan pairs them (lib/configuration-protected.js
+  // locateItem): a swap of two bound rows' criteria is an edit the build refuses (configuration-edit-unsupported), so verify must not
+  // pass it. Content pairing alone would. Only a rule takes them: the other kinds are compared as before.
+  const boundChildIds = kind === 'duplicateRule' && resolved.childIds && typeof resolved.childIds === 'object' ? resolved.childIds : undefined;
+  return {
+    id: resolved.id, remote: await ctx.sdk.fetchArtifact(kind, resolved.id, { overwrite: true }), origin: 'resolved',
+    ...(boundChildIds ? { childIds: boundChildIds } : {}),
+    ...(kind === 'duplicateRule' && resolved.buildRefusal ? { buildRefusal: resolved.buildRefusal } : {}),
+  };
 }
 
+// What a protected rule's definition check names, as the union of two judgments: the content comparison (`compared`, whose pointers
+// keep the order the unprotected check reports them in) and the build's own (`found.buildRefusal`, from the port: it refuses every
+// edit of a protected rule). Placement rules, so a consumer that reads the fields sees one stable shape:
+//   - the comparison's pointers stay where they are; a pointer only the build's judgment adds goes after them;
+//   - each `/conditions/<key>` follows `/conditions` at once, in declaration order: a declared condition the plan would create
+//     (a new or renamed key) or whose bound row no longer holds its criteria;
+//   - a removal (a bound row no longer declared, an extra row) names `/conditions` alone;
+//   - `/definition` only when the build refuses and nothing above says what: a state change the declaration does not name.
+// A content refusal does not hide a build refusal: the build still refuses, so the check is DRIFT, naming the root pointer when
+// the refusal is a root field (these refusals stop the comparison before it names anything).
+const CONTENT_REFUSAL_POINTER = { DUPLICATE_RULE_TABLE_IMMUTABLE: '/matchingEntity', DUPLICATE_RULE_NAME_CONFLICT: '/entity', CONFIGURATION_CHILD_IDENTITY_AMBIGUOUS: '/conditions' };
+
+function ruleDriftFields(entry, found, compared) {
+  const refusal = found.buildRefusal;
+  const out = compared.refusal
+    ? (CONTENT_REFUSAL_POINTER[compared.refusal] ? [CONTENT_REFUSAL_POINTER[compared.refusal]] : [])
+    : compared.changes.filter((c) => !c.binding).map((c) => c.pointer);
+  if (refusal || out.includes('/conditions')) {
+    const keyed = conditionDriftPointers(entry, found.remote, found.childIds, new Set(refusal ? refusal.created : []));
+    if (!out.includes('/conditions') && (keyed.length || (refusal && refusal.removed))) out.push('/conditions');
+    const at = out.indexOf('/conditions');
+    if (at >= 0) out.splice(at + 1, 0, ...keyed.filter((pointer) => !out.includes(pointer)));
+  }
+  return refusal && !out.length ? ['/definition'] : out;
+}
+
+// The declared conditions of a protected rule that the build's plan would create (`created`, by key), or whose bound row no
+// longer holds their criteria, as drift pointers (`/conditions/<key>`), in declaration order, so a failing check names them.
+// `bound` is the binding's slot -> id (slot = condition key). A bound row that is gone never gets here: the port reads every
+// bound row at its id (configuration-row-not-found).
+function conditionDriftPointers(entry, remote, bound, created = new Set()) {
+  const rows = Array.isArray(remote.conditions) ? remote.conditions : [];
+  const out = [];
+  for (const d of Array.isArray(entry.conditions) ? entry.conditions : []) {
+    if (created.has(d.key)) { out.push(`/conditions/${d.key}`); continue; }
+    const id = has(bound, d.key) ? bound[d.key] : null;
+    const row = id ? rows.find((r) => ref(r.id) === ref(id)) : null;
+    if (row && !describes(d, row)) out.push(`/conditions/${d.key}`);
+  }
+  return out;
+}
 async function verifyKind(ctx, kindPlan, entries, checks, onFound) {
   for (const entry of entries) {
     const { kind } = kindPlan;
@@ -2915,10 +3008,12 @@ async function verifyKind(ctx, kindPlan, entries, checks, onFound) {
     if (found.refusal) { checks.push({ kind, key, name: 'definition', ok: false, code: found.refusal }); continue; }
     if (onFound) onFound(entry, found);
     const compared = kindPlan.compare(entry, found.remote, ctx, found.childIds);
-    if (compared.refusal) { checks.push({ kind, key, name: 'definition', ok: false, code: compared.refusal }); continue; }
-    const drift = compared.changes.filter((c) => !c.binding).map((c) => c.pointer);
-    const bindingDrift = compared.changes.filter((c) => c.binding).map((c) => c.pointer);
-    checks.push(drift.length ? { kind, key, name: 'definition', ok: false, code: 'DRIFT', fields: drift } : { kind, key, name: 'definition', ok: true });
+    // A protected rule the build refuses is DRIFT whatever the comparison said (ruleDriftFields); otherwise a refusal stands.
+    const ruleRefused = kind === 'duplicateRule' && found.buildRefusal;
+    if (compared.refusal && !ruleRefused) { checks.push({ kind, key, name: 'definition', ok: false, code: compared.refusal }); continue; }
+    const fields = kind === 'duplicateRule' && found.childIds ? ruleDriftFields(entry, found, compared) : compared.changes.filter((c) => !c.binding).map((c) => c.pointer);
+    const bindingDrift = (compared.changes || []).filter((c) => c.binding).map((c) => c.pointer);
+    checks.push(fields.length ? { kind, key, name: 'definition', ok: false, code: 'DRIFT', fields } : { kind, key, name: 'definition', ok: true });
     const bindings = bindingsOf(ctx);
     const bound = kind === 'environmentVariable' ? bindings.environmentVariables.has(lower(key))
       : kind === 'connectionReference' ? bindings.connectionReferences.has(lower(key)) : false;
@@ -3166,6 +3261,10 @@ module.exports = {
   hasConfigurationDefinitions,
   configurationReadiness,
   observeConfiguration,
+  // A page's readiness of one connection reference, for the managed download's restore (lib/configuration-protected.js
+  // restoreProofOf): the connection inventory reader and the binding verdict every build's page gate uses.
+  connectionInventory,
+  referenceBinding,
   configurationPageBlockers,
   configurationContext,
   configurationDestructive,

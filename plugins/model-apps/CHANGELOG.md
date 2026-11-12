@@ -5,6 +5,54 @@ All notable changes to the **model-apps** plugin.
 Entries are deliberately short: what changed and why it matters to you. The reasoning,
 evidence and trade-offs behind a change live in its PR, in `docs/`, or in the linked issue.
 
+## [2.26.0]
+
+- **Managed downloads restore more of an app:** declared views and charts, environment variables, connection references and Custom API scaffolds the binding store proves unchanged; values, defaults, secrets and connection ids are never written (#811).
+- The download names the field security profiles it leaves out, and `verify` holds a deployed chart's content to its definition.
+- A rebuild no longer republishes a table solely for a declared view the binding store proves unchanged in this run.
+- **Downloads:** an `app-spec.json` that cannot be replaced is refused before `pages/` or the fragments file is written; a later spec-write failure says only what is known.
+- **Page scroll check:** values with `var()`, `env()`, `attr()`, an escape or a comment compare byte for byte; the fixed-`maxHeight` padding message says when the end may be cut off (#840).
+- **Shared pages:** an app whose sitemap is briefly unreadable is read again, the whole scan repeated after each wait, before the build halts.
+- **Genpage:** a promotion guide, and a pull mode that brings existing pages into the project unedited (#675).
+
+### Limits
+
+- Secret environment variables, implemented Custom APIs, other-language Custom API labels and duplicate rules are not downloaded.
+- A connection reference a page names is downloaded only when the environment's connections can be listed and include its connection under its connector.
+- The browser verify step, keyboard scrolling and bare-text scrollers remain open (#840).
+- A publish refused because another customization is running still stops after the ordinary retries.
+- Duplicate rules made before opting in still cannot be adopted; migrating one is a separate replacement outside the plugin (#807).
+- Shared genpage manifests and opt-in page tests (#669, #670), the eval graders (#672, #674) and durable command-bar state (#812) are not in this release.
+## [2.25.0]
+
+- **Pages scroll:** the rules teach a bounded, scrolling page root; `check-griffel-styles.js` stops a generated page whose layout it can show would clip below the fold, or that it cannot read, with exit 3 and the fix (AB#6793599).
+- With `--existing` (downloaded pages) the same finding is a note and the exit code is unchanged.
+- **Failure-safe downloads:** the new `pages/` tree is staged and swapped in whole after the download's checks; a refusal or failure before then leaves `pages/` as it was, and a failed swap puts it back (#814).
+- If a swap cannot be undone, or a run stops mid-swap, the previous pages stay in the named `.pages-replace.*` folder to copy back; a later download reports it.
+- The download checks its own folders before each operation and refuses one a link has replaced.
+- **Adopt configuration made before opting in:** under `configurationIdentity: "stable-v1"`, an environment variable, connection reference or Custom API at another id can be adopted with the approvals the stop prints (#807).
+- The stop names each row and the fields a later edit would change; adopting sends nothing, that build changes only those fields, and a changed, unreadable or out-of-solution row is refused.
+- **Evals:** app-builder fixtures 22-24 now grade the declared dashboard tiles, rule shape and flow stages (#817).
+
+### Limits
+
+- The scroll check reads only the layouts it recognises (not `@media` or selector overrides, nor sibling heights) and refuses some valid layouts it cannot compare; its fix always passes. Upload and build do not run it.
+- Duplicate-detection rules made before opting in cannot be adopted yet (#807 stays open); a rule whose first publication is unproven is still published by hand (#808).
+- An adopted form whose layers read apart still needs the printed `publication-risk` approval (#797).
+## [2.24.0]
+
+- **Command buttons, read-only:** `scripts/list-command-states.js` lists an app's modern command buttons by row id: each button's bar, scope, stored hidden and disabled flags, and the reasons a button is not a candidate. Nothing is written (#812).
+- **Show or hide existing buttons:** on a full build with `--publish`, `commandStates[]` (with `minimumPluginVersion: "2.24.0"`) sets the hidden and disabled flags of an existing table-scoped modern button, by row id, with one conditional write; a dry run prints the exact approvals needed (#812).
+- **Publication:** publishing a table publishes all saved customizations on it, for every app that shows it, so it has its own approval. Until that publication is confirmed, the build reports `command-state-publish-unconfirmed` and what each row is known to hold.
+- **Windows:** a brief file lock (antivirus, indexer) on the binding store, the changed-only snapshot, or page and recovery records no longer stops a build: the rename is retried up to 5 seconds, 30 in all per process, then the original error is reported (#830).
+- **Verify:** a protected duplicate rule is judged as the build judges it, so swapped condition criteria, a renamed condition key or omitted `conditions` now fail with `DRIFT`, naming the conditions, instead of passing a rule the build refuses (#831).
+
+### Limits
+
+- Only table-scoped modern buttons with static visibility can be changed; app-scoped and Power Fx buttons are refused, and classic out-of-box buttons are out of reach. Removing an entry or a teardown restores no flag, and download does not write `commandStates` back (#812 stays open).
+- A table publication that was sent can still complete after a halt, or after you remove the entry; this release keeps no record of it across runs.
+- A modern button set to `disabled` is not shown at all, rather than greyed out.
+
 ## [2.23.0]
 
 - **Configuration identities (opt-in):** with `configurationIdentity: "stable-v1"`, environment variables, connection references, Custom APIs and duplicate-detection rules, with their children, are created at reserved ids and bound; a create whose answer was lost is never sent again (#807).

@@ -55,11 +55,32 @@ function safeReaddir(p) {
   }
 }
 
-function findFilesBySuffix(dir, suffix) {
+function findFilesBySuffix(dir, suffix, recursive = false) {
   if (!fs.existsSync(dir)) return [];
   return safeReaddir(dir)
-    .filter((e) => e.isFile() && e.name.endsWith(suffix))
-    .map((e) => path.join(dir, e.name));
+    .flatMap((e) => {
+      const file = path.join(dir, e.name);
+      if (recursive && e.isDirectory()) return findFilesBySuffix(file, suffix, true);
+      return e.isFile() && e.name.endsWith(suffix) ? [file] : [];
+    });
+}
+
+// Aggregate PAC records use "adx_statecode: 1"; per-record exports can use
+// "statecode: 1" (and "name" instead of "adx_name"). Keep explicit zero/false.
+function recordField(record, key) {
+  const alternate = key.startsWith('adx_') ? key.slice(4) : `adx_${key}`;
+  const value = record[key] ?? record[alternate] ?? null;
+  return Array.isArray(value) ? value.slice().sort() : value;
+}
+
+function stateCode(record) {
+  const value = recordField(record, 'statecode');
+  return typeof value === 'number' ? value : null;
+}
+
+function mergeScans(...scans) {
+  const inventory = scans.flatMap((scan) => scan.inventory);
+  return { count: inventory.length, inventory, parseErrors: scans.flatMap((scan) => scan.parseErrors) };
 }
 
 function safeParseYaml(filePath, errors) {
@@ -118,10 +139,10 @@ function scanWebPages(siteRoot, withContentHash) {
       inventory.push({
         kind: 'parent',
         slug: slug.name,
-        name: rec.adx_name || null,
-        partialUrl: rec.adx_partialurl || null,
-        isRoot: rec.adx_isroot === true || rec.adx_isroot === 'true',
-        stateCode: typeof rec.statecode === 'number' ? rec.statecode : null,
+        name: recordField(rec, 'adx_name'),
+        partialUrl: recordField(rec, 'adx_partialurl'),
+        isRoot: [true, 'true'].includes(recordField(rec, 'adx_isroot')),
+        stateCode: stateCode(rec),
         contentHash: withContentHash ? sha256OfFileIfExists(f.replace('.webpage.yml', '.webpage.copy.html')) : undefined,
       });
     }
@@ -134,10 +155,10 @@ function scanWebPages(siteRoot, withContentHash) {
       inventory.push({
         kind: 'content',
         slug: slug.name,
-        name: rec.adx_name || null,
-        partialUrl: rec.adx_partialurl || null,
+        name: recordField(rec, 'adx_name'),
+        partialUrl: recordField(rec, 'adx_partialurl'),
         language: extractLanguageTag(path.basename(f), '.webpage.yml'),
-        stateCode: typeof rec.statecode === 'number' ? rec.statecode : null,
+        stateCode: stateCode(rec),
         contentHash: withContentHash ? sha256OfFileIfExists(f.replace('.webpage.yml', '.webpage.copy.html')) : undefined,
       });
     }
@@ -157,10 +178,10 @@ function scanContentSnippets(siteRoot, withContentHash) {
       if (!rec) continue;
       inventory.push({
         slug: slug.name,
-        name: rec.adx_name || null,
-        displayName: rec.adx_display_name || null,
+        name: recordField(rec, 'adx_name'),
+        displayName: recordField(rec, 'adx_display_name'),
         language: extractLanguageTag(path.basename(f), '.contentsnippet.yml'),
-        stateCode: typeof rec.statecode === 'number' ? rec.statecode : null,
+        stateCode: stateCode(rec),
         contentHash: withContentHash ? sha256OfFileIfExists(f.replace('.contentsnippet.yml', '.contentsnippet.value.html')) : undefined,
       });
     }
@@ -168,10 +189,10 @@ function scanContentSnippets(siteRoot, withContentHash) {
   return { count: inventory.length, inventory, parseErrors: errors };
 }
 
-function scanWebLinkSets(siteRoot) {
+function scanWebLinkSets(siteRoot, folder) {
   const errors = [];
   const inventory = [];
-  const root = path.join(siteRoot, 'weblink-sets');
+  const root = path.join(siteRoot, folder);
   for (const slug of safeReaddir(root)) {
     if (!slug.isDirectory()) continue;
     const dir = path.join(root, slug.name);
@@ -187,19 +208,19 @@ function scanWebLinkSets(siteRoot) {
       const linkRecs = fs.existsSync(linksFile) ? parseCollectionFile(linksFile, errors) : [];
       const links = linkRecs
         .map((r) => ({
-          name: r.adx_name || null,
-          displayOrder: typeof r.adx_displayorder === 'number' ? r.adx_displayorder : null,
-          pageId: r.adx_pageid || null,
-          externalUrl: r.adx_externalurl || null,
-          stateCode: typeof r.statecode === 'number' ? r.statecode : null,
+          name: recordField(r, 'adx_name'),
+          displayOrder: recordField(r, 'adx_displayorder'),
+          pageId: recordField(r, 'adx_pageid'),
+          externalUrl: recordField(r, 'adx_externalurl'),
+          stateCode: stateCode(r),
         }))
         .sort((a, b) => (a.displayOrder ?? 999) - (b.displayOrder ?? 999) || String(a.name).localeCompare(String(b.name)));
 
       inventory.push({
         slug: slug.name,
-        name: rec.adx_name || null,
+        name: recordField(rec, 'adx_name'),
         language,
-        stateCode: typeof rec.statecode === 'number' ? rec.statecode : null,
+        stateCode: stateCode(rec),
         linkCount: links.filter((link) => (link.stateCode ?? 0) === 0).length,
         linkNames: links.filter((link) => (link.stateCode ?? 0) === 0).map((l) => l.name),
         links,
@@ -239,8 +260,8 @@ function scanWebTemplates(siteRoot, withContentHash) {
       if (!rec) continue;
       inventory.push({
         slug: slug.name,
-        name: rec.adx_name || null,
-        stateCode: typeof rec.statecode === 'number' ? rec.statecode : null,
+        name: recordField(rec, 'adx_name'),
+        stateCode: stateCode(rec),
         contentHash: withContentHash ? sha256OfFileIfExists(f.replace('.webtemplate.yml', '.webtemplate.source.html')) : undefined,
       });
     }
@@ -258,9 +279,9 @@ function scanFlatFolder(siteRoot, folder, suffix, identity) {
     if (!rec) continue;
     const item = {};
     for (const [outKey, ymlKey] of Object.entries(identity)) {
-      item[outKey] = rec[ymlKey] ?? null;
+      item[outKey] = recordField(rec, ymlKey);
     }
-    item.stateCode = typeof rec.statecode === 'number' ? rec.statecode : null;
+    item.stateCode = stateCode(rec);
     inventory.push(item);
   }
   return { count: inventory.length, inventory, parseErrors: errors };
@@ -279,9 +300,9 @@ function scanPerSlugFolder(siteRoot, folder, suffix, identity) {
       if (!rec) continue;
       const item = { slug: slug.name };
       for (const [outKey, ymlKey] of Object.entries(identity)) {
-        item[outKey] = rec[ymlKey] ?? null;
+        item[outKey] = recordField(rec, ymlKey);
       }
-      item.stateCode = typeof rec.statecode === 'number' ? rec.statecode : null;
+      item.stateCode = stateCode(rec);
       inventory.push(item);
     }
   }
@@ -298,10 +319,32 @@ function scanTopLevelCollection(siteRoot, file, identity) {
   for (const rec of parseCollectionFile(full, errors)) {
     const item = {};
     for (const [outKey, ymlKey] of Object.entries(identity)) {
-      item[outKey] = rec[ymlKey] ?? null;
+      item[outKey] = recordField(rec, ymlKey);
     }
-    item.stateCode = typeof rec.statecode === 'number' ? rec.statecode : null;
+    item.stateCode = stateCode(rec);
     inventory.push(item);
+  }
+  return { count: inventory.length, inventory, parseErrors: errors };
+}
+
+function scanAdvancedFormSteps(siteRoot, forms) {
+  const errors = [];
+  const inventory = [];
+  for (const form of forms.inventory) {
+    const root = path.join(siteRoot, 'advanced-forms', form.slug, 'advanced-form-steps');
+    for (const file of findFilesBySuffix(root, '.advancedformstep.yml', true)) {
+      const rec = safeParseYaml(file, errors);
+      if (!rec) continue;
+      inventory.push({
+        name: recordField(rec, 'adx_name'),
+        parentForm: form.name,
+        formId: recordField(rec, 'adx_webform'),
+        type: recordField(rec, 'adx_type'),
+        targetEntity: recordField(rec, 'adx_targetentitylogicalname'),
+        nextStepId: recordField(rec, 'adx_nextstep'),
+        stateCode: stateCode(rec),
+      });
+    }
   }
   return { count: inventory.length, inventory, parseErrors: errors };
 }
@@ -339,14 +382,21 @@ function main() {
   }
 
   siteRoot = resolvePowerPagesSiteRoot(siteRoot) || path.resolve(siteRoot);
-  const webLinkSets = scanWebLinkSets(siteRoot);
-  const siteSettings = scanTopLevelCollection(siteRoot, 'sitesetting.yml',
-    { name: 'adx_name', value: 'adx_value' });
-  const individualSettings = scanFlatFolder(siteRoot, 'site-settings', '.sitesetting.yml',
-    { name: 'adx_name', value: 'adx_value' });
-  siteSettings.inventory.push(...individualSettings.inventory);
-  siteSettings.parseErrors.push(...individualSettings.parseErrors);
-  siteSettings.count = siteSettings.inventory.length;
+  const webLinkSets = mergeScans(
+    scanWebLinkSets(siteRoot, 'web-link-sets'),
+    scanWebLinkSets(siteRoot, 'weblink-sets'));
+  const siteSettings = mergeScans(
+    scanTopLevelCollection(siteRoot, 'sitesetting.yml', { name: 'adx_name', value: 'adx_value' }),
+    scanFlatFolder(siteRoot, 'site-settings', '.sitesetting.yml', { name: 'adx_name', value: 'adx_value' }));
+  const ruleFields = {
+    name: 'adx_name', pageId: 'adx_webpageid', right: 'adx_right', scope: 'adx_scope',
+    webRoleIds: 'adx_webpageaccesscontrolrule_webrole',
+  };
+  const webpageRules = mergeScans(
+    scanTopLevelCollection(siteRoot, 'webpagerule.yml', ruleFields),
+    scanFlatFolder(siteRoot, 'webpage-rules', '.webpagerule.yml', ruleFields));
+  const advancedForms = scanPerSlugFolder(siteRoot, 'advanced-forms', '.advancedform.yml',
+    { name: 'adx_name' });
 
   const categories = {
     webPages: scanWebPages(siteRoot, withContentHash),
@@ -366,8 +416,8 @@ function main() {
       { name: 'adx_entityname', permissionName: 'adx_name' }),
     basicForms: scanPerSlugFolder(siteRoot, 'basic-forms', '.basicform.yml',
       { name: 'adx_name' }),
-    advancedForms: scanPerSlugFolder(siteRoot, 'advanced-forms', '.advancedform.yml',
-      { name: 'adx_name' }),
+    advancedForms,
+    advancedFormSteps: scanAdvancedFormSteps(siteRoot, advancedForms),
     lists: scanPerSlugFolder(siteRoot, 'lists', '.entitylist.yml',
       { name: 'adx_name' }),
     polls: scanPerSlugFolder(siteRoot, 'polls', '.poll.yml',
@@ -387,8 +437,7 @@ function main() {
       { name: 'adx_name' }),
     publishingStates: scanTopLevelCollection(siteRoot, 'publishingstate.yml',
       { name: 'adx_name' }),
-    webpageRules: scanTopLevelCollection(siteRoot, 'webpagerule.yml',
-      { name: 'adx_name' }),
+    webpageRules,
     websiteBindings: scanTopLevelCollection(siteRoot, 'websitebinding.yml',
       { name: 'adx_name' }),
     websiteLanguages: scanTopLevelCollection(siteRoot, 'websitelanguage.yml',
@@ -415,6 +464,7 @@ function main() {
     tablePermissions: ['name', 'permissionName'],
     basicForms: ['slug', 'name'],
     advancedForms: ['slug', 'name'],
+    advancedFormSteps: ['parentForm', 'name'],
     lists: ['slug', 'name'],
     polls: ['slug', 'name'],
     pollPlacements: ['slug', 'name'],

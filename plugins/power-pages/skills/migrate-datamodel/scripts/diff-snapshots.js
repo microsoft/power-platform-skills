@@ -61,6 +61,7 @@ const KEY_FIELDS = {
   tablePermissions: ['name', 'permissionName'],
   basicForms: ['name'],
   advancedForms: ['name'],
+  advancedFormSteps: ['parentForm', 'name'],
   lists: ['name'],
   polls: ['name'],
   pollPlacements: ['name'],
@@ -86,6 +87,8 @@ const KEY_FIELDS = {
 const VALUE_FIELDS = {
   siteSettings: ['value'],
   webLinks: ['pageId', 'externalUrl', 'displayOrder'],
+  advancedFormSteps: ['formId', 'type', 'targetEntity', 'nextStepId'],
+  webpageRules: ['pageId', 'right', 'scope', 'webRoleIds'],
 };
 
 function makeKey(rec, fields) {

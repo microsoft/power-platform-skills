@@ -60,7 +60,7 @@ async function sdkWithCapture() {
   return { sdk, reads };
 }
 
-test.after(() => { for (const d of dirs) fs.rmSync(d, { recursive: true, force: true }); });
+test.after(() => { for (const d of dirs) fs.rmSync(d, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
 
 test('REAL BUNDLE: PCF reads record customcontrol query and raw bound-function URLs', async () => {
   const { sdk, reads } = await sdkWithCapture();

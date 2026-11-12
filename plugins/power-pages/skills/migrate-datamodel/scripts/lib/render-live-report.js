@@ -59,10 +59,21 @@ function localReportLink(value) {
   if (/^[\\/]{2}/.test(link)) return null;
   if (path.isAbsolute(link)) return pathToFileURL(link).href;
   if (/^file:/i.test(link)) {
-    try { return new URL(link).href; } catch { return null; }
+    try {
+      const url = new URL(link);
+      return url.hostname ? null : url.href;
+    } catch { return null; }
   }
   if (/^[a-z][a-z0-9+.-]*:/i.test(link) || /^[\\/]{2}/.test(link)) return null;
   return link;
+}
+
+function portalLink(value) {
+  if (typeof value !== 'string' || /[\u0000-\u001f\u007f]/.test(value)) return null;
+  try {
+    const url = new URL(value);
+    return url.protocol === 'https:' && !url.username && !url.password ? url.href : null;
+  } catch { return null; }
 }
 
 // ── Formatting helpers ─────────────────────────────────────────────────────
@@ -721,6 +732,7 @@ const CATEGORY_TO_GROUP = {
   // Forms & Lists — data-entry surfaces backed by Dataverse tables
   basicForms: 'Forms & Lists',
   advancedForms: 'Forms & Lists',
+  advancedFormSteps: 'Forms & Lists',
   lists: 'Forms & Lists',
 
   // Navigation — discovery / link-out widgets
@@ -760,6 +772,7 @@ const CATEGORY_DESC = {
   pageTemplates: 'Page layout definitions that webPages select from when rendering.',
   contentSnippets: 'Reusable inline text blobs referenced by Liquid as {{ snippets["name"] }}.',
   basicForms: 'Entity Forms — single-record create/edit/read forms backed by a Dataverse table.',
+  advancedFormSteps: 'Individual steps within multistep forms, including target tables and next-step routing.',
   siteSettings: 'Key/value configuration toggles for the site (cache, authentication, telemetry, etc.).',
   siteMarkers: 'Named anchors used by Liquid to reference specific pages by purpose (e.g. "Home", "404").',
   publishingStates: 'Editorial states (Draft, Published, Inactive) attached to webPages and webFiles.',
@@ -791,6 +804,7 @@ function describeRecord(rec, category) {
     const parts = [rec.name, rec.parentSet ? `in '${rec.parentSet}'` : null, rec.language ? `lang=${rec.language}` : null].filter(Boolean);
     return parts.join(' · ');
   }
+  if (category === 'advancedFormSteps') return `${rec.name || '(unnamed)'} in ${rec.parentForm || '(unknown form)'}`;
   if (rec.name && rec.language) return `${rec.name} · lang=${rec.language}`;
   if (rec.name && rec.partialUrl) return `${rec.name} · url=${rec.partialUrl}`;
   if (rec.name) return rec.name;
@@ -888,23 +902,25 @@ function renderRemediationFileRow(entry, idx) {
   const summary = (entry.changeSummary && entry.changeSummary.length > 0)
     ? `<ul class="rem-summary">${entry.changeSummary.map((s) => `<li>${escapeHtml(s)}</li>`).join('')}</ul>`
     : '';
-  // Single-quoted absolute paths so the command pastes cleanly into either
-  // PowerShell or bash from any working directory (both treat single quotes as
-  // literal, and livePath/stagedPath are absolute in the manifest).
-  const diffCmd = entry.livePath && entry.stagedPath
-    ? `code --diff '${entry.livePath}' '${entry.stagedPath}'`
-    : null;
+  // PowerShell escapes O'Brien as 'O''Brien'; Bash requires 'O'\''Brien'.
+  // These encodings are not interchangeable. Label each copied command's shell.
+  const paths = [entry.livePath, entry.stagedPath];
+  const validPaths = paths.every((value) => typeof value === 'string' && value &&
+    !/[\u0000-\u001f\u007f]/.test(value));
+  const diffCommands = validPaths ? [
+    { shell: 'PowerShell', quote: (value) => `'${value.replace(/'/g, "''")}'` },
+    { shell: 'Bash', quote: (value) => `'${value.replace(/'/g, "'\\''")}'` },
+  ].map(({ shell, quote }) => ({ shell, command: `code --diff ${paths.map(quote).join(' ')}` })) : [];
   // Per-file Copy button in the always-visible summary row so the user can see
   // exactly which file each command targets without expanding the row.
-  const copyBtn = diffCmd
-    ? `<button type="button" class="rem-copy-btn" data-label="Copy diff command" data-copy="${escapeHtml(diffCmd)}">Copy diff command</button>`
-    : '';
-  const diffCmdBlock = diffCmd
-    ? `<div class="rem-open">
-      <div class="rem-open-label">Open this file's side-by-side diff in VS Code — paste into a terminal:</div>
-      <code class="rem-open-cmd">${escapeHtml(diffCmd)}</code>
-    </div>`
-    : '';
+  const copyBtn = diffCommands.map(({ shell, command }) =>
+    `<button type="button" class="rem-copy-btn" data-label="Copy ${shell} diff command" data-copy="${escapeHtml(command)}">Copy ${shell} diff command</button>`).join('');
+  const diffCmdBlock = diffCommands.length
+    ? diffCommands.map(({ shell, command }) => `<div class="rem-open">
+      <div class="rem-open-label">Open this file's side-by-side diff in VS Code using ${shell}:</div>
+      <code class="rem-open-cmd">${escapeHtml(command)}</code>
+    </div>`).join('')
+    : '<div class="rem-open">Diff command unavailable: missing or unsupported file path.</div>';
   return `<details class="rem-file" id="${id}">
   <summary>
     <span class="rem-file-path">${escapeHtml(entry.relativePath)}</span>
@@ -1006,15 +1022,16 @@ function renderCustomizationCard(state) {
     })
     .join('');
 
-  const reportLink = report.path
-    ? `<a class="cust-open-btn" href="${escapeHtml(report.path)}">
+  const reportHref = localReportLink(report.path);
+  const reportLink = reportHref
+    ? `<a class="cust-open-btn" href="${escapeHtml(reportHref)}">
       <span class="cust-open-icon">📄</span>
       <span class="cust-open-text">
         <span class="cust-open-title">Open customization-report.html</span>
         <span class="cust-open-sub">Standalone catalog with per-finding details and remediation guidance</span>
       </span>
     </a>`
-    : '';
+    : report.path ? '<div class="cust-meta">Customization report unavailable: unsupported link.</div>' : '';
 
   const csvLine = report.csvPath
     ? `<div class="cust-meta">Source CSV: <code>${escapeHtml(report.csvPath)}</code></div>`
@@ -1829,7 +1846,9 @@ function renderTopbar(state) {
   }
 
   if (site.portalUrl) {
-    contextItems.push({ label: 'Portal', value: site.portalUrl, cls: 'ctx-accent', href: site.portalUrl });
+    const href = portalLink(site.portalUrl);
+    contextItems.push({ label: 'Portal', value: site.portalUrl, cls: 'ctx-accent', href,
+      invalidLink: !href });
   }
 
   if (site.environment) {
@@ -1848,7 +1867,7 @@ function renderTopbar(state) {
   const contextHtml = contextItems.map((c) => {
     const valueHtml = c.href
       ? `<a class="context-value" href="${escapeHtml(c.href)}" target="_blank" rel="noopener">${escapeHtml(c.value)}</a>`
-      : `<span class="context-value">${escapeHtml(c.value)}</span>`;
+      : `<span class="context-value"${c.invalidLink ? ' title="Unsupported portal link; HTTPS URL required"' : ''}>${escapeHtml(c.value)}</span>`;
     return `<span class="context-pill ${c.cls}"><span class="context-label">${escapeHtml(c.label)}</span>${valueHtml}</span>`;
   }).join('');
 

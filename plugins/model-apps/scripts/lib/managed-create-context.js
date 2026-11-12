@@ -399,6 +399,14 @@ function createManagedCreateContext({ store, approvals = [], notFoundCode, appro
       }
       return { ...outcome, localError, checked };
     },
+    /**
+     * The invocation's approval tokens, as given (a copy). A driver whose tokens carry more than the default spelling (an
+     * adoption of a row made at another id, configuration-protected.js) reads here which ones the maker gave before it
+     * plans anything.
+     */
+    approvals() {
+      return [...approved];
+    },
     /** This process's in-memory answers for one attempt. */
     facts(token) {
       return (facts.get(token) || []).slice();
@@ -489,7 +497,8 @@ function createManagedCreateContext({ store, approvals = [], notFoundCode, appro
     /**
      * Accept, WITHOUT sending anything, attempts deliberately planned over existing rows only (every row `update`, the
      * expected proof carrying the base observation it read) and never sent: items [{ token, observation, capture,
-     * declarationSha256? }], `capture` from captureReadOnly before `observation` was read. Each item must be the
+     * declarationSha256?, approvalTokenOf? }], `capture` from captureReadOnly before `observation` was read; an item's own
+     * `approvalTokenOf` spells its rows' tokens in place of the context's (an adoption names each row's id). Each item must be the
      * declaration it was prepared for, show nothing dispatched, and read back exactly — rows, parents, content, members,
      * rule state, and a private input readable and matching — with every row the group does not bind approved by its
      * own exact token (rows 3-8 of the recovery table, with no answer or receipt counted). This is not the generic
@@ -504,8 +513,8 @@ function createManagedCreateContext({ store, approvals = [], notFoundCode, appro
       const env = snapshot();
       const results = [];
       const proposals = [];
-      for (const { token, observation, capture, declarationSha256 } of items) {
-        const { a, verdict } = readOnlyVerdict(env, { token, observation, declarationSha256 });
+      for (const { token, observation, capture, declarationSha256, approvalTokenOf: itemTokenOf } of items) {
+        const { a, verdict } = readOnlyVerdict(env, { token, observation, declarationSha256, itemTokenOf });
         if (!capture || capture.token !== token) throw new TypeError(`the managed ${a.family} "${a.key}" has no capture taken before its fresh read (captureReadOnly)`);
         results.push({ family: a.family, key: a.key, token, verdict });
         if (verdict.action === 'commit') proposals.push({ ...proposalOf(a, observation, verdict.rows, env), capture });
@@ -516,7 +525,7 @@ function createManagedCreateContext({ store, approvals = [], notFoundCode, appro
       return results;
     },
     /**
-     * The verdict acceptReadOnly would give each item [{ token, observation, declarationSha256? }], judged exactly as it
+     * The verdict acceptReadOnly would give each item [{ token, observation, declarationSha256?, approvalTokenOf? }], judged exactly as it
      * judges (the declaration, the zero dispatch, then rows 3-8 with no answer or receipt counted), WITHOUT committing
      * anything: a read-only preflight names the halt before the build sends anything, and a commit here is only a
      * forecast — the acceptance itself re-reads, re-captures and re-judges. Answers [{ family, key, token, verdict }].
@@ -524,8 +533,8 @@ function createManagedCreateContext({ store, approvals = [], notFoundCode, appro
     judgeReadOnly(items) {
       store.refresh();
       const env = snapshot();
-      return items.map(({ token, observation, declarationSha256 }) => {
-        const { a, verdict } = readOnlyVerdict(env, { token, observation, declarationSha256 });
+      return items.map(({ token, observation, declarationSha256, approvalTokenOf: itemTokenOf }) => {
+        const { a, verdict } = readOnlyVerdict(env, { token, observation, declarationSha256, itemTokenOf });
         return { family: a.family, key: a.key, token, verdict };
       });
     },
@@ -533,7 +542,7 @@ function createManagedCreateContext({ store, approvals = [], notFoundCode, appro
 
   // One item of a read-only acceptance, judged (acceptReadOnly, judgeReadOnly). Throws when the attempt is not a plan of
   // existing rows with a base observation: only such a plan is ever accepted without a send.
-  function readOnlyVerdict(env, { token, observation, declarationSha256 }) {
+  function readOnlyVerdict(env, { token, observation, declarationSha256, itemTokenOf }) {
     const a = attemptOf(env, token);
     const name = `the managed ${a.family} "${a.key}"`;
     if (!a.rowProtocol || !a.expected || !a.expected.baseObservation || a.rowProtocol.rows.some((r) => r.mode !== 'update')) {
@@ -547,7 +556,7 @@ function createManagedCreateContext({ store, approvals = [], notFoundCode, appro
     } else if (!attemptProvenUnsent(a, env.workflowEffects)) {
       verdict = halt(STORE_CODES.pending, `${name} attempt may have sent something; it is recovered from its original expectation, never accepted read-only`);
     } else {
-      verdict = judgeRows(a, observation, { approvals: approved, boundRecords: group ? group.records : [], notFoundCode, approvalTokenOf, readOnly: true });
+      verdict = judgeRows(a, observation, { approvals: approved, boundRecords: group ? group.records : [], notFoundCode, approvalTokenOf: typeof itemTokenOf === 'function' ? itemTokenOf : approvalTokenOf, readOnly: true });
     }
     return { a, verdict };
   }

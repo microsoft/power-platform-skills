@@ -52,7 +52,7 @@ validation and retains a manual restart fallback when automation is unavailable.
 
 ## Skills
 
-The plugin provides 40 skills: 39 user-invocable skills and one model-only worker.
+The plugin provides 41 skills: 40 user-invocable skills and one model-only worker.
 They cover the full lifecycle of a Power Pages site - scaffolding,
 non-SPA authoring, deployment, data modeling, backend integration, authentication, localization,
 ALM and CI/CD, security review, performance analysis, testing, auditing, and platform migrations. Each user-invocable
@@ -110,6 +110,25 @@ changes without turning the site into an SPA.
 - New pages update navigation by default unless the user explicitly asks not to
 - Preserves local-only boundaries until the user explicitly runs deployment
 - Invokes the model-only `author-webpage-content` worker for localized page-body composition
+
+#### `/compare-site-configurations`
+
+> "My site works in dev but not in the test environment"
+>
+> "Compare the configuration of my dev and production Power Pages sites"
+>
+> "Compare this local downloaded site with the live site"
+
+Asks for both sites in one form: each can be a downloaded folder, a website URL, or a website record ID with its Dataverse environment URL.
+Downloads remote sites into separate local folders and opens a self-contained HTML report in the default browser.
+The comparison engine and HTML renderer are bundled directly from the Power Platform VS Code extension.
+The report keeps its component tabs, expandable text diffs, and Local/Remote labels: Added Locally means first-site-only; Deleted Locally means second-site-only.
+Only Power Pages configuration is compared: the component folders PAC writes and the `.yml` files at the site root.
+Other files in a site folder, such as `docs/`, are listed as skipped; for SPA sites only `.powerpages-site` is compared, not application source.
+Standard and Enhanced non-SPA sites and SPA sites are supported.
+Alongside the HTML report, the skill writes a JSON file that teammates can open in VS Code through **Power Pages Actions** > **Site Comparison** > **Import Comparison**, the same format as the extension's **Export as JSON**.
+After the report opens, the agent reads the changed files, explains which differences can change how the sites behave (access, settings, forms, templates, scripts) and asks whether you are seeing a behavior difference.
+Neither site is modified or uploaded; reports stay outside the site trees and contain site configuration, so share them only with people allowed to see it.
 
 #### `/deploy-site`
 

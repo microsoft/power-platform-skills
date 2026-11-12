@@ -9,7 +9,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-const { assertSafeOutputDir, assertPlainFileTarget, writeFileSafe, appendFileSafe, removeFileSafe, removeTreeWithRetry } = require('../lib/safe-fs.js');
+const { assertSafeOutputDir, assertPlainFileTarget, assertFileReplaceable, writeFileSafe, appendFileSafe, removeFileSafe, removeTreeWithRetry } = require('../lib/safe-fs.js');
 
 const dirs = [];
 test.after(() => {
@@ -839,3 +839,59 @@ test('removeTreeWithRetry never throws: what it cannot remove it describes, what
   assert.strictEqual(removeTreeWithRetry('somewhere', { fs: { rmSync: () => { throw Object.assign(new Error('x'), { code: 42 }); } } }), 42);
   assert.strictEqual(removeTreeWithRetry('somewhere', { fs: { rmSync: () => { throw null; } } }), 'UNKNOWN');
 });
+
+// ── assertFileReplaceable: the look a download takes at app-spec.json before it replaces pages/ ──────────────────────────────────────
+
+// `fs` with some of its methods replaced.
+function fsWith(overrides) {
+  const wrapped = Object.create(fs);
+  for (const [name, value] of Object.entries(overrides)) Object.defineProperty(wrapped, name, { value, writable: true });
+  return wrapped;
+}
+
+test('assertFileReplaceable makes, then removes, an empty sibling of its own to learn the folder takes a new file: a moment\'s lock on its removal is waited out on Windows, and nothing is left', () => {
+  const dir = tmp();
+  const spec = path.join(dir, 'app-spec.json');
+  fs.writeFileSync(spec, '{"maker":"unchanged"}');
+  let calls = 0;
+  const answer = assertFileReplaceable(spec, { fs: fsWith({ unlinkSync(p) {
+    calls += 1;
+    if (calls === 1 && process.platform === 'win32') throw Object.assign(new Error('EBUSY: injected'), { code: 'EBUSY' });
+    fs.unlinkSync(p);
+  } }) });
+  assert.strictEqual(answer, path.join(fs.realpathSync.native(dir), 'app-spec.json'));
+  assert.strictEqual(calls, process.platform === 'win32' ? 2 : 1);
+  assert.deepStrictEqual(fs.readdirSync(dir), ['app-spec.json']);
+  assert.strictEqual(fs.readFileSync(spec, 'utf8'), '{"maker":"unchanged"}');
+});
+
+for (const code of ['EIO', 'EACCES']) {
+  test(`assertFileReplaceable refuses when the empty sibling it made cannot be removed (${code}): the refusal names that file exactly and says it is the download's own, empty and can be deleted`, () => {
+    const dir = tmp();
+    const spec = path.join(dir, 'app-spec.json');
+    fs.writeFileSync(spec, '{"maker":"unchanged"}');
+    let probe = null;
+    const cause = Object.assign(new Error(`${code}: injected`), { code });
+    let thrown = null;
+    try {
+      assertFileReplaceable(spec, { fs: fsWith({
+        openSync(p, ...args) { probe = String(p); return fs.openSync(p, ...args); },
+        unlinkSync() { throw cause; },
+      }) });
+    } catch (e) {
+      thrown = e;
+    }
+    const left = fs.readdirSync(dir).filter((n) => n !== 'app-spec.json');
+    assert.ok(thrown, 'the look does not pass while its own file is left behind');
+    assert.strictEqual(thrown.code, 'IO_ERROR');
+    assert.strictEqual(thrown.reason, 'probe-not-removed');
+    assert.strictEqual(thrown.cause, cause);
+    assert.deepStrictEqual(left, [path.basename(probe)]);
+    assert.match(left[0], /^\.app-spec\.json\.\d+\.[0-9a-f]{8}\.tmp$/);
+    assert.strictEqual(fs.statSync(probe).size, 0);
+    assert.ok(thrown.message.includes(probe), thrown.message);
+    assert.ok(thrown.message.includes(`(${code})`), thrown.message);
+    assert.match(thrown.message, /an empty file this download made .*can be deleted/);
+    assert.strictEqual(fs.readFileSync(spec, 'utf8'), '{"maker":"unchanged"}');
+  });
+}

@@ -327,7 +327,7 @@ test('collectProject does not flag complete processed PCF output as stale', () =
 
     assert.equal(ids(findings).includes('PROJ_OUT_STALE'), false);
   } finally {
-    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
 
@@ -508,7 +508,7 @@ test('collectProject reports unsafe pcfconfig outDir through resolveOutRoot with
     assert.match(byId(findings, 'PROJ_OUT_UNSAFE').fix, /pcfconfig\.json/);
     assert.match(byId(findings, 'PROJ_OUT_UNSAFE').fix, /out\/controls/);
   } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
 
@@ -527,7 +527,7 @@ test('collectProject parses UTF-8 BOM package.json while preserving project byte
 
     assert.equal(state.packageJson.devDependencies['pcf-scripts'], dependencySet(MATRIX, 'standard').devDependencies['pcf-scripts']);
   } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
 

@@ -221,4 +221,10 @@ test('DME transformation is limited to mapped metadata, and plugin guidance pres
   assert.match(prompt, /if \(!sourceRows\.MoreRecords\) break/);
   assert.match(prompt, /sourceQuery\.PageInfo\.PagingCookie = sourceRows\.PagingCookie/);
   assert.match(prompt, /response\.IsFaulted/);
+  assert.match(prompt, /confirm the approved metadata\s+migration has completed/);
+  assert.match(prompt, /read-only preflight across ALL source rows/);
+  assert.match(prompt, /verifiedComponentIds\.TryGetValue\(src\.Id, out var componentId\)/);
+  assert.match(prompt, /"powerpagecomponent", componentId/);
+  assert.doesNotMatch(prompt, /Then run the actual SDM.to.EDM migration/);
+  assert.doesNotMatch(prompt, /"powerpagecomponent", src\.Id/);
 });

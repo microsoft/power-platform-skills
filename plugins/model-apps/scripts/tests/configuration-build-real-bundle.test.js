@@ -1189,6 +1189,40 @@ test('protected configuration through the build command: a first create whose na
   assert.deepEqual(first.org.unexpected, []);
 });
 
+// Opting in over two APIs made without it: one stop names both namesakes, each with its own id, the fields the build would then
+// change and its exact approvals, and those approvals given back on the command line adopt both and send only the printed edit.
+test('protected configuration through the build command: a stop over several namesakes shows each one\u2019s id and fields beside its approvals, and those approvals adopt them', async () => {
+  const twoApis = (description) => {
+    const spec = apiSpec();
+    spec.customApis.push({ ...structuredClone(spec.customApis[0]), uniqueName: 'contoso_Other', displayName: 'Other', description, isFunction: false, requestParameters: [], responseProperties: [] });
+    return spec;
+  };
+  const plain = twoApis('Maker text');
+  delete plain.configurationIdentity;
+  const made = await runCommand(plain);
+  succeeded(made, 'the ordinary create');
+  const idOf = (name) => made.org.rows('customapis').find((r) => r.uniquename === name).customapiid;
+  const mark = made.org.requests.length;
+  const stopped = await runCommand(twoApis('Replacement'), { org: made.org, appDir: made.appDir, argv: DATA });
+  assert.equal(stopped.thrown && stopped.thrown.code, 'create-identity-conflict', stopped.thrown && stopped.thrown.message);
+  assert.notEqual(stopped.exitCode, 0);
+  assert.deepEqual(made.org.writes(mark), [], 'nothing is written');
+  // The error main() throws is the one the command prints whole (its own top-level catch, emitResult).
+  const shown = stopped.thrown.message;
+  for (const [key, name, change] of [['contoso_calc', 'contoso_Calc', 'nothing in it'], ['contoso_other', 'contoso_Other', 'only these fields, /description']]) {
+    const sentence = `Adopt customApi ${key} at its id ${idOf(name)} (the build would then change ${change}) only under these exact approvals, given after checking those rows are yours: "adopt:customApi:${key}@${idOf(name)}`;
+    assert.ok(shown.includes(sentence), `${key}: ${shown.slice(-1500)}`);
+  }
+  const tokens = [...stopped.thrown.message.matchAll(/given after checking those rows are yours: ((?:"(?:[^"\\]|\\.)*"(?:, )?)+)\./g)].flatMap((m) => JSON.parse(`[${m[1]}]`));
+  assert.equal(tokens.length, 4, tokens.join(' '));
+  const before = made.org.requests.length;
+  const done = await runCommand(twoApis('Replacement'), { org: made.org, appDir: made.appDir, argv: [...DATA, ...authorize(tokens)] });
+  succeeded(done, 'the adoption');
+  assert.deepEqual(made.org.writes(before).filter((w) => /customapi/i.test(w)), [`PATCH /customapis(${idOf('contoso_Other')})`]);
+  assert.equal(made.org.rows('customapis').length, 2);
+  assert.equal(made.org.rows('customapis').find((r) => r.uniquename === 'contoso_Other').description, 'Replacement');
+  assert.deepEqual(made.org.unexpected, []);
+});
 test('protected configuration through the build command: a first create whose namesake query cannot be completed stops before the first write', async () => {
   let failing = false;
   const org = commandOrg({ intercept: (req) => (failing && req.method === 'GET' && /^\/customapis\?/.test(req.path) && /\$filter=uniquename/.test(decodeURIComponent(req.path))

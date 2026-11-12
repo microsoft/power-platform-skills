@@ -13,6 +13,24 @@ The correct fix is to deliver a Dataverse solution package containing:
 The user will import this solution into their environment and run a separate
 data-migration step (covered at the end of this prompt).
 
+## Metadata prerequisite and execution order
+
+Solution schema preparation and packing can happen before metadata migration.
+Data copy cannot: before any extension-row writes, confirm the approved metadata
+migration has completed for this site and environment, or that the downstream
+metadata solution import has completed. The outer migration skill normally
+performs that metadata step before generating this handoff; verify it rather
+than assuming a standalone invocation has done so.
+
+Run a separate read-only preflight across ALL source rows to verify their target
+`powerpagecomponent` rows and expected component types. Build an explicit
+source-ID to component-ID mapping (`verifiedComponentIds` in the C# skeleton).
+Migration normally preserves the source GUID, but a GUID alone is not evidence
+that a matching component exists in the intended environment.
+If metadata or any mapping is missing, STOP and return to the migration
+conversation. Do not copy data, activate EDM, or start another PAC migration
+from this prompt. Resume data copy only after the prerequisite is verified.
+
 ## Findings (per-table groupings from the customization report)
 
 {{DME_TABLE_GROUPS_BLOCK}}
@@ -86,8 +104,10 @@ data-migration step (covered at the end of this prompt).
 
           pac solution import --path "./edm-migration-solution.zip"
 
-   b. After import, migrate row data from the old `adx_*` tables into the
-      new custom tables. For each finding:
+   b. **Post-metadata-migration data copy:** after solution import AND the
+      metadata prerequisite and complete read-only mapping preflight above,
+      migrate row data from the old `adx_*` tables into the new custom tables.
+      For each finding:
       - Read rows from the source `adx_*` table
       - For each row, find the corresponding `powerpagecomponent` row
         (joined by primary key — `powerpagecomponent` rows preserve the
@@ -103,13 +123,15 @@ data-migration step (covered at the end of this prompt).
       Skeleton:
         Trigger: Manual / Recurrence
         Step 1: List rows from <adx_source_table> via Dataverse connector
-        Step 2: For each row → Create a new row in <new_custom_table> with
-                <prefix>_powerpagecomponentid = item().<primary_key> and
+        Step 2: Resolve the component ID using the verified mapping; stop if absent.
+        Step 3: For each row → Create a new row in <new_custom_table> with
+                <prefix>_powerpagecomponentid = verified component ID and
                 <custom_columns> copied verbatim
 
       **Approach 2 — C# console app (higher volumes, batched):**
 
-      Skeleton:
+      Skeleton (supply `verifiedComponentIds` from the complete read-only
+      preflight before running this write phase):
 
           using Microsoft.Xrm.Sdk;
           using Microsoft.Xrm.Sdk.Messages;
@@ -130,9 +152,12 @@ data-migration step (covered at the end of this prompt).
           while (true) {
               var sourceRows = service.RetrieveMultiple(sourceQuery);
               foreach (var src in sourceRows.Entities) {
+                  if (!verifiedComponentIds.TryGetValue(src.Id, out var componentId)) {
+                      throw new InvalidOperationException("Missing verified component mapping; stop and return to the migration conversation.");
+                  }
                   var newRow = new Entity("<prefix>_<target>");
                   newRow["<prefix>_powerpagecomponentid"] = new EntityReference(
-                      "powerpagecomponent", src.Id);
+                      "powerpagecomponent", componentId);
                   newRow["<custom_column1>"] = src.GetAttributeValue<object>("<custom_column1>");
                   // ... copy remaining custom columns ...
                   batch.Requests.Add(new CreateRequest { Target = newRow });
@@ -163,8 +188,10 @@ data-migration step (covered at the end of this prompt).
         columns to instead query the new custom table via its lookup.
         (The SDM-to-EDM skill's FetchXML rewriter handles entity-level
         changes; custom-column references need this manual update.)
-      - Then run the actual SDM-to-EDM migration via PAC CLI (a separate
-        step in the migration skill, not in this remediation prompt).
+      - Reconcile source and target row counts, mappings, custom values and
+        consumer changes, then return the results to the migration conversation.
+        Continue only through its existing reference-migration, validation and
+        activation approval gates; do not rerun metadata migration after data copy.
 
 ## References
 
