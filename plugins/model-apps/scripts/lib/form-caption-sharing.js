@@ -100,6 +100,18 @@ function fingerprintOf(row) {
   return systemFormRootLayerSha256({ name: row.name, description: row.description, formxml: row.formxml, type: typeOf(row.type), objecttypecode: row.objecttypecode });
 }
 
+// The fingerprint of any copy a listing returned, or null (it then matches no fresh read) for one that cannot be fingerprinted or
+// whose form XML is past the one-document budget — a fresh read past it was refused, so such a copy cannot be the fresh read, and
+// it is not hashed.
+function fingerprintOfCopy(row, lim) {
+  try {
+    if (!row || typeof row !== 'object' || (typeof row.formxml === 'string' && bytes(row.formxml) > lim.maxXmlBytes)) return null;
+    return fingerprintOf(row);
+  } catch {
+    return null;
+  }
+}
+
 // The stopped forms an observation may explain: a stored managed FORM group whose root is a form id, on a table scope, read by
 // the stop that decided with a saved layer that is not the published one. Answers [{ formId, key, savedSha256, publishedSha256 }],
 // one per form (the first observation of a form wins).
@@ -164,12 +176,13 @@ function layerReason(error) {
   return 'read-failed';
 }
 
-// The forms of `table` in both layers. Answers { layers: { saved, published }, coverage, reasons, reads, formsRead, dashboards, unsupported }
+// The forms of `table` in both layers. Answers { layers: { saved, published }, coverage, conflicts, reasons, reads, formsRead, dashboards, unsupported }
 // where a layer is null when none of it could be read, else a Map<formId, { name, fingerprint, cells | null, reason? }> (cells null:
 // that form's XML was not read, for `reason`; fingerprint null: its row was not read whole). `coverage[layer]` is 'complete' (one
 // whole listing), 'partial' (the pages accepted before a later read failed — a form it does not list may be on a page not read) or
-// 'unread'. A row that is not a form of this table is left out with a reason. `budget` is the presentation's XML byte budget, which
-// the root reads have already spent from.
+// 'unread'. A row that is not a form of this table is left out with a reason. `conflicts[layer]`, set only for a layer whose pages
+// repeated a form, is a Map<formId, row[]> of every copy received of each repeated form: none of them is in `layers`, and the caller
+// compares them with what it read itself. `budget` is the presentation's XML byte budget, which the root reads have already spent from.
 async function readInventory(client, table, lim, budget) {
   const { readSystemFormLayer, formKey } = require('./systemform-inventory.js');
   const filter = `$filter=objecttypecode eq '${odataLit(table)}'`;
@@ -178,12 +191,12 @@ async function readInventory(client, table, lim, budget) {
     saved: `/systemforms/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()?$select=${SELECT}&${filter}`,
   };
   const out = {
-    layers: {}, coverage: {}, reasons: [], reads: { saved: 0, published: 0 }, formsRead: { saved: 0, published: 0 }, dashboards: new Set(), unsupported: new Set(),
+    layers: {}, coverage: {}, conflicts: {}, reasons: [], reads: { saved: 0, published: 0 }, formsRead: { saved: 0, published: 0 }, dashboards: new Set(), unsupported: new Set(),
   };
   for (const layer of LAYERS) {
     const stats = { reads: 0 };
     const overSized = new Set();
-    const progress = { rows: [], conflicts: new Set() };
+    const progress = { rows: [], conflicts: new Set(), conflictRows: [] };
     const stop = (reason, why) => Object.assign(new Error(`the forms of table ${table} in the ${layer} layer could not all be read${why ? ` (${why})` : ''}`), { code: 'FORM_CAPTION_SHARING_UNREADABLE', sharingReason: reason });
     const errors = {
       code: 'FORM_CAPTION_SHARING_UNREADABLE',
@@ -212,6 +225,15 @@ async function readInventory(client, table, lim, budget) {
       // form they do not list is NOT shown as missing from the layer (stateIn), and a form that came back twice is not used.
       rows = progress.rows.filter((row) => !progress.conflicts.has(formKey(row)));
       out.coverage[layer] = rows.length ? 'partial' : 'unread';
+      if (progress.conflicts.size) {
+        const copies = new Map();
+        for (const row of [...progress.rows, ...progress.conflictRows]) {
+          if (!progress.conflicts.has(formKey(row))) continue;
+          const formId = normalizeGuid(row.formid);
+          if (formId) copies.set(formId, [...(copies.get(formId) || []), row]);
+        }
+        out.conflicts[layer] = copies;
+      }
     } finally {
       out.reads[layer] = stats.reads;
     }
@@ -348,8 +370,12 @@ async function readFormCaptionSharing(client, { scope, roots, limits, cache } = 
     let consistent = true;
     // The listing must show the stopped form as the fresh read did: a row with another name, description, type, table or form
     // XML was read at another moment, and the two are never joined into one explanation. A layer read whole that does not list
-    // it is incomplete; one read in part may hold it on a page that was not read.
+    // it is incomplete; one read in part may hold it on a page that was not read. A form the pages repeated is in no layer, but
+    // each copy received of it is still what the platform answered: one that is not the fresh read contradicts it, wherever it
+    // came (even on the page that left the layer unread).
     for (const layer of LAYERS) {
+      const copies = inv.conflicts[layer] && inv.conflicts[layer].get(root.formId);
+      if (copies && copies.some((row) => fingerprintOfCopy(row, lim) !== outcome.fingerprints[layer])) consistent = false;
       const listed = inv.layers[layer] && inv.layers[layer].get(root.formId);
       if (!inv.layers[layer]) continue;
       if (!listed) { if (inv.coverage[layer] === 'complete') reasons.push('incomplete-pages'); continue; }

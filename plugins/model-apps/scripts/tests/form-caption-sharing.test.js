@@ -365,6 +365,36 @@ test('a layer whose later page fails keeps the forms of the pages it accepted: w
   assert.deepEqual(peer3.published, { state: 'unreadable' });
 });
 
+test('a page that repeats forms is evidence against every form it repeats: none of their copies is used, and a stopped form it contradicts explains nothing', async () => {
+  const repeat = async (copies, { firstPage = true } = {}) => {
+    const f = await over(principal);
+    const entry = await observed(f.client, ROOT);
+    const link = 'https://contoso.crm.dynamics.com/api/data/v9.0/systemforms?$skiptoken=repeat';
+    const page = rowsOf(f.wire, 'published');
+    if (firstPage) {
+      scriptList(f.wire, 'published', { statusCode: 200, body: { value: page, '@odata.nextLink': link } });
+      f.wire.script((e) => e.url.includes('skiptoken=repeat'), { statusCode: 200, body: { value: copies(page) } });
+    } else {
+      scriptList(f.wire, 'published', { statusCode: 200, body: { value: [...page, ...copies(page)] } });
+    }
+    return (await observe(f.client, [entry])).result;
+  };
+  const of = (page, id) => page.find((r) => r.formid === id);
+  const peerAfter = (page) => ({ ...of(page, PEER), name: 'Account copy AFTER', formxml: of(page, PEER).formxml.replace('ZZZ old', 'caption AFTER') });
+  // Both repeats on the second page, the stopped form's an exact copy first: the peer's copies are not used either.
+  const both = await repeat((page) => [{ ...of(page, ROOT) }, peerAfter(page)]);
+  assert.deepEqual([both.scan.status, both.scan.reason], ['partial', 'incomplete-pages']);
+  const peer = both.cells[0].forms.find((x) => x.formId === PEER);
+  assert.deepEqual([peer.observedIn, peer.published], ['saved', { state: 'unreadable' }]);
+  // The stopped form repeated with another name and caption on a later page is another moment: it explains nothing.
+  const rootAfter = (page) => ({ ...of(page, ROOT), name: 'Account main AFTER', formxml: of(page, ROOT).formxml.replace('ZZZ old', 'caption AFTER') });
+  const contradicted = await repeat((page) => [rootAfter(page)]);
+  assert.deepEqual([contradicted.scan.status, contradicted.cells.length], ['partial', 0]);
+  // ... even when the repeat is on the only page, which then leaves the layer unread.
+  const onlyPage = await repeat((page) => [rootAfter(page)], { firstPage: false });
+  assert.deepEqual([onlyPage.scan.status, onlyPage.scan.coverage.published, onlyPage.cells.length], ['partial', 'unread', 0]);
+});
+
 test('a returned form row with no readable name is an unreadable form (invalid-row) that leaves the scan partial, never a form left out', async () => {
   for (const name of [undefined, null, 7]) {
     const { wire, client } = await over(principal);

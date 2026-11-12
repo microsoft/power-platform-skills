@@ -3135,8 +3135,11 @@ charts phases. A spec that uses none of them takes the legacy paths unchanged. W
   and table, both layers), else `observations-changed`. The paged reader's optional `progress` channel keeps the
   rows of the pages it accepted before a later failure (the deletion guard does not pass it, and keeps its
   all-or-nothing refusal), so the scan is partial with `scan.coverage` per listing ('complete' | 'partial' |
-  'unread') and a form a partial listing does not hold reads as not read, never as not returned. A returned row of
-  a read form type with no text name or XML is an unreadable form (`invalid-row`).
+  'unread') and a form a partial listing does not hold reads as not read, never as not returned. Every form a
+  returned page repeats (of an earlier page or within itself) is left out of its layer with all its copies, and a
+  copy of the stopped form that does not fingerprint as its fresh read is `observations-changed` even on the page
+  that ended the listing. A returned row of a read form type with no text name or XML is an unreadable form
+  (`invalid-row`).
   Form types 2, 6, 7 and 11 are read; dashboards are skipped; any other type, a failed or malformed page, a budget
   or an unreadable sharer makes the scan PARTIAL or UNAVAILABLE with its reason, never a negative. A form is a sharer
   only by the same normalized cell id (never a control, caption or GUID found elsewhere). The answer is display-only:

@@ -64,7 +64,9 @@ const formKey = (row) => {
 // `progress`, optional, is the channel for a caller that can use PART of a layer (the diagnostic; never the deletion guard, which must refuse on any gap):
 // a page's rows are added to `progress.rows` only once collectionRows has ACCEPTED that page, which it shows by asking for the next one (or by returning).
 // So a page whose own answer is refused (a malformed continuation, a row past a budget, a repeat) never adds a row, and the rows of the pages before a
-// failure stay. A form that came back twice is put in `progress.conflicts`: neither copy says which is current, so the caller must not use it.
+// failure stay. EVERY form a returned page repeats (of an earlier page or within itself) is put in `progress.conflicts`, and that page's copies of it in
+// `progress.conflictRows` (the earlier copies are in `progress.rows`): no copy says which is current, so the caller must not use any of them as evidence,
+// and must treat a copy that differs from what it read itself as a contradiction.
 function budgeted(client, { maxReads, maxForms, refuse, incomplete, onRow, progress }, counter) {
   const commit = () => {
     if (progress && counter.pending) progress.rows.push(...counter.pending);
@@ -79,15 +81,23 @@ function budgeted(client, { maxReads, maxForms, refuse, incomplete, onRow, progr
     const body = response && response.body;
     const value = body && body.value;
     if (Array.isArray(value)) {
+      // The whole page is in hand, so every form it repeats — of an earlier page or of itself — is known before any row is
+      // refused below: the first repeat stops the reading, but every repeated form, and each of its copies, goes to `progress`.
+      if (progress) {
+        const seen = new Set();
+        for (const row of value) {
+          const key = formKey(row);
+          if (key && (counter.ids.has(key) || seen.has(key))) progress.conflicts.add(key);
+          seen.add(key);
+        }
+        for (const row of value) if (progress.conflicts.has(formKey(row))) progress.conflictRows.push(row);
+      }
       counter.forms += value.length;
       if (counter.forms > maxForms) throw refuse(`— the layer holds more than ${maxForms} forms, the most this check reads`);
       for (const row of value) {
         const key = formKey(row);
         if (!key) throw incomplete(`a form came back with no form id (${JSON.stringify(row && row.formid !== undefined ? row.formid : null)})`);
-        if (counter.ids.has(key)) {
-          if (progress) progress.conflicts.add(key);
-          throw incomplete(`form ${key} came back twice`);
-        }
+        if (counter.ids.has(key)) throw incomplete(`form ${key} came back twice`);
         counter.ids.add(key);
         if (onRow) onRow(row, refuse);
       }
@@ -119,7 +129,7 @@ function budgeted(client, { maxReads, maxForms, refuse, incomplete, onRow, progr
  *               short(declared, held)    fewer forms than an answer declared
  *               failed(error)            any other failure of a read, with collectionRows' (or the client's) error
  *   onRow     optional, see budgeted
- *   progress  optional `{ rows: [], conflicts: new Set() }`, see budgeted: the rows of the pages accepted before a failure. It changes nothing
+ *   progress  optional `{ rows: [], conflicts: new Set(), conflictRows: [] }`, see budgeted: the rows of the pages accepted before a failure. It changes nothing
  *             about what this function answers or throws
  *   stats     optional: its `reads` is set to the reads this layer took, whether it succeeded or not
  * @returns {Promise<{ rows: object[], reads: number }>} the rows as answered
