@@ -183,7 +183,7 @@ test('an unprotected build halted after its values were sent leaves none of them
   assert.deepEqual(out.scan(), []);
 });
 
-// S847-5: the copies an earlier version's verify left (real SDK files: each artifact and its snapshot). They are proven to be what
+// The copies an earlier version's verify left (real SDK files: each artifact and its snapshot). They are proven to be what
 // the environment last held, so they are not read and change no decision; they are neither rewritten nor deleted (this version
 // never deletes a file it did not write); the build says, once and without any of their content, which folders hold them.
 test('copies an earlier version\u2019s verify left in the app folder\u2019s workspace are never read or deleted: an ordinary apply makes the same decisions, keeps them byte for byte and warns once naming their folders, never their content', async () => {
@@ -221,7 +221,7 @@ test('copies an earlier version\u2019s verify left in the app folder\u2019s work
   assert.deepEqual(first.org.unexpected, []);
 });
 
-// S847-4 (A): an edit an earlier version's SDK made and never sent. The SDK used to report it as a change; hiding it would read as clean.
+// An edit an earlier version's SDK made and never sent. The SDK used to report it as a change; hiding it would read as clean.
 test('a draft an earlier version left is never hidden or deleted: the SDK\u2019s first touch of it is refused, naming its files and quoting none of its content, and the run goes on once the maker removes it', async () => {
   const DRAFT = 'canary-draft-91c4';
   const first = await command(specOf());
@@ -260,7 +260,7 @@ test('a draft an earlier version left is never hidden or deleted: the SDK\u2019s
   assert.deepEqual(sensitiveFiles(ws), kept);
 });
 
-// S847-4 (A, through the command): the build's own verify meets such a draft in the app folder.
+// Through the command: the build's own verify meets such a draft in the app folder.
 test('a build whose verify meets a draft an earlier version left stops with the refusal and keeps the draft; once the maker deletes it, the rebuild verifies', async () => {
   const appDir = path.join(makeTempDir('ws-cfg-draft-cli-'), 'app');
   const ws = path.join(appDir, '.maker-workspace');
@@ -286,7 +286,7 @@ test('a build whose verify meets a draft an earlier version left stops with the 
   assert.deepEqual(first.org.writes(mark), []);
 });
 
-// S847-4 (A, a --workspace): the build's configuration step works in its own throwaway workspace, so a draft an earlier
+// A --workspace: the build's configuration step works in its own throwaway workspace, so a draft an earlier
 // version left in a --workspace is never read by it: an ordinary apply keeps it byte for byte (it used to be removed at the
 // first write) and the build names its folder in the warning, never its content.
 test('a build over a --workspace holding a draft an earlier version left keeps the draft byte for byte, sends nothing and names its folder', async () => {
@@ -308,7 +308,7 @@ test('a build over a --workspace holding a draft an earlier version left keeps t
   assert.ok(!run.text.includes('canary-draft-5be1') && !Object.values(CANARY).some((c) => run.text.includes(c)), 'the warning quotes no content');
 });
 
-// S847-4 (B): a caller-supplied workspace is no proof that everything under it is the plugin's.
+// A caller-supplied workspace is no proof that everything under it is the plugin's.
 test('a file of the maker\u2019s own in a sensitive folder of a --workspace with no manifest is kept by a build', async () => {
   const ws = makeTempDir('ws-cfg-notes-');
   const note = path.join(ws, 'environment-variables', 'author-notes.txt');
@@ -410,7 +410,7 @@ test('the overlay keeps the two sensitive kinds in memory and every other key on
   assert.equal(await keepSensitiveConfigurationInMemory(storage).readText(['environment-variables', 'c.json']), null);
 });
 
-// S847-6: a copy that cannot be read is not proven clean, so it is refused (never hidden, never recorded as checked), nothing is
+// A copy that cannot be read is not proven clean, so it is refused (never hidden, never recorded as checked), nothing is
 // deleted, and the next access after the obstruction is gone checks it again and goes on.
 const CLEAN = { id: 'e1', defaultValue: CANARY.default };
 function plantCleanPair(dir, id = 'e1') {
@@ -459,22 +459,71 @@ test('a copy an earlier version left that cannot be read is refused rather than 
   assert.deepEqual(sensitiveFiles(dir), before);
 });
 
-// The same on a real Windows lock: another program holds the copy open with no sharing (FileShare.None).
-function holdLocked(file) {
+// The same on a real Windows lock: another program (a child PowerShell) holds the copy open with no sharing (FileShare.None).
+// The child's whole life is bounded, so a misbehaving holder can never hang the suite: it must report the lock within
+// HOLDER_READY_MS and exit within HOLDER_EXIT_MS of its release, or it is killed and the test fails with the reason. Its end is
+// captured from the moment it is spawned: a holder that ends on its own after reporting the lock has already emitted `exit`, so
+// a listener added only when the test releases it would wait for an event that is gone.
+const HOLDER_READY_MS = 60000;
+const HOLDER_EXIT_MS = 15000;
+function withinMs(promise, ms, message) {
+  let timer;
+  const late = new Promise((resolve, reject) => { timer = setTimeout(() => reject(new Error(message)), ms); });
+  return Promise.race([promise, late]).finally(() => clearTimeout(timer));
+}
+async function holdLocked(file) {
   const quoted = file.replace(/'/g, "''");
   const ps = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
     `$f = [System.IO.File]::Open('${quoted}', 'Open', 'ReadWrite', 'None'); [Console]::Out.WriteLine('locked'); [Console]::Out.Flush(); [void][Console]::In.ReadLine(); $f.Close()`],
   { stdio: ['pipe', 'pipe', 'ignore'], windowsHide: true });
-  return new Promise((resolve, reject) => {
-    let out = '';
-    ps.stdout.on('data', (d) => {
-      out += d;
-      if (out.includes('locked')) resolve(() => new Promise((done) => { ps.on('exit', done); ps.stdin.end('\n'); }));
-    });
-    ps.on('error', reject);
-    ps.on('exit', (code) => { if (!out.includes('locked')) reject(new Error(`the lock holder ended first (${code})`)); });
+  // A release written after the holder has gone fails with EPIPE on its stdin; `ended` already records that it has gone.
+  ps.stdin.on('error', () => {});
+  const ended = new Promise((resolve) => {
+    ps.once('exit', (code, signal) => resolve(`exit ${code === null ? signal : code}`));
+    ps.once('error', (error) => resolve(`spawn error: ${error.message}`));
   });
+  const stop = async () => {
+    if (ps.exitCode === null && ps.signalCode === null) ps.kill();
+    await withinMs(ended, HOLDER_EXIT_MS, 'the lock holder did not end after it was killed').catch(() => {});
+  };
+  let out = '';
+  const locked = new Promise((resolve, reject) => {
+    ps.stdout.on('data', (d) => { out += d; if (out.includes('locked')) resolve(); });
+    ended.then((how) => reject(new Error(`the lock holder ended before it held the file (${how})`)));
+  });
+  try {
+    await withinMs(locked, HOLDER_READY_MS, `the lock holder did not report the lock within ${HOLDER_READY_MS} ms`);
+  } catch (error) {
+    await stop();
+    throw error;
+  }
+  let releasing = null;
+  const release = () => releasing || (releasing = (async () => {
+    if (!ps.stdin.destroyed && !ps.stdin.writableEnded) ps.stdin.end('\n');
+    try {
+      await withinMs(ended, HOLDER_EXIT_MS, `the lock holder did not exit within ${HOLDER_EXIT_MS} ms of its release`);
+    } catch (error) {
+      await stop();
+      throw error;
+    }
+  })());
+  release.pid = ps.pid;
+  release.ended = ended;
+  return release;
 }
+
+test('the lock holder releases cleanly even when it ended on its own after holding the file (Windows)', { skip: process.platform !== 'win32' && 'a FileShare.None lock is a Windows file-system feature' }, async () => {
+  const dir = makeTempDir('ws-cfg-holder-');
+  const file = path.join(dir, 'held.json');
+  fs.writeFileSync(file, '{}');
+  const release = await holdLocked(file);
+  process.kill(release.pid);
+  // The holder's exit has been delivered before the test releases it: the release must still settle, and settle once.
+  await release.ended;
+  await withinMs(release(), HOLDER_EXIT_MS + 5000, 'the release of a holder that had already ended did not settle');
+  await release();
+  assert.equal(fs.readFileSync(file, 'utf8'), '{}');
+});
 
 test('a copy locked by another program is refused while locked and checked again once released (Windows)', { skip: process.platform !== 'win32' && 'a FileShare.None lock is a Windows file-system feature' }, async () => {
   const dir = makeTempDir('ws-cfg-locked-');
