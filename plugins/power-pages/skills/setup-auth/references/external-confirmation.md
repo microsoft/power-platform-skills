@@ -48,8 +48,8 @@ User clicks "Create my account"
    │     (server sets ApplicationCookie BEFORE returning 302 - user is signed in)
    ├── 200 OK with validation-summary → throw parsed error (e.g., duplicate email
    │     when RequireUniqueEmail is true and user typed an existing email)
-   └── 200 OK with TermsAndConditions markers → throw TermsRequiredError →
-         SPA navigates to /terms
+   └── 200 OK with TermsAndConditions markers → throw TermsRequiredError
+         with the terms form's query context → SPA navigates to /terms with that context
 ```
 
 ### Auth service additions (when any external provider is configured)
@@ -67,7 +67,7 @@ Create `src/pages/ExternalLoginConfirmation.tsx`:
 - On mount, calls `fetchExternalLoginDetails()`. Three states: loading, cookie-expired, ready.
 - When cookie expired: shows "Sign-in session expired" with a "Back to sign in" link to `/login`.
 - When ready: shows the user's full name read-only (from claims), an editable email input (default = email claim), and an "invitation banner" if `invitationCode` is non-empty.
-- On submit, calls `confirmExternalLogin(details)`. Handles `TermsRequiredError` → navigate to `/terms`. Handles `ExternalLoginCookieExpiredError` (mid-session expiry) → switch UI to the expired state.
+- On submit, calls `confirmExternalLogin(details)`. Append `TermsRequiredError.search` when navigating to `/terms` so the server's return URL, external-sign-in flags and invitation survive. Handle `ExternalLoginCookieExpiredError` (including expiry during form submission) by switching to the expired state.
 - Server-side validation errors shown inline via `parseServerErrors`.
 
 ### Routing
@@ -228,13 +228,36 @@ export async function confirmExternalLogin(details: ExternalLoginDetails): Promi
 
   if (response.ok) {
     const html = await response.text();
-    const errors = parseServerErrors(html);
-    if (errors.length > 0) throw new Error(errors.join(' '));
 
     // Server may render TermsAndConditions instead of redirecting to it.
     if (html.includes('TermsAndConditions') || html.includes('IsTermsAndConditionsAccepted')) {
-      throw new TermsRequiredError();
+      const doc = new DOMParser().parseFromString(html, 'text/html');
+      const formAction = doc.querySelector('form')?.getAttribute('action') || response.url || window.location.href;
+      const actionParams = new URL(formAction, window.location.origin).searchParams;
+      const currentParams = new URLSearchParams(window.location.search);
+      const field = (name: string, fallback = '') =>
+        (doc.querySelector(`input[name="${name}"]`) as HTMLInputElement | null)?.value ||
+        actionParams.get(name) || currentParams.get(name) || fallback;
+      const termsParams = new URLSearchParams();
+      termsParams.set('ReturnUrl', field('ReturnUrl', details.returnUrl || '/'));
+      termsParams.set('UseExternalSignInAsync', field('UseExternalSignInAsync', 'True'));
+      termsParams.set('IsFacebook', field('IsFacebook', 'False'));
+      termsParams.set('IsInternalAADUser', field('IsInternalAADUser', 'False'));
+      const invitationCode = field('InvitationCode') || field('invitationCode', details.invitationCode);
+      if (invitationCode) termsParams.set('InvitationCode', invitationCode);
+      throw new TermsRequiredError(`?${termsParams.toString()}`);
     }
+
+    const responsePath = response.url
+      ? new URL(response.url, window.location.origin).pathname.toLowerCase()
+      : '';
+    if (responsePath.endsWith('/externalloginfailure.aspx')
+      || !new DOMParser().parseFromString(html, 'text/html').querySelector('input[name="Email"]')) {
+      throw new ExternalLoginCookieExpiredError();
+    }
+
+    const errors = parseServerErrors(html);
+    if (errors.length > 0) throw new Error(errors.join(' '));
 
     throw new Error('Unable to complete external login. Please try again.');
   }
@@ -276,7 +299,7 @@ export default function ExternalLoginConfirmation() {
     e.preventDefault()
     if (!details) return
     confirmExternalLogin({ ...details, email }).catch(err => {
-      if (err instanceof TermsRequiredError) return navigate('/terms')
+      if (err instanceof TermsRequiredError) return navigate(`/terms${err.search}`)
       if (err instanceof ExternalLoginCookieExpiredError) return setCookieExpired(true)
       // else show serverError
     })

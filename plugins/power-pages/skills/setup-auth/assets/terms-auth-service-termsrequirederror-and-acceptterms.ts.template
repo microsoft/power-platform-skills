@@ -52,6 +52,8 @@ export async function acceptTerms(returnUrl?: string): Promise<void> {
     redirect: 'follow',
   });
 
+  if (!response.ok) throw new Error(`Failed to accept terms: ${response.status}`);
+
   // Default to the ReturnUrl from the query string if no explicit one was passed -
   // that's where the server originally wanted to send the user.
   returnUrl = returnUrl ?? queryReturnUrl;

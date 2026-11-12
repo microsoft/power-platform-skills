@@ -193,10 +193,15 @@ function service({ local = false, profile = false, terms = false, external = fal
     source += '\n' + read('assets/local-auth-service.ts.template');
   }
   if (profile) source += '\n' + read('assets/user-profile-auth-service-additions.ts.template');
-  if (terms) source += '\n' + read('assets/terms-auth-service-termsrequirederror-and-acceptterms.ts.template');
+  if (terms) {
+    const termsClass = typescriptBlocks(read('references/terms-workflow.md'))
+      .find((block) => block.includes('export class TermsRequiredError'));
+    assert.ok(termsClass, 'terms workflow must define TermsRequiredError');
+    source += '\n' + termsClass + '\n' + read('assets/terms-auth-service-termsrequirederror-and-acceptterms.ts.template');
+  }
   if (external) {
     const blocks = typescriptBlocks(read('references/external-confirmation.md'));
-    source += '\n' + blocks.slice(0, 2).join('\n');
+    source += '\n' + blocks.slice(0, 3).join('\n');
   }
   const names = [...source.matchAll(/^export (?:async )?(?:function|const|class) (\w+)/gm)].map((m) => m[1]);
   // Node's built-in type stripping parses the real template, without adding a
@@ -278,6 +283,23 @@ test('profile template patches only defined fields and refreshes the header snap
   assert.equal(api.getUserDisplayName(), 'New');
 });
 
+test('profile reads send the Power Pages verification token', templateRuntime, async () => {
+  const calls = [];
+  const api = service({
+    profile: true,
+    fetch: async (url, options) => {
+      calls.push({ url, options });
+      return url === '/_layout/tokenhtml'
+        ? { ok: true, text: async () => '<input value="csrf-test">' }
+        : { ok: true, json: async () => ({ firstname: 'Maker' }) };
+    },
+  });
+  const profile = await api.getMyProfile('contact-placeholder');
+  assert.equal(profile.firstname, 'Maker');
+  assert.equal(calls[0].url, '/_layout/tokenhtml');
+  assert.equal(calls[1].options.headers.__RequestVerificationToken, 'csrf-test');
+});
+
 test('profile update preserves the server error message rather than catching its own throw', templateRuntime, async () => {
   const api = service({
     profile: true,
@@ -317,6 +339,24 @@ test('terms acceptance keeps external sign-in flags and surfaces a 200 validatio
   assert.equal(posted.get('UseExternalSignInAsync'), 'True');
   assert.equal(posted.get('IsFacebook'), 'True');
   assert.ok(calls[0].url.includes('UseExternalSignInAsync=True'));
+});
+
+test('terms acceptance rejects a non-OK response even when fetch followed a redirect', templateRuntime, async () => {
+  class Parser {
+    parseFromString() { return { querySelector: () => ({ value: 'csrf-test' }), querySelectorAll: () => [] }; }
+  }
+  const api = service({
+    terms: true,
+    DOMParser: Parser,
+    fetch: async (_url, options) => options
+      ? options.method === 'POST'
+        ? { ok: false, status: 403, redirected: true, text: async () => 'forbidden' }
+        : { ok: true, url: 'https://site.example.com/Account/Login/TermsAndConditions', text: async () => 'form' }
+      : { ok: true, url: 'https://site.example.com/Account/Login/TermsAndConditions', text: async () => 'form' },
+  });
+  api.window.location.search = '?UseExternalSignInAsync=True&ReturnUrl=%2Forders';
+  await assert.rejects(api.acceptTerms(), /403/);
+  assert.equal(api.window.location.href, '/');
 });
 
 test('registration parses the server action, ViewState and full Web Forms control names', templateRuntime, async () => {
@@ -425,6 +465,55 @@ test('external confirmation refetch preserves callback context and encoding', te
   const details = await api.fetchExternalLoginDetails();
   assert.equal(requested, '/Account/Login/ExternalLoginCallback' + api.window.location.search);
   assert.equal(details.returnUrl, '/orders?tab=open');
+});
+
+test('external confirmation maps an expired callback cookie to the expired-session error', templateRuntime, async () => {
+  class Parser {
+    parseFromString() { return { querySelector: () => null, querySelectorAll: () => [] }; }
+  }
+  const api = service({
+    external: true,
+    DOMParser: Parser,
+    fetch: async () => ({ ok: true, type: 'basic', text: async () => '<h1>ExternalLoginFailure.aspx</h1>' }),
+  });
+  await assert.rejects(api.confirmExternalLogin({
+    email: 'maker@contoso.com', firstName: 'Maker', lastName: 'User', username: 'maker',
+    invitationCode: '', returnUrl: '/', antiForgeryToken: 'csrf-test',
+  }), (error) => error instanceof api.ExternalLoginCookieExpiredError);
+});
+
+test('external terms errors preserve the server return URL, sign-in flags and invitation', templateRuntime, async () => {
+  const termsAction = '/Account/Login/TermsAndConditions?ReturnUrl=%2Forders%3Ftab%3Dopen&UseExternalSignInAsync=True&IsFacebook=True&IsInternalAADUser=False&InvitationCode=invite%2B1';
+  class Parser {
+    parseFromString() {
+      return {
+        querySelector: (selector) => selector === 'form'
+          ? { getAttribute: () => termsAction }
+          : null,
+        querySelectorAll: () => [],
+      };
+    }
+  }
+  const api = service({
+    external: true, terms: true, DOMParser: Parser,
+    fetch: async () => ({
+      ok: true, type: 'basic', text: async () => '<form action="/Account/Login/TermsAndConditions">TermsAndConditions IsTermsAndConditionsAccepted</form>',
+    }),
+  });
+  await assert.rejects(api.confirmExternalLogin({
+    email: 'maker@contoso.com', firstName: 'Maker', lastName: 'User', username: 'maker',
+    invitationCode: 'invite+1', returnUrl: '/orders?tab=open', antiForgeryToken: 'csrf-test',
+  }), (error) => {
+    assert.ok(error instanceof api.TermsRequiredError);
+    const params = new URLSearchParams(error.search);
+    assert.equal(params.get('ReturnUrl'), '/orders?tab=open');
+    assert.equal(params.get('UseExternalSignInAsync'), 'True');
+    assert.equal(params.get('IsFacebook'), 'True');
+    assert.equal(params.get('IsInternalAADUser'), 'False');
+    assert.equal(params.get('InvitationCode'), 'invite+1');
+    return true;
+  });
+  assert.match(read('references/external-confirmation.md'), /navigate\(`\/terms\$\{err\.search\}`\)/);
 });
 
 test('username registration form submits separate required email with the chosen username', templateRuntime, async () => {

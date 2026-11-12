@@ -115,7 +115,7 @@ export function getTenantId(): string | undefined {
 }
 
 /**
- * Fetches the anti-forgery token required for login form POSTs.
+ * Fetches the anti-forgery token required for login form posts and Power Pages Web API calls.
  * The token is embedded in an HTML response from /_layout/tokenhtml.
  */
 export async function fetchAntiForgeryToken(): Promise<string> {
