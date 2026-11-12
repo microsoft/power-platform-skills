@@ -3604,7 +3604,8 @@ The one exception (`unsentPublication`, `publishOnce`): a saved rule create (`ac
 unpublished whose `rule-state` effect is still `dispatched: false`, and which would commit (or need only
 ownership approvals, named first) if that publish had landed, sends `PublishDuplicateRule` once under a new
 epoch (`store.claimUnsentRowEffect`, through `ctx.claimEffect`), sealed dispatched before it leaves, then
-reads the rule a bounded number of times and settles. When a protected rule create's first publication may
+reads the rule a bounded number of times and settles. The other exception is a variable value its record proves
+never dispatched (`valueOwed`, below). When a protected rule create's first publication may
 have left but is not confirmed (its `rule-state` effect dispatched, the create neither committed nor an edit
 nor an adoption, read with a root and a stop of `create-completion-required` or `create-identity-unverified`),
 the stop also names the rule, its App Spec key and its original id, and says to wait and rebuild if the rule reads
@@ -3641,8 +3642,20 @@ owed recovery) is un-sealed by the transport while its scope is open (`managed-c
 `ctx.release` succeeds and the item stops as `create-refused` (`refusedStop`, `nothingCreated`, the service
 code), routed to the refused bucket so later items still run: nothing is pending, and the next build creates it
 again from what the App Spec then declares (a secret variable's value from the settings), or drops it. Measured live, a
-secret variable's protected create is two sends (the definition, then its value): a refused value therefore keeps the
-attempt (`create-outcome-unknown`, the definition row left), and the maker retires it as the reference describes. Environment variable and connection reference updates (definition, first
+variable's protected create with a value is two sends (the definition, then its value outside the solution): a refused
+value therefore keeps the attempt. When the run saw the definition acknowledged, the value fact is `notStarted` and no
+fact conflicts, the port receipts the root by a fresh exact read (`ctx.receiptPartialVariableRoot`, only for a candidate
+`run` kept in memory — a later process never receipts a root from a matching GET) and stops `create-value-refused`
+(`valueRefusedStop`: the service code and the attempt's own token, routed as unknown; `valueRefusedHint` spells the
+exact retire approval). The value is the one row a later build may still send (`valueOwed`, `completeValueOnce`): its
+record proves it never dispatched (no sealed fields, no child receipt), the attempt's own rows still hash to its
+declaration, the settings supply a non-empty value, a fresh read shows the definition exactly as prepared with the
+value and membership as recorded, and the definition is the attempt's own (`acknowledgedRoot`) or approved by its root
+`adopt:environmentVariable:<key>` token. It is claimed under a new epoch (`store.claimUnsentValueRow`, through
+`ctx.claimValue`: the capture re-checked under the lease, one claim per attempt per process), read and judged again,
+then sent once by `B.postPlannedVariableValue` through the fenced transport, which seals it dispatched first. A value
+refused again stops the same way; any other unchecked answer is `create-outcome-unknown` and never sent again; an
+acknowledged value settles the attempt. Environment variable and connection reference updates (definition, first
 value, own value replacement) go through the protected port as one checked set over the item's plan; a value
 row the binding does not hold is `create-identity-conflict`. Before any service change, every build runs the
 store-driven `pendingSweep` (the hookup's `sweep`, run by `configuration-build.js` `sweepPendingConfiguration`

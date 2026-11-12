@@ -1574,10 +1574,16 @@ the field builds exactly as before.
   error code, nothing was created. The item stops with `create-refused` and the code, the items after it still
   run, and nothing is left unfinished: correct the declaration or its deployment settings value and build
   again, or remove it from the App Spec. A refused edit of an existing row is different: it stays unfinished,
-  as above. A secret environment variable is created in two requests, its definition and then its value:
-  when the service refuses the value (for example a Key Vault reference it rejects), the definition already
-  exists, so the build stops with the outcome unknown and keeps the attempt; retire it as described next, then
-  delete that definition row before you declare the variable again.
+  as above. An environment variable with a value is created in two requests, its definition and then its
+  value. When the service refuses only the value (for example a Key Vault reference this environment
+  cannot read), the definition may already exist, so the attempt stays unfinished and the build stops with
+  `create-value-refused`, the service code and the exact retire approval. Correct the value in the
+  deployment settings, keep the App Spec definition unchanged, and build again: after fresh checks, the
+  build sends only the missing value, once, and never the definition again. A value refused again stops
+  the same way. If no recorded answer proves the attempt created the definition (for example its answer
+  was lost), the build first asks you to approve it with `adopt:environmentVariable:<key>`. A value whose
+  request may have reached the service is never sent again. To stop tracking the attempt instead, retire
+  it as described next, then delete that definition row before you declare the variable again.
   A create an earlier plugin version (2.26.0 or before) left unfinished after such a refusal is not
   released by corrected settings: that version did not record that nothing was created, so the build
   stops with `create-completion-required` and sends nothing. The stop prints the way out with the exact
