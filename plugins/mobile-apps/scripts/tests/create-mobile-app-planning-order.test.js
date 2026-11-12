@@ -9,7 +9,9 @@ const { createSkillPhaseA, createSkillPhaseB, createSkillWorkflow } = require('.
 const pluginRoot = path.resolve(__dirname, '..', '..');
 const createSkill = createSkillWorkflow();
 const planner = fs.readFileSync(
-  path.join(pluginRoot, 'agents', 'native-app-planner.md'),
+  // The screens-first order's planner; data-model-first keeps native-app-planner, covered by
+  // create-mobile-app-data-model-first.test.js.
+  path.join(pluginRoot, 'agents', 'architecture-planner.md'),
   'utf8',
 );
 const architect = fs.readFileSync(
@@ -129,11 +131,11 @@ test('screens are planned, built, and previewed before any architecture or data-
   // and SKILL.md holds nothing else: Phase B is only read once the preview is approved.
   const phaseA = createSkillPhaseA();
   for (const outside of ['Invoke skill: /add-', 'create-dataverse-snapshot.js', 'detect-publisher-prefix.js',
-    'discover-app-registrations.js', 'mobile-app:native-app-planner', 'auth.config.json` using `Edit`']) {
+    'discover-app-registrations.js', 'mobile-app:architecture-planner', 'auth.config.json` using `Edit`']) {
     assert.ok(!phaseA.includes(outside), `Phase A must not reach ${outside}`);
   }
   assert.doesNotMatch(phaseA, /^### Step (?:9|1[0-7])\b/m, 'Phase B steps belong in references/make-it-real.md');
-  assert.match(phaseA, /On `Looks good - continue`[\s\S]*\*\*Continue with Phase B:\*\* read \[`references\/make-it-real\.md`\]\(references\/make-it-real\.md\) in full now/);
+  assert.match(phaseA, /On `Looks good - continue`[\s\S]*\*\*Continue with Phase B:\*\* read \[`references\/make-it-real\.md`\]\(make-it-real\.md\) in full now/);
 
   // The screen graph gate is the only screen gate, and specs wait until the screens are built.
   const screens = section(createSkill, '### Step 4 — Plan the screens', '### Step 5 —');
@@ -260,7 +262,9 @@ test('data platform and integrations are approved before Dataverse modeling', ()
   // A connector-only app never reaches the architect, in either the first pass or a revision.
   assert.match(planner, /### Connector-only\s+Do not dispatch `mobile-app:data-model-architect`/);
   assert.match(planner, /in `connector-only` mode, do not enter plan mode, do not\s+dispatch or re-dispatch `data-model-architect`/);
-  assert.doesNotMatch(`${planner}\n${architect}\n${screenPlanner}\n${createSkill}`, /Gate [1-4]\b|Gate 4a|Gate 4b/);
+  // Screens-first names its gates. The shared agents also serve data-model-first, whose gates are
+  // numbered, so only the text this order owns is checked.
+  assert.doesNotMatch(`${planner}\n${createSkill}`, /Gate [1-4]\b|Gate 4a|Gate 4b/);
   assert.match(
     architect,
     /BLOCKED: This step only applies when Dataverse is selected/i,

@@ -29,6 +29,7 @@ const { parseArgs, validateFlags, readJsonArg, emitResult } = require('./lib/dat
 const { migrateAppSpec } = require('./lib/app-spec.js');
 const { buildPagePlan, pageKey, pageFile, planFile, pageDataMode, mdText } = require('./lib/page-plan.js');
 const { pageFileProblems } = require('./lib/page-file-targets.js');
+const { makeWritesBlocking } = require('./lib/output-redaction.js');
 
 function main() {
   const argv = process.argv.slice(2);
@@ -43,6 +44,7 @@ function main() {
     needValue: ['spec', 'working-dir', 'env', 'app', 'languages'],
   });
   if (flagError) {
+    makeWritesBlocking(process.stdout, process.stderr);
     process.stderr.write(`✗ ${flagError}\n${USAGE}\n`);
     process.exit(1);
   }

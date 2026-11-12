@@ -220,7 +220,8 @@ test('template preparation is delegated to the deterministic script', () => {
   // result is never re-parsed, so quotes, `$`, or backticks in a name stay literal.
   assert.match(command, /req\(\) \{ node -e "process\.stdout\.write\(String\(require\('\.\/\.tmp\/requirements\.json'\)/);
   assert.match(command, /NAME=\$\(req appName\); SLUG=\$\(req slug\)/);
-  assert.match(command, /node "\$\{PLUGIN_ROOT\}\/scripts\/prepare-mobile-template\.js" --working-dir \. --display-name "\$NAME" --slug "\$SLUG" > \.tmp\/prepare\.json \|\| exit 34/);
+  // `--screens-first` adds the data layer and the web-preview override only this order uses.
+  assert.match(command, /node "\$\{PLUGIN_ROOT\}\/scripts\/prepare-mobile-template\.js" --working-dir \. --display-name "\$NAME" --slug "\$SLUG" --screens-first > \.tmp\/prepare\.json \|\| exit 34/);
   assert.doesNotMatch(command, /--display-name "<displayName>"/);
   assert.match(notes, /Nothing writes under `src\/generated\/`, which only Power Apps generation commands own/);
   for (const source of [command, notes]) {
@@ -233,10 +234,12 @@ test('template preparation is delegated to the deterministic script', () => {
   // A refused folder is reported, never repaired by hand.
   assert.match(skill, /\| 34 \| Preparation refused the folder \| Report its exact error and STOP\.[^\n]*never fall back to rewriting files by hand/);
 
-  // Step 2b writes the plan skeleton before preparation, so the created-app check runs at
-  // Step 0, before anything in this run has written a file.
+  // Step 2b writes the plan skeleton before preparation, so the creation-state evidence is
+  // gathered at Step 0, before anything in this run has written a file. A plan alone is
+  // creation's own artifact, never proof of a created app.
   const startup = skill.slice(skill.indexOf('### Step 0 —'), skill.indexOf('### Step 1 —'));
-  assert.match(startup, /for f in memory-bank\.md docs\/\.run-plan\.json native-app-plan\.md \.datamodel-manifest\.json; do \[ -e "\$f" \] && echo "CREATED \$f"; done/);
+  assert.match(startup, /for f in memory-bank\.md native-app-plan\.md docs\/\.run-plan\.json \.datamodel-manifest\.json; do \[ -e "\$f" \] && echo "FOUND \$f"; done/);
+  assert.match(startup, /`FOUND native-app-plan\.md` or `FOUND docs\/\.run-plan\.json` alone \| Creation's own planning artifacts, allowed on a fresh starter/);
   assert.ok(skill.indexOf('### Step 0 —') < skill.indexOf('### Step 2b —'));
 });
 

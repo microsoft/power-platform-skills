@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|bash|sh|powershell|PowerShell|pwsh",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node -e 'try{const path=require(process.argv[1]);const root=process.env.PLUGIN_ROOT||process.env.CLAUDE_PLUGIN_ROOT;if(!root)throw new Error(process.argv[3]);process.argv[1]=undefined;require(path.resolve(root,process.argv[2]))}catch(error){console.error(process.argv[4]+error.message)}' node:path hooks/set-cli-origin.js 'Plugin root is not set' '[code-apps] CLI attribution was not applied: '",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

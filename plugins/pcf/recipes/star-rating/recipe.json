@@ -1,0 +1,31 @@
+{
+  "id": "star-rating",
+  "title": "Star rating",
+  "summary": "A compact accessible whole-number star rating field control.",
+  "template": "field-standard",
+  "hosts": ["model", "pages"],
+  "status": "available",
+  "certified": { "model": {}, "pages": {} },
+  "whyWanted": "Makers often need a small field control that demonstrates a complete PCF recipe from manifest patching through tests.",
+  "properties": [
+    {
+      "name": "value",
+      "displayNameKey": "Value_Display_Key",
+      "descriptionKey": "Value_Desc_Key",
+      "ofType": "Whole.None",
+      "usage": "bound",
+      "required": true
+    },
+    {
+      "name": "max",
+      "displayNameKey": "Max_Display_Key",
+      "descriptionKey": "Max_Desc_Key",
+      "ofType": "Whole.None",
+      "usage": "input",
+      "required": false,
+      "defaultValue": "5"
+    }
+  ],
+  "features": [],
+  "configuration": "Bind value to a Whole Number column and optionally set max to the largest rating, from 1 to 10."
+}

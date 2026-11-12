@@ -23,7 +23,7 @@ const {
   validateSnapshot,
 } = require('../create-dataverse-snapshot');
 const { renderPlanningEvidence } = require('../render-dataverse-planning-evidence');
-const { createSkillWorkflow } = require('./helpers/create-skill');
+const { createSkillDataModelFirst, createSkillWorkflow } = require('./helpers/create-skill');
 
 function label(value) {
   return { UserLocalizedLabel: { Label: value } };
@@ -1430,11 +1430,6 @@ test('planning contracts require snapshot-only and monotonic incremental expansi
     path.join(pluginRoot, 'agents', 'data-model-architect.md'),
     'utf8',
   );
-  const planner = fs.readFileSync(
-    path.join(pluginRoot, 'agents', 'native-app-planner.md'),
-    'utf8',
-  );
-  const createSkill = createSkillWorkflow();
   const snapshotScript = fs.readFileSync(
     path.join(pluginRoot, 'scripts', 'create-dataverse-snapshot.js'),
     'utf8',
@@ -1448,48 +1443,70 @@ test('planning contracts require snapshot-only and monotonic incremental expansi
   assert.match(architect, /Do not use `Read`, `Grep`, or shell\s+output to load the full snapshot/s);
   assert.match(architect, /detailLevel: core/);
   assert.doesNotMatch(architect, /approving (?:Gate 1|the architecture gate)|user sees it at (?:Gate 1|the architecture gate)/);
-  assert.match(planner, /Dataverse planning forwarding is verbatim/);
-  assert.match(planner, /Do not duplicate raw evidence/);
-  assert.match(planner, /validate-dataverse-planning-decisions\.js/);
-  assert.match(planner, /only exit `0` permits\s+embedding and the data model gate/);
-  assert.match(planner, /Architecture\s+gate acceptance does not satisfy this data-model precondition/);
-  assert.match(planner, /preserve the validator's exact stderr first line/);
-  assert.match(planner, /NEEDS_REVISION: dataverse-plan-validation/);
-  assert.match(planner, /Do not\s+rewrite one signal as the other/);
-  assert.doesNotMatch(planner, /planning-timings\.js/);
-  assert.match(createSkill, /render-dataverse-architect-evidence\.js/);
-  assert.match(createSkill, /--concepts-file "\$CONCEPTS_PATH"/);
-  assert.match(createSkill, /--progressive-detail/);
-  assert.match(createSkill, /--combined-base-read/);
-  assert.match(createSkill, /--read-concurrency 1/);
-  assert.match(createSkill, /--inventory-cache "\$INVENTORY_CACHE_PATH"/);
-  assert.match(createSkill, /strongCollisionCandidates/);
-  assert.match(createSkill, /coreCandidates/);
-  assert.match(createSkill, /validate-dataverse-planning-decisions\.js/);
-  assert.match(createSkill, /same validation MUST run before the data model gate is shown/);
-  assert.match(createSkill, /--base-snapshot "\$SNAPSHOT_PATH"/);
-  assert.match(createSkill, /DETAIL_ATTEMPTED_NAMES/);
-  assert.match(createSkill, /selectedTables` with `detailLevel: full`/);
-  assert.match(createSkill, /detailLevel: core` is not fully attempted/);
-  assert.match(createSkill, /PROPOSED_CHECKED_NAMES/);
-  assert.match(createSkill, /NEEDS_CONTEXT: dataverse-plan-revision:<short-safe-classification>/);
-  assert.match(createSkill, /do not[\s]+route it through the generic `NEEDS_CONTEXT` retry cap/i);
-  assert.match(createSkill, /NEW_DETAIL_NAMES = requested names - DETAIL_ATTEMPTED_NAMES/);
-  assert.match(createSkill, /NEW_PROPOSED_NAMES = requested names - PROPOSED_CHECKED_NAMES/);
-  assert.match(createSkill, /--proposed-tables "<NEW_PROPOSED_NAMES as exact comma-separated logical names>"/);
-  assert.match(createSkill, /preserve and branch on the exact stderr first line/);
-  assert.match(createSkill, /On exit `4`[\s\S]*NEEDS_REVISION: dataverse-plan-validation/);
-  assert.match(createSkill, /do not issue another network request/i);
-  assert.match(createSkill, /No-progress fallback/);
-  assert.match(createSkill, /Ask the user only when the remaining choice changes business semantics/);
-  assert.doesNotMatch(createSkill, /A second detailed-metadata signal is `BLOCKED`/);
-  assert.doesNotMatch(createSkill, /A second proposed-name signal is `BLOCKED`/);
-  assert.match(createSkill, /connector-only.*skip every command/s);
-  assert.match(createSkill, /Publisher-prefix discovery skipped — connector-only planning/);
-  assert.doesNotMatch(createSkill, /legacy-unverified/);
-  assert.match(createSkill, /unresolved\s+metadata never authorizes a write/s);
-  assert.match(createSkill, /Ask the user only when recovery needs interactive sign-in/);
-  assert.match(createSkill, /classify the affected exact or advisory table as `Defer`/);
-  assert.match(createSkill, /10–15 minute target/);
+  // Each build order has its own planner and gate names; both must keep the same contract.
+  for (const flow of [
+    {
+      order: 'screens-first',
+      planner: 'architecture-planner.md',
+      createSkill: createSkillWorkflow(),
+      embedGate: /only exit `0` permits\s+embedding and the data model gate/,
+      architectureAcceptance: /Architecture\s+gate acceptance does not satisfy this data-model precondition/,
+      validationGate: /same validation MUST run before the data model gate is shown/,
+    },
+    {
+      order: 'data-model-first',
+      planner: 'native-app-planner.md',
+      createSkill: createSkillDataModelFirst(),
+      embedGate: /only exit `0` permits\s+embedding and Gate 2/,
+      architectureAcceptance: /Gate 1\s+architecture acceptance does not satisfy this data-model precondition/,
+      validationGate: /same validation MUST run before Gate 2 is shown/,
+    },
+  ]) {
+    const planner = fs.readFileSync(path.join(pluginRoot, 'agents', flow.planner), 'utf8');
+    const { createSkill } = flow;
+    assert.match(planner, /Dataverse planning forwarding is verbatim/);
+    assert.match(planner, /Do not duplicate raw evidence/);
+    assert.match(planner, /validate-dataverse-planning-decisions\.js/);
+    assert.match(planner, flow.embedGate, flow.order);
+    assert.match(planner, flow.architectureAcceptance, flow.order);
+    assert.match(planner, /preserve the validator's exact stderr first line/);
+    assert.match(planner, /NEEDS_REVISION: dataverse-plan-validation/);
+    assert.match(planner, /Do not\s+rewrite one signal as the other/);
+    assert.doesNotMatch(planner, /planning-timings\.js/);
+    assert.match(createSkill, /render-dataverse-architect-evidence\.js/);
+    assert.match(createSkill, /--concepts-file "\$CONCEPTS_PATH"/);
+    assert.match(createSkill, /--progressive-detail/);
+    assert.match(createSkill, /--combined-base-read/);
+    assert.match(createSkill, /--read-concurrency 1/);
+    assert.match(createSkill, /--inventory-cache "\$INVENTORY_CACHE_PATH"/);
+    assert.match(createSkill, /strongCollisionCandidates/);
+    assert.match(createSkill, /coreCandidates/);
+    assert.match(createSkill, /validate-dataverse-planning-decisions\.js/);
+    assert.match(createSkill, flow.validationGate, flow.order);
+    assert.match(createSkill, /--base-snapshot "\$SNAPSHOT_PATH"/);
+    assert.match(createSkill, /DETAIL_ATTEMPTED_NAMES/);
+    assert.match(createSkill, /selectedTables` with `detailLevel: full`/);
+    assert.match(createSkill, /detailLevel: core` is not fully attempted/);
+    assert.match(createSkill, /PROPOSED_CHECKED_NAMES/);
+    assert.match(createSkill, /NEEDS_CONTEXT: dataverse-plan-revision:<short-safe-classification>/);
+    assert.match(createSkill, /do not[\s]+route it through the generic `NEEDS_CONTEXT` retry cap/i);
+    assert.match(createSkill, /NEW_DETAIL_NAMES = requested names - DETAIL_ATTEMPTED_NAMES/);
+    assert.match(createSkill, /NEW_PROPOSED_NAMES = requested names - PROPOSED_CHECKED_NAMES/);
+    assert.match(createSkill, /--proposed-tables "<NEW_PROPOSED_NAMES as exact comma-separated logical names>"/);
+    assert.match(createSkill, /preserve and branch on the exact stderr first line/);
+    assert.match(createSkill, /On exit `4`[\s\S]*NEEDS_REVISION: dataverse-plan-validation/);
+    assert.match(createSkill, /do not issue another network request/i);
+    assert.match(createSkill, /No-progress fallback/);
+    assert.match(createSkill, /Ask the user only when the remaining choice changes business semantics/);
+    assert.doesNotMatch(createSkill, /A second detailed-metadata signal is `BLOCKED`/);
+    assert.doesNotMatch(createSkill, /A second proposed-name signal is `BLOCKED`/);
+    assert.match(createSkill, /connector-only.*skip every command/s);
+    assert.match(createSkill, /Publisher-prefix discovery skipped — connector-only planning/);
+    assert.doesNotMatch(createSkill, /legacy-unverified/);
+    assert.match(createSkill, /unresolved\s+metadata never authorizes a write/s);
+    assert.match(createSkill, /Ask the user only when recovery needs interactive sign-in/);
+    assert.match(createSkill, /classify the affected exact or advisory table as `Defer`/);
+    assert.match(createSkill, /10–15 minute target/);
+  }
   assert.doesNotMatch(snapshotScript, /execFileSync/);
 });

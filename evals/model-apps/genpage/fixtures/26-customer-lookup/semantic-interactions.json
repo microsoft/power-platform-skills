@@ -1,0 +1,26 @@
+[
+  {
+    "type": "needs_input",
+    "event": "planner-discovery",
+    "question": "opportunities-account-scope",
+    "options": [
+      "Parent account",
+      "Direct customer",
+      "Customer plus contacts"
+    ],
+    "defaults": []
+  },
+  {
+    "type": "answer",
+    "event": "planner-answers",
+    "question": "opportunities-account-scope",
+    "selected": "Direct customer",
+    "source": "AskUserQuestion"
+  },
+  {
+    "type": "approval",
+    "preview": "approved-plan.md",
+    "outcome": "approved",
+    "source": "ExitPlanMode"
+  }
+]

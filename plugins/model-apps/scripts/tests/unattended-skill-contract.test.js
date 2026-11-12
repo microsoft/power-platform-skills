@@ -78,3 +78,22 @@ test('the genpage unattended markers satisfy the evaluator patterns they are pin
     'the pinned mode marker must start with `Unattended default:` so isUnattendedLog detects it',
   );
 });
+
+// A data-semantics default is recorded on the same `Unattended default:` marker as the plan approval, so the documented semantic
+// record must never satisfy the evaluator's plan-approval check — even when its answer is a choice labelled "Approved" — and the
+// documented approval line must still satisfy it. Counterpart: evals/model-apps/genpage/lib/assertions-layer-1.js
+// (PLAN_APPROVAL_RECORD, read by the EnterPlanMode workflow assertion).
+test('the documented semantic default record never stands in for the plan-approval record', () => {
+  const { WORKFLOW_ASSERTIONS } = require(path.join(PLUGIN, '..', '..', 'evals', 'model-apps', 'genpage', 'lib', 'assertions-layer-1.js'));
+  const check = WORKFLOW_ASSERTIONS.get('Phase 1 (Planner): The plan is presented via EnterPlanMode and user approval is requested');
+  const skill = read('skills', 'genpage', 'SKILL.md');
+  const template = /`(Unattended default: <assumption id> \/ <question id> → <answer> \(<reason>\))`/.exec(skill);
+  assert.ok(template, 'SKILL.md documents the semantic default record');
+  const semantic = template[1].replace('<assumption id>', 'A1').replace('<question id>', 'plan-status').replace('<answer>', 'Approved').replace('<reason>', 'the only status value the request names');
+  const mode = 'Unattended default: interaction mode → unattended (--non-interactive flag)';
+  const grade = (log) => check({ fixture: { id: 2, dirName: '2-test', dir: '/fake', files: [], workflowLog: log, genpagePlan: null, genpageEditPlan: null, entityCreationLog: null }, eval: { id: 2, expectations: [] } }).status;
+  assert.equal(grade(`${mode}\n${semantic}`), 'fail', 'a semantic default is not a plan approval');
+  assert.equal(grade(`${mode}\n${semantic}\nUnattended default: plan approval → approved (unattended mode; all semantic questions resolved)`), 'pass');
+  assert.match(skill, /Only once every data-semantics question is answered, treat the plan as approved/);
+  assert.match(skill, /If it marked none, \*\*halt\*\*/, 'neighbour: an unanswered question with no marked default halts an unattended run');
+});

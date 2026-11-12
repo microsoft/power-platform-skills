@@ -1,0 +1,50 @@
+{
+  "contractVersion": 2,
+  "provenance": "synthetic",
+  "description": "Constructed evidence, not an agent capture or a live run: every id, digest and answer is a placeholder. A host keeps a turn id before the first send of an approved create and of an approved edit, loses each answer after the write (a controlled loss), and sends the same command again from another process: one page, one history turn. A reuse of the edit's turn that asks for another binding list (replace, where the first send kept the page's bindings) is refused with nothing written and the connection kept. A later ordinary edit passes no --turn-id.",
+  "selection": "Explicit only: node evals/model-apps/genpage/run-stable-turn-retry.js. The folder name has no eval id, so run-layer-1.js and run-layer-2.js never load it and their counts do not change.",
+  "contracts": [
+    "plugins/model-apps/skills/genpage/SKILL.md \"Drafts, the pages lease, and a compiler refresh\" (--turn-id)",
+    "plugins/model-apps/skills/genpage/edit-flow.md Edit Phase 6"
+  ],
+  "toolResults": "tool-results.json",
+  "artifacts": [
+    "create/agent-message.txt",
+    "create/history-after.json",
+    "create/page-name.txt",
+    "create/pages-after.json",
+    "create/prompt.txt",
+    "edit/agent-message.txt",
+    "edit/config-after-changed.json",
+    "edit/config-after.json",
+    "edit/config-before.json",
+    "edit/connectors.json",
+    "edit/history-after.json",
+    "edit/prompt.txt",
+    "ordinary/agent-message.txt",
+    "ordinary/prompt.txt",
+    "ordinary/revenue.tsx",
+    "revenue.tsx"
+  ],
+  "turns": [
+    {
+      "turnId": "33333333-3333-4333-8333-333333333333",
+      "readback": {
+        "pages": "create/pages-after.json",
+        "history": "create/history-after.json"
+      }
+    },
+    {
+      "turnId": "44444444-4444-4444-8444-444444444444",
+      "readback": {
+        "history": "edit/history-after.json",
+        "configBefore": "edit/config-before.json",
+        "configAfterRetry": "edit/config-after.json",
+        "configAfterChanged": "edit/config-after-changed.json"
+      }
+    }
+  ],
+  "ordinary": [
+    "ordinary-edit"
+  ]
+}

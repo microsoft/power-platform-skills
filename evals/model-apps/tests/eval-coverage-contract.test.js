@@ -98,7 +98,7 @@ function unregisteredCommonProblems(data, { workflow, code }) {
   ];
 }
 
-// Every per-eval expectation is checked, or recorded as deferred or manual.
+// Every per-eval expectation is checked, or recorded as deferred or manual with the reason no check grades it.
 function unscoredProblems({ evals, hasCheck, unscored }) {
   const problems = [];
   const expectations = new Map();
@@ -110,6 +110,7 @@ function unscoredProblems({ evals, hasCheck, unscored }) {
     if (listed.has(key)) problems.push(`unscored lists ${label} twice`);
     listed.add(key);
     if (!STATUSES.has(entry.status)) problems.push(`unscored ${label}: status must be "deferred" or "manual", got ${JSON.stringify(entry.status)}`);
+    if (typeof entry.reason !== 'string' || !entry.reason.trim()) problems.push(`unscored ${label} needs a reason: why no offline check grades it yet`);
     if (!expectations.has(key)) problems.push(`unscored ${label} is no longer in evals.json — remove it`);
     else if (hasCheck(entry.text)) problems.push(`${label} now has a check — remove it from unscored`);
   }
@@ -422,6 +423,7 @@ test('negative controls: expectation and grading drift is reported', () => {
   const [first] = unscored;
   assert.match(unscoredProblems({ evals: genpageData.evals, hasCheck: (t) => t === first.text || hasGenpageCheck(t), unscored }).join('\n'), /now has a check/);
   assert.match(unscoredProblems({ evals: genpageData.evals, hasCheck: hasGenpageCheck, unscored: [{ ...first, status: 'later' }, ...unscored.slice(1)] }).join('\n'), /status must be/);
+  assert.match(unscoredProblems({ evals: genpageData.evals, hasCheck: hasGenpageCheck, unscored: [{ ...first, reason: ' ' }, ...unscored.slice(1)] }).join('\n'), /needs a reason/);
   assert.match(unscoredProblems({ evals: genpageData.evals, hasCheck: hasGenpageCheck, unscored: [...unscored, { eval: first.eval, status: 'deferred', text: 'Phase 1: gone' }] }).join('\n'), /no longer in evals.json/);
   assert.match(unscoredProblems({ evals: genpageData.evals, hasCheck: hasGenpageCheck, unscored: [...unscored, first] }).join('\n'), /twice/);
 

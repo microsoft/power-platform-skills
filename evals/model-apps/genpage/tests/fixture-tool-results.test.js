@@ -44,8 +44,11 @@ function recordedProbes() {
 }
 
 test('feature-flags.js exits 0 for enabled and 1 for disabled (the contract the fixtures record)', () => {
-  assert.deepEqual(measuredExit('custom-api', true), { code: 0, out: 'enabled' });
-  assert.deepEqual(measuredExit('custom-api', false), { code: 1, out: 'disabled' });
+  // Measured with a flag the script still knows. The fixtures' custom-api probes are older runs' history: that flag was removed, and an
+  // unknown flag reads as disabled whatever its variable says, but the output/exit-code pairing they recorded is the same contract.
+  assert.deepEqual(measuredExit('dataverse-operations', true), { code: 0, out: 'enabled' });
+  assert.deepEqual(measuredExit('dataverse-operations', false), { code: 1, out: 'disabled' });
+  assert.deepEqual(measuredExit('custom-api', true), { code: 1, out: 'disabled' });
 });
 
 test('every recorded feature-flag probe pairs its output with the exit code the script returns', () => {

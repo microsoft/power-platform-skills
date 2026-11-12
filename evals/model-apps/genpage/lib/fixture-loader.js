@@ -109,7 +109,7 @@ function loadFixtures(fixturesDir) {
       workflowLog: readOptional(dir, 'workflow-log.md'),
       genpagePlan: readOptional(dir, 'genpage-plan.md'),
       genpageEditPlan: readOptional(dir, 'genpage-edit-plan.md'),
-      // The schema `pac model genpage generate-types` wrote from the live environment. It is not a
+      // The schema the type generator (`genpage.js types`, or `pac model genpage generate-types` in a capture made before it) wrote from the live environment. It is not a
       // generated page (listTsxFiles skips it), but it is the only captured record of the choice
       // values Dataverse actually holds after provisioning.
       runtimeTypes: readOptional(dir, 'RuntimeTypes.ts'),
@@ -140,4 +140,11 @@ function readOptional(dir, fileName) {
   return fs.readFileSync(full, 'utf8');
 }
 
-module.exports = { loadFixtures, listTsxFiles, readOptional, ENTITY_CREATION_LOG, LEGACY_ENTITY_CREATION_LOG };
+// One contract-2 fixture read from its own folder, with the same path and JSON checks as the corpus. For an evidence folder that
+// is selected by name and kept out of the default corpus (a folder name with no eval id, which loadFixtures passes over).
+function loadFixtureDir(dir) {
+  const dirName = path.basename(dir);
+  return { id: null, dirName, dir, files: listTsxFiles(dir), ...fixtureEvidence(dir, dirName, {}) };
+}
+
+module.exports = { loadFixtures, loadFixtureDir, listTsxFiles, readOptional, ENTITY_CREATION_LOG, LEGACY_ENTITY_CREATION_LOG };

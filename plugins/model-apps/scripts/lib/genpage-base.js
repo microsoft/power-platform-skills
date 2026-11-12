@@ -7,11 +7,22 @@
 //
 // The marker is a sibling dotfile of the code file, `<dir>/.<basename>.genpage-base.json`. It
 // stores hashes and ids only — never an environment URL — so a user may commit it with the page.
+// `appId` is optional: a page created before any app held it (an upload with no --app-id) is recorded
+// with the page alone, and the first update that names the app the page was then placed in — which
+// proves its own membership first — goes ahead on that marker and records the app (compareWithMarker).
 //
-// pac model genpage download writes page.tsx UTF-8 with a leading BOM and a final CRLF (measured).
-// A page uploaded as LF with no BOM must hash equal to that download, or every edit-flow update
-// would look diverged. Trailing whitespace-only lines are not content: pac's final CRLF is one of
-// them. Whitespace inside a line, and blank lines between content, stay — those are the page.
+// `unfinished` is optional too: an upload that CREATED the page records what is left of it — `publish` (the page was written and its publish failed) or `place` (it was
+// asked to place the page in an app, and that, with the publish, is not done) — until it is done. It says "this tool created this page, and its creation is not complete",
+// which is what lets exactly that page be completed by an upload that names it (`--page-id`), without the proof an ordinary update makes of the page's place in the app's
+// navigation: an unfinished page is not in the navigation yet, so that proof could never be made. It proves nothing else, and no other page. It is cleared when the page is
+// finished, so that the proof of the page's place in an app is made again for every update after it.
+const UNFINISHED = new Set(['publish', 'place']);
+//
+// A page an earlier release deployed through pac carries a UTF-8 BOM and a final CRLF that pac's
+// download wrote (measured); the SDK stores a page's text exactly. A page uploaded as LF with no BOM
+// must hash equal to either, or every edit-flow update would look diverged. Trailing whitespace-only
+// lines are not content: that final CRLF is one of them. Whitespace inside a line, and blank lines
+// between content, stay — those are the page.
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -69,7 +80,9 @@ function readMarker(codeFile) {
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
   if (parsed.version !== 1) return null;
   if (typeof parsed.pageId !== 'string' || !parsed.pageId.trim()) return null;
-  if (typeof parsed.appId !== 'string' || !parsed.appId.trim()) return null;
+  // Absent, or null, is a page recorded before any app held it; a value must be a usable id.
+  const hasApp = parsed.appId !== undefined && parsed.appId !== null;
+  if (hasApp && (typeof parsed.appId !== 'string' || !parsed.appId.trim())) return null;
   const deployedSha256 = String(parsed.deployedSha256 || '').toLowerCase();
   const localSha256 = String(parsed.localSha256 || '').toLowerCase();
   if (!SHA256_RE.test(deployedSha256) || !SHA256_RE.test(localSha256)) return null;
@@ -77,11 +90,13 @@ function readMarker(codeFile) {
   return {
     version: 1,
     pageId: parsed.pageId.toLowerCase(),
-    appId: parsed.appId.toLowerCase(),
+    ...(hasApp ? { appId: parsed.appId.toLowerCase() } : {}),
     deployedSha256,
     localSha256,
     recordedAt: parsed.recordedAt,
     source: parsed.source,
+    // Only a state this module writes is one, so a hand-edited value can never be read as one.
+    ...(UNFINISHED.has(parsed.unfinished) ? { unfinished: parsed.unfinished } : {}),
   };
 }
 
@@ -91,8 +106,8 @@ function writeMarker(codeFile, marker) {
   const deployedSha256 = String(marker && marker.deployedSha256 || '').toLowerCase();
   const localSha256 = String(marker && marker.localSha256 || '').toLowerCase();
   const source = marker && marker.source;
-  if (!pageId || !appId) {
-    throw new Error('writeMarker: pageId and appId are required');
+  if (!pageId) {
+    throw new Error('writeMarker: pageId is required');
   }
   if (!SHA256_RE.test(deployedSha256) || !SHA256_RE.test(localSha256)) {
     throw new Error('writeMarker: deployedSha256 and localSha256 must be sha256 hex');
@@ -103,11 +118,14 @@ function writeMarker(codeFile, marker) {
   const body = {
     version: 1,
     pageId,
-    appId,
+    // No key at all for a page no app held yet, rather than an empty one a reader would have to tell from a bad value.
+    ...(appId ? { appId } : {}),
     deployedSha256,
     localSha256,
     recordedAt: (marker && marker.recordedAt) || new Date().toISOString(),
     source,
+    // Absent unless set: a finished page's marker is the one it always was.
+    ...(marker && UNFINISHED.has(marker.unfinished) ? { unfinished: marker.unfinished } : {}),
   };
   // writeFileSafe refuses a link, a junction, a hard link, and a non-file at the marker name,
   // and replaces the directory entry rather than following one planted after the check.
@@ -121,8 +139,11 @@ function deleteMarker(codeFile) {
 
 function compareWithMarker(marker, { pageId, appId, deployedText, localText } = {}) {
   if (!marker) return { marker: 'absent', deployed: 'unknown', local: 'no-base' };
+  // A marker recorded with an app is for that page in that app. One recorded with none — the page was created before any app held it —
+  // is for the page alone: the update that names an app proves the page is in that app's navigation before it asks about the marker, so
+  // the app adds nothing to what the marker has to match, and the update then records it (genpage-upload.js).
   const samePage = marker.pageId === String(pageId || '').toLowerCase()
-    && marker.appId === String(appId || '').toLowerCase();
+    && (marker.appId === undefined || marker.appId === String(appId || '').toLowerCase());
   if (!samePage) return { marker: 'other-page', deployed: 'unknown', local: 'no-base' };
   const deployed = deployedText == null
     ? 'unknown'
@@ -134,8 +155,9 @@ function compareWithMarker(marker, { pageId, appId, deployedText, localText } = 
 }
 
 // LCS-free multiset delta: a line that appears twice on one side and once on the other counts
-// as one added or removed, not as a full rewrite. Normalized the same way as the hash, so pac's
-// BOM and final CRLF do not inflate a summary of a real content change.
+// as one added or removed, not as a full rewrite. Normalized the same way as the hash, so the
+// BOM and final CRLF a page an earlier release deployed carries do not inflate a summary of a real
+// content change.
 function lineDelta(a, b) {
   const count = (text) => {
     const normalized = normalizePageText(text);
@@ -155,21 +177,6 @@ function lineDelta(a, b) {
     if (na > nb) removed += na - nb;
   }
   return { added, removed };
-}
-
-// pac names the downloaded directory with its own casing of the page id, which need not match
-// the casing the caller typed. Joining the caller's spelling works on a case-insensitive
-// filesystem and fails on Linux.
-function findDownloadedPageDir(dir, pageId) {
-  const want = String(pageId || '').toLowerCase();
-  let names;
-  try {
-    names = fs.readdirSync(dir);
-  } catch {
-    return null;
-  }
-  const entry = names.find((d) => String(d).toLowerCase() === want);
-  return entry ? path.join(dir, entry) : null;
 }
 
 // Read a code file only when it is a regular file with one name. Hashing through a symlink would
@@ -201,6 +208,5 @@ module.exports = {
   deleteMarker,
   compareWithMarker,
   lineDelta,
-  findDownloadedPageDir,
   readPlainText,
 };

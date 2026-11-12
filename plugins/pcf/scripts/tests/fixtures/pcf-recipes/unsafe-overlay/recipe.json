@@ -1,0 +1,26 @@
+{
+  "id": "unsafe-overlay",
+  "title": "Unsafe overlay",
+  "summary": "Unsafe fixture.",
+  "template": "field-standard",
+  "hosts": [
+    "model"
+  ],
+  "whyWanted": "Exercises unsafe overlay rejection.",
+  "configuration": "Do not use.",
+  "status": "available",
+  "certified": {
+    "model": {},
+    "pages": {}
+  },
+  "properties": [
+    {
+      "name": "value",
+      "displayNameKey": "Value_Display",
+      "descriptionKey": "Value_Desc",
+      "ofType": "SingleLine.Text",
+      "usage": "bound",
+      "required": true
+    }
+  ]
+}

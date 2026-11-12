@@ -120,7 +120,7 @@ Required sections:
 - `## Project` (for app name + description)
 - `## Screens` → `### Screen Map` (so we know what to render)
 
-If `## Screens` is missing the plan hasn't passed the screen graph gate yet. STOP with: `BLOCKED: native-app-plan.md has no ## Screens section. Run /create-mobile-app at least through the screen graph gate first.`
+If `## Screens` is missing the plan hasn't passed the screen graph gate (Gate 3 in the data-model-first order) yet. STOP with: `BLOCKED: native-app-plan.md has no ## Screens section. Run /create-mobile-app at least through the screen graph gate first.`
 
 **Pick the representative screen** to render in the 3-up. Heuristic, in order:
 
@@ -434,7 +434,7 @@ The caller uses these dimensions to write `brand/design-system.md` at Sub-step 3
 
 > Design direction picked: <Inspection|SaaS|Product|Hybrid>. Block written to `<working_dir>/native-app-plan.md` § Design Direction. Preview kept at `<working_dir>/_design_vibe.html` for reference.
 
-If invoked from `/create-mobile-app` Step 9, the orchestrator applies the resulting tokens to the running app, so the live preview restyles; screens are not rebuilt.
+If invoked from `/create-mobile-app` Step 9 (screens first), the orchestrator applies the resulting tokens to the running app, so the live preview restyles; screens are not rebuilt. In the data-model-first order the orchestrator continues with screen-builder fan-out using the new direction.
 
 ---
 
@@ -446,7 +446,7 @@ This skill's only side-effect on shared state is **one block** written into `nat
 - `agents/screen-builder.md` — if `## Design Direction` exists, read `list_style`, `motion`, `tone`, `primary_action_shape` and apply them when choosing row/component patterns from the user's screen spec. Samples remain code/API references only. Otherwise use today's defaults.
 
 If this skill folder is removed:
-1. The orchestrator's Step 9 keeps the template's default theme (no `## Design Direction` block ever gets written)
+1. The orchestrator keeps the template's default theme in the screens-first order, and the data-model-first order falls back to its existing single-preview flow (no `## Design Direction` block ever gets written)
 2. screen-planner and screen-builder's `if (block exists)` conditions evaluate false → behave exactly as today
 3. No other file change required
 

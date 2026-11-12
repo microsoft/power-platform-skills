@@ -8,7 +8,7 @@ The user approves it at the screen graph gate, `preview-screen-builder` builds e
 
 1. **Draft.** Write `<working_dir>/.tmp/screens.json` once, with the `Write` tool, in the shape below.
    Done when every feature in the brief has a screen or a control that delivers it.
-2. **Check and render.** Run `render-screen-graph.js` (SKILL.md Step 4 gives the command).
+2. **Check and render.** Run `render-screen-graph.js` ([`screens-first.md`](screens-first.md) Step 4 gives the command).
    It checks routes, params, and the Data Contract, then writes the plan's `## Screens` section.
    On `status: "blocked"`, fix every listed problem in one edit and rerun.
    Done when it prints `status: "ok"`; address any `warnings` it names.

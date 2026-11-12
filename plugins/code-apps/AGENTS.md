@@ -1,6 +1,6 @@
-# AGENTS.md — Power Apps Plugin
+# AGENTS.md — Code Apps Plugin
 
-This file provides guidance to AI Agents when working with the **power-apps** plugin.
+This file provides guidance to AI agents that work on the **code-apps-preview** plugin in `plugins/code-apps`.
 
 ## What This Plugin Is
 
@@ -11,16 +11,27 @@ A plugin for building and deploying Power Apps code apps using React + Vite + Ty
 Test this plugin locally:
 
 ```bash
-claude --plugin-dir /path/to/plugins/power-apps
+claude --plugin-dir /path/to/plugins/code-apps
 ```
 
 ## Architecture
 
 ```
 .plugin/plugin.json               <- Open Plugins metadata (name, version, keywords)
+.claude-plugin/plugin.json        <- Legacy mirror for existing installations
+plugin.json                       <- Agent Plugins 1.0.0 manifest
 AGENTS.md                         <- Plugin guidance for AI agents (this file)
 agents/
   code-app-architect.md           <- Agent persona for architecture decisions
+com.github.copilot/agents/
+  code-app-architect.agent.md     <- Native Copilot copy with adjusted relative links
+com.github.copilot/hooks/
+  hooks.json                     <- Native Copilot hooks for the portable package
+hooks.json                        <- Native Copilot CLI preToolUse hook
+hooks/
+  hooks.json                      <- Claude Code PreToolUse hook
+  set-cli-origin.js               <- Narrow leading-invocation attribution (Node only)
+  README.md                       <- Hook contracts and limitations
 shared/
   shared-instructions.md          <- Cross-cutting concerns (Windows CLI, safety, planning, memory bank)
   connector-reference.md          <- Connector patterns and generated service usage
@@ -33,12 +44,12 @@ skills/
   create-code-app/
     SKILL.md                      <- Scaffold, init, build, and deploy a new code app
     references/
-      prerequisites-reference.md  <- Node, pac, git requirements
+      prerequisites-reference.md  <- Node, npm-installed Power Apps CLI, git requirements
       troubleshooting.md          <- Common issues and fixes
   deploy/
     SKILL.md                      <- Build and deploy an existing code app
   list-connections/
-    SKILL.md                      <- List Power Platform connections to get connection IDs
+    SKILL.md                      <- List connections (connection IDs; optional on CLI 1.3.0+)
   add-datasource/
     SKILL.md                      <- Router: asks what you need and picks the right add-* skill
   add-connector/
@@ -69,7 +80,7 @@ skills/
 |-------|-------------|
 | `/create-code-app` | Scaffold, configure, and deploy a new Power Apps code app |
 | `/deploy` | Build and deploy an existing code app |
-| `/list-connections` | List Power Platform connections to find connection IDs |
+| `/list-connections` | List Power Platform connections and their IDs (required before adding a connector only on CLIs older than 1.3.0) |
 | `/add-datasource` | Add a data source (routes to the appropriate add-* skill) |
 | `/add-dataverse` | Add Dataverse tables with generated TypeScript models and services |
 | `/add-sharepoint` | Add SharePoint Online connector |
@@ -87,6 +98,10 @@ skills/
 
 Power Apps code apps run in a sandbox — direct HTTP calls (`fetch`, `axios`, Graph API, etc.) do not work at runtime. **All external data access must go through Power Platform connectors.**
 
+### Connections
+
+Every non-Dataverse data source is bound to a connection. With Power Apps CLI 1.3.0+ (which `/create-code-app` installs), `pa app add data-source` finds the connector's connection or creates one, so connector skills omit `-c`. Older CLIs need `-c <connection-id>`. [shared/connector-reference.md](./shared/connector-reference.md) defines both flows and when to ask the user first.
+
 ### Generated Services
 
 `pa app add data-source` generates typed TypeScript services in `src/generated/`:
@@ -97,7 +112,17 @@ Always use generated services for data access.
 
 ### CLI
 
-The Power Apps CLI (`@microsoft/power-apps-cli`) is installed locally via `npm install` as part of the app template. It ships two binaries — grouped **`pa`** (preferred) and flat **`power-apps`** (fallback). **Resolve which one the project has via [shared/cli-binary.md](./shared/cli-binary.md) first**, then invoke it with `npx --no-install <pa|power-apps>` from the project directory — runs natively in bash on all platforms, no PowerShell wrapper needed. Commands below use the canonical grouped `pa` form:
+The Power Apps CLI (`@microsoft/power-apps-cli`) is installed into each project as a dev dependency; the Vite template doesn't include it, so `/create-code-app` adds it. It has shipped two binaries — grouped **`pa`** (preferred) and flat **`power-apps`** (fallback). **Resolve which one the project has via [shared/cli-binary.md](./shared/cli-binary.md) first**, then invoke it with `npx --no-install <pa|power-apps>` from the project directory — runs natively in bash on all platforms, no PowerShell wrapper needed. Commands below use the canonical grouped `pa` form:
+
+Shell hooks automatically supply `PA_CLI_ORIGIN=plugin/<host-agent>` for recognized
+CLI invocations without replacing explicit user values. Do not manually export
+attribution in skills. Keep both host hook configurations in sync; native Copilot
+events preserve shell identity, whereas its Claude-compatible `Bash` alias does
+not distinguish Bash from PowerShell. See [hooks/README.md](./hooks/README.md).
+Keep detection conservative and tokenizer-free: match supported single-line
+leading invocations and simple output captures, not arbitrary shell programs.
+Leave PowerShell `using` preambles unchanged. Handled hook/launcher failures must
+report stderr diagnostics but complete successfully without rewriting the call.
 
 ```bash
 pa app push                   # Deploy app
@@ -111,13 +136,36 @@ Always use `npx degit` to create new projects — never `git clone` or manual fi
 
 ```bash
 npx degit microsoft/PowerAppsCodeApps/templates/vite {folder} --force
+cd {folder}
+npm install
+npm install --save-dev "@microsoft/power-apps-cli@^1.3.0"   # the template doesn't include the CLI
 ```
 
 ## Testing Changes
 
-After modifying this plugin:
+Run these checks from the repository root:
 
-1. Run `claude --debug` to see plugin loading details
-2. Test skill invocation with `/create-code-app`
-3. Verify connector-first guardrails are enforced
-4. Test CLI commands (`pa app push`, `pa app add data-source`, etc.)
+```bash
+node scripts/validate-code-apps.js
+node scripts/validate-legacy-compatibility.js
+node --test scripts/tests/validate-legacy-compatibility.test.js
+node --test plugins/code-apps/scripts/tests/*.test.js
+```
+
+The Code Apps workflow runs these checks on Windows and Ubuntu.
+Package checks do not prove that a client can install, update, or execute skills.
+Check those actions separately before claiming runtime support.
+The path-filtered `code-apps-script-tests` workflow exercises Bash and PowerShell
+on Windows and Linux with local CLI stubs. These tests never transmit telemetry.
+
+## Portable Package Rules
+
+- Preserve the plugin name `code-apps-preview` and both legacy manifests.
+- Keep root `plugin.json` metadata equal to the legacy metadata, except for its required `$schema`.
+- Keep all 15 skills in one shared set. Preserve their existing tool declarations, model preferences, and invocation settings.
+- Use document-relative links in skills, agents, and shared instructions. Do not depend on `${PLUGIN_ROOT}` expansion in Markdown.
+- Keep the native Copilot architect equal to the legacy architect, except for relative resource paths.
+- The repository's `.agents/plugins/marketplace.json` exposes Code Apps only. Do not add unadapted sibling plugins.
+- Preserve user approvals when replacing client-specific tools with equivalent capabilities.
+- Keep `com.github.copilot/hooks/hooks.json` equal to the legacy root `hooks.json`.
+- Preserve the existing Code Apps attribution hooks. Do not copy Managed Apps attribution variables or agent detection into them.

@@ -20,6 +20,11 @@
 //     [--render]                  also invoke render-alm-plan.js after writing
 //     [--rendererPath <path>]     defaults to skills/plan-alm/scripts/render-alm-plan.js
 //                                 relative to plugin root
+//     [--live]                    also query each plan stage's live Dataverse
+//                                 `environmentvariablevalues` (Azure CLI token per
+//                                 stage envUrl) and merge them into the "Values by
+//                                 Environment" matrix; deployment-settings.json and
+//                                 manual values win. --phase mode only.
 //
 // What gets refreshed per phase:
 //   setup-solution:
@@ -95,6 +100,7 @@ function parseArgs(argv) {
     rendererPath: null,
     stageName: null,
     reconcile: false,
+    live: false,
   };
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--projectRoot' && args[i + 1]) out.projectRoot = args[++i];
@@ -103,6 +109,7 @@ function parseArgs(argv) {
     else if (args[i] === '--rendererPath' && args[i + 1]) out.rendererPath = args[++i];
     else if (args[i] === '--stageName' && args[i + 1]) out.stageName = args[++i];
     else if (args[i] === '--reconcile') out.reconcile = true;
+    else if (args[i] === '--live') out.live = true;
   }
   return out;
 }
@@ -197,39 +204,336 @@ function extractPerStageValues(deploymentSettings) {
   return bySchema;
 }
 
+// Provenance marker for cells written from the live `environmentvariablevalues`
+// table (see mergeLiveEnvVarValues). A cell is "live-sourced" when
+// `ev.valueSources[stageKey] === 'live'`. Live-sourced cells are NOT manual
+// overrides: they must be updated (or cleared) on the next live query and
+// replaced by a deployment-settings.json value, otherwise the first value ever
+// observed in PPAC would freeze into the plan and the audit trail would drift.
+function isLiveSourced(ev, stageKey) {
+  return !!(ev && ev.valueSources && typeof ev.valueSources === 'object' &&
+    ev.valueSources[stageKey] === 'live');
+}
+
+// Provenance marker for cells written by backfillEnvVarValuesFromSettings
+// (`ev.valueSources[stageKey] === 'settings'`). Like live cells these are NOT
+// manual overrides: when deployment-settings.json changes, the next backfill
+// must replace them. Without the tag a cell carried forward from an earlier
+// run (carryForwardEnvVarValues) looks identical to a hand edit and the old
+// file value would freeze. Untagged cells remain manual overrides.
+function isSettingsSourced(ev, stageKey) {
+  return !!(ev && ev.valueSources && typeof ev.valueSources === 'object' &&
+    ev.valueSources[stageKey] === 'settings');
+}
+
+function setValueSource(ev, stageKey, source) {
+  if (source) {
+    ev.valueSources = (ev.valueSources && typeof ev.valueSources === 'object') ? ev.valueSources : {};
+    ev.valueSources[stageKey] = source;
+    return;
+  }
+  if (!ev.valueSources || typeof ev.valueSources !== 'object') return;
+  delete ev.valueSources[stageKey];
+  if (Object.keys(ev.valueSources).length === 0) delete ev.valueSources;
+}
+
+// Replace planData.envVars with a freshly discovered definition list (the
+// last-env-vars.json sidecar) WITHOUT losing per-stage values{} / valueSources{}
+// already in the plan. Discovery rows carry only
+//   { schemaName, displayName, type, defaultValue, description, siteSetting }
+// so a plain replace would drop every matrix cell. That is unrecoverable when
+// the same run's live query for a stage fails (the stage is absent from
+// liveEnvVarValues.byStage, so the merge can't refill it) or for manual cells
+// that only ever lived in the plan.
+//   - Matched by schemaName, case-insensitively (Dataverse schema names are
+//     case-insensitive and discovery may return different casing).
+//   - A definition missing from `incoming` is dropped on purpose — it was
+//     removed from the solution, so its values go with it.
+//   - Values/valueSources on the incoming row win per stage key; prior
+//     provenance is kept only for keys the incoming row doesn't set.
+function carryForwardEnvVarValues(previous, incoming) {
+  if (!Array.isArray(incoming)) return incoming;
+  const isObj = (o) => !!o && typeof o === 'object' && !Array.isArray(o);
+  const priorBySchema = new Map();
+  for (const ev of (Array.isArray(previous) ? previous : [])) {
+    if (ev && typeof ev.schemaName === 'string') priorBySchema.set(ev.schemaName.toLowerCase(), ev);
+  }
+  return incoming.map((row) => {
+    if (!row || typeof row.schemaName !== 'string') return row;
+    const prior = priorBySchema.get(row.schemaName.toLowerCase());
+    if (!prior || !isObj(prior.values) || Object.keys(prior.values).length === 0) return row;
+    const rowValues = isObj(row.values) ? row.values : {};
+    const rowSources = isObj(row.valueSources) ? row.valueSources : {};
+    const priorSources = isObj(prior.valueSources) ? prior.valueSources : {};
+    const values = {};
+    const sources = {};
+    for (const [key, value] of Object.entries(prior.values)) {
+      if (Object.prototype.hasOwnProperty.call(rowValues, key)) continue;
+      values[key] = value;
+      if (priorSources[key]) sources[key] = priorSources[key];
+    }
+    Object.assign(values, rowValues);
+    Object.assign(sources, rowSources);
+    const out = { ...row, values };
+    if (Object.keys(sources).length > 0) out.valueSources = sources;
+    else delete out.valueSources;
+    return out;
+  });
+}
+
 // Backfill planData.envVars[i].values{} from deployment-settings.json so
 // the rendered plan's "Values by Environment" matrix auto-populates after
 // deploy-pipeline runs. Idempotent: an existing non-empty value on
-// ev.values[stageName] is preserved (manual overrides win). Returns the
-// number of cells filled in this call.
+// ev.values[stageName] is preserved (manual overrides win) unless that value
+// was written by a previous live query or a previous backfill (tagged
+// valueSources[stage] = 'live' | 'settings') — the current file wins over both.
+// Cells it writes are tagged 'settings'. Schema names match case-insensitively
+// (Dataverse schema names are case-insensitive; files and discovery can differ
+// in casing). Returns the number of cells filled or changed in this call.
 //
-// TODO(follow-up): also query the live `environmentvariablevalues` table
-// per target env so values set in Power Platform Admin Center (bypassing
-// the file) show up. Needs per-stage tokens + env var definition GUIDs,
-// neither of which the helper currently has — deferring until those
-// inputs are wired through the refresh contract.
+// Values set in Power Platform Admin Center (bypassing the file) are merged in
+// by mergeLiveEnvVarValues when the caller passes `--live`.
 function backfillEnvVarValuesFromSettings(planData, projectRoot) {
   if (!Array.isArray(planData.envVars) || planData.envVars.length === 0) return 0;
   const settings = readDeploymentSettings(projectRoot);
   if (!settings) return 0;
   const bySchema = extractPerStageValues(settings);
   if (!bySchema || Object.keys(bySchema).length === 0) return 0;
+  const bySchemaLower = new Map();
+  for (const [schemaName, stages] of Object.entries(bySchema)) {
+    // extractPerStageValues groups by exact spelling, so `cr5fe_x` (Staging)
+    // and `CR5FE_X` (Production) arrive as separate entries. Merge their stage
+    // maps rather than letting the second spelling replace the first.
+    const key = schemaName.toLowerCase();
+    bySchemaLower.set(key, { ...(bySchemaLower.get(key) || {}), ...stages });
+  }
 
   let filled = 0;
   for (const ev of planData.envVars) {
     if (!ev || typeof ev.schemaName !== 'string') continue;
-    const matches = bySchema[ev.schemaName];
+    const matches = bySchemaLower.get(ev.schemaName.toLowerCase());
     if (!matches) continue;
     ev.values = (ev.values && typeof ev.values === 'object') ? ev.values : {};
     for (const [stageName, value] of Object.entries(matches)) {
-      // Manual override / prior call wins — never overwrite a populated cell.
+      // Manual override wins — never overwrite a populated untagged cell. A
+      // live-queried or previously backfilled cell is replaced by the file.
       const existing = ev.values[stageName];
-      if (existing != null && existing !== '') continue;
+      const populated = existing != null && existing !== '';
+      const settingsCell = isSettingsSourced(ev, stageName);
+      if (populated && !isLiveSourced(ev, stageName) && !settingsCell) continue;
+      if (populated && settingsCell && existing === value) continue;
       ev.values[stageName] = value;
+      setValueSource(ev, stageName, 'settings');
       filled += 1;
     }
   }
   return filled;
+}
+
+// Dataverse environment variable definition `type` for Secret (Azure Key Vault
+// reference). The value row holds a Key Vault reference, not a usable value —
+// keep it out of the rendered plan.
+// See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/environmentvariabledefinition#BKMK_Type
+const ENV_VAR_TYPE_SECRET = 100000005;
+
+// Query the live `environmentvariablevalues` table of every plan stage that has
+// an envUrl (planData.stages[] = [{ label, envUrl, type }]) so values set in
+// Power Platform Admin Center — which never touch deployment-settings.json —
+// still reach the ALM plan. Async + network-bound, so it is NOT run by
+// refresh()/reconcile() themselves; the CLI calls it only under `--live` and
+// passes the result into refresh() as `liveEnvVarValues`.
+//
+// Two reads per env, both with fields already relied on by
+// verify-env-var-values.js:
+//   GET {envUrl}/api/data/v9.2/environmentvariabledefinitions?$select=environmentvariabledefinitionid,schemaname,type
+//     → { value: [{ environmentvariabledefinitionid, schemaname, type }], @odata.nextLink? }
+//   GET {envUrl}/api/data/v9.2/environmentvariablevalues?$select=value,_environmentvariabledefinitionid_value
+//     → { value: [{ value, _environmentvariabledefinitionid_value }], @odata.nextLink? }
+// Every definition is read (not just planData.envVars[]) because the phase
+// refresh may replace planData.envVars from last-env-vars.json AFTER this runs.
+//
+// Fail-soft per stage: a missing token / unreachable env / HTTP error is
+// recorded in `errors[]` and that stage is simply absent from `byStage`, so
+// the merge leaves its cells untouched rather than clearing them.
+//
+// Returns { byStage: { [stageLabel]: { [schemaName]: value } }, queriedStages: [label], errors: [{ stage, error }] }.
+async function fetchLiveEnvVarValues(planData, deps = {}) {
+  const helpers = require('./validation-helpers');
+  const getToken = deps.getToken || helpers.getAuthToken;
+  const request = deps.request || helpers.makeRequest;
+  const byStage = {};
+  const queriedStages = [];
+  const errors = [];
+  const stages = planData && Array.isArray(planData.stages) ? planData.stages : [];
+
+  for (const stage of stages) {
+    if (!stage || typeof stage !== 'object') continue;
+    const label = typeof stage.label === 'string' ? stage.label.trim() : '';
+    const rawUrl = typeof stage.envUrl === 'string' ? stage.envUrl.trim() : '';
+    if (!label || !rawUrl) continue;
+
+    let base;
+    try {
+      // Rejects non-Dataverse hosts so the bearer token is never sent elsewhere.
+      base = helpers.validateDataverseEnvironmentUrl(rawUrl);
+    } catch (e) {
+      errors.push({ stage: label, error: e.message });
+      continue;
+    }
+
+    const token = getToken(base);
+    if (!token) {
+      errors.push({ stage: label, error: `could not acquire a token for ${base}` });
+      continue;
+    }
+
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      const defs = await helpers.odataGetAll(
+        `${base}/api/data/v9.2/environmentvariabledefinitions` +
+          '?$select=environmentvariabledefinitionid,schemaname,type',
+        token,
+        request,
+      );
+      // eslint-disable-next-line no-await-in-loop
+      const vals = await helpers.odataGetAll(
+        `${base}/api/data/v9.2/environmentvariablevalues` +
+          '?$select=value,_environmentvariabledefinitionid_value',
+        token,
+        request,
+      );
+      const schemaById = new Map();
+      for (const d of defs) {
+        if (!d || !d.environmentvariabledefinitionid || !d.schemaname) continue;
+        if (Number(d.type) === ENV_VAR_TYPE_SECRET) continue;
+        schemaById.set(String(d.environmentvariabledefinitionid).toLowerCase(), d.schemaname);
+      }
+      const values = {};
+      for (const v of vals) {
+        if (!v || v.value == null || v.value === '') continue;
+        const defId = v._environmentvariabledefinitionid_value;
+        if (!defId) continue;
+        const schemaName = schemaById.get(String(defId).toLowerCase());
+        if (!schemaName) continue;
+        values[schemaName] = String(v.value);
+      }
+      byStage[label] = values;
+      queriedStages.push(label);
+    } catch (e) {
+      errors.push({ stage: label, error: e.message });
+    }
+  }
+  return { byStage, queriedStages, errors };
+}
+
+// True when a values{} key is an alias the renderer collapses onto `label`'s
+// column. Must stay in step with buildEnvVarValuesMatrix() in
+// skills/plan-alm/scripts/render-alm-plan.js, which maps all of these onto the
+// same column:
+//   "Staging"                          bare label
+//   "Deploy to Staging"                pipeline stage name
+//   "Staging (Deploy to Staging)"      composite label used by some settings files
+//   "CitizenServicesStaging"           stage.envName
+//   "https://contoso.crm.dynamics.com/" stage.envUrl
+// Label-derived aliases are compared case-insensitively (hand-edited settings
+// files drift in casing); envName / envUrl are exact, like the renderer.
+function isStageAlias(key, stage, label) {
+  if (typeof key !== 'string') return false;
+  const lowerLabel = label.toLowerCase();
+  const lowerKey = key.trim().toLowerCase();
+  if (normalizeStageLabel(key).toLowerCase() === lowerLabel) return true;
+  if (lowerKey === `${lowerLabel} (deploy to ${lowerLabel})`) return true;
+  if (stage && stage.envName && key === String(stage.envName)) return true;
+  if (stage && stage.envUrl && key === String(stage.envUrl)) return true;
+  return false;
+}
+
+// True when ev.values carries a local (non-live) value for `stage` under any
+// alias the renderer collapses onto the same column (see isStageAlias).
+function hasLocalStageValue(ev, stage, label) {
+  for (const [key, value] of Object.entries(ev.values || {})) {
+    if (value == null || value === '') continue;
+    if (isLiveSourced(ev, key)) continue;
+    if (isStageAlias(key, stage, label)) return true;
+  }
+  return false;
+}
+
+// Merge live per-stage values (from fetchLiveEnvVarValues) into
+// planData.envVars[i].values{}. Precedence, highest first:
+//   1. a manual / deployment-settings.json value for that stage (any alias)
+//   2. the live value from the stage's environment
+// deployment-settings.json is backfilled FIRST so the local file always wins.
+// Live-sourced cells are tagged in ev.valueSources so a later query can update
+// them, and they are cleared when the live record has since been deleted (only
+// for stages whose query succeeded). Returns { filled, updated, cleared }.
+//
+// Local precedence is enforced for EVERY plan stage, not just the ones queried
+// successfully: if an earlier refresh left a live `Staging` cell and the user
+// has since added `Deploy to Staging` to deployment-settings.json, that stale
+// live cell must go even when this run's Staging query failed — otherwise the
+// renderer (which prefers the exact-label key) keeps showing the stale live
+// value over the local override. Live fills/updates and deleted-record cleanup
+// stay restricted to stages present in `live.byStage`.
+function mergeLiveEnvVarValues(planData, projectRoot, live) {
+  const counts = { filled: 0, updated: 0, cleared: 0 };
+  backfillEnvVarValuesFromSettings(planData, projectRoot);
+  if (!Array.isArray(planData.envVars) || planData.envVars.length === 0) return counts;
+  if (!live || !live.byStage || typeof live.byStage !== 'object') return counts;
+
+  const stageByLabel = new Map();
+  for (const stage of (Array.isArray(planData.stages) ? planData.stages : [])) {
+    if (stage && typeof stage.label === 'string' && stage.label.trim()) {
+      stageByLabel.set(stage.label.trim(), stage);
+    }
+  }
+  const labels = new Set([...stageByLabel.keys(), ...Object.keys(live.byStage)]);
+  const liveLowerByStage = new Map();
+  for (const [label, valuesBySchema] of Object.entries(live.byStage)) {
+    const lower = new Map();
+    for (const [schemaName, value] of Object.entries(valuesBySchema || {})) {
+      lower.set(schemaName.toLowerCase(), value);
+    }
+    liveLowerByStage.set(label, lower);
+  }
+
+  for (const ev of planData.envVars) {
+    if (!ev || typeof ev.schemaName !== 'string') continue;
+    ev.values = (ev.values && typeof ev.values === 'object') ? ev.values : {};
+    for (const label of labels) {
+      const stage = stageByLabel.get(label) || null;
+      const currentIsLive = isLiveSourced(ev, label);
+      if (hasLocalStageValue(ev, stage, label)) {
+        // Local value wins; drop a stale live cell so the renderer (which
+        // prefers the exact label key) can't show it over the local alias.
+        if (currentIsLive) {
+          delete ev.values[label];
+          setValueSource(ev, label, null);
+          counts.cleared += 1;
+        }
+        continue;
+      }
+      // Query failed or stage not queried: leave its cells exactly as they are.
+      if (!liveLowerByStage.has(label)) continue;
+      // Case-insensitive: the plan's schemaName can come from a discovery
+      // sidecar whose casing differs from what this env's query returned.
+      const liveValue = liveLowerByStage.get(label).get(ev.schemaName.toLowerCase());
+      if (liveValue == null || liveValue === '') {
+        if (currentIsLive) {
+          delete ev.values[label];
+          setValueSource(ev, label, null);
+          counts.cleared += 1;
+        }
+        continue;
+      }
+      if (currentIsLive && ev.values[label] === liveValue) continue;
+      if (currentIsLive) counts.updated += 1;
+      else counts.filled += 1;
+      ev.values[label] = liveValue;
+      setValueSource(ev, label, 'live');
+    }
+  }
+  return counts;
 }
 
 // Flip a matching entry in planData.steps[] to the given status. Each phase
@@ -691,7 +995,8 @@ function refreshSetupSolution(planData, projectRoot) {
     // valid post-state: setup-solution may have skipped all env vars (Tier 1
     // Skip-all + no Tier 2 promotions), in which case the tab should reflect
     // the empty existing state instead of carrying stale planned counts.
-    planData.envVars = envVarsMarker.envVars;
+    // Per-stage values/valueSources are carried forward by schema name.
+    planData.envVars = carryForwardEnvVarValues(planData.envVars, envVarsMarker.envVars);
   }
   // Refresh sizeAnalysis.envVarCount so the Overview stat card + Size Analysis
   // signal reflect the post-setup-solution count (after OAuth promotions,
@@ -922,7 +1227,8 @@ function refreshConfigureEnvVariables(planData, projectRoot) {
   }
   const envVarsMarker = projectRoot ? readJson(almPath(projectRoot, 'lastEnvVars')) : null;
   if (envVarsMarker && Array.isArray(envVarsMarker.envVars)) {
-    planData.envVars = envVarsMarker.envVars;
+    // Keep per-stage values/valueSources by schema name — discovery rows have none.
+    planData.envVars = carryForwardEnvVarValues(planData.envVars, envVarsMarker.envVars);
   }
   // Backfill is the major payoff for this phase — the user just authored
   // per-stage values in deployment-settings.json and the rendered plan should
@@ -1144,7 +1450,7 @@ function invokeRenderer(rendererPath, dataPath, outputPath) {
   });
 }
 
-function refresh({ projectRoot, phase, render, rendererPath, stageName }) {
+function refresh({ projectRoot, phase, render, rendererPath, stageName, liveEnvVarValues }) {
   if (!projectRoot) throw new Error('--projectRoot is required');
   if (!phase) throw new Error('--phase is required');
   if (!PHASES.has(phase)) {
@@ -1170,6 +1476,17 @@ function refresh({ projectRoot, phase, render, rendererPath, stageName }) {
   }
 
   applyRefresh(planData, phase, projectRoot, stageName);
+  // `liveEnvVarValues` is the pre-fetched result of fetchLiveEnvVarValues (CLI
+  // `--live`). Merged after the phase handler so it sees the phase's final
+  // planData.envVars[] (configure-env-variables / setup-solution may replace it).
+  let liveEnvVars;
+  if (liveEnvVarValues) {
+    liveEnvVars = {
+      ...mergeLiveEnvVarValues(planData, projectRoot, liveEnvVarValues),
+      queriedStages: liveEnvVarValues.queriedStages || [],
+      errors: liveEnvVarValues.errors || [],
+    };
+  }
   evaluatePlanCompletion(planData);
   fs.writeFileSync(dataPath, JSON.stringify(planData, null, 2), 'utf8');
 
@@ -1184,19 +1501,35 @@ function refresh({ projectRoot, phase, render, rendererPath, stageName }) {
   // sequencing — never auto-fired). null when the plan is fully executed.
   const nextStep = computeNextStep(planData);
 
-  return { ok: true, phase, dataPath, htmlPath, rendered, nextStep };
+  const result = { ok: true, phase, dataPath, htmlPath, rendered, nextStep };
+  if (liveEnvVars) result.liveEnvVars = liveEnvVars;
+  return result;
+}
+
+// CLI entry. `--live` pre-fetches live env var values (async, network) before
+// the synchronous refresh so refresh() stays sync for its in-process callers.
+// The fetch is skipped when there is no plan to refresh — refresh() then
+// returns its usual ok:false soft no-op without any az / Dataverse calls.
+async function runCli(args, deps = {}) {
+  if (args.reconcile) return reconcile(args);
+  if (args.live && args.projectRoot) {
+    const planData = readJson(planDataPath(args.projectRoot));
+    if (planData) {
+      args = { ...args, liveEnvVarValues: await fetchLiveEnvVarValues(planData, deps) };
+    }
+  }
+  return refresh(args);
 }
 
 if (require.main === module) {
   const args = parseArgs(process.argv);
-  try {
-    const result = args.reconcile ? reconcile(args) : refresh(args);
+  runCli(args).then((result) => {
     process.stdout.write(JSON.stringify(result) + '\n');
     process.exit(0);  // ok:false (missing planData / deferred) is a soft no-op
-  } catch (err) {
+  }, (err) => {
     process.stderr.write('refresh-alm-plan-data: ' + err.message + '\n');
     process.exit(1);
-  }
+  });
 }
 
 module.exports = {
@@ -1206,6 +1539,9 @@ module.exports = {
   dropResolvedRisks,
   setStepStatus,
   backfillEnvVarValuesFromSettings,
+  fetchLiveEnvVarValues,
+  mergeLiveEnvVarValues,
+  runCli,
   extractPerStageValues,
   computeNextStep,
   mapStepToSkill,

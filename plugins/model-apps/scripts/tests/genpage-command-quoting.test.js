@@ -93,8 +93,9 @@ test('the command-text reader sees what it guards', () => {
     '```',
     'Prose `--connectors "<working-dir>/c.json"` and a JSON example `{ "intent": "<need>" }`.',
     'Make it: `mkdir -p <folder-name>`, then `upload --page-id \'<id>\'`; not commands: `pageId: "PAGEREF_<x>"`, `Replaced PAGEREF_<name> tokens`.',
-    '> names come from `pac model genpage list',
-    '> --app-id <id>`. Never guess them, and `pac model list` too.',
+    '> names come from `node genpage.js list --env',
+    "> '<envUrl>' --app-id <id>`. Never guess them, and `node apps.js list --env '<envUrl>'` too.",
+    'The environment comes from `pac org who`, not from a guess.',
     '```markdown',
     "- Command: `node x.js --env '<org-url>'`",
     '```',
@@ -107,8 +108,9 @@ test('the command-text reader sees what it guards', () => {
     '--connectors "<working-dir>/c.json"',
     'mkdir -p <folder-name>',
     "upload --page-id '<id>'",
-    'pac model genpage list --app-id <id>',
-    'pac model list',
+    "node genpage.js list --env '<envUrl>' --app-id <id>",
+    "node apps.js list --env '<envUrl>'",
+    'pac org who',
     "node x.js --env '<org-url>'",
   ]);
 });

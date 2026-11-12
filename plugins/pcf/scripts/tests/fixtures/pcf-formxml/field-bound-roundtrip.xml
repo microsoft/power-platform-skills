@@ -1,0 +1,21 @@
+<form>
+  <!-- Round-tripped through the platform after a designer-shaped PCF binding write; sanitized to contoso/new_ names and fresh GUIDs. -->
+  <tabs>
+    <tab name="general">
+      <columns>
+        <column>
+          <sections>
+            <section name="general_section">
+              <rows>
+                <row>
+                  <cell id="{5B53A54D-0C62-4E4E-9B56-55B398E63055}"><labels><label description="PCF Probe Name" languagecode="1033" /></labels><control id="new_contosoprobename" classid="{4273EDBD-AC1D-40d3-9FB2-095C621B552D}" datafieldname="new_contosoprobename" /></cell><cell id="{6667E3BE-2FD9-48BA-B0C1-365C0A04CDEE}" showlabel="true" locklevel="0"><labels><label description="PCF Probe Text" languagecode="1033" /></labels><control id="new_contosoprobetext" classid="{F9A8A302-114E-466A-B582-6771B2AE0D92}" datafieldname="new_contosoprobetext" disabled="false" uniqueid="{36F1D7E1-F372-421F-A11F-0EC7117E3EDE}" /></cell>
+                </row>
+              </rows>
+            </section>
+          </sections>
+        </column>
+      </columns>
+    </tab>
+  </tabs>
+  <controlDescriptions><controlDescription forControl="{36F1D7E1-F372-421F-A11F-0EC7117E3EDE}"><customControl id="{4273EDBD-AC1D-40d3-9FB2-095C621B552D}"><parameters><datafieldname>new_contosoprobetext</datafieldname></parameters></customControl><customControl formFactor="0" name="new_ContosoProbe.ContosoProbeA"><parameters><sampleProperty>new_contosoprobetext</sampleProperty></parameters></customControl><customControl formFactor="1" name="new_ContosoProbe.ContosoProbeA"><parameters><sampleProperty>new_contosoprobetext</sampleProperty></parameters></customControl><customControl formFactor="2" name="new_ContosoProbe.ContosoProbeA"><parameters><sampleProperty>new_contosoprobetext</sampleProperty></parameters></customControl></controlDescription></controlDescriptions>
+</form>

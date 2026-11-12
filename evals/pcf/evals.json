@@ -1,0 +1,744 @@
+{
+  "skill_name": "pcf",
+  "eval_instructions": "Offline deterministic structural and generated-project evals for /pcf:pcf. Assertions are fixed by contract in this file and are never derived from the code under test.",
+  "common_assertions": [
+    "contract: every expected code is present",
+    "contract: every forbidden code is absent",
+    "contract: expected ok/status fields match",
+    "contract: expected upgrade step ids are present",
+    "contract: expected manual step ids are present"
+  ],
+  "evals": [
+    {
+      "id": 1,
+      "tier": "smoke",
+      "family": "intent",
+      "fixture": "001-intent-field-clean",
+      "expect": {
+        "ok": true,
+        "presentCodes": [],
+        "absentCodes": [
+          "PCF_INTENT_PAGES_MULTI_FIELD",
+          "PCF_INTENT_PAGES_VIRTUAL"
+        ]
+      },
+      "assertions": [
+        "contract: every expected code is present",
+        "contract: every forbidden code is absent",
+        "contract: expected ok/status fields match",
+        "contract: expected upgrade step ids are present",
+        "contract: expected manual step ids are present"
+      ]
+    },
+    {
+      "id": 2,
+      "tier": "smoke",
+      "family": "intent",
+      "fixture": "002-intent-pages-multi-field",
+      "expect": {
+        "ok": false,
+        "presentCodes": [
+          "PCF_INTENT_PAGES_MULTI_FIELD"
+        ],
+        "absentCodes": [
+          "PCF_INTENT_PAGES_VIRTUAL"
+        ]
+      },
+      "assertions": [
+        "contract: every expected code is present",
+        "contract: every forbidden code is absent",
+        "contract: expected ok/status fields match",
+        "contract: expected upgrade step ids are present",
+        "contract: expected manual step ids are present"
+      ]
+    },
+    {
+      "id": 3,
+      "tier": "full",
+      "family": "intent",
+      "fixture": "003-intent-quickcreate-subgrid",
+      "expect": {
+        "ok": false,
+        "presentCodes": [
+          "PCF_INTENT_QC_SUBGRID"
+        ],
+        "absentCodes": [
+          "PCF_INTENT_PAGES_MULTI_FIELD"
+        ]
+      },
+      "assertions": [
+        "contract: every expected code is present",
+        "contract: every forbidden code is absent",
+        "contract: expected ok/status fields match",
+        "contract: expected upgrade step ids are present",
+        "contract: expected manual step ids are present"
+      ]
+    },
+    {
+      "id": 4,
+      "tier": "full",
+      "family": "intent",
+      "fixture": "004-intent-pages-virtual-list",
+      "expect": {
+        "ok": false,
+        "presentCodes": [
+          "PCF_INTENT_PAGES_VIRTUAL"
+        ],
+        "absentCodes": [
+          "PCF_INTENT_PARAM_UNKNOWN",
+          "PCF_INTENT_LIST_NEEDS_VIEW_CONFIG"
+        ]
+      },
+      "assertions": [
+        "contract: every expected code is present",
+        "contract: every forbidden code is absent",
+        "contract: expected ok/status fields match",
+        "contract: expected upgrade step ids are present",
+        "contract: expected manual step ids are present"
+      ]
+    },
+    {
+      "id": 5,
+      "tier": "smoke",
+      "family": "manifest",
+      "fixture": "005-manifest-field-clean",
+      "expect": {
+        "ok": true,
+        "presentCodes": [],
+        "absentCodes": [
+          "PCF_ATTR_MISSING",
+          "PCF_PAGES_VIRTUAL"
+        ]
+      },
+      "assertions": [
+        "contract: every expected code is present",
+        "contract: every forbidden code is absent",
+        "contract: expected ok/status fields match",
+        "contract: expected upgrade step ids are present",
+        "contract: expected manual step ids are present"
+      ],
+      "hosts": [
+        "model",
+        "pages"
+      ]
+    },
+    {
+      "id": 6,
+      "tier": "full",
+      "family": "manifest",
+      "fixture": "006-manifest-pages-virtual",
+      "expect": {
+        "ok": false,
+        "presentCodes": [
+          "PCF_PAGES_VIRTUAL",
+          "PCF_PAGES_PLATFORM_LIBRARY"
+        ],
+        "absentCodes": [
+          "PCF_CODE_RESOURCE"
+        ]
+      },
+      "assertions": [
+        "contract: every expected code is present",
+        "contract: every forbidden code is absent",
+        "contract: expected ok/status fields match",
+        "contract: expected upgrade step ids are present",
+        "contract: expected manual step ids are present"
+      ],
+      "hosts": [
+        "pages"
+      ]
+    },
+    {
+      "id": 7,
+      "tier": "full",
+      "family": "manifest",
+      "fixture": "007-manifest-feature-policy",
+      "expect": {
+        "ok": false,
+        "presentCodes": [
+          "PCF_FEATURE_DUPLICATE",
+          "PCF_PAGES_REQUIRED_FEATURE"
+        ],
+        "absentCodes": [
+          "PCF_PAGES_VIRTUAL"
+        ]
+      },
+      "assertions": [
+        "contract: every expected code is present",
+        "contract: every forbidden code is absent",
+        "contract: expected ok/status fields match",
+        "contract: expected upgrade step ids are present",
+        "contract: expected manual step ids are present"
+      ],
+      "hosts": [
+        "pages"
+      ]
+    },
+    {
+      "id": 8,
+      "tier": "full",
+      "family": "manifest",
+      "fixture": "008-manifest-diff-removed",
+      "expect": {
+        "ok": false,
+        "presentCodes": [
+          "PCF_DIFF_PROPERTY_REMOVED"
+        ],
+        "absentCodes": [
+          "PCF_DIFF_IDENTITY_CHANGED"
+        ]
+      },
+      "assertions": [
+        "contract: every expected code is present",
+        "contract: every forbidden code is absent",
+        "contract: expected ok/status fields match",
+        "contract: expected upgrade step ids are present",
+        "contract: expected manual step ids are present"
+      ]
+    },
+    {
+      "id": 9,
+      "tier": "full",
+      "family": "code",
+      "fixture": "009-source-clean-webapi",
+      "expect": {
+        "ok": true,
+        "presentCodes": [],
+        "absentCodes": [
+          "PCF_CODE_XRM",
+          "PCF_FEATURE_UNDECLARED"
+        ]
+      },
+      "assertions": [
+        "contract: every expected code is present",
+        "contract: every forbidden code is absent",
+        "contract: expected ok/status fields match",
+        "contract: expected upgrade step ids are present",
+        "contract: expected manual step ids are present"
+      ],
+      "hosts": [
+        "model"
+      ]
+    },
+    {
+      "id": 10,
+      "tier": "smoke",
+      "family": "code",
+      "fixture": "010-source-xrm-webapi-undeclared",
+      "expect": {
+        "ok": false,
+        "presentCodes": [
+          "PCF_CODE_XRM",
+          "PCF_FEATURE_UNDECLARED"
+        ],
+        "absentCodes": [
+          "PCF_PAGES_API"
+        ]
+      },
+      "assertions": [
+        "contract: every expected code is present",
+        "contract: every forbidden code is absent",
+        "contract: expected ok/status fields match",
+        "contract: expected upgrade step ids are present",
+        "contract: expected manual step ids are present"
+      ],
+      "hosts": [
+        "model"
+      ]
+    },
+    {
+      "id": 11,
+      "tier": "full",
+      "family": "code",
+      "fixture": "011-source-virtual-root",
+      "expect": {
+        "ok": false,
+        "presentCodes": [
+          "PCF_VIRTUAL_OWN_ROOT"
+        ],
+        "absentCodes": [
+          "PCF_CODE_XRM"
+        ]
+      },
+      "assertions": [
+        "contract: every expected code is present",
+        "contract: every forbidden code is absent",
+        "contract: expected ok/status fields match",
+        "contract: expected upgrade step ids are present",
+        "contract: expected manual step ids are present"
+      ],
+      "hosts": [
+        "model"
+      ]
+    },
+    {
+      "id": 12,
+      "tier": "full",
+      "family": "code",
+      "fixture": "012-source-pages-unguarded-device",
+      "expect": {
+        "ok": false,
+        "presentCodes": [
+          "PCF_PAGES_API"
+        ],
+        "absentCodes": [
+          "PCF_FEATURE_UNDECLARED"
+        ]
+      },
+      "assertions": [
+        "contract: every expected code is present",
+        "contract: every forbidden code is absent",
+        "contract: expected ok/status fields match",
+        "contract: expected upgrade step ids are present",
+        "contract: expected manual step ids are present"
+      ],
+      "hosts": [
+        "pages"
+      ]
+    },
+    {
+      "id": 13,
+      "tier": "smoke",
+      "family": "formxml",
+      "fixture": "013-formxml-bound-all-clients",
+      "expect": {
+        "ok": true,
+        "status": "bound",
+        "presentCodes": [],
+        "absentCodes": [
+          "PCF_BIND_FACTOR_UNDECLARED",
+          "PCF_BIND_PARAM_MISMATCH"
+        ]
+      },
+      "assertions": [
+        "contract: every expected code is present",
+        "contract: every forbidden code is absent",
+        "contract: expected ok/status fields match",
+        "contract: expected upgrade step ids are present",
+        "contract: expected manual step ids are present"
+      ]
+    },
+    {
+      "id": 14,
+      "tier": "full",
+      "family": "formxml",
+      "fixture": "014-formxml-web-only",
+      "expect": {
+        "ok": false,
+        "status": "error",
+        "presentCodes": [
+          "PCF_BIND_FACTOR_UNDECLARED"
+        ],
+        "absentCodes": [
+          "PCF_BIND_NOT_CUSTOM"
+        ]
+      },
+      "assertions": [
+        "contract: every expected code is present",
+        "contract: every forbidden code is absent",
+        "contract: expected ok/status fields match",
+        "contract: expected upgrade step ids are present",
+        "contract: expected manual step ids are present"
+      ]
+    },
+    {
+      "id": 15,
+      "tier": "full",
+      "family": "formxml",
+      "fixture": "015-formxml-default-control",
+      "expect": {
+        "ok": false,
+        "status": "not-bound",
+        "presentCodes": [
+          "PCF_BIND_NOT_CUSTOM",
+          "PCF_BIND_NO_DESCRIPTION"
+        ],
+        "absentCodes": [
+          "PCF_BIND_MULTIPLE_CELLS"
+        ]
+      },
+      "assertions": [
+        "contract: every expected code is present",
+        "contract: every forbidden code is absent",
+        "contract: expected ok/status fields match",
+        "contract: expected upgrade step ids are present",
+        "contract: expected manual step ids are present"
+      ]
+    },
+    {
+      "id": 16,
+      "tier": "full",
+      "family": "formxml",
+      "fixture": "016-formxml-duplicate-cells",
+      "expect": {
+        "ok": false,
+        "status": "ambiguous",
+        "presentCodes": [
+          "PCF_BIND_MULTIPLE_CELLS"
+        ],
+        "absentCodes": [
+          "PCF_BIND_NO_CELL"
+        ]
+      },
+      "assertions": [
+        "contract: every expected code is present",
+        "contract: every forbidden code is absent",
+        "contract: expected ok/status fields match",
+        "contract: expected upgrade step ids are present",
+        "contract: expected manual step ids are present"
+      ]
+    },
+    {
+      "id": 17,
+      "tier": "smoke",
+      "family": "doctor",
+      "fixture": "017-doctor-clean",
+      "expect": {
+        "ok": true,
+        "presentCodes": [],
+        "absentCodes": [
+          "PROJ_NO_LOCKFILE",
+          "PROJ_NODE_MODULES_MISSING",
+          "PROJ_BUILDMODE_NOT_PRODUCTION"
+        ]
+      },
+      "assertions": [
+        "contract: every expected code is present",
+        "contract: every forbidden code is absent",
+        "contract: expected ok/status fields match",
+        "contract: expected upgrade step ids are present",
+        "contract: expected manual step ids are present"
+      ],
+      "hosts": [
+        "model"
+      ]
+    },
+    {
+      "id": 18,
+      "tier": "full",
+      "family": "doctor",
+      "fixture": "018-doctor-missing-install",
+      "expect": {
+        "ok": false,
+        "presentCodes": [
+          "PROJ_NO_LOCKFILE",
+          "PROJ_NODE_MODULES_MISSING"
+        ],
+        "absentCodes": [
+          "PROJ_HOST_CONFLICT"
+        ]
+      },
+      "assertions": [
+        "contract: every expected code is present",
+        "contract: every forbidden code is absent",
+        "contract: expected ok/status fields match",
+        "contract: expected upgrade step ids are present",
+        "contract: expected manual step ids are present"
+      ],
+      "needs": [
+        "build"
+      ],
+      "hosts": [
+        "model"
+      ]
+    },
+    {
+      "id": 19,
+      "tier": "full",
+      "family": "doctor",
+      "fixture": "019-doctor-legacy-buildmode",
+      "expect": {
+        "ok": true,
+        "presentCodes": [
+          "PROJ_ESLINT_LEGACY",
+          "PROJ_BUILDMODE_NOT_PRODUCTION"
+        ],
+        "absentCodes": [
+          "PROJ_NODE_MODULES_MISSING"
+        ]
+      },
+      "assertions": [
+        "contract: every expected code is present",
+        "contract: every forbidden code is absent",
+        "contract: expected ok/status fields match",
+        "contract: expected upgrade step ids are present",
+        "contract: expected manual step ids are present"
+      ],
+      "hosts": [
+        "model"
+      ]
+    },
+    {
+      "id": 20,
+      "tier": "full",
+      "family": "doctor",
+      "fixture": "020-doctor-virtual-pages",
+      "expect": {
+        "ok": false,
+        "presentCodes": [
+          "PROJ_HOST_CONFLICT",
+          "PROJ_PLATFORM_LIB"
+        ],
+        "absentCodes": [
+          "PROJ_NODE_MODULES_MISSING"
+        ]
+      },
+      "assertions": [
+        "contract: every expected code is present",
+        "contract: every forbidden code is absent",
+        "contract: expected ok/status fields match",
+        "contract: expected upgrade step ids are present",
+        "contract: expected manual step ids are present"
+      ],
+      "hosts": [
+        "pages"
+      ]
+    },
+    {
+      "id": 21,
+      "tier": "smoke",
+      "family": "upgrade",
+      "fixture": "021-upgrade-clean",
+      "expect": {
+        "ok": true,
+        "presentStepIds": [],
+        "absentStepIds": [
+          "DEPS_TO_MATRIX",
+          "BUILDMODE_PRODUCTION"
+        ],
+        "presentManualIds": []
+      },
+      "assertions": [
+        "contract: every expected code is present",
+        "contract: every forbidden code is absent",
+        "contract: expected ok/status fields match",
+        "contract: expected upgrade step ids are present",
+        "contract: expected manual step ids are present"
+      ],
+      "hosts": [
+        "model"
+      ]
+    },
+    {
+      "id": 22,
+      "tier": "full",
+      "family": "upgrade",
+      "fixture": "022-upgrade-deps",
+      "expect": {
+        "ok": true,
+        "presentStepIds": [
+          "DEPS_TO_MATRIX",
+          "REINSTALL"
+        ],
+        "absentStepIds": [
+          "BUILDMODE_PRODUCTION"
+        ],
+        "presentManualIds": []
+      },
+      "assertions": [
+        "contract: every expected code is present",
+        "contract: every forbidden code is absent",
+        "contract: expected ok/status fields match",
+        "contract: expected upgrade step ids are present",
+        "contract: expected manual step ids are present"
+      ],
+      "hosts": [
+        "model"
+      ]
+    },
+    {
+      "id": 23,
+      "tier": "full",
+      "family": "upgrade",
+      "fixture": "023-upgrade-buildmode",
+      "expect": {
+        "ok": true,
+        "presentStepIds": [
+          "BUILDMODE_PRODUCTION"
+        ],
+        "absentStepIds": [
+          "DEPS_TO_MATRIX"
+        ],
+        "presentManualIds": []
+      },
+      "assertions": [
+        "contract: every expected code is present",
+        "contract: every forbidden code is absent",
+        "contract: expected ok/status fields match",
+        "contract: expected upgrade step ids are present",
+        "contract: expected manual step ids are present"
+      ],
+      "hosts": [
+        "model"
+      ]
+    },
+    {
+      "id": 24,
+      "tier": "smoke",
+      "family": "upgrade",
+      "fixture": "024-upgrade-virtual-pages-manual",
+      "expect": {
+        "ok": true,
+        "presentStepIds": [],
+        "absentStepIds": [
+          "DEPS_TO_MATRIX"
+        ],
+        "presentManualIds": [
+          "PAGES_VIRTUAL_TO_STANDARD"
+        ]
+      },
+      "assertions": [
+        "contract: every expected code is present",
+        "contract: every forbidden code is absent",
+        "contract: expected ok/status fields match",
+        "contract: expected upgrade step ids are present",
+        "contract: expected manual step ids are present"
+      ],
+      "hosts": [
+        "pages"
+      ]
+    },
+    {
+      "id": 25,
+      "tier": "full",
+      "family": "generated",
+      "fixture": "025-generated-good",
+      "expect": {
+        "ok": true,
+        "presentCodes": [],
+        "absentCodes": [
+          "PCF_CODE_XRM",
+          "PCF_FEATURE_UNDECLARED",
+          "PCF_PAGES_VIRTUAL"
+        ]
+      },
+      "assertions": [
+        "contract: every expected code is present",
+        "contract: every forbidden code is absent",
+        "contract: expected ok/status fields match",
+        "contract: expected upgrade step ids are present",
+        "contract: expected manual step ids are present"
+      ],
+      "hosts": [
+        "model"
+      ]
+    },
+    {
+      "id": 26,
+      "tier": "full",
+      "family": "generated",
+      "fixture": "026-generated-xrm-webapi",
+      "expect": {
+        "ok": false,
+        "presentCodes": [
+          "PCF_CODE_XRM",
+          "PCF_FEATURE_UNDECLARED"
+        ],
+        "absentCodes": [
+          "PCF_PAGES_VIRTUAL"
+        ]
+      },
+      "assertions": [
+        "contract: every expected code is present",
+        "contract: every forbidden code is absent",
+        "contract: expected ok/status fields match",
+        "contract: expected upgrade step ids are present",
+        "contract: expected manual step ids are present"
+      ],
+      "hosts": [
+        "model"
+      ]
+    },
+    {
+      "id": 27,
+      "tier": "full",
+      "family": "generated",
+      "fixture": "027-generated-pages-virtual",
+      "expect": {
+        "ok": false,
+        "presentCodes": [
+          "PCF_PAGES_VIRTUAL",
+          "PCF_PAGES_PLATFORM_LIBRARY"
+        ],
+        "absentCodes": [
+          "PCF_CODE_XRM"
+        ]
+      },
+      "assertions": [
+        "contract: every expected code is present",
+        "contract: every forbidden code is absent",
+        "contract: expected ok/status fields match",
+        "contract: expected upgrade step ids are present",
+        "contract: expected manual step ids are present"
+      ],
+      "hosts": [
+        "pages"
+      ]
+    },
+    {
+      "id": 28,
+      "tier": "full",
+      "family": "intent",
+      "fixture": "028-intent-pages-liquid",
+      "expect": {
+        "ok": true,
+        "presentCodes": [],
+        "absentCodes": [
+          "PCF_INTENT_PAGES_DATASET",
+          "PCF_INTENT_LIST_NEEDS_VIEW_CONFIG"
+        ]
+      },
+      "assertions": [
+        "contract: every expected code is present",
+        "contract: every forbidden code is absent",
+        "contract: expected ok/status fields match",
+        "contract: expected upgrade step ids are present",
+        "contract: expected manual step ids are present"
+      ]
+    },
+    {
+      "id": 29,
+      "tier": "full",
+      "family": "intent",
+      "fixture": "029-intent-pages-dataset",
+      "expect": {
+        "ok": false,
+        "presentCodes": [
+          "PCF_INTENT_PAGES_DATASET"
+        ],
+        "absentCodes": [
+          "PCF_INTENT_PAGES_VIRTUAL",
+          "PCF_INTENT_LIST_NEEDS_VIEW_CONFIG"
+        ]
+      },
+      "assertions": [
+        "contract: every expected code is present",
+        "contract: every forbidden code is absent",
+        "contract: expected ok/status fields match",
+        "contract: expected upgrade step ids are present",
+        "contract: expected manual step ids are present"
+      ]
+    },
+    {
+      "id": 30,
+      "tier": "full",
+      "family": "intent",
+      "fixture": "030-intent-pages-list",
+      "expect": {
+        "ok": false,
+        "presentCodes": [],
+        "absentCodes": [
+          "PCF_INTENT_PAGES_DATASET",
+          "PCF_INTENT_LIST_NEEDS_VIEW_CONFIG"
+        ]
+      },
+      "assertions": [
+        "contract: every expected code is present",
+        "contract: every forbidden code is absent",
+        "contract: expected ok/status fields match",
+        "contract: expected upgrade step ids are present",
+        "contract: expected manual step ids are present"
+      ]
+    }
+  ]
+}

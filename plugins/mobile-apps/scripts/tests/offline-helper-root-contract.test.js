@@ -7,7 +7,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 const { shellBlocks } = require('./helpers/markdown-shell-blocks');
-const { createSkillWorkflow } = require('./helpers/create-skill');
+const { createSkillDataModelFirst, createSkillWorkflow } = require('./helpers/create-skill');
 
 const pluginRoot = path.resolve(__dirname, '../..');
 const read = (file) => fs.readFileSync(path.join(pluginRoot, file), 'utf8').replace(/\r\n?/g, '\n');
@@ -363,11 +363,12 @@ test('offline setup forwards its resolved root and exact approved prerequisites 
   assert.match(handoff, /exact Gate 1-approved prerequisite table allowlist/);
   assert.match(handoff, /Configuration review must already\s+be accepted/);
   assert.match(handoff, /literal first-line status/);
-  const creation = createSkillWorkflow();
-  const caller = section(creation, 'If the user selects Yes, invoke `/setup-offline-profile`', 'Tables and generated services now exist');
-  assert.match(caller, /--working-dir '<working_dir>'/);
-  assert.match(caller, /orchestrator: create-mobile-app/);
-  assert.match(caller, /not its prerequisite or\s+profile mutations/);
+  for (const creation of [createSkillWorkflow(), createSkillDataModelFirst()]) {
+    const caller = section(creation, 'If the user selects Yes, invoke `/setup-offline-profile`', 'Tables and generated services now exist');
+    assert.match(caller, /--working-dir '<working_dir>'/);
+    assert.match(caller, /orchestrator: create-mobile-app/);
+    assert.match(caller, /not its prerequisite or\s+profile mutations/);
+  }
 });
 
 test('offline architect reads only the supplied app and tenant and cannot borrow another root', (t) => {

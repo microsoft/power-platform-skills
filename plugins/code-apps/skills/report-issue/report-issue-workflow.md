@@ -2,7 +2,11 @@
 
 File a bug report on the [power-platform-skills](https://github.com/microsoft/power-platform-skills) GitHub repository. This workflow gathers the required information, presents a full preview, and creates the issue on the user's behalf.
 
-**Initial request:** $ARGUMENTS
+**Initial request:** Use the description supplied when the user invoked this skill.
+Some clients expose this description as `$ARGUMENTS`.
+
+Follow the [client tool mapping](../../shared/shared-instructions.md#client-tool-mapping).
+If a client has no question tool, ask in the conversation and wait for the user's answer.
 
 > **WARNING:** Before proceeding, inform the user: "This will create an issue on the **public** GitHub repository [microsoft/power-platform-skills](https://github.com/microsoft/power-platform-skills). **Do not include any sensitive information** such as credentials, internal URLs, tenant IDs, customer data, or proprietary code in the bug report."
 
@@ -15,7 +19,7 @@ File a bug report on the [power-platform-skills](https://github.com/microsoft/po
 **Actions**:
 
 1. Create a task list with all 5 phases (see [Progress Tracking](#progress-tracking) table).
-2. **Auto-detect the plugin name** from the current plugin context by reading `${PLUGIN_ROOT}/.plugin/plugin.json`. Extract the `name` field.
+2. **Auto-detect the plugin name** from the current plugin context by reading [plugin.json](../../plugin.json). Extract the `name` field.
 3. **Auto-detect the plugin version** from the same `plugin.json` — extract the `version` field.
 4. If the plugin name or version cannot be determined, use `AskUserQuestion` to ask the user.
 
@@ -50,12 +54,12 @@ Use `AskUserQuestion` to gather bug details. `AskUserQuestion` supports 1-4 ques
 
 **Call 3** — Environment details:
 
-Use `AskUserQuestion` with a single question: **"We recommend including environment details (OS, Claude Code version, PAC CLI version) to help maintainers reproduce and debug the issue faster. Include them?"** (header: "Environment") — Options: "Yes, auto-collect them" (recommended), "No, skip".
+Use `AskUserQuestion` with a single question: **"Include environment details (OS, active agent client version, Power Apps CLI version) to help maintainers reproduce the issue?"** (header: "Environment") — Options: "Yes, auto-collect them" (recommended), "No, skip".
 
 - If **yes**: Auto-collect the following by running shell commands:
   - **OS**: Detect the user's OS name and version using an appropriate command for their platform.
-  - **Claude Code version**: Run `claude --version`
-  - **PAC CLI version**: Run `pac help` and extract the version from the output
+  - **Agent client version**: Run the active client's version command, such as `copilot --version`, `claude --version`, `codex --version`, or `cursor-agent --version`. Do not substitute another client's version. Report explicitly if the active client's version is unavailable.
+  - **Power Apps CLI version**: Resolve the locally installed CLI from the code app project root using [cli-binary.md](../../shared/cli-binary.md), then run `$PA --version`. If the CLI is not installed, report that explicitly.
   - Present the collected details to the user.
 - If **no**: Skip environment fields.
 

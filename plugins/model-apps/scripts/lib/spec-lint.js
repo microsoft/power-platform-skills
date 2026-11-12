@@ -2,12 +2,17 @@
 // Pure App Spec guardrail. Returns { ok, errors, warnings }. errors block the plan
 // gate; warnings teach. Bakes in the modeling lessons hit live — notably the
 // relationship schema-name vs lookup-name collision Dataverse rejects.
-const { relationshipSchemaName, relationshipFor, invalidChoiceSampleTokens, isPlatformIconRef, labelText, appMembershipWarnings } = require('./app-spec.js');
+const { relationshipSchemaName, relationshipFor, invalidChoiceSampleTokens, isPlatformIconRef, labelText, derivedPluralName, appMembershipWarnings, subgridPlacementProblems, subgridDuplicateProblems, subgridUnknownKeys } = require('./app-spec.js');
 const { compileFormIntent, formFieldLogicals, NON_FORM_RENDERABLE_TYPES } = require('./artifact-intent.js');
 const { normalizeSpecShape } = require('./spec-shape.js');
 const { resolveSurfaces, unresolvedSurfaceMessage } = require('./surface-resolver.js');
 const { nearestName } = require('./nearest-name.js');
+const { declaredFeatureOn } = require('./declared-features.js');
 const { isAppSourcePath } = require('./app-source-path.js');
+const { labelLintWarnings, viewsForLabels } = require('./view-filter-labels.js');
+const { navigationVerdict } = require('./app-navigation.js');
+const { authorizeFlag } = require('./cli-failure.js');
+const { noPersonasWarning, uncoveredTables, uncoveredTablesWarning } = require('./app-access.js');
 
 const CHOICE_OPTION_WARN = 12;
 const SEQNUM_RE = /\{SEQNUM(:\d+)?\}/i;
@@ -246,6 +251,8 @@ function lintAppSpec(spec) {
     if (!isExplicit && f.fieldOptions && typeof f.fieldOptions === 'object' && !Array.isArray(f.fieldOptions)) {
       let placed = null;
       try { placed = new Set(formFieldLogicals(compileFormIntent(spec, f))); } catch { /* a malformed form is the validator's to report */ }
+      // A declared form keeps what its spec omits and refuses `prune` (app-spec.js validateDeclaredForms), so it is not advised there.
+      const keepsRest = declaredFeatureOn('forms') && f.reconcile === 'declared' ? '' : ' (prune: false keeps the rest of the form)';
       for (const [key, opt] of Object.entries(placed ? f.fieldOptions : {})) {
         const flags = [opt && opt.readOnly === true && 'readOnly', opt && opt.hidden === true && 'hidden'].filter(Boolean);
         if (!flags.length || placed.has(lc(key))) continue;
@@ -258,13 +265,14 @@ function lintAppSpec(spec) {
         if (col && NON_FORM_RENDERABLE_TYPES.has(col.type)) {
           W(`${what} on a ${col.type} column, which has no form control, so the auto layout leaves it off the form and the build never applies it.`);
         } else if (col) {
-          W(`${what} on a ${col.type} column, a type the auto layout does not place, so the build never applies it. List '${key}' in an explicit layout to place it (prune: false keeps the rest of the form).`);
+          W(`${what} on a ${col.type} column, a type the auto layout does not place, so the build never applies it. List '${key}' in an explicit layout to place it${keepsRest}.`);
         } else {
-          W(`${what} on a field the auto layout does not place — it places the primary column, the table's declared columns and its parent lookups — so the build never applies it. Declare '${key}' as a column, or list it in an explicit layout (prune: false keeps the rest of the form).`);
+          W(`${what} on a field the auto layout does not place — it places the primary column, the table's declared columns and its parent lookups — so the build never applies it. Declare '${key}' as a column, or list it in an explicit layout${keepsRest}.`);
         }
       }
     }
     for (const sg of f.subgrids || []) {
+      for (const message of subgridUnknownKeys(sg)) W(`Form ${f.entity} ${message}`);
       const has1N = (spec.relationships || []).some(
         (r) => r.type === 'OneToMany' && lc(r.referenced) === lc(f.entity) && lc(r.referencing) === lc(sg.childEntity)
       );
@@ -272,6 +280,16 @@ function lintAppSpec(spec) {
         (r) => r.type === 'ManyToMany' && ((lc(r.entity1) === lc(f.entity) && lc(r.entity2) === lc(sg.childEntity)) || (lc(r.entity1) === lc(sg.childEntity) && lc(r.entity2) === lc(f.entity)))
       );
       if (!has1N && !hasNN) E(`Form ${f.entity} sub-grid for ${sg.childEntity} has no matching OneToMany or ManyToMany relationship`);
+      // Where the grid goes — the SAME judgement validateAppSpec makes, from the one function, so a spec that
+      // lints clean is not refused by the build's gate for a placement the lint never looked at.
+      if (formType === 'Main') for (const message of subgridPlacementProblems(f, sg)) E(`Form ${f.entity} ${message}`);
+    }
+    // A relationship listed more than once — likewise the one judgement of the spec gate: an error when an entry says
+    // where the grid goes, a warning when none does.
+    if (formType === 'Main') {
+      const duplicates = subgridDuplicateProblems(spec, f);
+      for (const message of duplicates.errors) E(`Form ${f.entity} ${message}`);
+      for (const message of duplicates.warnings) W(`Form ${f.entity} ${message}`);
     }
     for (const ev of f.events || []) {
       if (!FORM_EVENTS.has(lc(ev.event))) { E(`Form ${f.entity} has an event with unknown type '${ev.event}' (use onload/onsave/onchange)`); continue; }
@@ -388,11 +406,13 @@ function lintAppSpec(spec) {
     for (const ds of p.dataSources || []) {
       if (!entityLowerSet.has(lc(ds))) W(`Page '${p.name}' data source '${ds}' isn't a declared entity — ok if it's a standard table, otherwise a likely typo`);
     }
-    // pac stores each ASCII `"` in a page's name as `\"` on the page's own record, and changes nothing else
-    // (live-measured). A warning, not an error: the navigation shows the subarea's `title`, which the build
-    // writes as given. (The standalone genpage upload refuses such a name — there pac writes the title too.)
+    // A warning, not an error: a page's name is stored exactly as given, in the page and in the navigation title. Pages an earlier release
+    // created through pac hold each ASCII `"` as `\"` on the page's own record (the build repairs that name on its next update), so the same
+    // name can read differently from page to page. The warning is kept — reworded, because pac no longer writes pages — since the app-builder
+    // eval (evals/model-apps/app-builder/lib/assertions.js) and references/app-spec-schema.md still treat it as part of the lint contract;
+    // retire it together with them.
     if (typeof p.name === 'string' && p.name.includes('"')) {
-      W(`Page '${p.name}': pac stores each ASCII double quote (") in a page's name as \\" on the page's own record — use typographic quotes (“ ”) or an apostrophe instead`);
+      W(`Page '${p.name}': the name has an ASCII double quote (") — it is stored exactly as written, but a page an earlier release created holds each one as \\" on the page's own record until a build rewrites its name — use typographic quotes (“ ”) or an apostrophe instead`);
     }
   }
   // The sitemap `VectorIcon` attribute must be an SVG path (e.g. /_imgs/TableIconsFluentV9/x.svg) or
@@ -423,6 +443,19 @@ function lintAppSpec(spec) {
       }
     }
   }
+  // A navigation a NEW app cannot be built from. validateAppSpec accepts it (data-only specs have no navigation, and a downloaded spec carries
+  // the app's own, which can be empty), but a build that includes the app step refuses it for a new app before it writes anything. Whether the
+  // app exists is not known here, so this is a warning, and it says who is spared by asking the same rule again for an app that exists.
+  // It speaks of the build `--apply` runs — the whole build, which creates a new app's pages before the app (sdk-build.js pagesFirstRule) — so a
+  // navigation of pages only is one a new app is built from, and is not warned about; whether each page is implemented yet is validation's to say
+  // (the deploy profile), since a spec being authored may still hold intent pages.
+  const navigation = navigationVerdict(spec, { appExists: false, newAppPagesFirst: true });
+  if (navigation.outcome === 'refuse') {
+    const forExisting = navigationVerdict(spec, { appExists: true, newAppPagesFirst: true }).outcome;
+    const spared = forExisting === 'ok' ? ' An app that already exists is not affected.'
+      : forExisting === 'warn' ? ' An app that already exists is built with no navigation entries, and the build says so.' : '';
+    W(`appShell: ${navigation.message}${spared}`);
+  }
 
   for (const ch of spec.charts || []) {
     const ent = (spec.entities || []).find((e) => lc(e.schemaName) === lc(ch.entity));
@@ -442,11 +475,19 @@ function lintAppSpec(spec) {
     // author picks a distinct name (or knowingly customizes the stock default).
     const ve = (spec.entities || []).find((x) => lc(x.schemaName) === lc(v.entity));
     if (ve && v.name) {
-      const plural = labelText(ve.pluralName, spec && spec.languageCode) || `${labelText(ve.displayName, spec && spec.languageCode) || ve.schemaName}s`;
+      const plural = labelText(ve.pluralName, spec && spec.languageCode) || derivedPluralName(ve, spec && spec.languageCode);
       if (lc(v.name) === `active ${lc(plural)}` || lc(v.name) === `inactive ${lc(plural)}`) {
-        W(`View '${v.name}' has the same name as ${ve.schemaName}'s stock default view — it will MERGE onto that default (columns are unioned and the stock "Created On" is kept, but its filters/sort are ignored). Use a distinct name to author a separate view.`);
+        // A declared view (reconcile: "declared") is not merged: it replaces the stock view's columns, filters and sort. But the
+        // stock view exists on every table, new ones included, and this spec did not create it, so every edit is an adoption
+        // the build refuses until the maker names it (lib/view-reconcile.js, view-adoption-not-authorized).
+        if (v.reconcile === 'declared') W(`View '${v.name}' has the same name as ${ve.schemaName}'s stock default view, which exists on every table, new ones included — as a declared view, a build changes it only with ${authorizeFlag(`adopt:view:${lc(v.entity)}/${v.name}`)}. Use a distinct name to author a separate view.`);
+        else W(`View '${v.name}' has the same name as ${ve.schemaName}'s stock default view — it will MERGE onto that default (columns are unioned and the stock "Created On" is kept, but its filters/sort are ignored). Use a distinct name to author a separate view.`);
       }
     }
+    // ADO 6691114: offline, a label can only be checked against what the spec declares. Say when one will
+    // be checked against the environment at build time instead, so the author is not surprised by the halt.
+    // A declared view's joined filters are options of the JOINED table, so they are checked there, as the build reads them.
+    for (const lv of viewsForLabels({ views: [v] })) for (const w of labelLintWarnings(spec, lv)) W(w);
     for (const f of v.filters || []) {
       if (!f.attr) { E(`View '${v.name}' has a filter without an attr`); continue; }
       const op = f.op || 'eq';
@@ -532,10 +573,25 @@ function lintAppSpec(spec) {
   // ai block — row-summary guardrails.
   const D365_OWNED_SUMMARY_TABLES = new Set(['incident', 'lead', 'opportunity']);
   const DESCRIPTIVE_TYPES = new Set(['Text', 'Memo', 'Choice', 'MultiChoice', 'DateTime', 'Money', 'Integer', 'Decimal', 'Double', 'Boolean']);
+  // The keys the build reads from a table's entry: `enabled` (ai-candidates.js), `instruction` — the table's row-summary prompt — and
+  // `columns` (ai-prompt.js buildPromptSpec). validateAppSpec rejects no other key, so a misnamed one validated, built green and did
+  // nothing; seen live: `prompt` for the prompt, under `default: "off"`, planned no summary at all. A warning, as the schema accepts it.
+  const SUMMARY_TABLE_KEYS = ['enabled', 'instruction', 'columns'];
   if (spec.ai && spec.ai.summaries && spec.ai.summaries.tables && typeof spec.ai.summaries.tables === 'object') {
     for (const [k, v] of Object.entries(spec.ai.summaries.tables)) {
       if (D365_OWNED_SUMMARY_TABLES.has(lc(k))) {
         W(`Summary table '${k}' is a Dynamics 365 app table (Case/Lead/Opportunity) — it provides its own summaries; the row-summary feature isn't available for it`);
+      }
+      if (v && typeof v === 'object' && !Array.isArray(v)) {
+        for (const key of Object.keys(v)) {
+          if (SUMMARY_TABLE_KEYS.includes(key)) continue;
+          if (key === 'prompt') {
+            W(`ai.summaries.tables['${k}'].prompt is ignored — a table's row-summary prompt is its instruction: rename the key to ai.summaries.tables['${k}'].instruction (when a summary is enabled, omitting instruction uses the default prompt)`);
+            continue;
+          }
+          const near = nearestName(key, SUMMARY_TABLE_KEYS);
+          W(`ai.summaries.tables['${k}']: unknown key '${key}' is ignored${near ? ` — did you mean '${near}'?` : ''} (a table's entry reads only enabled, instruction and columns)`);
+        }
       }
       const ent = (spec.entities || []).find((e) => lc(e.schemaName) === lc(k));
       if (ent) {
@@ -581,10 +637,17 @@ function lintAppSpec(spec) {
     .filter((j) => j && typeof j === 'object')
     .map((j) => ({ persona: p.persona, job: j })));
   if (!personas.length) {
-    W('no personas[] — no jobs-to-be-done are recorded and no security role is authored, so the app opens only for system administrators. Capture who uses this app and what each of them needs to get done.');
+    // Says what the spec authors, and who can open the app only as a condition: no personas[] is also how an extension of an app that already has roles
+    // is written on purpose (a persona's role is converged to the declared privileges, so it is not how to add one table to somebody else's role), and
+    // a spec cannot tell the lint whether the app is new. See lib/app-access.js.
+    W(noPersonasWarning(spec));
   } else if (!jobs.length) {
     W('personas[] declares no jobs — a persona with no jobs-to-be-done neither documents the app nor sizes its security role.');
   }
+  // A table this spec creates is used by the users of a role only once a privilege on it is granted: by a persona, or by a roleGrants[] entry for a role that
+  // already exists. Whatever roles the app has, nothing here gives any of them this table.
+  const withoutAccess = uncoveredTables(spec);
+  if (withoutAccess.length) W(uncoveredTablesWarning(withoutAccess));
   for (const { persona, job } of jobs) {
     if (!(Array.isArray(job.surfaces) && job.surfaces.length)) {
       W(`persona "${persona}" job "${job.name}" is not mapped to a surface (jobs[].surfaces[]) — nothing in this app demonstrably lets that persona do the job.`);

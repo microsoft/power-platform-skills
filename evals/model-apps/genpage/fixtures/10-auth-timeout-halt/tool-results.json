@@ -1,5 +1,12 @@
 [
   {
+    "id": "list-tables-search",
+    "by": "genpage-planner",
+    "command": "node scripts\\list-tables.js --env https://contoso.crm.dynamics.com --search cnt_widget --exact",
+    "exitCode": 0,
+    "result": { "ok": true, "search": ["cnt_widget"], "exact": true, "count": 0, "tables": [], "missing": ["cnt_widget"] }
+  },
+  {
     "id": "auth-first",
     "command": "node scripts\\check-auth.js --env https://contoso.crm.dynamics.com --require-pac",
     "result": {

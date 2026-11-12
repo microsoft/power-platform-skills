@@ -123,8 +123,8 @@ test('REAL BUNDLE: an old copy holding unpushed edits is refused at push, and th
     assert.strictEqual(err.code, 'ARTIFACT_PROJECTION_STALE', 'with the SDK code kept for the caller');
     assert.match(err.message, /Refusing to push app/, 'the SDK reason stays in the message');
     assert.match(err.message, /earlier version of this plugin/, 'it says where the copy came from');
-    assert.match(err.message, /To reset it, stop any other build or teardown using the \.maker-workspace directory \(or the --workspace one\), then delete everything in it except last-applied\.json and destructive-approval\.json, and re-run/,
-      'and names the step an operator can take, keeping the navigation baseline and the approval record');
+    assert.match(err.message, /To reset it, stop any other build or teardown using the \.maker-workspace directory \(or the --workspace one\), then delete everything in it except last-applied\.json, destructive-approval\.json, web-resource-unconfirmed\.\*\.json \(the durable ids needed to recover unconfirmed web-resource writes\), dashboard-creation\.\*\.json \(the ids of the dashboards an interrupted build created before they joined the solution\) and the page-ownership\.\*\.json records \(the receipts and pending records of the pages the app created: nothing else can find them\), and re-run/,
+      'and names the step an operator can take, keeping the navigation baseline, the approval record and the page records');
     return true;
   });
   assert.strictEqual(writes.length, 0, 'nothing was written');
@@ -146,7 +146,7 @@ test('REAL BUNDLE: a copy holding unpushed edits over a moved environment halts 
     assert.ok(err instanceof BuildHalt);
     assert.strictEqual(err.code, 'LOCAL_EDITS_WOULD_BE_LOST', 'the SDK code is kept');
     assert.match(err.message, /the environment's copy changed after this workspace copy was fetched/);
-    assert.match(err.message, /A re-run applies the spec over that change, so first look at it in Maker and put into the spec anything that should stay; then stop any other build or teardown using the \.maker-workspace directory \(or the --workspace one\), then delete everything in it except last-applied\.json and destructive-approval\.json, and re-run\./,
+    assert.match(err.message, /A re-run applies the spec over that change, so first look at it in Maker and put into the spec anything that should stay; then stop any other build or teardown using the \.maker-workspace directory \(or the --workspace one\), then delete everything in it except last-applied\.json, destructive-approval\.json, web-resource-unconfirmed\.\*\.json \(the durable ids needed to recover unconfirmed web-resource writes\), dashboard-creation\.\*\.json \(the ids of the dashboards an interrupted build created before they joined the solution\) and the page-ownership\.\*\.json records \(the receipts and pending records of the pages the app created: nothing else can find them\), and re-run\./,
       'the review comes before the reset: the copy may be the fence a concurrent-edit halt keeps');
     return true;
   });
@@ -167,4 +167,30 @@ test('the runner adds no remedy to an SDK error it has none for', async () => {
         return true;
       });
   }
+});
+
+// REAL BUNDLE: two refusals the bundled SDK raises before anything is written, each ending with an SDK call an operator cannot make. The halt
+// keeps the SDK's words and code, adds the maker's step, and is never run again (a run again meets the same refusal).
+test('REAL BUNDLE: a Date and Time column with no behaviour, and a command row whose location or type changed, halt with the maker\u2019s step and are never run again', async () => {
+  const bundle = require(BUNDLE);
+  const { isTransientHalt } = require('../build-model-app.js');
+  const runner = makeRunner({ emit: () => {}, total: 1 });
+  const dateTime = new bundle.DateTimeBehaviorMissingError('contoso_project', ['contoso_due']);
+  assert.strictEqual(dateTime.code, 'DATETIME_BEHAVIOR_MISSING');
+  await assert.rejects(() => runner.run('data-model', 'column contoso_project.contoso_notes', async () => { throw dateTime; }), (err) => {
+    assert.ok(err instanceof BuildHalt);
+    assert.strictEqual(err.code, 'DATETIME_BEHAVIOR_MISSING');
+    assert.ok(err.message.includes(dateTime.message), 'the SDK names the table and its columns');
+    assert.match(err.message, /nothing was created by the refused request\. .*Set the behaviour of each to User local .* in the column's advanced options in Power Apps, then run the build again\.$/);
+    assert.strictEqual(isTransientHalt(err), false, 'never run again');
+    return true;
+  });
+  const command = new bundle.SdkError(bundle.COMMAND_IMMUTABLE_COLUMN_CHANGED_CODE, "Refusing to push command 'contoso_project': app action 'x' changed its location.");
+  assert.strictEqual(command.code, 'COMMAND_IMMUTABLE_COLUMN_CHANGED');
+  await assert.rejects(() => runner.run('commands', 'command bar for contoso_project', async () => { throw command; }), (err) => {
+    assert.strictEqual(err.code, 'COMMAND_IMMUTABLE_COLUMN_CHANGED');
+    assert.match(err.message, /^commands failed: Refusing to push command .* — nothing was written\. .*Remove the command in Power Apps, then run the build again to create it as the spec says\.$/);
+    assert.strictEqual(isTransientHalt(err), false, 'never run again');
+    return true;
+  });
 });

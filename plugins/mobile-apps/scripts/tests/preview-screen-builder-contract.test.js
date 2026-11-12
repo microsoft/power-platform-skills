@@ -58,7 +58,7 @@ test('the preview builder keeps the rules that make a screen correct', () => {
     /ListEmptyComponent/,
     /RefreshControl/,
     /KeyboardAvoidingView/,
-    /event\.target\.value/,
+    /through `onChangeText`/,
     /Ionicons/,
     /Button\.Text/,
     /Profile alone signs out/,

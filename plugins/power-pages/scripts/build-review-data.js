@@ -23,6 +23,7 @@ const SECTION_MAP = {
   },
   'audit-permissions.json': { id: 'permissions', label: 'Roles & Permissions', icon: '◇' },
   'setup-auth.json': { id: 'auth', label: 'Access & Identity', icon: '◈' },
+  'analyze-performance.json': { id: 'performance', label: 'Performance', icon: '⚡' },
 };
 
 // Every severity a finding may carry. `pass` is shown as a stat but excluded

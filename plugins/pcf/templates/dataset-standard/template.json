@@ -1,0 +1,9 @@
+{
+  "id": "dataset-standard",
+  "kind": "dataset",
+  "controlType": "standard",
+  "dependencySet": "standard",
+  "hosts": ["model"],
+  "title": "Standard dataset control",
+  "description": "A standard PCF dataset control for model-driven apps."
+}

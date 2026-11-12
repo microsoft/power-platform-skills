@@ -10,6 +10,10 @@
 //      existing afterwards means this invocation wrote it.
 //   2. `verify` proves the written file targets exactly what the approved plan named and,
 //      for an edit, contains the same ordered change list.
+//   3. For a create plan, `verify` also compares the semantic records both documents carry — what was assumed, each page's
+//      relationship and filter decisions, the lookups it uses (lib/genpage-plan-semantics.js) — and, with
+//      `--require-assumptions`, requires them of a newly authored plan; with `--lookup-metadata <file>` it checks the observed
+//      lookups against the saved metadata read, and with `--require-observed-lookups` no lookup may still be planned.
 //
 // Why not a hash of the whole approved body: the planner hands back a PREVIEW for approval and then
 // writes a DIFFERENT document. The preview is
@@ -25,6 +29,10 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { pagesTables } = require('./lib/page-file-targets.js');
 const { sha256 } = require('./lib/hash.js');
+const { makeWritesBlocking } = require('./lib/output-redaction.js');
+const {
+  readWrittenSemantics, readPreviewSemantics, hasSemanticContract, requiredContractProblems, compareSemantics, lookupEvidenceProblems, semanticRecord,
+} = require('./lib/genpage-plan-semantics.js');
 
 // What a plan document targets.
 //   create:  the Pages table's File column — `## Pages` in the written plan, `### Pages (N total)`
@@ -33,8 +41,8 @@ const { sha256 } = require('./lib/hash.js');
 //            `- **File:** <guid>/page.tsx` in the preview's `### Current State`.
 // Returns { kind, targets } or null when the document names neither.
 //
-// Both GUID patterns are bounded by `[\w-]` on the side that could run on, exactly as the upload
-// parser bounds pac's `Page ID:` (lib/genpage-cli.js parsePageId): an overlong `<guid>deadbeef` was
+// Both GUID patterns are bounded by `[\w-]` on the side that could run on, as the id read from `pac`'s
+// upload output once was (`Page ID: <guid>`): an overlong `<guid>deadbeef` was
 // truncated to its first 36 characters and certified.
 //
 // The written edit plan states the id ONCE, structurally, in `## File Being Edited`
@@ -255,7 +263,72 @@ function planKindOf(planPath) {
   return null;
 }
 
-function verifyPlanProvenance({ planPath, approvedPlan }) {
+// The semantic records of a create plan (references/plan-schema.md: ## Assumptions, and per page Data semantics and Lookup
+// metadata), compared between the approved preview and the written plan by lib/genpage-plan-semantics.js — structured fields by id,
+// never a whole-document hash, for the reason above. Same page files are not enough: a changed assumption, decision or lookup scope
+// is something the maker did not approve. Returns { problems, hash }.
+//   - Either document carrying any part of the contract requires its counterpart in the other: one-sided is never "older plan".
+//   - requireAssumptions (a newly authored plan): both documents carry Assumptions and, for every page, Data semantics and Lookup
+//     metadata — so leaving the contract out of both cannot evade the comparison.
+//   - lookupMetadataPath: the successful get-lookup-metadata.js answer saved after provisioning. Every `observed` lookup of the
+//     written plan must match it, and only with it may a lookup approved as `planned` be written `observed` with its measured
+//     paths (the post-provision reconciliation). It is read here, never fetched: this gate does no network I/O.
+//   - requireObservedLookups (before generation): no lookup is still `planned`, which needs that evidence.
+function createSemanticsProblems({ approvedPlan, written, targets, requireAssumptions, requireObservedLookups, lookupMetadataPath }) {
+  const approvedRead = readPreviewSemantics(approvedPlan);
+  const writtenRead = readWrittenSemantics(written);
+  const problems = [
+    ...approvedRead.problems.map((p) => `the approved plan: ${p.message}`),
+    ...writtenRead.problems.map((p) => `the written plan: ${p.message}`),
+  ];
+  for (const file of approvedRead.pages.keys()) {
+    if (!targets.includes(file)) problems.push(`the approved plan records ${file}, which is not one of its pages`);
+  }
+  for (const [file, page] of writtenRead.pages) {
+    if ((page.semantics !== null || page.lookups !== null) && !targets.includes(file)) problems.push(`the written plan records ${file}, which is not one of its pages`);
+  }
+  if (requireAssumptions) {
+    problems.push(...requiredContractProblems(approvedRead, targets, 'the approved plan').map((p) => p.message));
+    problems.push(...requiredContractProblems(writtenRead, targets, 'the written plan').map((p) => p.message));
+  }
+  // "Read" and "valid" are kept apart from the value: a file holding JSON `null` (or `false`, `0`, `[]`) was read and is
+  // validated like any other answer — it is not "no evidence supplied". Only evidence that validated authorizes a
+  // `planned` → `observed` promotion, and --require-observed-lookups needs exactly that, not merely a path.
+  let evidence;
+  let evidenceRead = false;
+  let evidenceValid = false;
+  if (lookupMetadataPath) {
+    try {
+      const file = path.resolve(lookupMetadataPath);
+      if (!fs.lstatSync(file).isFile()) throw new Error(`${file} is not a regular file (a link, junction or folder)`);
+      evidence = JSON.parse(fs.readFileSync(file, 'utf8'));
+      evidenceRead = true;
+    } catch (e) {
+      problems.push(`could not read the lookup metadata evidence: ${e.message}`);
+    }
+    if (evidenceRead) {
+      const evidenceProblems = lookupEvidenceProblems(writtenRead, evidence).map((p) => p.message);
+      problems.push(...evidenceProblems);
+      evidenceValid = evidenceProblems.length === 0;
+    }
+  }
+  if (requireObservedLookups) {
+    if (!lookupMetadataPath) problems.push('--require-observed-lookups needs --lookup-metadata <path>: the successful lookup metadata read');
+    else if (!evidenceValid) problems.push('--require-observed-lookups needs lookup metadata evidence that is a successful get-lookup-metadata.js answer every observed lookup matches');
+    for (const [file, page] of writtenRead.pages) {
+      for (const row of page.lookups && !page.lookups.sentinel ? page.lookups.rows.values() : []) {
+        if (row.state !== 'observed') problems.push(`${file} ${row.table}.${row.column} is still planned: read its metadata after provisioning and reconcile the plan before generation`);
+      }
+    }
+  }
+  problems.push(...compareSemantics(approvedRead, writtenRead, { promotions: evidenceValid }));
+  const contract = hasSemanticContract(approvedRead) || hasSemanticContract(writtenRead);
+  return { problems, hash: contract ? sha256(JSON.stringify(semanticRecord(writtenRead))) : null };
+}
+
+const SEMANTIC_OPTIONS = ['requireAssumptions', 'requireObservedLookups', 'lookupMetadataPath'];
+
+function verifyPlanProvenance({ planPath, approvedPlan, requireAssumptions = false, requireObservedLookups = false, lookupMetadataPath = null }) {
   if (!planPath) return { ok: false, error: '--plan is required' };
   if (approvedPlan == null) return { ok: false, error: '--approved is required' };
   const absPlanPath = path.resolve(planPath);
@@ -267,6 +340,17 @@ function verifyPlanProvenance({ planPath, approvedPlan }) {
       action: 'verify',
       planPath: absPlanPath,
       error: 'the approved plan body names no pages — save the plan body the planner returned for approval (its Pages table, or the Current State file of an edit) as the --approved file',
+    };
+  }
+  // The semantic records are a create plan's; an edit plan keeps its own change-list comparison and is never verified against them.
+  const options = { requireAssumptions, requireObservedLookups, lookupMetadataPath };
+  if (approved.kind === 'edit' && SEMANTIC_OPTIONS.some((name) => options[name])) {
+    return {
+      ok: false,
+      action: 'verify',
+      planPath: absPlanPath,
+      approvedTargets: approved.targets,
+      error: 'the semantic options (--require-assumptions, --require-observed-lookups, --lookup-metadata) apply to a create plan; an edit plan is verified by its change list',
     };
   }
   // The file this certifies must be the one written in place: a link would have it vouch for a
@@ -320,16 +404,48 @@ function verifyPlanProvenance({ planPath, approvedPlan }) {
     }
     changesHash = sha256(JSON.stringify(approvedChanges));
   }
-  return { ok: true, action: 'verify', planPath: absPlanPath, kind: approved.kind, targets: approved.targets, writtenHash, ...(changesHash ? { changesHash } : {}) };
+  let semanticsHash;
+  if (approved.kind === 'create') {
+    const semantic = createSemanticsProblems({ approvedPlan, written, targets: approved.targets, requireAssumptions, requireObservedLookups, lookupMetadataPath });
+    if (semantic.problems.length) {
+      const more = semantic.problems.length > 1 ? ` (and ${semantic.problems.length - 1} more)` : '';
+      return {
+        ok: false, action: 'verify', planPath: absPlanPath, approvedTargets: approved.targets, writtenTargets: actual.targets, writtenHash,
+        semanticProblems: semantic.problems,
+        error: `the written plan's semantic records are not the approved ones: ${semantic.problems[0]}${more}`,
+      };
+    }
+    semanticsHash = semantic.hash || undefined;
+  }
+  return {
+    ok: true, action: 'verify', planPath: absPlanPath, kind: approved.kind, targets: approved.targets, writtenHash,
+    ...(changesHash ? { changesHash } : {}), ...(semanticsHash ? { semanticsHash } : {}),
+  };
 }
 
+const USAGE = 'Usage: node genpage-plan-provenance.js prepare --plan <path> OR verify --plan <path> --approved @<approved-plan-file> '
+  + '[--require-assumptions] [--require-observed-lookups --lookup-metadata <lookup-metadata.json>]';
+const VALUE_FLAGS = ['plan', 'approved', 'lookup-metadata'];
+const BOOLEAN_FLAGS = ['require-assumptions', 'require-observed-lookups'];
+
+// `prepare --plan <path>` / `verify --plan <path> --approved @<file> [--require-assumptions] [--require-observed-lookups]
+// [--lookup-metadata <path>]`. Every flag is declared: an unknown one — `--require-assumption`, a typo that would otherwise drop
+// the gate it names without a word — a stray word, or a boolean flag given a value is a usage error (`usage` set), never ignored.
+// A value flag takes the next word whatever it is, as before, so a missing --plan value still reads as "--plan is required".
 function parseArgv(argv) {
   const out = { command: argv[0] || '' };
   for (let i = 1; i < argv.length; i += 1) {
     const key = argv[i];
-    if (!key.startsWith('--')) continue;
-    out[key.slice(2)] = argv[i + 1];
+    if (!key.startsWith('--')) { out.usage = out.usage || `unexpected argument '${key}'`; continue; }
+    const name = key.slice(2);
+    if (BOOLEAN_FLAGS.includes(name)) { out[name] = true; continue; }
+    if (!VALUE_FLAGS.includes(name)) { out.usage = out.usage || `unknown flag ${key}`; continue; }
+    if (name === 'lookup-metadata' && (argv[i + 1] === undefined || argv[i + 1].startsWith('--'))) { out.usage = out.usage || '--lookup-metadata needs a path'; continue; }
+    out[name] = argv[i + 1];
     i += 1;
+  }
+  if (out.command === 'prepare' && [...BOOLEAN_FLAGS, 'lookup-metadata', 'approved'].some((name) => out[name] !== undefined)) {
+    out.usage = out.usage || 'prepare takes --plan only';
   }
   return out;
 }
@@ -346,22 +462,35 @@ function readApproved(value) {
 function main() {
   const args = parseArgv(process.argv.slice(2));
   let result;
-  if (args.command === 'prepare') {
+  let usage = false;
+  if (args.usage) {
+    result = { ok: false, error: `${args.usage} — ${USAGE}` };
+    usage = true;
+  } else if (args.command === 'prepare') {
     result = preparePlanProvenance({ planPath: args.plan });
   } else if (args.command === 'verify') {
     let approvedPlan;
     try {
       approvedPlan = readApproved(args.approved);
-      result = verifyPlanProvenance({ planPath: args.plan, approvedPlan });
+      result = verifyPlanProvenance({
+        planPath: args.plan,
+        approvedPlan,
+        requireAssumptions: args['require-assumptions'] === true,
+        requireObservedLookups: args['require-observed-lookups'] === true,
+        lookupMetadataPath: args['lookup-metadata'] || null,
+      });
     } catch (e) {
       result = { ok: false, action: 'verify', error: `could not read the approved plan: ${e.message}` };
     }
   } else {
-    result = { ok: false, error: 'Usage: node genpage-plan-provenance.js prepare --plan <path> OR verify --plan <path> --approved @<approved-plan-file>' };
+    result = { ok: false, error: USAGE };
   }
 
+  // A mismatch carries both change lists whole, and the process exits right after the write: it is made blocking
+  // first, or a pipe on Linux and macOS takes only what fits at once (lib/output-redaction.js).
+  makeWritesBlocking(process.stdout, process.stderr);
   process.stdout.write(JSON.stringify(result) + '\n');
-  process.exit(result.ok ? 0 : (args.command === 'prepare' || args.command === 'verify' ? 3 : 1));
+  process.exit(result.ok ? 0 : (!usage && (args.command === 'prepare' || args.command === 'verify') ? 3 : 1));
 }
 
 if (require.main === module) main();

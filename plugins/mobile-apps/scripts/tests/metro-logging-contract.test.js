@@ -7,7 +7,7 @@ const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
-const { createSkillWorkflow } = require('./helpers/create-skill');
+const { createSkillDataModelFirst, createSkillWorkflow } = require('./helpers/create-skill');
 
 function caretVersionAtLeast(value, minimum) {
   const match = /^\^(\d+)\.(\d+)\.(\d+)$/.exec(value);
@@ -106,6 +106,17 @@ test('skill contracts read logs and persist host-neutral state under .powernativ
   assert.doesNotMatch(createSkill, /npx expo start|without rerunning the `predev` schema hook/);
   assert.doesNotMatch(createSkill, /delegates Metro terminal output.*power-apps-native-host\/metro-logger/);
   assert.doesNotMatch(createSkill, /scripts\/metro-session\.js|dev:expo|copy the plugin wrapper/i);
+
+  // The data-model-first order launches Metro at its own Step 12 and checks the lifecycle
+  // scripts inline, as it always has.
+  const dataModelFirst = createSkillDataModelFirst();
+  assert.match(dataModelFirst, /^### Step 12 [^\r\n]*Metro writes project-local logs/m);
+  assert.match(dataModelFirst, /createPowerAppsMetroConfig/);
+  assert.match(dataModelFirst, /template owns the `dev` and `predev` command bodies/);
+  assert.match(dataModelFirst, /for \(const scriptName of \['dev', 'predev'\]\)/);
+  assert.match(dataModelFirst, /npx --no-install qrcode -o "\$METRO_QR"/);
+  assert.match(dataModelFirst, /continue through the optional Step 12\.5 debug handoff and print the Step 13 summary/);
+  assert.doesNotMatch(dataModelFirst, /npx --yes|npm_config_registry=|npx expo start/);
   assert.match(debugSkill, /\.powernative\/metro-logs/);
   assert.match(debugSkill, /\.powernative\/debug-app/);
   assert.doesNotMatch(debugSkill, /\.claude\/debug-app/);

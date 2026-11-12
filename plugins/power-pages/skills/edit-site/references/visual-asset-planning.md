@@ -1,0 +1,287 @@
+# Non-SPA Visual Asset Planning
+
+Use this reference when a non-SPA site customization may benefit from photography, logos,
+favicons, icons, illustrations, patterns, fonts, or other visual assets.
+
+## Resolve delivery first
+
+During site creation, use **direct HTTPS URLs for added images**, recorded as
+`newSiteDesign.imageDelivery: "external-url"`. Do not download/stage images, create image Web Files
+or attachment metadata, or execute an `author-web-file` operation for these additions. Reuse suitable existing
+template images without reimporting them. Existing-site customization and explicit file imports
+retain the Web File path below; this policy does not remove Web Files for CSS, fonts or documents.
+
+Power Pages supports native [external image URLs](https://learn.microsoft.com/power-pages/getting-started/add-image).
+For each external image:
+
+- Resolve an actual direct image resource, not a gallery/HTML page or guessed photo ID. Require
+  an absolute HTTPS URL without embedded credentials, raw whitespace or backslashes. Use a stable
+  user-approved CDN/host URL or a curated Unsplash direct URL; never use auth/SAS secrets or
+  expiring private links.
+- Record `delivery: "external-url"`, `externalUrl`, source/license basis and
+  `preparation: { "status": "remote" }`. Do not claim a file hash, cache path or imported metadata.
+- Put that exact URL in the consumer's static `inputs` (including nested image `source` values).
+  No import operation or `publicUrl` output binding is needed. For CSS backgrounds, also declare
+  the URL in the styling owner's `externalResources`.
+- Review hotlink permission, privacy and remote availability, plus known site CSP `img-src`
+  restrictions. Power Pages permissions do not protect external URLs. Never relax CSP
+  automatically; choose a permitted source or obtain separate approval for policy changes.
+- Keep localized alt text, aspect ratio, reserved layout space, crop/focal point, and appropriately
+  sized CDN variants. Source-page evidence and syntactic URL validation alone are not proof of
+  availability. Keep unchecked external images explicitly **unverified**.
+
+### Optional network checks
+
+`render-edit-site-plan.js` makes no image-network requests by default. It
+validates the plan and renders external images with an explicit unverified notice, without
+creating an image-check report. Its result includes `imageChecks: null`, `verifiedImages: 0`,
+and the number of unique unchecked URLs in `unverifiedImages`. Normal review and publication
+can proceed in this state; neither a mandatory check-choice question nor a live site preview
+is required.
+
+Only when the user requests source verification, append `--verifyImages true` to the review
+command. The existing verifier checks each unique `externalUrl` once before writing review HTML.
+It uses up to three concurrent unauthenticated HTTPS GETs, a 20-second deadline per URL including
+redirects, at most three redirects, and the existing 15 MiB asset byte limit.
+Every destination must resolve to public Internet addresses; DNS answers are pinned for the
+request. No cookies, auth headers, referrers, or image files are retained.
+
+Require HTTP 200, a supported image Content-Type, non-empty bytes, and matching image content
+signatures (PNG/APNG, JPEG, WebP, GIF, AVIF, SVG, or ICO). This is an HTTP/content check, not a full
+browser decode or visual-fidelity guarantee. For oversized assets, choose a smaller CDN variant.
+A requested check's 404, HTML/gallery response, timeout, or other failure blocks review generation with the affected
+asset names and URLs. Select a working direct resource and update both its manifest entry and
+all consumer inputs before rendering again; never repeatedly retry a known 404 or substitute
+an unapproved image after approval. Do not disable checking to hide a known failure or silently
+fall back to unchecked HTML.
+
+Successful checks are stored in `plan.html.image-checks.json`, bound to the complete plan hash
+and exact URLs, and displayed in the review. If the approved review included checks, publish with
+`--imageChecks` pointing to that report; otherwise omit the argument. Supplied reports must
+validate and are preserved in `current-execution.json`; `--action resolve` supplies them
+to the executing workflow without more requests. Missing, stale or failed supplied reports never silently become
+unchecked publication. Reuse valid evidence within that approved run. A revised plan requires
+fresh review and approval, with fresh checks only when requested. The timestamps describe
+observed availability, not a promise that remote content cannot change. Receipts without reports,
+including legacy receipts, remain resumable without claiming checks that were not performed.
+
+The generated plan lazily displays approved hosted images in the browser with localized preview
+alt text, the planned aspect ratio, and a no-referrer policy. Retain clickable image/source links,
+known attribution, license, and hosting caveats alongside the preview. If an image cannot load, show an
+explicit unavailable state with an image-source link, not a broken-image box or endless loading
+message. Pure HTML serialization and publication do not fetch images; an optional source check
+reads them in memory without staging files or importing Web Files.
+Browser preview requests go to the approved provider; successful previews do not prove site CSP,
+final crop/focal-point treatment, or Studio/runtime rendering. A local-only or newly authored image
+without an approved hosted URL retains an explicit unavailable preview and its file metadata; do
+not upload it, guess a runtime host, or invent a URL to manufacture a preview.
+
+## Design role before source
+
+Do not add an asset merely to fill a hero, card, or empty column. Inspect the visitor journey and
+classify each proposed visual by the job it performs:
+
+| Role | Typical assets | Planning rule |
+|---|---|---|
+| Brand | Logo, wordmark, favicon, brand pattern | Prefer existing or user-approved brand files |
+| Informative | Product image, map, diagram | Require a source that communicates the stated fact |
+| Editorial | People, place, service photography | Use only when it improves credibility or context |
+| Structural | Section divider, background motif | Prefer original SVG or CSS atmosphere |
+| Functional | Icons, state markers, directional cues | Use a coherent original SVG set and never rely on color alone |
+| Decorative | Abstract flourishes and textures | Keep restrained and use empty alternative text |
+
+FAQ, pricing, policy, and operational pages often benefit more from typography, spacing, and
+simple original SVG details than unrelated stock photography. Record `assets: []` when no visual
+asset improves an existing-site or narrow-edit outcome.
+
+For an explicit new-site design handoff, plan meaningful content imagery as part of the initial
+composition: a relevant hero image or original illustration and supporting images where they
+explain the content. Reuse suitable template images rather than replacing them gratuitously.
+Suitability means fit with the approved experience, subject and art direction, not merely presence
+in the selected creation template. New-site imagery and branding are not constrained by that
+template; replace unsuitable visuals through the approved asset/caller operations without
+discarding required content or deleting unrelated Web Files. Honor explicit asset-preservation
+preferences and keep existing-site narrow edits within their requested scope.
+Record at least one non-decorative content photograph/illustration in the asset manifest with
+its real placement; a logo, favicon, icon, or decorative pattern alone is insufficient. An explicit
+user request to omit images is recorded as `newSiteDesign.imagery: "user-declined"` with
+`imageryReason`. Missing source material is a dependency to resolve, not an implicit opt-out.
+Use the shared `${PLUGIN_ROOT}/references/site-design-quality.md` for visual composition; this
+reference owns the delivery-specific URL, staging/import, binding, and verification rules.
+
+## Source priority
+
+Among sources that fit the approved design, resolve in this order:
+
+1. existing approved site/template images or hosted image URLs;
+2. user-provided approved hosted brand assets and photography;
+3. curated Unsplash photography for URL-based additions.
+
+Outside URL-based creation, user-provided local files and original safe SVG illustrations may
+also use the explicitly selected Web File delivery path. Do not silently switch a new-site image
+to file delivery because a hosted source is missing.
+
+Do not generate raster images. Do not use another stock provider. Do not use placeholder-image
+services or leave unresolved image slots.
+
+### Existing site assets
+
+Inspect `web-files/`, image callers, logo/favicon callers, snippets, templates, and comparable
+pages. Reuse an existing asset only when its identity, public URL, permissions boundary, visual
+role, and licensing/ownership are appropriate for the new placement.
+
+### User-provided assets
+
+This is the Web File delivery path only, not the new-site URL image path. Treat every supplied
+file as untrusted. Stage it with:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/prepare-non-spa-asset.js" \
+  --projectRoot "<PROJECT_ROOT>" \
+  --sourcePath "<SOURCE_FILE>"
+```
+
+The helper validates supported signatures, dimensions, MIME agreement, size, and SVG safety,
+writes approved bytes under `.powerpages-customization/assets/`, adds that cache to `.gitignore`,
+and returns the project-relative path and SHA-256. The cache is outside the non-SPA site root
+and must never be passed to `pac pages upload`.
+
+### Original SVG assets
+
+Use local SVG authoring/staging only on the explicit Web File path. URL-based creation needs an
+already hosted approved illustration; do not stage or upload an illustration as a hidden fallback.
+
+Original SVG is suitable for simple geometry, icons, patterns, and non-photographic illustration.
+Author it in the fresh external review directory, then stage it through the same helper before the
+plan is approved. Use a real `viewBox`; do not encode visitor-facing text into the SVG when HTML
+text would be more accessible and localizable.
+
+The helper rejects declarations/entities, external stylesheets, script or style elements, style
+and event-handler attributes, embedded HTML or media, and external resource references. Use SVG
+presentation attributes for simple geometry. Do not weaken those checks to accommodate a design.
+
+### Unsplash photography
+
+Follow the same **WebSearch-to-CDN** sourcing approach as SPA creation:
+
+1. Use `WebSearch` for the specific subject the section needs. Choose photography whose
+   composition, lighting, color temperature, orientation, and available text space fit the page.
+2. Use a direct `https://images.unsplash.com/photo-...` URL found through the search, with explicit
+   sizing/crop parameters such as `w=1600&h=900&fit=crop&fm=jpg` (`w=800` for cards, `w=1600` for
+   heroes). Preserve the discovered CDN path. Do not derive it from a photo-page slug or a
+   search-result identifier, guess IDs, or copy documentation placeholders.
+3. Keep one art direction across the chosen photos, with consistent crops and localized alt text.
+   Record the exact sized/cropped URL as `externalUrl`, `source.type: "unsplash"`, the
+   `source.license` basis, and `preparation: { "status": "remote" }`.
+
+For external delivery, **do not require a photo-page fetch, scraping, API credentials, or a
+photographer lookup**. Retain `source.sourcePage` and `source.photographer` when reliably known
+from search results or supplied evidence; otherwise omit them rather than inventing attribution
+or a photo-page/CDN pairing. Supplied metadata must still be valid.
+
+An anti-bot challenge or unavailable `unsplash.com` photo/search page is not evidence that
+`images.unsplash.com` is unavailable. Do not bypass the challenge or repeatedly retry it;
+continue with a direct CDN URL found through WebSearch. If none is found, search for another
+suitable Unsplash photo or request an approved hosted URL. Continue content/layout planning
+while resolving imagery, but do not request approval with unresolved images.
+
+Do not download the image to a file. Network verification is optional as described above;
+when requested, check the **final direct image URL**, not the photo page. A failed CDN image
+check still blocks approval HTML for that checked review; successful checks remain bound to
+the exact plan and are published through `--imageChecks`. Without checks, preserve the explicit
+unverified status.
+
+For an explicitly selected Web File delivery outside that creation path, retain the required
+photo page, photographer, license and `source.downloadUrl`, then stage the selected image:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/prepare-non-spa-asset.js" \
+  --projectRoot "<PROJECT_ROOT>" \
+  --downloadUrl "<HTTPS_IMAGES_UNSPLASH_URL>" \
+  --sourcePage "<HTTPS_UNSPLASH_PHOTO_PAGE>" \
+  --fileName "<SAFE_FILENAME_WITH_EXTENSION>"
+```
+
+[Unsplash's published license](https://unsplash.com/license) permits downloading, copying, modifying, distributing, and
+commercial use without required attribution. The license does not grant separate rights for
+recognizable people, trademarks, artwork, or protected property visible in a photograph. Avoid
+those subjects when the planned use could imply endorsement or require additional rights; retain
+a plan warning when the context needs human legal/brand review.
+
+Import staged files as local Power Pages Web Files only on that file-delivery path. URL-based
+creation uses the approved Unsplash direct URL in the finished image component instead.
+
+## Composition decisions
+
+For each approved asset, resolve:
+
+- role and visitor-facing purpose;
+- page, section, and global-versus-page scope;
+- visual rationale;
+- aspect ratio, crop, and focal-point intent;
+- informative versus decorative behavior;
+- localized alternative text for every affected locale;
+- optional safe link destination;
+- existing, remote, staged, or global-caller dependencies;
+- whether `style-site` is required for presentation after placement.
+
+Use the image component's responsive defaults unless the inspected site establishes a stronger
+pattern. Do not invent unsupported image components, inline arbitrary data URIs, or copy Design
+Studio placeholder SVG payloads.
+
+## Logos and favicons
+
+During every header update, match the logo or wordmark to the approved website name and brand
+requirements. Do not preserve an unrelated starter logo merely because it came with the template.
+Do not silently invent an official company logo or use stock photography as a substitute.
+Resolve the direction using known inputs:
+
+1. use a supplied approved logo when the requirements call for it;
+2. retain the verified current logo only when it meets those requirements or the user explicitly
+   requests preservation, and record why;
+3. if no suitable logo is available, propose a clearly labeled typography-only wordmark or simple
+   original geometric mark for approval in the existing customization plan;
+4. when brand authorization or required source material is unresolved, ask only for that missing
+   decision in the normal clarification round. Report unresolved logo work as incomplete rather
+   than silently choosing no change. Honor an explicit no-logo or no-change request.
+
+A typography-only wordmark uses native text/HTML. Image marks still follow the resolved delivery
+contract: new-site additions need an approved hosted URL, not an automatic upload or a new Web File.
+Keep logo and meaningful content imagery separate; a logo alone does not satisfy the new-site
+imagery requirement.
+
+A logo or favicon change is site-wide even when only one Web File is imported. Resolve the exact
+existing snippets, templates, site settings, or other callers, including separate desktop/mobile
+logo variants and requested locales. Update only those approved callers, with the correct brand
+name/alternative text, home-link destination, aspect ratio and responsive sizing intent. Do not
+silently expand a header-logo change to favicons, footer branding or unrequested locales.
+Do not replace the complete website header merely to change a logo, and preserve navigation,
+search, language selection, sign-in behavior, caching assumptions, and anonymous/authenticated
+branches.
+
+## Execution and verification
+
+External images require no import: consumers use their approved static HTTPS URL directly.
+Verify that actual image references, after HTML attribute decoding, match that URL and that no
+download/cache/Web File was created. Do not treat a remote asset as a byte-hashed local artifact.
+
+For Web File delivery, create/import operations use the `author-web-file` reference workflow
+from `${PLUGIN_ROOT}/skills/edit-site/references/web-file-authoring.md`.
+Their consumers depend on
+the import and bind the verified `publicUrl`; never guess a future Web File URL.
+
+For Web File assets, after execution verify:
+
+- staged SHA-256 matches the imported bytes;
+- binary and adjacent `.webfile.yml` both exist;
+- extension, MIME type, filename, metadata, IDs, parent, and public URL agree;
+- every planned caller uses the final root-relative URL;
+- informative images have localized alternative text and decorative images use `alt=""`;
+- dimensions preserve aspect ratio and fit the approved Design Studio column;
+- no unapproved SVG active content or base64 placeholder remains;
+- global brand callers and unrelated assets are preserved;
+- target-environment attachment size and blocked-extension policy remain satisfied.
+
+Local inspection cannot prove the final crop, visual balance, CSP behavior, or live rendering.
+Keep desktop/mobile crop, readability over imagery, logo scaling, and runtime performance as
+pending live checks unless they are separately authorized and performed.

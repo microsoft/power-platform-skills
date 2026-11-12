@@ -85,7 +85,7 @@ The prompt gives you `working_dir`, `screen_name`, `route`, `target_file` (absol
 - Empty states name the domain ("No inspections scheduled today") and offer the next action.
 - A row or card shows status one way: a left stripe (`borderLeftWidth`) with a plain text label, or a `StatusPill`.
 - Error copy is the screen's own ("Couldn't load today's inspections."), with the hook's message as supporting detail.
-- A form sits in a `KeyboardAvoidingView` (`behavior={Platform.OS === 'ios' ? 'padding' : undefined}`), uses `@react-native-community/datetimepicker` for dates, reads a Tamagui `Input` as `event.target.value` in `onChange`, and on success calls `router.back()`.
+- A form sits in a `KeyboardAvoidingView` (`behavior={Platform.OS === 'ios' ? 'padding' : undefined}`), uses `@react-native-community/datetimepicker` for dates, reads a Tamagui `Input` through `onChangeText`, and on success calls `router.back()`.
 - An action that cannot run yet is disabled with a one-line reason beside it.
 
 ### Tamagui

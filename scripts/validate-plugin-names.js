@@ -6,16 +6,16 @@
 
 const fs = require('fs');
 const path = require('path');
+const { isValidPluginName } = require('./install.js');
 
 const ROOT = path.resolve(__dirname, '..');
-const OPEN_PLUGIN_NAME_PATTERN = /^[a-z0-9](?:[a-z0-9.-]{0,62}[a-z0-9])?$/;
 
 function validateName(name, source) {
   if (typeof name !== 'string') {
     return `${source}: plugin name must be a string`;
   }
 
-  if (OPEN_PLUGIN_NAME_PATTERN.test(name) && !name.includes('--') && !name.includes('..')) {
+  if (isValidPluginName(name)) {
     return null;
   }
   return `${source}: '${name}' does not follow Open Plugins name constraints`;

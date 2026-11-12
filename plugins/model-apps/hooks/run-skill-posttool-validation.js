@@ -23,6 +23,7 @@ const {
   getValidatorScript,
   readUtf8Stream,
 } = require('../scripts/lib/modelapps-hook-utils');
+const { makeWritesBlocking } = require('../scripts/lib/output-redaction.js');
 
 const DEBUG = process.env.DEBUG === '1' || process.env.DEBUG === 'true';
 
@@ -75,10 +76,12 @@ readUtf8Stream(process.stdin).then((inputData) => {
     process.exitCode = result.status ?? 0;
   } catch (err) {
     // Never block on a hook-side bug — the skill already ran.
+    makeWritesBlocking(process.stdout, process.stderr);
     process.stderr.write(`[model-apps hook] Unexpected error: ${err.message}\n`);
     process.exit(0);
   }
 }).catch((err) => {
+  makeWritesBlocking(process.stdout, process.stderr);
   process.stderr.write(`[model-apps hook] Unexpected error: ${err.message}\n`);
   process.exit(0);
 });

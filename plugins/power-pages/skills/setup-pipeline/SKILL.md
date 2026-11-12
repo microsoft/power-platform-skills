@@ -126,21 +126,21 @@ Steps:
    ```bash
    node "${PLUGIN_ROOT}/scripts/lib/detect-project-context.js"
    ```
-   Capture output as JSON; extract `.siteName` (store as `siteName`), `.websiteRecordId`, `.environmentUrl` (store as `devEnvUrl`), and `.solutionManifest` (store as `solutionManifest`). **`devEnvUrl` is `null` for declarative / data-model (EDM) sites** — `detect-project-context.js` reads the env URL only from `powerpages.config.json`, which those sites don't have. Do **not** treat a null `devEnvUrl` as an error here; Step 2 resolves the authoritative dev env URL from `pac env who`. If `siteName` is absent, stop and advise running `/power-pages:create-site` first — a downloaded/deployed site (code **or** declarative) always resolves a `siteName` (from `powerpages.config.json` *or* `.powerpages-site/website.yml`), so a missing `siteName` means there is no site checked out here, **not** merely "no `powerpages.config.json`". If `solutionManifest` is null (no `.solution-manifest.json`), stop and advise running `/power-pages:setup-solution` first.
+   Capture output as JSON; extract `.siteName` (store as `siteName`), `.websiteRecordId`, `.environmentUrl` (store as `devEnvUrl`), and `.solutionManifest` (store as `solutionManifest`). **`devEnvUrl` is `null` for non-SPA / data-model (EDM) sites** — `detect-project-context.js` reads the env URL only from `powerpages.config.json`, which those sites don't have. Do **not** treat a null `devEnvUrl` as an error here; Step 2 resolves the authoritative dev env URL from `pac env who`. If `siteName` is absent, stop and advise running `/power-pages:create-site` first — a downloaded/deployed site (code **or** non-SPA) always resolves a `siteName` (from `powerpages.config.json` *or* `.powerpages-site/website.yml`), so a missing `siteName` means there is no site checked out here, **not** merely "no `powerpages.config.json`". If `solutionManifest` is null (no `.solution-manifest.json`), stop and advise running `/power-pages:setup-solution` first.
 
    **Manifest version check:**
    - If `solutionManifest.schemaVersion === 2` (multi-solution layout), set `MULTI_SOLUTION_MODE = true` and store `solutionManifest.solutions[]` as `SOLUTIONS_LIST`. See Phase 6b — a SINGLE pipeline ships all solutions through per-solution stage runs (the pre-v1.3.x "one pipeline per solution" layout was reverted because it cluttered the Pipelines UI).
    - If `schemaVersion` is absent or `1` (single solution), read `solutionManifest.solution.uniqueName` and `solutionManifest.solution.solutionId`. One pipeline will be created (existing flow).
 
-2. Run `verify-alm-prerequisites.js` to confirm PAC CLI auth, acquire a token, and verify API access. **Pass `--envUrl` only when `devEnvUrl` is non-null** (code sites). When `devEnvUrl` is null (declarative / data-model sites from Step 1), **omit `--envUrl` entirely** — do not pass `--envUrl "null"` or an empty value:
+2. Run `verify-alm-prerequisites.js` to confirm PAC CLI auth, acquire a token, and verify API access. **Pass `--envUrl` only when `devEnvUrl` is non-null** (SPA sites). When `devEnvUrl` is null (non-SPA / data-model sites from Step 1), **omit `--envUrl` entirely** — do not pass `--envUrl "null"` or an empty value:
    ```bash
-   # Code sites — devEnvUrl resolved from powerpages.config.json in Step 1:
+   # SPA sites — devEnvUrl resolved from powerpages.config.json in Step 1:
    node "${PLUGIN_ROOT}/scripts/lib/verify-alm-prerequisites.js" --envUrl "{devEnvUrl}"
 
-   # Declarative / data-model (EDM) sites — devEnvUrl is null, omit the flag:
+   # Non-SPA / data-model (EDM) sites — devEnvUrl is null, omit the flag:
    node "${PLUGIN_ROOT}/scripts/lib/verify-alm-prerequisites.js"
    ```
-   `verify-alm-prerequisites.js` treats `--envUrl` as optional and resolves the environment from `pac env who` when it's omitted (the flag only *overrides* the PAC CLI env). Capture output as JSON; extract `.envUrl` and `.token` (store as `DEV_TOKEN`), then **set `devEnvUrl = .envUrl`** — this verified value (from `pac env who`) is the authoritative dev env URL for every later step: it backfills the null for declarative sites and confirms it for code sites. If `.envUrl` is still empty after this, stop and advise the user to run `pac auth create` / select an environment (`pac org select`) before retrying.
+   `verify-alm-prerequisites.js` treats `--envUrl` as optional and resolves the environment from `pac env who` when it's omitted (the flag only *overrides* the PAC CLI env). Capture output as JSON; extract `.envUrl` and `.token` (store as `DEV_TOKEN`), then **set `devEnvUrl = .envUrl`** — this verified value (from `pac env who`) is the authoritative dev env URL for every later step: it backfills the null for non-SPA sites and confirms it for SPA sites. If `.envUrl` is still empty after this, stop and advise the user to run `pac auth create` / select an environment (`pac org select`) before retrying.
 
 3. Run silently:
    ```bash
@@ -299,7 +299,7 @@ If found: ask via `AskUserQuestion` whether to use the existing pipeline ID or c
 
 **4.4 Check `blockedattachments` on source + all target envs:**
 
-Power Pages code sites include `.js` files in their compiled output. If `.js` is in the env's `blockedattachments` setting, `pac pages upload-code-site` (on the source) and `deploy-pipeline` (on targets) will both fail with `AttachmentBlocked`. Run this on the **source env** and on **every target env**:
+Power Pages SPA sites include `.js` files in their compiled output. If `.js` is in the env's `blockedattachments` setting, `pac pages upload-code-site` (on the source) and `deploy-pipeline` (on targets) will both fail with `AttachmentBlocked`. Run this on the **source env** and on **every target env**:
 
 ```bash
 node "${PLUGIN_ROOT}/scripts/lib/fix-blocked-attachments.js" \
@@ -309,7 +309,7 @@ node "${PLUGIN_ROOT}/scripts/lib/fix-blocked-attachments.js" \
 ```
 
 If `wasBlocked` is non-empty for any env, inform the user:
-> "`.js` files are blocked in `{envUrl}`. This will cause upload/deployment failures for Power Pages code sites. Remove the block? This modifies an environment-level security setting."
+> "`.js` files are blocked in `{envUrl}`. This will cause upload/deployment failures for Power Pages SPA sites. Remove the block? This modifies an environment-level security setting."
 
 <!-- gate: setup-pipeline:4.4.blocked-attachments | category=consent | cancel-leaves=attachment-block-modified -->
 > 🚦 **Gate (consent · setup-pipeline:4.4.blocked-attachments):** Modify env-level `blockedattachments` security setting (tenant-wide impact). Affects all users of the env, not just this skill. Reversible from PPAC. **Fires PER ENV that has blocks.** Phase 4.4 checks source + every target env; if M envs out of N have `.js` (or other media extensions) on the blocklist, the gate fires M times — once per env. Each env has its own security setting and its own group of affected makers. Yes for source does NOT cover staging; yes for staging does NOT cover production. **Do NOT batch consent across envs.**

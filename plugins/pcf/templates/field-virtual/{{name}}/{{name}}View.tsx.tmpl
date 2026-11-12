@@ -1,0 +1,40 @@
+import * as React from "react";
+import { Input, InputOnChangeData } from "@fluentui/react-components";
+
+export interface {{name}}ViewProps {
+    cssClass: string;
+    inputClass: string;
+    messageClass: string;
+    label: string;
+    value: string;
+    disabled: boolean;
+    readOnly: boolean;
+    hidden: boolean;
+    message: string;
+    onChange: (next: string) => void;
+}
+
+export function {{name}}View(props: {{name}}ViewProps): React.ReactElement {
+    return React.createElement(
+        "div",
+        { className: props.cssClass },
+        // Fluent v9 Input comes from the declared Fluent platform library, so it is not bundled
+        // and it follows the host theme. Native input props (aria-label, disabled, readOnly,
+        // hidden, value) land on the inner <input>; className and root props land on the wrapper.
+        // The wrapper's Fluent class sets `display: inline-flex`, which overrides the browser's
+        // `[hidden]` rule, so a hidden wrapper also gets an inline `display: none`; without it an
+        // empty bordered box would stay on screen when field security hides the value.
+        React.createElement(Input, {
+            "aria-label": props.label,
+            className: props.inputClass,
+            root: { hidden: props.hidden, style: props.hidden ? { display: "none" } : undefined },
+            disabled: props.disabled,
+            hidden: props.hidden,
+            readOnly: props.readOnly,
+            type: "text",
+            value: props.value,
+            onChange: (_event: React.ChangeEvent<HTMLInputElement>, data: InputOnChangeData) => props.onChange(data.value),
+        }),
+        React.createElement("div", { className: props.messageClass, hidden: !props.message }, props.message),
+    );
+}

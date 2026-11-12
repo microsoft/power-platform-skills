@@ -1,6 +1,6 @@
 # Tamagui Integration
 
-Internal reference used by `/create-mobile-app` Step 9.2 and `/edit-app` Step 5
+Internal reference used by `/create-mobile-app` Step 9.2 (screens first) or Step 9b (data model first) and `/edit-app` Step 5
 after `/design-system` writes approved brand artifacts. This is not a
 user-invocable skill.
 
@@ -127,7 +127,7 @@ Never remap brand space keys (`xs`, `sm`, `md`, `lg`, `xl`, `2xl`, `3xl`,
 
 ## Approved dark palette (conditional)
 
-This branch is required for both `/create-mobile-app` Step 9.2 and `/edit-app`
+This branch is required for both `/create-mobile-app` Step 9.2 (screens first) or Step 9b (data model first) and `/edit-app`
 Step 5 when the approved design includes a custom dark palette. Without one,
 keep the Brand Import example above unchanged and do not import a nonexistent
 dark file. An unapproved file's presence alone does not authorize wiring it.

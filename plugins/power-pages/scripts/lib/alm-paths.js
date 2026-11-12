@@ -8,7 +8,7 @@
 // keeps the root uncluttered for users who otherwise see ~13 dot-files in
 // `git status` after any ALM run.
 //
-// NOT moved here (intentionally — see CLAUDE.md):
+// NOT moved here (intentionally — see AGENTS.md):
 //   - .solution-manifest.json   (referenced by non-ALM skills too)
 //   - .datamodel-manifest.json  (written by setup-datamodel, not ALM)
 //   - .alm-config.json          (user-authored config dotfile)

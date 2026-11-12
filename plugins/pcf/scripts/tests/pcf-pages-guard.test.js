@@ -1,0 +1,1857 @@
+'use strict';
+
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const Module = require('node:module');
+const { performance } = require('node:perf_hooks');
+const { scanSource, featureCoherence, gateSources } = require('../lib/pcf-code-gate.js');
+
+const FILE = 'src/pages-control.ts';
+
+function findingsFor(text, feature = 'Device.captureImage', hosts = ['pages'], options = {}) {
+  return featureCoherence({
+    features: feature ? [{ name: feature }] : [],
+  }, [{ file: FILE, text }], hosts, options);
+}
+
+function codesFor(text, feature, hosts) {
+  return findingsFor(text, feature, hosts).map((finding) => finding.code).sort();
+}
+
+const memberSpellings = [
+  ['double-quoted method', 'context.device["captureImage"]()'],
+  ['single-quoted method', "context.device['captureImage']()"],
+  ['bracket namespace and method', "context['device']['captureImage']()"],
+  ['optional root', 'context?.device.captureImage()'],
+  ['optional root and method', 'context?.device?.captureImage()'],
+  ['optional root and call', 'context?.device?.captureImage?.()'],
+  ['optional brackets', 'context?.["device"]?.["captureImage"]?.()'],
+  ['spaced members', 'context . device . captureImage ()'],
+  ['multiline members', 'context\n . device\n . captureImage\n ()'],
+  ['comment-separated members', 'context /* root */ . device [ /* method */ "captureImage" ] ()'],
+  ['utility bracket method', 'context.utils["lookupObjects"]()', 'Utility', 'utils', 'lookupObjects'],
+  ['utility optional root', 'context?.utils.lookupObjects()', 'Utility', 'utils', 'lookupObjects'],
+  ['utility spaced members', 'context . utils . lookupObjects ()', 'Utility', 'utils', 'lookupObjects'],
+];
+
+for (const [name, call, feature = 'Device.captureImage', namespace = 'device', method = 'captureImage'] of memberSpellings) {
+  test(`Pages detection recognizes ${name} without weakening the guard`, () => {
+    const guarded = `if (typeof context.${namespace}?.${method} === "function") { ${call}; }`;
+    const invalidGuard = `if (ready || typeof context.${namespace}?.${method} === "function") { ${call}; }`;
+    const results = {
+      unguarded: codesFor(call, feature),
+      guarded: codesFor(guarded, feature),
+      invalidGuard: codesFor(invalidGuard, feature),
+      undeclared: codesFor(call, null, ['model']),
+      textOnly: codesFor(`// ${call}\nconst note = ${JSON.stringify(call)};`, null),
+    };
+    assert.deepEqual(results, {
+      unguarded: ['PCF_PAGES_API'],
+      guarded: [],
+      invalidGuard: ['PCF_PAGES_API'],
+      undeclared: ['PCF_FEATURE_UNDECLARED'],
+      textOnly: [],
+    });
+    const finding = findingsFor(`// header\n${call};`, feature).find((item) => item.code === 'PCF_PAGES_API');
+    assert.equal(finding.severity, 'error');
+    assert.equal(finding.file, FILE);
+    assert.equal(finding.line, 2);
+  });
+}
+
+for (const [name, expression] of [
+  ['bracket namespace', 'context["webAPI"].retrieveRecord("account", id)'],
+  ['optional root', 'context?.webAPI.retrieveRecord("account", id)'],
+  ['spaced members', 'context . webAPI . retrieveRecord("account", id)'],
+]) {
+  test(`Feature discovery recognizes WebAPI ${name}`, () => {
+    assert.deepEqual({
+      declared: codesFor(expression, 'WebAPI', ['model']),
+      undeclared: codesFor(expression, null, ['model']),
+      textOnly: codesFor(`const note = ${JSON.stringify(expression)};`, null, ['model']),
+    }, {
+      declared: [],
+      undeclared: ['PCF_FEATURE_UNDECLARED'],
+      textOnly: [],
+    });
+  });
+}
+
+const CALL = 'context.device.captureImage()';
+const PROOF = 'typeof context.device?.captureImage === "function"';
+
+function withinGuard(body) {
+  return `if (${PROOF}) { ${body} }`;
+}
+
+const shadowingCases = [
+  ['single arrow parameter', `contexts.forEach(context => ${CALL});`, `contexts.forEach(item => ${CALL});`],
+  ['parenthesized arrow parameter', `contexts.forEach((context) => ${CALL});`, `contexts.forEach((item) => ${CALL});`],
+  ['destructured arrow parameter', `contexts.forEach(({ context }) => ${CALL});`, `contexts.forEach(({ item }) => ${CALL});`],
+  ['renamed destructured parameter', `contexts.forEach(({ current: context }) => ${CALL});`, `contexts.forEach(({ context: item }) => ${CALL});`, ['PCF_PAGES_API']],
+  ['array parameter', `contexts.forEach(([context]) => ${CALL});`, `contexts.forEach(([item]) => ${CALL});`],
+  ['defaulted parameter', `contexts.forEach((context = nextContext) => ${CALL});`, `contexts.forEach((item = context) => ${CALL});`, ['PCF_PAGES_API']],
+  ['block arrow parameter', `contexts.forEach(context => { ${CALL}; });`, `contexts.forEach(item => { ${CALL}; });`],
+  ['function expression parameter', `button.onclick = function(context) { ${CALL}; };`, `button.onclick = function(event) { ${CALL}; };`],
+  ['function declaration parameter', `function handle(context) { ${CALL}; }`, `function handle(event) { ${CALL}; }`],
+  ['object method parameter', `const handlers = { click(context) { ${CALL}; } };`, `const handlers = { click(event) { ${CALL}; } };`],
+  ['class method parameter', `class Handler { click(context) { ${CALL}; } }`, `class Handler { click(event) { ${CALL}; } }`],
+  ['typed method parameter', `class Handler { click(context: Context): void { ${CALL}; } }`, `class Handler { click(event: Event): void { ${CALL}; } }`],
+  ['destructured local', `button.onclick = () => { const { context } = next; ${CALL}; };`, `button.onclick = () => { const { item } = next; ${CALL}; };`],
+  ['second local declarator', `button.onclick = () => { const item = next, context = nextContext; ${CALL}; };`, `button.onclick = () => { const item = next, event = nextEvent; ${CALL}; };`],
+  ['local captured by a nested closure', `button.onclick = () => { const context = next; button.onchange = () => ${CALL}; };`, `button.onclick = () => { const item = next; button.onchange = () => ${CALL}; };`],
+  ...['let', 'const', 'var'].flatMap((kind) => [
+    [`${kind} local before call`, `button.onclick = () => { ${kind} context = next; ${CALL}; };`, `button.onclick = () => { ${kind} item = next; ${CALL}; };`],
+    [`${kind} local after call`, `button.onclick = () => { ${CALL}; ${kind} context = next; };`, `button.onclick = () => { ${CALL}; ${kind} item = next; };`],
+  ]),
+];
+
+for (const [name, shadowed, captured, capturedCodes = []] of shadowingCases) {
+  test(`Pages guard distinguishes ${name} from the guarded outer root`, () => {
+    assert.deepEqual({
+      shadowed: codesFor(withinGuard(shadowed)),
+      captured: codesFor(withinGuard(captured)),
+    }, {
+      shadowed: ['PCF_PAGES_API'],
+      captured: capturedCodes,
+    });
+  });
+}
+
+const writes = [
+  ['root assignment', 'context = nextContext;'],
+  ['assignment in an if condition', 'if (context = nextContext) { $CALL; }'],
+  ['namespace assignment', 'context.device = nextDevice;'],
+  ['bracket namespace assignment', 'context["device"] = nextDevice;'],
+  ['namespace deletion', 'delete context.device;'],
+  ['bracket namespace deletion', 'delete context["device"];'],
+  ['method replacement', 'context.device.captureImage = nextMethod;'],
+  ['bracket method deletion', 'delete context.device["captureImage"];'],
+  ...['+=', '-=', '*=', '/=', '%=', '**=', '<<=', '>>=', '>>>=', '&=', '|=', '^=', '&&=', '||=', '??=']
+    .map((operator) => [`root compound ${operator}`, `context ${operator} nextContext;`]),
+  ['namespace compound assignment', 'context.device ??= nextDevice;'],
+  ['captured root assignment', 'button.onclick = () => { context = nextContext; $CALL; };'],
+];
+
+for (const [name, write] of writes) {
+  test(`Pages guard expires after ${name} but not unrelated writes`, () => {
+    const body = write.includes('$CALL') ? write.replace('$CALL', CALL) : `${write} ${CALL};`;
+    assert.deepEqual({
+      changed: codesFor(withinGuard(body)),
+      unrelated: codesFor(withinGuard(`other = nextContext; context.other = nextValue; ${CALL};`)),
+      comparisons: codesFor(withinGuard(`if (context === nextContext && context.device !== nextDevice) { ${CALL}; }`)),
+      eventHandler: codesFor(withinGuard(`button.onclick = () => ${CALL};`)),
+      differentParameter: codesFor(withinGuard(`contexts.forEach(item => ${CALL});`)),
+    }, {
+      changed: ['PCF_PAGES_API'],
+      unrelated: [],
+      comparisons: [],
+      eventHandler: [],
+      differentParameter: [],
+    });
+  });
+}
+
+test('Pages guard invalidates only subsequent calls and allows a new proof', () => {
+  assert.deepEqual({
+    beforeAndAfter: codesFor(withinGuard(`${CALL}; context = next; ${CALL};`)),
+    afterNestedWrite: codesFor(withinGuard(`if (ready) { context.device = next; } ${CALL};`)),
+    afterUnrelatedBlock: codesFor(withinGuard(`if (ready) { other = next; } ${CALL};`)),
+    reproved: codesFor(withinGuard(`context = next; if (${PROOF}) { ${CALL}; }`)),
+    independentCallbacks: codesFor(withinGuard(`button.onclick = (item) => { consume(item); }; button.onchange = () => ${CALL};`)),
+  }, {
+    beforeAndAfter: ['PCF_PAGES_API'],
+    afterNestedWrite: ['PCF_PAGES_API'],
+    afterUnrelatedBlock: [],
+    reproved: [],
+    independentCallbacks: [],
+  });
+});
+
+test('Pages guard confines callback-local bindings and writes to that callback', () => {
+  assert.deepEqual({
+    parameter: codesFor(withinGuard(`contexts.forEach(context => { context = next; ${CALL}; }); ${CALL};`)),
+    local: codesFor(withinGuard(`button.onclick = () => { const context = next; ${CALL}; }; ${CALL};`)),
+    unrelatedNestedLocal: codesFor(withinGuard(`button.onclick = () => { const context = next; consume(context); }; button.onchange = () => ${CALL};`)),
+    reprovedParameter: codesFor(withinGuard(`button.onclick = (context) => { if (${PROOF}) { ${CALL}; } };`)),
+    reprovedFunction: codesFor(withinGuard(`button.onclick = function(context) { if (${PROOF}) { ${CALL}; } };`)),
+    reprovedLocal: codesFor(withinGuard(`button.onclick = () => { const context = next; if (${PROOF}) { ${CALL}; } };`)),
+    reprovedDestructuring: codesFor(withinGuard(`button.onclick = ({ context }) => { if (${PROOF}) { ${CALL}; } };`)),
+  }, {
+    parameter: ['PCF_PAGES_API'],
+    local: ['PCF_PAGES_API'],
+    unrelatedNestedLocal: [],
+    reprovedParameter: [],
+    reprovedFunction: [],
+    reprovedLocal: [],
+    reprovedDestructuring: [],
+  });
+});
+
+test('Pages guard keeps callback parameter defaults local to that callback', () => {
+  assert.deepEqual({
+    arrow: codesFor(withinGuard(`contexts.forEach((context = next) => { ${CALL}; }); ${CALL};`)),
+    destructured: codesFor(withinGuard(`contexts.forEach(({ context = next }) => { ${CALL}; }); ${CALL};`)),
+    functionExpression: codesFor(withinGuard(`contexts.forEach(function(context = next) { ${CALL}; }); ${CALL};`)),
+  }, {
+    arrow: ['PCF_PAGES_API'],
+    destructured: ['PCF_PAGES_API'],
+    functionExpression: ['PCF_PAGES_API'],
+  });
+});
+
+test('Pages utility guard expires after a protected prefix changes', () => {
+  const proof = 'typeof context.utils?.lookupObjects === "function"';
+  assert.deepEqual({
+    changed: codesFor(`if (${proof}) { context.utils = next; context.utils.lookupObjects(); }`, 'Utility'),
+    captured: codesFor(`if (${proof}) { button.onclick = () => context.utils.lookupObjects(); }`, 'Utility'),
+  }, {
+    changed: ['PCF_PAGES_API'],
+    captured: [],
+  });
+});
+
+for (const [name, parameters] of [
+  ['typed arrow', '(context: Context): void'],
+  ['typed async arrow', '(context: Context): Promise<void>'],
+  ['generic typed arrow', '<T>(context: Context<T>): void'],
+]) {
+  test(`Pages guard rejects ${name} shadowing while retaining a captured root`, () => {
+    assert.deepEqual({
+      shadowed: codesFor(withinGuard(`button.onclick = ${parameters} => { ${CALL}; };`)),
+      captured: codesFor(withinGuard(`button.onclick = ${parameters.replace('context:', 'event:')} => { ${CALL}; };`)),
+    }, {
+      shadowed: ['PCF_PAGES_API'],
+      captured: [],
+    });
+  });
+}
+
+test('Pages guard rejects destructured and uninitialized root declarations', () => {
+  assert.deepEqual({
+    destructuredAssignment: codesFor(withinGuard(`({ context } = next); ${CALL};`)),
+    arrayAssignment: codesFor(withinGuard(`[context] = next; ${CALL};`)),
+    blockDeclaration: codesFor(withinGuard(`{ let context; ${CALL}; }`)),
+    forBinding: codesFor(withinGuard(`for (const context of contexts) { ${CALL}; }`)),
+    destructuredDeclaration: codesFor(withinGuard(`const { context } = holder; ${CALL};`)),
+    unrelatedDestructuring: codesFor(withinGuard(`({ context: item } = next); ${CALL};`)),
+  }, {
+    destructuredAssignment: ['PCF_PAGES_API'],
+    arrayAssignment: ['PCF_PAGES_API'],
+    blockDeclaration: ['PCF_PAGES_API'],
+    forBinding: ['PCF_PAGES_API'],
+    destructuredDeclaration: ['PCF_PAGES_API'],
+    unrelatedDestructuring: [],
+  });
+});
+
+test('Pages guard ignores writes to a member named like the root', () => {
+  assert.deepEqual({
+    assignment: codesFor(withinGuard(`state.context = next; holder.context.device = next; ${CALL};`)),
+    deletion: codesFor(withinGuard(`delete state.context; delete holder.context.device; ${CALL};`)),
+  }, {
+    assignment: [],
+    deletion: [],
+  });
+});
+
+test('Pages guard expires after destructured protected-prefix writes', () => {
+  for (const write of [
+    '({ current: context.device } = next);',
+    '[context.device] = next;',
+    '({ current: context["device"] } = next);',
+    '({ current: context.device.captureImage } = next);',
+  ]) {
+    assert.deepEqual(codesFor(withinGuard(`${write} ${CALL};`)), ['PCF_PAGES_API'], write);
+  }
+  assert.deepEqual(codesFor(withinGuard(`({ current: state.context } = next); ${CALL};`)), []);
+});
+
+for (const [name, head] of [
+  ['member if', 'helper.if'],
+  ['optional member if', 'obj?.if'],
+  ['spaced member if', 'obj . if'],
+  ['comment-separated member if', 'obj /* member */ . /* name */ if'],
+  ['dollar-prefixed identifier', '$if'],
+]) {
+  test(`Pages guard rejects ${name} rather than impersonating a statement`, () => {
+    assert.deepEqual({
+      impersonated: codesFor(`${head}(context.device?.captureImage)\n{ ${CALL}; }`),
+      longerIdentifier: codesFor(`verifyIf(context.device?.captureImage)\n{ ${CALL}; }`),
+      realIf: codesFor(withinGuard(`${CALL};`)),
+      realElseIf: codesFor(`if (ready) { consume(); } else if (${PROOF}) { ${CALL}; }`),
+      realElse: codesFor(`if (${PROOF}) { consume(); } else { ${CALL}; }`),
+      innerElse: codesFor(withinGuard(`if (ready) { consume(); } else { ${CALL}; }`)),
+    }, {
+      impersonated: ['PCF_PAGES_API'],
+      longerIdentifier: ['PCF_PAGES_API'],
+      realIf: [],
+      realElseIf: [],
+      realElse: ['PCF_PAGES_API'],
+      innerElse: [],
+    });
+  });
+}
+
+for (const [name, relative] of [
+  ['development guide', 'AGENTS.md'],
+  ['testing reference', path.join('references', 'pcf-testing.md')],
+]) {
+  test(`Pages ${name} states the static guard limits and required runtime evidence`, () => {
+    const text = fs.readFileSync(path.resolve(__dirname, '..', '..', relative), 'utf8');
+    assert.match(text, /static heuristic/i);
+    assert.match(text, /source text/i);
+    assert.match(text, /not a JavaScript parser/i);
+    assert.match(text, /conservative/i);
+    assert.match(text, /cannot prove[^.\n]*report/i);
+    assert.match(text, /nested callbacks[^.\n]*rebind/i);
+    assert.match(text, /shadowing[^.\n]*writing[^.\n]*ends the proof/i);
+    assert.match(text, /unrecognized forms[^.\n]*reported[^.\n]*fail closed/i);
+    assert.match(text, /computed member names/i);
+    assert.match(text, /template-literal member names/i);
+    assert.match(text, /aliasing[^.\n]*`const d = context\.device; d\.captureImage\(\)`/i);
+    assert.match(text, /dynamic dispatch/i);
+    assert.match(text, /parenthesized receivers/i);
+    assert.match(text, /except a function- or block-local `const` bound to an object literal[^\n]*used only to call those functions[^\n]*fail closed/i);
+    assert.match(text, /early-return guards and calls in `else` branches are reported by design[^\n]*deliberate fail-closed limit[^\n]*positive guard block/i);
+    assert.match(text, /parenthesized receivers[^\n]*`\.bind`[^\n]*`Reflect\.apply`[^\n]*detected like direct calls/i);
+    assert.match(text, /`factory\?\.<T>\(context\.device\)\.captureImage\(\)`[^\n]*over-report/);
+    assert.match(text, /runtime verification on the target Power Pages site[^.\n]*required/i);
+  });
+}
+
+for (const relative of [
+  'AGENTS.md', path.join('references', 'pcf-testing.md'), path.join('references', 'pcf-best-practices.md'),
+]) {
+  test(`Pages documentation states context receivers, lexical proof expiry and fallback: ${relative}`, () => {
+    const text = fs.readFileSync(path.resolve(__dirname, '..', '..', relative), 'utf8');
+    assert.match(text, /this\._context/);
+    assert.match(text, /props\.context/);
+    assert.match(text, /\bctx\b/);
+    assert.match(text, /pcfContext/);
+    assert.match(text, /true-branch[^.\n]*positive method-level guard/i);
+    assert.match(text, /early-return guards[^.\n]*reported/i);
+    assert.match(text, /writ(?:e|ing)[^.\n]*before the call[^.\n]*ends the proof/i);
+    assert.match(text, /PCF_CODE_UNPARSEABLE[^.\n]*warning/);
+    assert.match(text, /Pages API calls[^.\n]*unguarded/i);
+    assert.match(text, /aliases?[^\n]*may evade|aliasing[^\n]*may evade/i);
+    assert.match(text, /computed[^.\n]*template-literal member names/i);
+    assert.match(text, /dynamic dispatch/);
+    assert.match(text, /parenthesized receivers/);
+    assert.match(text, /runtime verification on the target Power Pages site[^.\n]*required/i);
+  });
+}
+
+for (const [name, body, captured] of [
+  ['catch parameter', `try { throw next; } catch (context) { ${CALL}; }`, `try { throw next; } catch (event) { ${CALL}; }`],
+  ['destructured catch parameter', `try { throw next; } catch ({ context }) { ${CALL}; }`, `try { throw next; } catch ({ event }) { ${CALL}; }`],
+  ['generator parameter', `const f = function*(context) { yield ${CALL}; };`, `const f = function*(event) { yield ${CALL}; };`],
+  ['generic function parameter', `function f<T>(context: Context<T>) { ${CALL}; }`, `function f<T>(event: Event<T>) { ${CALL}; }`],
+  ['string-named method parameter', `const h = { "click"(context) { ${CALL}; } };`, `const h = { "click"(event) { ${CALL}; } };`],
+  ['generic class method parameter', `class H { click<T>(context: Context<T>) { ${CALL}; } }`, `class H { click<T>(event: Event<T>) { ${CALL}; } }`],
+  ['object-return-typed arrow parameter', `const f = (context: Context): { done: boolean } => { ${CALL}; return { done: true }; };`, `const f = (event: Event): { done: boolean } => { ${CALL}; return { done: true }; };`],
+  ['ASI local declaration', `button.onclick = () => { let context\n${CALL}; };`, `button.onclick = () => { let item\n${CALL}; };`],
+  ['hoisted function declaration', `function context() {} ${CALL};`, `function handle() {} ${CALL};`],
+  ['block-scoped class declaration', `class context {} ${CALL};`, `class Handler {} ${CALL};`],
+  ['for-of root target', `for (context of contexts) { ${CALL}; }`, `for (item of items) { ${CALL}; }`],
+  ['for-of var target', `for (var context of contexts) { ${CALL}; }`, `for (var item of items) { ${CALL}; }`],
+  ['for-of protected prefix target', `for (context.device of devices) { ${CALL}; }`, `for (context.other of items) { ${CALL}; }`],
+  ['postfix protected prefix decrement', `context.device--; ${CALL};`, `context.other--; ${CALL};`],
+  ['prefix protected prefix increment', `++context.device; ${CALL};`, `++context.other; ${CALL};`],
+]) {
+  test(`Pages proof fails closed for ${name} and keeps unrelated bindings clean`, () => {
+    assert.deepEqual({
+      rebound: codesFor(withinGuard(body)),
+      captured: codesFor(withinGuard(captured)),
+    }, { rebound: ['PCF_PAGES_API'], captured: [] });
+  });
+}
+
+test('Pages proof keeps a dollar-prefixed root assignment unrelated', () => {
+  assert.deepEqual(codesFor(withinGuard(`$context = next; ${CALL};`)), []);
+});
+
+test('Pages proof limits a later loop-header declaration to its own statement', () => {
+  assert.deepEqual(codesFor(withinGuard(`${CALL}; for (const context of contexts) { consume(context); }`)), []);
+});
+
+test('Pages proof uses Unicode identifier boundaries for roots and keywords', () => {
+  const pi = '\u03c0';
+  assert.deepEqual(codesFor(`${pi}if(context.device?.captureImage)\n{ ${CALL}; }`), ['PCF_PAGES_API']);
+  for (const other of ['$context', '_context', 'context2', 'contextX', `${pi}context`, 'context\u200c', 'context\u200d', 'ctx.context']) {
+    assert.deepEqual(codesFor(withinGuard(`${other} = next; ${CALL};`)), [], other);
+    const detected = ['_context', 'ctx.context'].includes(other);
+    assert.deepEqual(codesFor(`${other}.device.captureImage()`, null),
+      detected ? ['PCF_FEATURE_UNDECLARED', 'PCF_PAGES_API'] : [], other);
+  }
+  for (const method of [`captureImage${pi}`, 'captureImage\u200c', 'captureImage\u200d', 'captureImage\u{10400}']) {
+    assert.deepEqual(codesFor(`context.device.${method}()`, `Device.${method}`), ['PCF_PAGES_API'], method);
+    assert.deepEqual(codesFor(`if (typeof context.device?.${method} === "function") { context.device.${method}(); }`, `Device.${method}`), [], method);
+  }
+});
+
+const extraMemberSpellings = [
+  ['root non-null assertion', 'context!.device.captureImage()'],
+  ['namespace non-null assertion', 'context.device!.captureImage()'],
+  ['method non-null assertion', 'context.device.captureImage!()'],
+  ['non-null assertion before brackets', 'context!.device!["captureImage"]!()'],
+  ['fixed Unicode escape', String.raw`context.device["capture\u0049mage"]()`],
+  ['braced Unicode escape', String.raw`context.device["capture\u{49}mage"]()`],
+  ['hex namespace escape', String.raw`context["\x64evice"].captureImage()`],
+  ['escaped single-quoted key', String.raw`context.device['capture\u0049mage']()`],
+  ['identity escape', String.raw`context.device["\captureImage"]()`],
+  ['string line continuation', 'context.device["capture\\\nImage"]()'],
+  ['fixed escape at key end', String.raw`context.device["captureImag\u0065"]()`],
+  ['hex escape at key end', String.raw`context.device["captureImag\x65"]()`],
+];
+
+for (const [name, call] of extraMemberSpellings) {
+  test(`Pages detection recognizes ${name} only for detection, not as a proof`, () => {
+    assert.deepEqual({
+      unguarded: codesFor(call),
+      guarded: codesFor(withinGuard(`${call};`)),
+      invalidGuard: codesFor(`if (ready || ${PROOF}) { ${call}; }`),
+      undeclared: codesFor(call, null, ['model']),
+      textOnly: codesFor(`// ${call.replace(/\n/g, '\n// ')}\nconst note = ${JSON.stringify(call)};`, null),
+    }, {
+      unguarded: ['PCF_PAGES_API'],
+      guarded: [],
+      invalidGuard: ['PCF_PAGES_API'],
+      undeclared: ['PCF_FEATURE_UNDECLARED'],
+      textOnly: [],
+    });
+  });
+}
+
+test('Pages detection never promotes non-null assertions or escaped keys into guard proofs', () => {
+  for (const condition of [
+    'typeof context!.device?.captureImage === "function"',
+    'typeof context.device!?.captureImage === "function"',
+    String.raw`typeof context.device["capture\u0049mage"] === "function"`,
+  ]) {
+    assert.deepEqual(codesFor(`if (${condition}) { ${CALL}; }`), ['PCF_PAGES_API'], condition);
+  }
+  for (const comparison of ['context.device.captureImage != other', 'context.device.captureImage !== other']) {
+    assert.deepEqual(codesFor(withinGuard(`${comparison}; ${CALL};`)), [], comparison);
+  }
+  assert.deepEqual(codesFor(`if (!context.device?.captureImage) { ${CALL}; }`), ['PCF_PAGES_API']);
+});
+
+const DISPATCH_FORMS = [
+  ['parenthesized namespace receiver', '(context.device).captureImage()'],
+  ['parenthesized root receiver', '(context).device.captureImage()'],
+  ['nested parenthesized receivers', '((context).device).captureImage()'],
+  ['parenthesized receiver with optional call', '(context.device)?.captureImage?.()'],
+  ['parenthesized receiver after return', 'return (context.device).captureImage()'],
+  ['template-literal method key', 'context.device[`captureImage`]()'],
+  ['template-literal namespace key', 'context[`device`].captureImage()'],
+  ['escaped template-literal key', 'context.device[`capture\\u0049mage`]()'],
+  ['call dispatch', 'context.device.captureImage.call(context.device)'],
+  ['apply dispatch', 'context.device.captureImage.apply(context.device, [])'],
+  ['bind dispatch', 'context.device.captureImage.bind(context.device)()'],
+  ['optional call dispatch', 'context.device.captureImage?.call(context.device)'],
+  ['Reflect.apply dispatch', 'Reflect.apply(context.device.captureImage, context.device, [])'],
+  ['Reflect.apply of a parenthesized receiver', 'Reflect.apply((context.device).captureImage, context.device, [])'],
+  ['utility call dispatch', 'context.utils.lookupObjects.call(undefined, {})', 'Utility', 'utils', 'lookupObjects'],
+  ['parenthesized utility receiver', '(context.utils).lookupObjects({})', 'Utility', 'utils', 'lookupObjects'],
+];
+
+for (const [name, call, feature = 'Device.captureImage', namespace = 'device', method = 'captureImage'] of DISPATCH_FORMS) {
+  test(`Pages detection recognizes ${name}`, () => {
+    const statement = `${call};`;
+    const body = call.startsWith('return ') ? `function f(context) { ${statement} }` : statement;
+    const guarded = `function g(context) { if (typeof context.${namespace}?.${method} === "function") { ${statement} } }`;
+    assert.deepEqual({
+      unguarded: codesFor(body, feature),
+      guarded: codesFor(guarded, feature),
+      invalidGuard: codesFor(guarded.replace('if (typeof', 'if (ready || typeof'), feature),
+      undeclared: codesFor(body, null, ['model']),
+      textOnly: codesFor(`// ${call}\nconst note = ${JSON.stringify(call)};`, null),
+      fallback: findingsFor(guarded, feature, ['pages'], { indexer: throwingIndexer }).map((finding) => finding.code),
+    }, {
+      unguarded: ['PCF_PAGES_API'],
+      guarded: [],
+      invalidGuard: ['PCF_PAGES_API'],
+      undeclared: ['PCF_FEATURE_UNDECLARED'],
+      textOnly: [],
+      fallback: ['PCF_PAGES_API'],
+    });
+  });
+}
+
+test('Pages detection keeps call results, comma groups and dynamic keys out of the dispatch forms', () => {
+  for (const text of [
+    'foo(context.device).captureImage();',
+    'context.device.captureImage.name;',
+    'const fn = context.device.captureImage.call;',
+    'Reflect.apply(other.captureImage, context.device, []);',
+    'Reflect.apply(fn, context.device, []);',
+    'Other.apply(context.device.captureImage, context.device, []);',
+    'context.device[`capture${suffix}`]();',
+  ]) {
+    assert.deepEqual(codesFor(text, null).filter((code) => code === 'PCF_PAGES_API'), [], text);
+  }
+  // The new forms are detected only: they are not new proof syntax.
+  for (const condition of [
+    'typeof (context.device)?.captureImage === "function"',
+    'typeof context.device[`captureImage`] === "function"',
+    'typeof context.device.captureImage.call === "function"',
+  ]) {
+    assert.deepEqual(codesFor(`if (${condition}) { ${CALL}; }`), ['PCF_PAGES_API'], condition);
+  }
+});
+
+test('Pages detection reads optional and generic call arguments as arguments, not grouped receivers', () => {
+  const factory = 'const factory = (value) => ({ captureImage() { return "local"; } });\n';
+  const generic = 'function factory<T>(value: T) { return { captureImage() { return "local"; } }; }\n';
+  const method = 'const factory = { create<T>(value: T) { return { captureImage() { return "local"; } }; } };\n';
+  for (const text of [
+    `${factory}function run(context) { return factory?.(context.device).captureImage(); }`,
+    `${factory}function run(context) { return factory?.(context.device)?.captureImage(); }`,
+    `${generic}function run(context) { return factory<unknown>(context.device).captureImage(); }`,
+    `${method}function run(context) { return factory.create<unknown>(context.device).captureImage(); }`,
+    `${factory}function run(context) { return factory(context.device).captureImage(); }`,
+  ]) {
+    assert.deepEqual(codesFor(text, null), [], text);
+    assert.deepEqual(codesFor(text, null, ['model']), [], text);
+  }
+  // After an analyzer failure the fallback reads the optional call the same way.
+  assert.deepEqual(findingsFor(`${factory}factory?.(context.device).captureImage();`, null, ['pages'], { indexer: throwingIndexer })
+    .map((finding) => finding.code), []);
+  // Known limit, in the safe direction: after an optional call with type arguments the parenthesis is still
+  // read as a grouped receiver, so the factory result's method is reported as a Pages call (an over-report).
+  for (const text of [
+    `${generic}function run(context) { return factory?.<unknown>(context.device).captureImage(); }`,
+    `${method}function run(context) { return factory.create?.<unknown>(context.device).captureImage(); }`,
+  ]) {
+    assert.deepEqual(codesFor(text, null), ['PCF_FEATURE_UNDECLARED', 'PCF_PAGES_API'], text);
+  }
+  // A grouped receiver after an operator or keyword is still read through.
+  for (const text of ['ready && (context.device).captureImage();', 'value = (context.device).captureImage();', 'void (context.device).captureImage();']) {
+    assert.deepEqual(codesFor(text, null), ['PCF_FEATURE_UNDECLARED', 'PCF_PAGES_API'], text);
+  }
+});
+
+test('Pages proof refuses early exits and else branches of a negated method check by design', () => {
+  // A deliberate fail-closed limit: code that runs between a negated check and the call, such as a later
+  // operand of the same condition, can remove the method without a write the analyzer sees.
+  const negated = 'typeof context.device?.captureImage !== "function"';
+  for (const body of [
+    `if (${negated}) return; ${CALL};`,
+    `if (${negated}) { return; } ${CALL};`,
+    `if (${negated}) throw new Error("no camera"); ${CALL};`,
+    `if (!context.device?.captureImage) return; ${CALL};`,
+    `if (!(${PROOF})) return; ${CALL};`,
+    `if (${negated}) return; return ${CALL};`,
+    `if (${negated}) return; const image = ${CALL};`,
+    `if (${negated}) { consume(); } else { ${CALL}; }`,
+    `if (${negated}) consume(); else ${CALL};`,
+    `if (${negated} || !state.ready) return; return ${CALL};`,
+    `if (!(${PROOF} && state > 0)) return; ${CALL};`,
+    `if (${negated}) return; Object.assign(context.device, { captureImage: undefined }); ${CALL};`,
+  ]) {
+    assert.deepEqual(codesFor(`function capture(context, state, consume) { ${body} }`), ['PCF_PAGES_API'], body);
+  }
+  assert.deepEqual(codesFor(`function capture(contexts) { for (const context of contexts) { if (${negated}) continue; ${CALL}; } }`),
+    ['PCF_PAGES_API']);
+  const [finding] = findingsFor(`function capture(context) { if (${negated}) return; ${CALL}; }`);
+  assert.match(finding.message, /early-return guards and aliases are not recognized/);
+  // The recommended rewrite: a positive guard block around the call.
+  assert.deepEqual(codesFor(`function capture(context) { if (${PROOF}) { ${CALL}; } }`), []);
+  assert.deepEqual(codesFor(`async function capture(context, consume) { if (${PROOF}) { const image = await ${CALL}; consume(image); } }`), []);
+});
+
+test('Pages detection ignores a context-named local object literal that is provably not the PCF context', () => {
+  for (const name of ['ctx', 'context', '_context', 'pcfContext']) {
+    const text = `function render() {\n  const ${name} = { device: { captureImage() { return 1; }, "pickFile": async () => [] }, utils: { lookupObjects: function (options) { return []; }, max: 3 } };\n  ${name}.device.captureImage(); ${name}.device.pickFile(); ${name}.utils.lookupObjects(options);\n}`;
+    assert.deepEqual(codesFor(text, null), [], name);
+    assert.deepEqual(codesFor(text, null, ['model']), [], name);
+  }
+  for (const text of [
+    '{ const ctx = { device: { captureImage: () => ({ id: "local", size: [1, 2] }) } }; ctx.device.captureImage(); }',
+    'function render() { const ctx = { device: { captureImage(a, b) { return null; } } }\n  ctx?.device?.captureImage?.(a); }',
+    'function render() { const ctx = { device: { captureImage: async function named() { return; } } }; new ctx.device.captureImage(); }',
+  ]) {
+    assert.deepEqual(codesFor(text, null), [], text);
+  }
+  // A literal whose function runs other code is not set aside; the call inside is read on its own too.
+  assert.deepEqual(codesFor('function render() { const ctx = { device: { captureImage: () => context.device.captureImage() } }; ctx.device.captureImage(); }'),
+    ['PCF_PAGES_API', 'PCF_PAGES_API']);
+});
+
+test('Pages detection keeps the error for context-named objects it cannot prove local', () => {
+  const local = 'device: { captureImage() { return "local"; } }';
+  for (const body of [
+    // Not a local, inert const literal.
+    'let ctx = { device: { captureImage() {} } }; ctx.device.captureImage();',
+    'const ctx = { device: real.device }; ctx.device.captureImage();',
+    'const ctx = { device }; ctx.device.captureImage();',
+    'const ctx = { ...base }; ctx.device.captureImage();',
+    'const ctx = { [key]: {} }; ctx.device.captureImage();',
+    'const ctx = { get device() { return real; } }; ctx.device.captureImage();',
+    'const ctx = { __proto__: { device: { captureImage() {} } } }; ctx.device.captureImage();',
+    'const ctx = { device: { captureImage() {} }, device: real }; ctx.device.captureImage();',
+    'const ctx = { device: { *captureImage() {} } }; ctx.device.captureImage();',
+    'const ctx = { device: { captureImage(): void {} } }; ctx.device.captureImage();',
+    'const ctx = { device: { captureImage(v = real) {} } }; ctx.device.captureImage();',
+    'const ctx = { device: { captureImage({ device }) {} } }; ctx.device.captureImage();',
+    'const ctx = { device: { captureImage: real.captureImage } }; ctx.device.captureImage();',
+    'const ctx = { device: { captureImage() {} } } as unknown as Context; ctx.device.captureImage();',
+    'const ctx = useContext(PcfContext); ctx.device.captureImage();',
+    // A function in the literal that runs, reads or returns anything else.
+    `const ctx = { ${local}, update(value) { this.device = value.device; } }; ctx.update(api); ctx.device.captureImage();`,
+    `const ctx = { ${local}, expose() { return this; } }; Object.assign(ctx.expose(), api); ctx.device.captureImage();`,
+    `let escaped; const ctx = { ${local}, leak() { escaped = this; } }; ctx.leak(); escaped.device = api.device; ctx.device.captureImage();`,
+    `const ctx = { ${local}, update(value) { this.device = value.device; } }; ctx.update?.(api); ctx.device.captureImage();`,
+    `const ctx = { ${local}, update() { ctx.device = api.device; } }; ctx.update(); ctx.device.captureImage();`,
+    `const ctx = { ${local}, update() { super.__defineGetter__("device", () => api.device); } }; ctx.update(); ctx.device.captureImage();`,
+    'const ctx = { device: { captureImage(c) { return c.device.captureImage(); } } }; ctx.device.captureImage(api);',
+    'const ctx = { device: { captureImage: (c) => c } }; ctx.device.captureImage(api.device).captureImage();',
+    'const ctx = { device: { captureImage() { return real; } } }; ctx.device.captureImage().captureImage();',
+    'const ctx = { device: { captureImage() { return arguments; } } }; ctx.device.captureImage();',
+    'const ctx = { device: { captureImage() { consume(); return 1; } } }; ctx.device.captureImage();',
+    // A use other than a call of the literal's own function.
+    'const ctx = {}; ctx.__defineGetter__("device", () => api.device); ctx.device.captureImage();',
+    `const ctx = { ${local} }; ctx.hasOwnProperty("device"); ctx.device.captureImage();`,
+    `const ctx = { ${local} }; ctx.device.captureImage.call(api.device);`,
+    `const ctx = { ${local} }; helper(ctx); ctx.device.captureImage();`,
+    `const ctx = { ${local} }; const d = ctx.device; ctx.device.captureImage();`,
+    `const ctx = { ${local} }; ctx.device.captureImage = real; ctx.device.captureImage();`,
+    `const ctx = { ${local} }; Object.assign(ctx.device, real); ctx.device.captureImage();`,
+    `const ctx = { ${local} }; delete ctx.device; ctx.device.captureImage();`,
+    `const ctx = { ${local} }; (ctx).device.captureImage();`,
+    `const ctx = { ${local} }; const alias = ctx; alias.device = api.device; ctx.device.captureImage();`,
+    `const ctx = { ${local} }; return [ctx, ctx.device.captureImage()];`,
+    // Something else could reach the binding: eval, a with statement, an inner declaration.
+    `const ctx = { ${local} }; eval("ctx.device = api.device"); ctx.device.captureImage();`,
+    `const ctx = { ${local} }, other = 1; { const ctx = real; ctx.device.captureImage(); }`,
+    `const ctx = { ${local} }; function inner(ctx) { ctx.device.captureImage(); }`,
+    `const ctx = { ${local} }; button.onclick = (ctx) => ctx.device.captureImage();`,
+  ]) {
+    assert.ok(codesFor(`function run(api, real, base, key, device, helper, consume, button, PcfContext) { ${body} }`, null).includes('PCF_PAGES_API'), body);
+  }
+  for (const text of [
+    // Only the context-named root itself is set aside, never a receiver under another root.
+    'function run(api) { const props = { context: null }; Object.assign(props, { context: api }); props.context.device.captureImage(); }',
+    'function run(api) { const state = { context: null }; const alias = state; alias.context = api; state.context.device.captureImage(); }',
+    'function run(api) { const props = { context: { device: { captureImage() {} } } }; props.context.device.captureImage(); }',
+    // A program-level const can be reached from other scripts; a with statement can rebind the name.
+    'const ctx = { device: { captureImage() {} } }; ctx.device.captureImage();',
+    'export const ctx = { device: { captureImage() {} } }; ctx.device.captureImage();',
+    'function run(api) { const ctx = { device: { captureImage() {} } }; with (api) { ctx.device.captureImage(); } }',
+    'function render(ctx) { ctx.device.captureImage(); }',
+    'class C { init(context) { this._context = context; } run() { this._context.device.captureImage(); } }',
+  ]) {
+    assert.ok(codesFor(text, null).includes('PCF_PAGES_API'), text);
+    assert.ok(codesFor(text, null, ['model']).includes('PCF_FEATURE_UNDECLARED'), text);
+  }
+});
+
+test('Pages detection decodes escapes without evaluating malformed or non-identifier keys', () => {
+  for (const key of [
+    String.raw`"capture\uZZZZImage"`, String.raw`"capture\u{110000}Image"`,
+    String.raw`"capture\xZZImage"`, String.raw`"capture\nImage"`,
+    String.raw`"capture\tImage"`, String.raw`"capture\\Image"`,
+    String.raw`"capture\"Image"`, String.raw`"capture\0Image"`,
+  ]) {
+    assert.deepEqual(codesFor(`context.device[${key}]()`, null), [], key);
+  }
+});
+
+test('Pages proof treats every root occurrence in a recognized head as a barrier', () => {
+  for (const body of [
+    `const f = (event = context) => { ${CALL}; };`,
+    `const f = (event: context) => { ${CALL}; };`,
+    `const h = { [context.name](event) { ${CALL}; } };`,
+    `const h = { get value(): context { ${CALL}; } };`,
+    `const f = function named(event = context) { ${CALL}; };`,
+  ]) {
+    assert.deepEqual(codesFor(withinGuard(body)), ['PCF_PAGES_API'], body);
+  }
+  // In a .ts file, `<context>` before a parameter list is a type-parameter list. A type cannot shadow
+  // the `context` value, so the gate blanks it as a type and the proof crosses.
+  assert.deepEqual(codesFor(withinGuard(`const f = <context>(event) => { ${CALL}; };`)), []);
+});
+
+test('Pages proof crosses recognized root-free callbacks, methods and accessors', () => {
+  for (const body of [
+    `button.onclick = () => ${CALL};`,
+    `items.forEach((item) => { ${CALL}; });`,
+    `items.forEach(async (item: Item): Promise<void> => { await ${CALL}; });`,
+    `const f = <T>(item: T): { done: boolean } => { ${CALL}; return { done: true }; };`,
+    `const f = async item => ${CALL};`,
+    `const h = { [key](event) { ${CALL}; }, 1(event) { ${CALL}; } };`,
+    `const h = { get value() { ${CALL}; }, set value(item) { ${CALL}; } };`,
+    `const h = { async *click<T>(event: Event<T>): Promise<void> { ${CALL}; } };`,
+    `helper(context); ${CALL};`,
+    `const other = context; ${CALL};`,
+  ]) {
+    assert.deepEqual(codesFor(withinGuard(body)), [], body);
+  }
+});
+
+test('Pages proof rejects an unrecognized nested head instead of assuming capture', () => {
+  const body = `handler ??? (event) { ${CALL}; }`;
+  assert.deepEqual(codesFor(withinGuard(body)), ['PCF_PAGES_API']);
+});
+
+test('Pages proof indexes hoisted and lexical declarations before and after calls', () => {
+  for (const body of [
+    `${CALL}; function context() {}`,
+    `${CALL}; class context {}`,
+    `{ ${CALL}; let context\n}`,
+    `button.onclick = () => { ${CALL}; if (ready) { var context = next; } };`,
+    `${CALL}; for (var context of contexts) { consume(context); }`,
+  ]) {
+    assert.deepEqual(codesFor(withinGuard(body)), ['PCF_PAGES_API'], body);
+  }
+  for (const body of [
+    `for (let context of contexts) { consume(context); } ${CALL};`,
+    `for (const context of contexts) consume(context); ${CALL};`,
+    `if (ready) { const context = next; consume(context); } ${CALL};`,
+  ]) {
+    assert.deepEqual(codesFor(withinGuard(body)), [], body);
+  }
+});
+
+test('Pages proof tracks writes by function and preserves fresh proofs', () => {
+  for (const write of [
+    'context++', '--context', 'context.device++', '--context.device', 'context.device.captureImage--',
+    'for (context in contexts) {}', 'for (context.device in devices) {}',
+    String.raw`context["\x64evice"] = next`,
+  ]) {
+    assert.deepEqual(codesFor(withinGuard(`${CALL}; ${write}; ${CALL};`)), ['PCF_PAGES_API'], write);
+    assert.deepEqual(codesFor(withinGuard(`${write}; button.onclick = () => ${CALL};`)), ['PCF_PAGES_API'], write);
+    assert.deepEqual(codesFor(withinGuard(`${write}; if (${PROOF}) { ${CALL}; }`)), [], write);
+  }
+  assert.deepEqual(codesFor(withinGuard(`button.onclick = () => { context = next; }; ${CALL};`)), ['PCF_PAGES_API']);
+});
+
+test('Pages proof classifies wrapped assignment and update targets instead of assuming reads', () => {
+  for (const write of [
+    '(context) = next', '((context.device)) = next', '++(context.device)',
+    '(context.device)--', 'delete ((context.device))', 'context.device! = next',
+    '(context as Context) = next',
+  ]) {
+    assert.deepEqual(codesFor(withinGuard(`${CALL}; ${write}; ${CALL};`)), ['PCF_PAGES_API'], write);
+    assert.deepEqual(codesFor(withinGuard(`${write}; if (${PROOF}) { ${CALL}; }`)), [], write);
+  }
+  for (const read of ['helper(context)', 'helper((context.device))', 'const other = (context)', 'const other = context.device!']) {
+    assert.deepEqual(codesFor(withinGuard(`${read}; ${CALL};`)), [], read);
+  }
+});
+
+test('Pages proof shares binding-pattern classification with loop targets', () => {
+  assert.deepEqual(codesFor(withinGuard(`for ({ context } of contexts) {} ${CALL};`)), ['PCF_PAGES_API']);
+  assert.deepEqual(codesFor(withinGuard(`for ({ current: context.device } of devices) {} ${CALL};`)), ['PCF_PAGES_API']);
+  assert.deepEqual(codesFor(withinGuard(`for ({ context: item } of contexts) { consume(item); } ${CALL};`)), []);
+});
+
+test('Pages proof indexes root declarations even when their heads are unfamiliar', () => {
+  for (const declaration of [
+    'declare function context(): void;',
+    '@decorate class context {}',
+    'const item: Pair<A, B> = next, context = nextContext;',
+  ]) {
+    assert.deepEqual(codesFor(withinGuard(`${CALL}; ${declaration}`)), ['PCF_PAGES_API'], declaration);
+  }
+});
+
+test('Pages proof recognizes root-free generic defaults and object-stored function expressions', () => {
+  for (const body of [
+    `const f = <T = Item>(event: T) => { ${CALL}; };`,
+    `function f<T = Item>(event: T) { ${CALL}; }`,
+    `const h = { click<T = Item>(event: T) { ${CALL}; } };`,
+    `const h = { click: function(event) { ${CALL}; } };`,
+    `const h = { click: function*(event) { yield ${CALL}; } };`,
+  ]) {
+    assert.deepEqual(codesFor(withinGuard(body)), [], body);
+  }
+});
+
+test('Pages proof keeps block and catch-local writes away from the outer binding', () => {
+  assert.deepEqual(codesFor(withinGuard(`try { throw next; } catch (context) { context = next; } ${CALL};`)), []);
+  assert.deepEqual(codesFor(withinGuard(`{ let context = next; context.device = nextDevice; } ${CALL};`)), []);
+});
+
+test('Pages proof distinguishes postfix updates from a following ASI-separated call', () => {
+  assert.deepEqual(codesFor(withinGuard(`other++\n${CALL}; ${CALL};`)), []);
+  assert.deepEqual(codesFor(withinGuard(`other--\n${CALL}; ${CALL};`)), []);
+});
+
+test('Pages proof ends expression callback scopes at ASI boundaries', () => {
+  assert.deepEqual(codesFor(withinGuard(`button.onclick = context => ${CALL}\n${CALL};`)), ['PCF_PAGES_API']);
+  assert.deepEqual(codesFor(withinGuard(`button.onclick = () => context = next\n${CALL};`)), ['PCF_PAGES_API']);
+});
+
+test('Pages proof requires a recognized read or binding role for every root occurrence', () => {
+  for (const body of [
+    `${CALL}; await using context = holder;`,
+    `context @ next; ${CALL};`,
+  ]) {
+    assert.deepEqual(codesFor(withinGuard(body)), ['PCF_PAGES_API'], body);
+  }
+  for (const read of ['helper(context)', 'const other = context', 'typeof context', 'void context', 'const other = context.device!']) {
+    assert.deepEqual(codesFor(withinGuard(`${read}; ${CALL};`)), [], read);
+  }
+  assert.deepEqual(codesFor(withinGuard(`const h = { context: holder }; ${CALL};`)), []);
+  assert.deepEqual(codesFor(withinGuard(`class H { private context: Context; click(item) { ${CALL}; } }`)), []);
+  assert.deepEqual(codesFor(withinGuard(`const h = { if(item) { ${CALL}; } };`)), []);
+});
+
+for (const [name, body] of [
+  ['function parameter', String.raw`const f = function(\u0063ontext) { ${CALL}; };`],
+  ['method parameter', String.raw`const h = { "click"(\u0063ontext) { ${CALL}; } };`],
+  ['catch parameter', String.raw`try { throw next; } catch (\u0063ontext) { ${CALL}; }`],
+  ['future lexical declaration', String.raw`${CALL}; let \u0063ontext = next;`],
+  ['assignment target', String.raw`\u0063ontext = next; ${CALL};`],
+  ['hoisted declaration name', String.raw`function \u0063ontext() {} ${CALL};`],
+]) {
+  test(`Pages proof fails closed for unrecognized ${name} identifier syntax`, () => {
+    assert.deepEqual(codesFor(withinGuard(body)), ['PCF_PAGES_API']);
+  });
+}
+
+const THIS_CALL = 'this._ctx.device.captureImage()';
+const THIS_PROOF = 'typeof this._ctx?.device?.captureImage === "function"';
+test('Pages proof keeps lexical this in arrows but not rebinding functions or classes', () => {
+  assert.deepEqual(codesFor(`if (${THIS_PROOF}) { el.addEventListener("click", function () { ${THIS_CALL}; }); }`), ['PCF_PAGES_API']);
+  for (const body of [
+    `${THIS_CALL};`,
+    `el.addEventListener("click", () => ${THIS_CALL});`,
+    `items.forEach(async (item: Item): Promise<void> => { await ${THIS_CALL}; });`,
+  ]) {
+    assert.deepEqual(codesFor(`if (${THIS_PROOF}) { ${body} }`), [], body);
+  }
+  for (const body of [
+    `const h = { click() { ${THIS_CALL}; } };`,
+    `const h = { get value() { ${THIS_CALL}; } };`,
+    `class H { click = () => ${THIS_CALL}; }`,
+    `this._ctx = next; ${THIS_CALL};`,
+  ]) {
+    assert.deepEqual(codesFor(`if (${THIS_PROOF}) { ${body} }`), ['PCF_PAGES_API'], body);
+  }
+  assert.match(findingsFor(THIS_CALL).find((finding) => finding.code === 'PCF_PAGES_API').message, /this\._ctx\?\.device\?\.captureImage/);
+});
+
+// Complexity guards. They exist to catch a rescan that turns linear work into quadratic (or
+// exponential) work, not to measure how fast a machine is, so none of them bounds a wall-clock time
+// that load alone can exceed (the old fixed 500-1500 ms bounds failed on a busy machine):
+//  - Where the gate exposes its work (lexer passes, the line-start table) the test counts that work.
+//    A count does not depend on load.
+//  - Otherwise the test times one fixture at a quarter of its size and at full size and bounds the
+//    growth. Linear work grows about 4x (2-6x measured); quadratic work grows 16x. A slow or busy
+//    machine slows both runs alike, so the ratio holds. Each side is the fastest of several runs, so
+//    a pause that hits one run is ignored, and a ratio over the limit is measured again (a real
+//    regression exceeds it every time).
+//  - Every timed test keeps an absolute ceiling, at least 10x the old bound, as a catastrophe guard.
+const GROWTH_RUNS = 5;
+const GROWTH_ATTEMPTS = 3;
+const GROWTH_LIMIT = 10;
+const CATASTROPHE_LIMIT_MS = 15000;
+
+function fastest(runs, fn) {
+  let best = Infinity;
+  for (let i = 0; i < runs; i += 1) {
+    const started = performance.now();
+    fn();
+    best = Math.min(best, performance.now() - started);
+    // Already past the catastrophe ceiling: more runs only make a failing test slower.
+    if (best > CATASTROPHE_LIMIT_MS) break;
+  }
+  return best;
+}
+
+// `build(scale)` returns the fixture at `scale` of its full size; `run(text)` returns the findings.
+// Returns the findings for the full-size fixture so the caller can keep asserting on them.
+function assertLinearGrowth(t, label, build, run) {
+  const small = build(0.25);
+  const full = build(1);
+  // The first runs pay for JIT compilation, which is not growth with size.
+  run(small);
+  run(small);
+  let growth = Infinity;
+  let fullMs = Infinity;
+  for (let attempt = 1; attempt <= GROWTH_ATTEMPTS && growth >= GROWTH_LIMIT; attempt += 1) {
+    const smallMs = fastest(GROWTH_RUNS, () => run(small));
+    fullMs = fastest(GROWTH_RUNS, () => run(full));
+    // Timer noise dominates below a millisecond, so do not divide by less.
+    growth = fullMs / Math.max(smallMs, 1);
+    t.diagnostic(`${label}: ${smallMs.toFixed(3)} ms at 1/4 size, ${fullMs.toFixed(3)} ms at full size, growth ${growth.toFixed(2)}x (attempt ${attempt})`);
+  }
+  assert.ok(growth < GROWTH_LIMIT, `${label}: work grew ${growth.toFixed(2)}x for 4x the input; linear work grows about 4x and quadratic work 16x`);
+  assert.ok(fullMs < CATASTROPHE_LIMIT_MS, `${label}: ${fullMs.toFixed(3)} ms exceeds ${CATASTROPHE_LIMIT_MS} ms`);
+  return run(full);
+}
+
+function scanBoth(text, feature, hosts) {
+  return [...scanSource(FILE, text), ...findingsFor(text, feature, hosts)];
+}
+
+// A second copy of the gate whose lexer calls are counted. The gate reads its lexer through a
+// destructured import, so the counting wrapper must be in place when the module loads; the shared
+// exports and the first copy (the one every other test uses) are restored straight after.
+// Lexer passes are the unit of work for .ts angle-bracket types: the file must be lexed a bounded
+// number of times however many types it holds, because each pass reads the whole file.
+function loadCountingGate() {
+  const literalsPath = require.resolve('../lib/source-literals.js');
+  const gatePath = require.resolve('../lib/pcf-code-gate.js');
+  const literals = require(literalsPath);
+  const original = literals.blankNonCodePreservingTemplateExpressions;
+  const stats = { calls: 0, chars: 0 };
+  const loaded = require.cache[gatePath];
+  literals.blankNonCodePreservingTemplateExpressions = function counting(text, options) {
+    stats.calls += 1;
+    stats.chars += text.length;
+    return original.call(this, text, options);
+  };
+  delete require.cache[gatePath];
+  try {
+    return { gate: require(gatePath), stats };
+  } finally {
+    literals.blankNonCodePreservingTemplateExpressions = original;
+    if (loaded) require.cache[gatePath] = loaded;
+    else delete require.cache[gatePath];
+  }
+}
+
+const counting = loadCountingGate();
+
+function lexWork(fn) {
+  counting.stats.calls = 0;
+  counting.stats.chars = 0;
+  const result = fn();
+  return { calls: counting.stats.calls, chars: counting.stats.chars, result };
+}
+
+// Measured: 2-4 lexer passes and 2-4 characters lexed per source character, however many casts the
+// file holds. Lexing once per type (the sequential loop) reads the whole file 31 to 601 times, so
+// 8 leaves room for another pass without letting that regression through.
+const MAX_LEX_PASSES = 8;
+function assertBoundedLexing(label, text, work) {
+  assert.ok(work.calls <= MAX_LEX_PASSES, `${label}: ${work.calls} lexer passes (limit ${MAX_LEX_PASSES})`);
+  assert.ok(work.chars <= MAX_LEX_PASSES * text.length,
+    `${label}: lexed ${work.chars} characters of a ${text.length}-character file (limit ${MAX_LEX_PASSES}x)`);
+}
+
+test('Pages proof indexes the 5000-line nested fixture without quadratic rescans', (t) => {
+  // The guard's body nests 2495 callbacks deep; a lookup that rebalances the body for each scope or
+  // call, instead of reading the index, makes this fixture quadratic.
+  const build = (scale) => {
+    const depth = Math.round(2495 * scale);
+    return [
+      `if (${PROOF}) {`,
+      ...Array(8).fill(`${CALL};`),
+      ...Array(depth).fill('run(() => {'),
+      ...Array(depth).fill('});'),
+      '}',
+    ].join('\n');
+  };
+  assert.equal(build(1).split('\n').length, 5000);
+  assert.deepEqual(assertLinearGrowth(t, 'nested', build, scanBoth), []);
+});
+
+test('Pages proof indexes a 3000-line realistic control with 40 guarded calls', (t) => {
+  // Calls and lines scale together, so a per-call rescan of the control grows with both.
+  const build = (scale) => {
+    const total = Math.round(3000 * scale);
+    const lines = ['class Control {', 'init(context: Context) {', `if (${PROOF}) {`];
+    for (let i = 0; i < Math.round(40 * scale); i += 1) {
+      lines.push('this.handlers.push((item: Item) => {', ...Array(70).fill('consume(item);'), `${CALL};`, '});');
+    }
+    while (lines.length < total - 3) lines.push('consume(null);');
+    lines.push('}', '}', '}');
+    return lines.join('\n');
+  };
+  assert.equal(build(1).split('\n').length, 3000);
+  assert.deepEqual(assertLinearGrowth(t, 'control', build, scanBoth), []);
+});
+
+const DEFAULT_CALLBACK = 'function render(cb = () => { if (true) { return 1; } }) { return cb(); }';
+const FOR_CHAIN = 'for(;;)'.repeat(8000) + 'consume(1);';
+const EMPTY_MANIFEST = { features: [] };
+
+for (const [name, text] of [
+  ['parameter-default arrow with a nested block', DEFAULT_CALLBACK],
+  ['deep for-statement chain', FOR_CHAIN],
+  ['parameter-default function expression', 'function render(cb = function () { if (true) { return 1; } }) { return cb(); }'],
+  ['parameter-default object method', 'function render(h = { click() { if (true) { return 1; } } }) { return h; }'],
+  ['parameter-default class expression', 'function render(H = class { static { if (true) {} } }) { return H; }'],
+  ['destructuring-default executable body', 'function render({ cb = () => { if (true) { return 1; } } } = {}) { return cb(); }'],
+  ['computed-key executable body', 'const h = { [(() => { if (true) { return 1; } })()]() {} };'],
+  ['extends-clause executable body', 'class H extends (() => { if (true) { return Base; } })() {}'],
+  ['static-block executable body', 'class H { static { if (true) { consume(1); } } }'],
+  ['field-initializer executable body', 'class H { field = (() => { if (true) { return 1; } })(); }'],
+]) {
+  for (const host of ['model', 'pages']) {
+    test(`Source analysis never throws for ${name} on ${host}`, () => {
+      assert.deepEqual(scanSource(FILE, text), []);
+      assert.deepEqual(findingsFor(text, null, [host]), []);
+      assert.deepEqual(gateSources({ manifestModel: EMPTY_MANIFEST, sources: [{ file: FILE, text }], hosts: [host] }),
+        { ok: true, errors: [], warnings: [] });
+    });
+  }
+}
+
+test('Source analysis scopes parameter-default bodies without losing a separate valid guard', () => {
+  const text = `${DEFAULT_CALLBACK}\n${withinGuard(`${CALL};`)}`;
+  assert.deepEqual(scanSource(FILE, text), []);
+  assert.deepEqual(findingsFor(text), []);
+});
+
+function throwingIndexer() {
+  throw new Error('injected analyzer failure');
+}
+
+for (const host of ['model', 'pages']) {
+  test(`Source analysis fails closed after an internal error on ${host}`, () => {
+    const text = `${CALL};`;
+    const options = { indexer: throwingIndexer };
+    const sourceFindings = scanSource(FILE, text, options);
+    assert.deepEqual(sourceFindings.map((finding) => finding.code), ['PCF_CODE_UNPARSEABLE']);
+    assert.equal(sourceFindings[0].severity, 'warning');
+    assert.equal(sourceFindings[0].file, FILE);
+    assert.equal(sourceFindings[0].line, 1);
+    assert.match(sourceFindings[0].message, /could not finish analyzing/i);
+    assert.match(sourceFindings[0].message, /checks[^.]*analysis[^.]*skipped/i);
+    assert.match(sourceFindings[0].message, /Pages API calls[^.]*unguarded/i);
+    const featureFindings = findingsFor(text, 'Device.captureImage', [host], options);
+    assert.deepEqual(featureFindings.map((finding) => finding.code), host === 'pages' ? ['PCF_PAGES_API'] : []);
+    if (host === 'pages') {
+      assert.equal(featureFindings[0].severity, 'error');
+      assert.match(featureFindings[0].message, /guard could not be analyzed/i);
+    }
+    const gated = gateSources({ manifestModel: { features: [{ name: 'Device.captureImage' }] },
+      sources: [{ file: FILE, text }], hosts: [host] }, options);
+    assert.equal(gated.ok, host !== 'pages');
+    assert.deepEqual(gated.warnings.map((finding) => finding.code), ['PCF_CODE_UNPARSEABLE']);
+    assert.deepEqual(gated.errors.map((finding) => finding.code), host === 'pages' ? ['PCF_PAGES_API'] : []);
+  });
+
+  test(`API-free source emits only the scan warning after an internal error on ${host}`, () => {
+    const text = 'const value = 1; consume(value);';
+    const options = { indexer: throwingIndexer };
+    assert.deepEqual(scanSource(FILE, text, options).map((finding) => finding.code), ['PCF_CODE_UNPARSEABLE']);
+    assert.deepEqual(findingsFor(text, null, [host], options), []);
+  });
+}
+
+test('Source analysis keeps every index-independent rule after an internal error', () => {
+  const text = [
+    'Xrm.Page(); window.parent; eval("x"); context.parameters.value.raw = 1;',
+    'document.body; container.innerHTML = "x"; localStorage; context.page;',
+    'const url = "/api/data/v9.2/accounts"; el.id = "fixed"; createRoot(container);',
+  ].join('\n');
+  assert.deepEqual(scanSource(FILE, text, { indexer: throwingIndexer, controlType: 'virtual' })
+    .map((finding) => finding.code).sort(), [
+    'PCF_CODE_DIRECT_API', 'PCF_CODE_EVAL', 'PCF_CODE_FIXED_ELEMENT_ID', 'PCF_CODE_HOST_DOM',
+    'PCF_CODE_INNERHTML', 'PCF_CODE_INTERNAL_CONTEXT', 'PCF_CODE_PARENT_WINDOW',
+    'PCF_CODE_RAW_ASSIGN', 'PCF_CODE_STORAGE', 'PCF_CODE_UNPARSEABLE', 'PCF_CODE_XRM', 'PCF_VIRTUAL_OWN_ROOT',
+  ]);
+});
+
+test('Source fallback retains all used features and does not warn twice per file', () => {
+  const text = 'props.context.device.captureImage(); this._ctx.utils.lookupObjects(); ctx.webAPI.retrieveRecord();';
+  const options = { indexer: throwingIndexer };
+  const manifestModel = { features: ['Device.captureImage', 'Utility', 'WebAPI'].map((name) => ({ name })) };
+  const sources = [{ file: FILE, text }];
+  const findings = featureCoherence(manifestModel, sources, ['pages'], options);
+  assert.deepEqual(findings.map((finding) => finding.code), ['PCF_PAGES_API', 'PCF_PAGES_API']);
+  assert.deepEqual(featureCoherence(EMPTY_MANIFEST, sources, ['model'], options)
+    .map((finding) => finding.code), Array(3).fill('PCF_FEATURE_UNDECLARED'));
+  assert.deepEqual(featureCoherence(manifestModel, sources, ['model'], options), []);
+  const gated = gateSources({ manifestModel, sources, hosts: ['pages'] }, options);
+  assert.equal(gated.warnings.length, 1);
+  assert.equal(gated.errors.length, 2);
+});
+
+test('Combined source gates index each file once, including failed analyses', () => {
+  let attempts = 0;
+  const result = gateSources({
+    manifestModel: { features: [{ name: 'Device.captureImage' }] },
+    sources: [{ file: FILE, text: `${CALL};` }, { file: 'src/helper.ts', text: 'consume(1);' }],
+    hosts: ['pages'],
+  }, { indexer: () => { attempts += 1; throw new Error('injected analyzer failure'); } });
+  assert.equal(attempts, 2);
+  assert.deepEqual(result.errors.map((finding) => finding.code), ['PCF_PAGES_API']);
+  assert.deepEqual(result.warnings.map((finding) => finding.code), ['PCF_CODE_UNPARSEABLE', 'PCF_CODE_UNPARSEABLE']);
+});
+
+test('Source fallback uses only executable recognized references, including normalized static members', () => {
+  const text = [
+    `// ${CALL};`,
+    `const note = ${JSON.stringify(`${CALL};`)};`,
+    String.raw`props["context"]?.["device"]["capture\u0049mage"]!!();`,
+    String.raw`cont\u0065xt.utils["lookupObjects"]();`,
+    'const label = `${ctx.webAPI.retrieveRecord()}`;',
+    'helpers.utils.lookupObjects(); this.device.captureImage();',
+  ].join('\n');
+  const manifestModel = { features: ['Device.captureImage', 'Utility', 'WebAPI'].map((name) => ({ name })) };
+  const findings = featureCoherence(manifestModel, [{ file: FILE, text }], ['pages'], { indexer: throwingIndexer });
+  assert.deepEqual(findings.map((finding) => finding.code), ['PCF_PAGES_API', 'PCF_PAGES_API']);
+  assert.deepEqual(findings.map((finding) => finding.line), [3, 4]);
+});
+
+for (const call of [
+  'this.utils.formatLabel();',
+  'this.device.captureImage();',
+  'this.state.device.formatLabel();',
+  'this.props.utils.lookupObjects();',
+  'helpers.utils.lookupObjects();',
+]) {
+  for (const host of ['model', 'pages']) {
+    test(`Non-context receiver stays clean on ${host}: ${call}`, () => {
+      assert.deepEqual(findingsFor(call, null, [host]), []);
+      assert.deepEqual(findingsFor(call, null, [host], { indexer: throwingIndexer }), []);
+    });
+  }
+}
+
+for (const receiver of [
+  'props.context', 'this.props.context', 'this._context', 'this._ctx', 'this.pcfContext', 'ctx',
+  '_pcfContext', '__PCFCTX', 'holder.CTX', 'props["context"]', 'this["_ctx"]',
+]) {
+  test(`Context receiver is detected with its own same-path guard: ${receiver}`, () => {
+    const call = `${receiver}.device.captureImage()`;
+    assert.deepEqual(codesFor(`${call};`), ['PCF_PAGES_API']);
+    const proofReceiver = receiver.replace(/\["(\w+)"\]/g, '.$1');
+    const guarded = `if (typeof ${proofReceiver}.device?.captureImage === "function") { ${call}; }`;
+    assert.deepEqual(codesFor(guarded), []);
+    const fallback = findingsFor(guarded, 'Device.captureImage', ['pages'], { indexer: throwingIndexer });
+    assert.deepEqual(fallback.map((finding) => finding.code), ['PCF_PAGES_API']);
+  });
+}
+
+test('Context receiver preserves namespace and arbitrary method feature detection', () => {
+  assert.deepEqual(codesFor('props.context.utils.lookupObjects();', null, ['model']), ['PCF_FEATURE_UNDECLARED']);
+  assert.deepEqual(codesFor('context.device.formatLabel();', null, ['model']), ['PCF_FEATURE_UNDECLARED']);
+  assert.deepEqual(codesFor('props.context.webAPI.retrieveRecord();', null, ['model']), ['PCF_FEATURE_UNDECLARED']);
+});
+
+test('Context guards prove only the same complete receiver path', () => {
+  assert.deepEqual(codesFor(withinGuard('this._context.device.captureImage();')), ['PCF_PAGES_API']);
+});
+
+for (const [name, body] of [
+  ['root write', 'props = next; props.context.device.captureImage();'],
+  ['intermediate prefix write', 'props.context = next; props.context.device.captureImage();'],
+  ['namespace write', 'props.context.device = next; props.context.device.captureImage();'],
+  ['shadowed parameter', 'items.forEach(props => { props.context.device.captureImage(); });'],
+  ['shadowed declaration', 'items.forEach(() => { let props = next; props.context.device.captureImage(); });'],
+]) {
+  test(`Context guard tracks a generalized root ${name}`, () => {
+    assert.deepEqual(codesFor(`if (typeof props.context.device?.captureImage === "function") { ${body} }`), ['PCF_PAGES_API']);
+  });
+}
+
+for (const [name, body] of [
+  ['destructuring default', `const { image = (context.device = {}) } = {}; ${CALL};`],
+  ['assignment-pattern default', `({ image = (context.device = {}) } = {}); ${CALL};`],
+  ['computed method key', `const h = { [context.device = {}]() {} }; ${CALL};`],
+  ['computed property key', `const h = { [context.device = {}]: value }; ${CALL};`],
+  ['class extends clause', `class H extends (context.device = {}, Base) {} ${CALL};`],
+  ['class static block', `class H { static { context.device = {}; } } ${CALL};`],
+  ['class field initializer', `class H { field = (context.device = {}); } ${CALL};`],
+  ['sibling callback prefix', `items.forEach(() => { context.device = undefined; }); ${CALL};`],
+  ['sibling callback root', `const reset = () => { context = next; }; ${CALL};`],
+  ['function parameter default', `function f(x = (context = next)) {} ${CALL};`],
+  ['arrow parameter default', `const f = (x = (context.device = next)) => {}; ${CALL};`],
+  ['destructured function parameter default', `function f({ x = (context = next) } = {}) {} ${CALL};`],
+]) {
+  test(`Pages proof expires after a same-binding write in a ${name}`, () => {
+    assert.deepEqual(codesFor(withinGuard(body)), ['PCF_PAGES_API']);
+  });
+}
+
+for (const [name, body] of [
+  ['declaration pattern default read', `const { image = ${CALL} } = {};`],
+  ['assignment pattern default read', `({ image = ${CALL} } = {});`],
+  ['shadowed callback parameter write', `button.onclick = (context) => { context = next; }; ${CALL};`],
+  ['shadowed callback local write', `items.forEach(() => { let context = other; context = next; }); ${CALL};`],
+  ['shadowed callback var write', `items.forEach(() => { context = next; var context; }); ${CALL};`],
+  ['shadowed catch pattern default write', `try {} catch ({ context }) { context = next; } ${CALL};`],
+  ['shadowed function parameter default write', `function f(context = (context = next)) {} ${CALL};`],
+  ['shadowed nested function name write', `function f() { function context() {} context = next; } ${CALL};`],
+  ['shadowed nested class name write', `{ class context {} context = next; } ${CALL};`],
+  ['shadowed static-block var write', `class H { static { var context = other; context = next; } } ${CALL};`],
+  ['shadowed static-block function name write', `class H { static { function context() {} context = next; } } ${CALL};`],
+  ['private class name write in its heritage', `const H = class context extends (context = next, Base) {}; ${CALL};`],
+  ['private class name captured in its heritage', `const H = class context extends (() => { context = next; return Base; })() {}; ${CALL};`],
+  ['dollar-prefixed name write', `$context = next; ${CALL};`],
+  ['member names like the guarded root', `state.context = next; holder.context.device = next; ${CALL};`],
+  ['root argument and alias reads', `helper(context); const other = context; ${CALL};`],
+]) {
+  test(`Pages proof retains a guard for ${name}`, () => {
+    assert.deepEqual(codesFor(withinGuard(body)), []);
+  });
+}
+
+test('Pages proof expires after a parameter-default write that a same-named body declaration does not hide', () => {
+  // A function with parameter expressions evaluates its defaults before its body's declarations exist,
+  // so the default writes the outer context however the body declares the name.
+  for (const body of [
+    `function reset(v = (context.device = {})) { let context; } ${CALL};`,
+    `function reset(v = (context.device = {})) { var context; } ${CALL};`,
+    `function reset(v = (context = next)) { const context = other; consume(context); } ${CALL};`,
+    `function reset({ v = (context.device = {}) } = {}) { let context; } ${CALL};`,
+    `const reset = function (v = (context.device = {})) { var context; }; ${CALL};`,
+    `const reset = (v = (context.device = {})) => { let context; }; ${CALL};`,
+    `const h = { reset(v = (context.device = {})) { var context; } }; ${CALL};`,
+    `class H { reset(v = (context.device = {})) { let context; } } ${CALL};`,
+  ]) {
+    assert.deepEqual(codesFor(withinGuard(body)), ['PCF_PAGES_API'], body);
+  }
+});
+
+test('Pages proof keeps body declarations local when a function has parameter expressions', () => {
+  for (const body of [
+    `function reset(v = 1) { let context = next; context = other; consume(context); } ${CALL};`,
+    `function reset(v = 1) { var context = next; context.device = other; } ${CALL};`,
+    `function reset(v = (other = next)) { var context; context = next; } ${CALL};`,
+  ]) {
+    assert.deepEqual(codesFor(withinGuard(body)), [], body);
+  }
+  // A call in such a body reads the body's own declaration, which no outer proof covers.
+  for (const kind of ['let', 'var']) {
+    assert.deepEqual(codesFor(withinGuard(`function reset(v = 1) { ${kind} context = next; ${CALL}; }`)), ['PCF_PAGES_API'], kind);
+  }
+});
+
+const THIS_CONTEXT_GUARD = 'typeof this._context.device?.captureImage === "function"';
+const THIS_CONTEXT_CALL = 'this._context.device.captureImage()';
+const inGuardedMethod = (classBody, after = `${THIS_CONTEXT_CALL};`) =>
+  `class C { run() { if (${THIS_CONTEXT_GUARD}) { class D { ${classBody} } ${after} } } }`;
+
+test('Pages proof expires after a this write in a computed class member key', () => {
+  // A computed key is evaluated where the class is defined, so its `this` is the enclosing method's.
+  // https://tc39.es/ecma262/#sec-runtime-semantics-classdefinitionevaluation
+  for (const member of [
+    '[this._context.device = null]() {}',
+    '[this._context.device = null] = 1;',
+    'static [this._context.device = null]() {}',
+    'static [this._context.device = null] = 1;',
+    'get [this._context.device = null]() { return 1; }',
+    'async *[this._context.device = null]() {}',
+    'value = 1; [this._context = null]() {}',
+    'run() {} [this._context.device = null]() {}',
+    'static { consume(1); } [this._context.device = null]() {}',
+    'value\n[this._context.device = null]() {}',
+    'value: number\n[this._context.device = null]() {}',
+    'value?: string\n[this._context.device = null]() {}',
+    '#value\n[this._context.device = null]() {}',
+    'static #value\n[this._context.device = null]() {}',
+    '@decorate [this._context.device = null]() {}',
+    '@decorate() [this._context.device = null]() {}',
+    '@scope.decorate [this._context.device = null]() {}',
+    '@decorate\n[this._context.device = null]() {}',
+    'handler = () => {}\n[this._context.device = null]() {}',
+    'count = next++\n[this._context.device = null]() {}',
+    'first = 1\nsecond\n[this._context.device = null]() {}',
+    'run(): void\n[this._context.device = null]() {}',
+  ]) {
+    assert.deepEqual(codesFor(inGuardedMethod(member)), ['PCF_PAGES_API'], member);
+  }
+});
+
+test('Pages proof keeps the class instance as this inside class member bodies and initializers', () => {
+  for (const member of [
+    'run() { this._context.device = null; }',
+    'value = (this._context.device = null);',
+    '[key] = (this._context.device = null);',
+    'static { this._context = null; }',
+    'value = { a: 1 }\n[this._context.device = null];',
+    'value = source\n[this._context.device = null];',
+    'value = read()\n[this._context.device = null];',
+    'value: number[] = []\n[this._context.device = null];',
+    'value = function () { return {}; }\n[this._context.device = null];',
+    'value = class {}\n[this._context.device = null];',
+    'value = () => source\n[this._context.device = null];',
+  ]) {
+    assert.deepEqual(codesFor(inGuardedMethod(member)), [], member);
+  }
+  // A call in a computed key runs under the enclosing proof; one in a member body does not.
+  assert.deepEqual(codesFor(inGuardedMethod(`[${THIS_CONTEXT_CALL}]() {}`, '')), []);
+  assert.deepEqual(codesFor(inGuardedMethod(`value: number\n[${THIS_CONTEXT_CALL}]() {}`, '')), []);
+  assert.deepEqual(codesFor(inGuardedMethod(`value = source\n[${THIS_CONTEXT_CALL}];`, '')), ['PCF_PAGES_API']);
+  assert.deepEqual(codesFor(`class D { [${THIS_CONTEXT_CALL}]() {} }`), ['PCF_PAGES_API']);
+  assert.deepEqual(codesFor(inGuardedMethod(`run() { ${THIS_CONTEXT_CALL}; }`, '')), ['PCF_PAGES_API']);
+});
+
+test('Pages proof keeps the inner class this for a computed key after an assertion initializer or a generic decorator', () => {
+  // Known limit, behaving as before: the member scanner does not recognize these keys as member starts, so
+  // `this` in them is still read as the inner class's instance and a write there does not end the outer proof.
+  for (const member of [
+    'value = {} as object\n[this._context.device = null]() {}',
+    '@decorate<number>() [this._context.device = null]() {}',
+  ]) {
+    assert.deepEqual(codesFor(inGuardedMethod(member)), [], member);
+  }
+  // The same key on its own line after the generic decorator is recognized.
+  assert.deepEqual(codesFor(inGuardedMethod('@decorate<number>()\n[this._context.device = null]() {}')), ['PCF_PAGES_API']);
+});
+
+for (const [name, call, plainCall = CALL, proof = PROOF] of [
+  ['method non-null run', 'context.device.captureImage!!()'],
+  ['root and namespace non-null runs', 'context!!!.device!!?.captureImage!!()'],
+  ['fixed member identifier escape', String.raw`context.device.capture\u0049mage()`],
+  ['braced member identifier escape', String.raw`context.device.capture\u{49}mage()`],
+  ['fixed root identifier escape', String.raw`cont\u0065xt.device.captureImage()`],
+  ['braced root identifier escape', String.raw`cont\u{65}xt.device.captureImage()`],
+  ['escaped generalized receiver', String.raw`props.cont\u0065xt.device.captureImage()`,
+    'props.context.device.captureImage()', 'typeof props.context.device?.captureImage === "function"'],
+]) {
+  test(`Pages detection normalizes ${name} without granting new proof syntax`, () => {
+    const guarded = `if (${proof}) { ${call}; }`;
+    assert.deepEqual(codesFor(`${call};`), ['PCF_PAGES_API']);
+    assert.deepEqual(codesFor(guarded), []);
+    assert.deepEqual(codesFor(`${call};`, null, ['model']), ['PCF_FEATURE_UNDECLARED']);
+    assert.deepEqual(findingsFor(guarded, 'Device.captureImage', ['pages'], { indexer: throwingIndexer })
+      .map((finding) => finding.code), ['PCF_PAGES_API']);
+    const condition = `typeof ${call.replace(/\(\)$/, '')} === "function"`;
+    assert.deepEqual(codesFor(`if (${condition}) { ${plainCall}; }`), ['PCF_PAGES_API']);
+  });
+}
+
+test('Pages detection ignores invalid identifier escapes without throwing', () => {
+  for (const call of [
+    String.raw`context.device.capture\uZZZZmage()`,
+    String.raw`context.device.capture\u{110000}mage()`,
+    String.raw`cont\uZZZZxt.device.captureImage()`,
+    String.raw`cont\u{D800}xt.device.captureImage()`,
+  ]) {
+    assert.deepEqual(findingsFor(call, null), [], call);
+    assert.deepEqual(scanSource(FILE, call), [], call);
+  }
+});
+
+for (const [name, separator] of [['line separator', '\u2028'], ['paragraph separator', '\u2029']]) {
+  test(`Pages proof recognizes ${name} as ASI after a declaration`, () => {
+    assert.deepEqual(codesFor(withinGuard(`let context${separator}${CALL};`)), ['PCF_PAGES_API']);
+  });
+  test(`Pages proof recognizes ${name} before a prefix update`, () => {
+    assert.deepEqual(codesFor(withinGuard(`counter${separator}++context.device; ${CALL};`)), ['PCF_PAGES_API']);
+    assert.deepEqual(codesFor(withinGuard(`counter${separator}++total; ${CALL};`)), []);
+  });
+}
+
+test('Source findings count all ECMAScript line terminators without double-counting CRLF', () => {
+  for (const separator of ['\n', '\r', '\r' + '\n', '\u2028', '\u2029']) {
+    const text = `consume(1);${separator}Xrm.Page(); ${CALL};`;
+    assert.equal(scanSource(FILE, text)[0].line, 2);
+    assert.equal(findingsFor(text)[0].line, 2);
+  }
+});
+
+test('Source analysis never throws on truncated plugin source and unbalanced guards', (t) => {
+  const plugin = path.resolve(__dirname, '..', '..');
+  const pending = [plugin];
+  const errors = [];
+  let variants = 0;
+  const check = (file, text) => {
+    for (const host of ['model', 'pages']) {
+      for (const [label, analyze] of [
+        ['scanSource', () => scanSource(file, text)],
+        ['featureCoherence', () => featureCoherence(EMPTY_MANIFEST, [{ file, text }], [host])],
+        ['gateSources', () => gateSources({ manifestModel: EMPTY_MANIFEST, sources: [{ file, text }], hosts: [host] })],
+      ]) {
+        try { analyze(); } catch (err) { errors.push(`${file} ${host} ${label}: ${err.stack}`); }
+      }
+    }
+    variants += 1;
+  };
+  while (pending.length) {
+    const directory = pending.pop();
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      const file = path.join(directory, entry.name);
+      if (entry.isDirectory() && entry.name !== 'node_modules') pending.push(file);
+      else if (entry.isFile() && /\.(?:tsx?|tmpl)$/.test(entry.name)) {
+        const text = fs.readFileSync(file, 'utf8');
+        for (const fraction of [0.25, 0.5, 0.75]) check(file, text.slice(0, Math.floor(text.length * fraction)));
+      }
+    }
+  }
+  for (const opener of ['{', '(', '[', '`', '/*']) {
+    check(`unbalanced-${JSON.stringify(opener)}.ts`, opener + withinGuard(`${CALL};`));
+    check(`truncated-${JSON.stringify(opener)}.ts`, withinGuard(opener + `${CALL};`));
+  }
+  t.diagnostic(`robustness sweep: ${variants} source variants, ${variants * 6} entry-point/host checks`);
+  assert.deepEqual(errors, []);
+});
+
+test('Pages proof traverses input-sized positive conjunction nesting iteratively', () => {
+  const text = `if (${'ready && ('.repeat(8000)}${PROOF}${')'.repeat(8000)}) { ${CALL}; }`;
+  assert.deepEqual(scanSource(FILE, text), []);
+  assert.deepEqual(findingsFor(text), []);
+});
+
+test('Fixed-id detection keeps later JSX after unmatched braces and inside template expressions', () => {
+  // JSX is TSX, so scan these as a .tsx file; a .ts file reads `<div …>` where an operand starts as a type.
+  for (const text of [
+    'const value = a<{ broken; const node = <div id="fixed" />;',
+    'const note = `prefix ${<div id="fixed" />} suffix`;',
+    '<div title={">"} id="fixed" />',
+    '<div title={"\\\" >"} id="fixed" />',
+  ]) {
+    assert.deepEqual(scanSource('src/pages-control.tsx', text).map((finding) => finding.code), ['PCF_CODE_FIXED_ELEMENT_ID'], text);
+  }
+});
+
+// The line-location tests place their verdict on the real scan path (scanSource and featureCoherence over a file
+// of 4000 calls), so quadratic work anywhere on it fails them - in the helper that finds a line or in its callers -
+// and the shipped gate carries no test hook or counter. Two checks, with different limits:
+//  1. A count, which does not depend on the machine: the characters read through slice, substring, split and
+//     matchAll while the scan runs. Re-splitting text.slice(0, offset), or rebuilding the line-start table, for
+//     every finding reads the text again each time, so it passes the limit by orders of magnitude. The count
+//     cannot see a loop that reads text[at] or a linear table search.
+//  2. A growth ratio (assertLinearGrowth) of the real scan, which catches the first of those. It reads the clock, so it is not
+//     load-independent: it compares the fastest of several runs at a quarter of the size with the same at full size,
+//     measures again before it fails, and keeps the 15 s catastrophe ceiling. A pause that hits one phase can
+//     still move the ratio, which is why the count above carries the cases it can see.
+// A linear search of the line-start table is quadratic too, but its few million probes cost far less than the
+// scan's own work per finding, so the ratio of the whole scan cannot see it. A third check measures lineOf alone,
+// on a test-only copy of the gate; the end-to-end check above is what proves the scan reaches the real lookup.
+// The old fixed 1500 ms bound is gone.
+function stringReadsDuring(scan) {
+  const read = { chars: 0 };
+  const proto = String.prototype;
+  const originals = { slice: proto.slice, substring: proto.substring, split: proto.split, matchAll: proto.matchAll };
+  // Slices count by the length they return (the scanner's own slices are a few characters long); split and
+  // matchAll count by the text they read. The methods are replaced only while the scan runs, and restored whatever happens.
+  proto.slice = function slice(...args) {
+    const piece = originals.slice.apply(this, args);
+    read.chars += piece.length;
+    return piece;
+  };
+  proto.substring = function substring(...args) {
+    const piece = originals.substring.apply(this, args);
+    read.chars += piece.length;
+    return piece;
+  };
+  proto.split = function split(...args) {
+    read.chars += this.length;
+    return originals.split.apply(this, args);
+  };
+  proto.matchAll = function matchAll(...args) {
+    read.chars += this.length;
+    return originals.matchAll.apply(this, args);
+  };
+  let result;
+  try {
+    result = scan();
+  } finally {
+    Object.assign(proto, originals);
+  }
+  return { chars: read.chars, result };
+}
+
+// Measured on a 4000-line file: about 7 characters read per source character (the lexer's split and the
+// scanner's few-character slices). A split of the prefix reads about 2000 characters per source character and a
+// table rebuilt per finding about 4000. 20 leaves room for another pass without letting either through.
+const MAX_TEXT_READS = 20;
+const LINE_LOCATION_CALLS = 4000;
+const lineLocationSource = (scale) => `${CALL};\n`.repeat(Math.round(LINE_LOCATION_CALLS * scale));
+const scanLineLocations = (text) => [...scanSource(FILE, text), ...findingsFor(text)];
+const assertLineLocations = (findings, count) => {
+  assert.equal(findings.length, count);
+  assert.ok(findings.every((finding, i) => finding.code === 'PCF_PAGES_API' && finding.line === i + 1));
+};
+
+test('Pages diagnostics index line locations instead of rescanning per call', () => {
+  const text = lineLocationSource(1);
+  const { chars, result: findings } = stringReadsDuring(() => scanLineLocations(text));
+  assertLineLocations(findings, LINE_LOCATION_CALLS);
+  assert.ok(chars <= MAX_TEXT_READS * text.length, `the scan read ${chars} characters through slice, substring, split and matchAll for a ${text.length}-character file (limit ${MAX_TEXT_READS}x)`);
+});
+
+test('Pages diagnostics take time in proportion to the number of calls', (t) => {
+  assertLineLocations(assertLinearGrowth(t, 'line locations', lineLocationSource, scanLineLocations), LINE_LOCATION_CALLS);
+});
+
+// A test-only copy of the gate that also exports its private lineOf: the production source plus one appended line,
+// compiled outside require.cache, so the shipped module and every other test are untouched.
+function loadGateWithLineOf() {
+  const gatePath = require.resolve('../lib/pcf-code-gate.js');
+  const copy = new Module(gatePath, module);
+  copy.filename = gatePath;
+  copy.paths = Module._nodeModulePaths(path.dirname(gatePath));
+  copy._compile(`${fs.readFileSync(gatePath, 'utf8')}\nmodule.exports.lineOf = lineOf;\n`, gatePath);
+  return copy.exports;
+}
+
+test('Line lookups grow linearly with the number of lines', (t) => {
+  const { lineOf } = loadGateWithLineOf();
+  const lineLength = `${CALL};\n`.length;
+  const build = (scale) => `${CALL};\n`.repeat(Math.round(8000 * scale));
+  // The line of the first character of every line. lineOf keeps the table of the last text it saw, so reset it
+  // first: each run then builds the table and does every lookup, as a scan of a new file does.
+  const run = (text) => {
+    lineOf('', 0);
+    const lines = [];
+    for (let offset = 0; offset < text.length; offset += lineLength) lines.push(lineOf(text, offset));
+    return lines;
+  };
+  const lines = assertLinearGrowth(t, 'line lookups', build, run);
+  assert.equal(lines.length, 8000);
+  assert.ok(lines.every((line, i) => line === i + 1));
+});
+
+test('The test copy of the gate locates lines the way the shipped gate does', () => {
+  const { lineOf } = loadGateWithLineOf();
+  // LF, CR LF, a lone CR and the two Unicode separators each end a line; CR LF is one terminator.
+  const text = 'a\nb\r\nc\rd\u2028e\u2029f';
+  const lineAtEachCharacter = [...text].map((_, index) => text.slice(0, index).split(/\r\n|[\n\r\u2028\u2029]/).length);
+  for (let index = 0; index < text.length; index += 1) {
+    if (text[index] === '\n' && text[index - 1] === '\r') continue;
+    assert.equal(lineOf(text, index), lineAtEachCharacter[index], `offset ${index}`);
+  }
+  assert.equal(loadGateWithLineOf().scanSource(FILE, `${CALL};`).length, scanSource(FILE, `${CALL};`).length);
+});
+
+test('The shipped gate exports only its three entry points', () => {
+  assert.deepEqual(Object.keys(require('../lib/pcf-code-gate.js')).sort(), ['featureCoherence', 'gateSources', 'scanSource']);
+});
+
+// The tests below scale their fixture and bound the growth (see assertLinearGrowth), so a slow
+// or busy machine cannot fail them.
+
+for (const [name, build, feature] of [
+  ['10000 unmatched angles', (scale) => 'const value = ' + 'a<'.repeat(Math.round(10000 * scale)), null],
+  ['8000 guard parentheses', (scale) => {
+    const depth = Math.round(8000 * scale);
+    return `if (${'('.repeat(depth)}${PROOF}${')'.repeat(depth)}) { ${CALL}; }`;
+  }, 'Device.captureImage'],
+  ['8000 nested for statements', (scale) => 'for(;;)'.repeat(Math.round(8000 * scale)) + 'consume(1);', null],
+]) {
+  test(`Source analysis bounds ${name}`, (t) => {
+    assert.deepEqual(assertLinearGrowth(t, name, build, (text) => scanBoth(text, feature)), []);
+  });
+}
+
+for (const [name, text] of [
+  ['locale-cache callback', `if (${PROOF}) {
+    button.onclick = () => { cache[context.userSettings.languageId] = "Ready"; };
+    ${CALL};
+  }`],
+  ['cache-get callback', `if (${PROOF}) {
+    button.onclick = () => { cache.get(context).pending = true; };
+    ${CALL};
+  }`],
+  ['class locale-cache callback', `class Control {
+    render(text) {
+      if (typeof this._context.device?.captureImage === "function") {
+        button.onclick = () => { this._labels[this._context.userSettings.languageId] = text; };
+        this._context.device.captureImage();
+      }
+    }
+  }`],
+]) {
+  test(`Pages proof keeps correctly guarded ${name} clean`, () => {
+    assert.deepEqual(scanSource(FILE, text), []);
+    assert.deepEqual(findingsFor(text), []);
+    assert.deepEqual(gateSources({
+      manifestModel: { features: [{ name: 'Device.captureImage' }] },
+      sources: [{ file: FILE, text }], hosts: ['pages'],
+    }), { ok: true, errors: [], warnings: [] });
+  });
+}
+
+const targetWriteForms = [
+  ...['=', '+=', '-=', '*=', '/=', '%=', '**=', '<<=', '>>=', '>>>=', '&=', '|=', '^=', '&&=', '||=', '??=']
+    .map((operator) => [`assignment ${operator}`, (target) => `${target} ${operator} next;`]),
+  ['postfix increment', (target) => `${target}++;`],
+  ['postfix decrement', (target) => `${target}--;`],
+  ['prefix increment', (target) => `++${target};`],
+  ['prefix decrement', (target) => `--${target};`],
+  ['deletion', (target) => `delete ${target};`],
+  ['for-of head', (target) => `for (${target} of items) {}`],
+  ['for-in head', (target) => `for (${target} in items) {}`],
+  ['object-pattern leaf', (target) => `({ a: ${target} } = next);`],
+  ['array-pattern leaf', (target) => `[${target}] = next;`],
+  ['nested-pattern leaf', (target) => `({ a: [${target}] } = next);`],
+  ['rest-pattern leaf', (target) => `({ ...${target} } = next);`],
+];
+
+for (const [name, write] of targetWriteForms) {
+  test(`Pages write targets distinguish key and argument reads for ${name}`, () => {
+    for (const target of [
+      'cache[context.userSettings.languageId]',
+      'cache.get(context).pending',
+      'cache[context.device].get(context).pending',
+    ]) {
+      assert.deepEqual(codesFor(withinGuard(`${write(target)} ${CALL};`)), [], target);
+    }
+    for (const target of ['context[key]', 'context.device[key]']) {
+      assert.deepEqual(codesFor(withinGuard(`${write(target)} ${CALL};`)), ['PCF_PAGES_API'], target);
+    }
+  });
+}
+
+for (const [name, target] of [
+  ['context read as a computed key', 'cache[context.device]'],
+  ['unrelated context member with a computed key', 'context.labels[key]'],
+  ['method child rather than the method', 'context.device.captureImage[key]'],
+  ['multiple computed members', 'cache[context].items[context.device]'],
+  ['optional member segments', 'cache?.items?.[context.device]?.pending'],
+  ['opaque tracked-root call result', 'context.get(context).pending'],
+  ['opaque protected-method call result', 'context.device.captureImage().pending'],
+  ['opaque result after a computed member', 'context[key](context).pending'],
+  ['opaque optional call result', 'context.get?.(context)?.pending'],
+]) {
+  test(`Pages proof classifies ${name} by its leftmost static write path`, () => {
+    assert.deepEqual(codesFor(withinGuard(`${target} = next; ${CALL};`)), []);
+  });
+}
+
+for (const [name, body] of [
+  ['computed protected-root assignment', `context[key] = next; ${CALL};`],
+  ['computed protected-namespace assignment', `context.device[key] = next; ${CALL};`],
+  ['parenthesized protected root', `(context).device = next; ${CALL};`],
+  ['comma-expression target', `(a, context).device = next; ${CALL};`],
+  ['protected destructuring leaf', `({ a: context.device } = next); ${CALL};`],
+  ['parenthesized destructuring leaf', `({ a: (context).device } = next); ${CALL};`],
+  ['computed destructuring leaf', `({ a: context.device[key] } = next); ${CALL};`],
+  ['computed-key nested assignment', `cache[(context.device = next)] = 1; ${CALL};`],
+  ['call-argument nested assignment', `cache.get((context.device = next)).pending = true; ${CALL};`],
+  ['unknown target containing a tracked-root read', `(cache[context]).pending = next; ${CALL};`],
+]) {
+  test(`Pages proof expires for ${name}`, () => {
+    assert.deepEqual(codesFor(withinGuard(body)), ['PCF_PAGES_API']);
+  });
+}
+
+test('Pages computed writes expire a protected class receiver but not another this member', () => {
+  const guard = 'typeof this._context.device?.captureImage === "function"';
+  const call = 'this._context.device.captureImage()';
+  for (const [name, write] of targetWriteForms) {
+    assert.deepEqual(codesFor(`if (${guard}) { ${write('this._context.device[key]')} ${call}; }`), ['PCF_PAGES_API'], name);
+    assert.deepEqual(codesFor(`if (${guard}) { ${write('this._labels[this._context.userSettings.languageId]')} ${call}; }`), [], name);
+  }
+});
+
+test('Pages unknown write targets expire only tracked roots inside the target', () => {
+  const propsProof = 'typeof props.context.device?.captureImage === "function"';
+  const propsCall = 'props.context.device.captureImage()';
+  for (const target of ['(context).other', '(a, context).device', '(cache[context]).pending']) {
+    const body = `${target} = next; ${propsCall};`;
+    assert.deepEqual(codesFor(withinGuard(`if (${propsProof}) { ${body} }`)), [], target);
+    assert.deepEqual(codesFor(withinGuard(`if (${propsProof}) { ${body} ${CALL}; }`)), ['PCF_PAGES_API'], target);
+  }
+  for (const write of ['(cache).pending = next;', String.raw`oth\u0065r = next;`]) {
+    assert.deepEqual(codesFor(withinGuard(`${write} ${CALL};`)), [], write);
+  }
+});
+
+for (const [name, receiver] of [['distinct receiver names', (i) => `p${i}`], ['one shared receiver name', () => 'p']]) {
+  test(`Source binding analysis bounds 2000 functions with ${name}`, (t) => {
+    const build = (scale) => Array.from({ length: Math.round(2000 * scale) }, (_, i) =>
+      `function f${i}(${receiver(i)}) { ${receiver(i)}.context.webAPI.retrieveRecord(); }`).join('\n');
+    assert.deepEqual(assertLinearGrowth(t, name, build, (text) => scanBoth(text, 'WebAPI', ['model'])), []);
+  });
+}
+
+// The shared lexer no longer overflows on long unary chains (it used to throw on 20,000 `!`), and no
+// valid input is known to make it throw. Inject a lexer that throws as such a failure would: the
+// gate reaches the same lexSource catch path either way.
+const failingLex = () => { throw new RangeError('Maximum call stack size exceeded'); };
+const LEXER_FAILURE_PREFIX = 'const value = 1;';
+const LEX_FAILS = { lex: failingLex };
+
+test('Lexer failures retain used features and fail closed for Pages calls', () => {
+  const text = `${LEXER_FAILURE_PREFIX} context.device.captureImage();`;
+  const findings = findingsFor(text, undefined, undefined, LEX_FAILS);
+  assert.deepEqual(findings.map((finding) => finding.code), ['PCF_CODE_UNPARSEABLE', 'PCF_PAGES_API']);
+  assert.equal(findings[0].severity, 'warning');
+  assert.equal(findings[0].file, FILE);
+  assert.match(findings[0].message, /could not finish analyzing/i);
+  assert.match(findings[1].message, /guard could not be analyzed/i);
+  const gated = gateSources({
+    manifestModel: { features: [{ name: 'Device.captureImage' }] },
+    sources: [{ file: FILE, text }], hosts: ['pages'],
+  }, LEX_FAILS);
+  assert.equal(gated.ok, false);
+  assert.deepEqual(gated.warnings.map((finding) => finding.code), ['PCF_CODE_UNPARSEABLE']);
+  assert.deepEqual(gated.errors.map((finding) => finding.code), ['PCF_PAGES_API']);
+});
+
+test('API-free lexer failures emit one combined warning and no Pages finding', () => {
+  const text = LEXER_FAILURE_PREFIX;
+  assert.deepEqual(findingsFor(text, null, undefined, LEX_FAILS).map((finding) => finding.code), ['PCF_CODE_UNPARSEABLE']);
+  const gated = gateSources({ manifestModel: EMPTY_MANIFEST, sources: [{ file: FILE, text }], hosts: ['pages'] }, LEX_FAILS);
+  assert.equal(gated.ok, true);
+  assert.deepEqual(gated.errors, []);
+  assert.deepEqual(gated.warnings.map((finding) => finding.code), ['PCF_CODE_UNPARSEABLE']);
+});
+
+test('Lexer-failure fallback is conservatively allowed to detect comments and strings', () => {
+  for (const inert of [`// ${CALL};`, `const note = "${CALL};";`]) {
+    const text = `${LEXER_FAILURE_PREFIX}\n${inert}`;
+    const findings = findingsFor(text, undefined, undefined, LEX_FAILS);
+    assert.deepEqual(findings.map((finding) => finding.code), ['PCF_CODE_UNPARSEABLE', 'PCF_PAGES_API']);
+    assert.equal(findings[1].line, 2);
+  }
+});
+
+test('Lexer-failure fallback retains each namespace feature and warning file identity', () => {
+  const manifestModel = { features: ['Device.captureImage', 'Utility', 'WebAPI'].map((name) => ({ name })) };
+  const text = `${LEXER_FAILURE_PREFIX}\nprops.context.device.captureImage(); this._ctx.utils.lookupObjects(); ctx.webAPI.retrieveRecord();`;
+  const sources = [{ file: FILE, text }, { file: 'src/helper.ts', text: LEXER_FAILURE_PREFIX }];
+  assert.deepEqual(featureCoherence(manifestModel, sources, ['model'], LEX_FAILS).map((finding) => finding.code),
+    ['PCF_CODE_UNPARSEABLE', 'PCF_CODE_UNPARSEABLE']);
+  const gated = gateSources({ manifestModel, sources, hosts: ['pages'] }, LEX_FAILS);
+  assert.equal(gated.ok, false);
+  assert.deepEqual(gated.errors.map((finding) => finding.code), ['PCF_PAGES_API', 'PCF_PAGES_API']);
+  assert.deepEqual(gated.warnings.map((finding) => [finding.code, finding.file]),
+    [['PCF_CODE_UNPARSEABLE', FILE], ['PCF_CODE_UNPARSEABLE', 'src/helper.ts']]);
+});
+
+// TypeScript-only angle brackets in a .ts file (FILE is .ts). The shared lexer reads TSX, where these
+// would open JSX elements and blank the code after them.
+const TS_ANGLE_TYPES = [
+  ['type assertion', 'this._input = <HTMLInputElement>document.createElement("input");'],
+  ['nested generic type', 'const items = <Array<Map<string, number>>>value;'],
+  ['function type', 'const handler = <(x: number) => void>callback;'],
+  ['object type with semicolons', 'const shape = <{ a: string; b: number }>raw;'],
+  ['string literal union', 'const kind = <"a" | "b">mode;'],
+  ['generic arrow', 'const first = <T>(items: T[]): T | undefined => items[0];'],
+  ['parenthesized assertion', 'const parsed = (<Record<string, unknown>>JSON.parse(text)).value;'],
+  ['multi-line type', 'const typed = <\n    Record<string, unknown>\n  >raw;'],
+];
+
+for (const [name, statement] of TS_ANGLE_TYPES) {
+  test(`.ts ${name} does not hide later calls from the gate`, () => {
+    const text = `function init(context) {\n  ${statement}\n  ${CALL};\n}`;
+    const callLine = text.split('\n').findIndex((line) => line.includes('captureImage')) + 1;
+    assert.deepEqual(findingsFor(text).map((finding) => [finding.code, finding.line]), [['PCF_PAGES_API', callLine]]);
+    const utility = text.replace(CALL, 'context.utils.lookupObjects()');
+    assert.deepEqual(findingsFor(utility, null, ['model']).map((finding) => finding.code), ['PCF_FEATURE_UNDECLARED']);
+  });
+}
+
+test('.ts guards prove calls inside generic arrows and after type assertions', () => {
+  assert.deepEqual(codesFor(withinGuard(`const run = <T>(item: T): T => { ${CALL}; return item; };`)), []);
+  assert.deepEqual(codesFor(withinGuard(`const el = <HTMLDivElement>document.createElement("div"); ${CALL};`)), []);
+  // Comparisons, generic calls and type arguments are not types where an operand starts.
+  assert.deepEqual(codesFor(withinGuard(`if (count < limit) { run<number>(1); ${CALL}; }`)), []);
+});
+
+test('.tsx sources keep TypeScript\'s JSX reading of angle brackets', () => {
+  const tsx = (text) => featureCoherence({ features: [{ name: 'Device.captureImage' }] },
+    [{ file: 'src/App.tsx', text }], ['pages']).map((finding) => finding.code);
+  // A TSX generic arrow is written <T,>; the guard proof still crosses it.
+  assert.deepEqual(tsx(withinGuard(`const run = <T,>(item: T): T => { ${CALL}; return item; };`)), []);
+  assert.deepEqual(tsx(`export const App = () => <div className="x">{label}</div>;\nexport function capture(context) { return ${CALL}; }`),
+    ['PCF_PAGES_API']);
+});
+
+test('.ts angle-bracket types the gate cannot blank fall back fail closed', () => {
+  // An unterminated type, and types the gate can only blank one lex at a time (each one after a
+  // comment) in a file large enough to pass the lexing budget.
+  const padding = `/*${' padding'.repeat(4000)} */\n`;
+  for (const [name, text] of [
+    ['unterminated type', `const value = <Record<string, unknown>raw;\n${CALL};`],
+    ['types past the lexing budget', `let v;\n${padding}${'v = /* cast */ <T>v;\n'.repeat(300)}${CALL};`],
+  ]) {
+    assert.deepEqual(scanSource(FILE, text).map((finding) => finding.code), ['PCF_CODE_UNPARSEABLE'], name);
+    const gated = gateSources({
+      manifestModel: { features: [{ name: 'Device.captureImage' }] },
+      sources: [{ file: FILE, text }], hosts: ['pages'],
+    });
+    assert.deepEqual(gated.warnings.map((finding) => finding.code), ['PCF_CODE_UNPARSEABLE'], name);
+    assert.deepEqual(gated.errors.map((finding) => finding.code), ['PCF_PAGES_API'], name);
+  }
+});
+
+test('Source analysis bounds a .ts control with many angle-bracket types', (t) => {
+  // Each blanked type used to cost one more lex of the whole file; a large control with 30 assertions
+  // must be lexed a bounded number of times and keep its findings.
+  const lines = ['export class C {', '  public init(context: ComponentFramework.Context<IInputs>): void {'];
+  for (let i = 0; i < 900; i += 1) {
+    lines.push(i % 30 === 0
+      ? `    const el${i} = <HTMLDivElement>document.createElement("div"); el${i}.className = "row-${i}";`
+      : `    const value${i}: Array<number> = [${i}, ${i + 1}]; total += value${i}.length > 1 ? ${i} : 0;`);
+  }
+  lines.push(`    ${CALL};`, '  }', '}');
+  const text = lines.join('\n');
+  const started = performance.now();
+  const work = lexWork(() => counting.gate.featureCoherence({ features: [{ name: 'Device.captureImage' }] },
+    [{ file: FILE, text }], ['pages']));
+  const elapsed = performance.now() - started;
+  t.diagnostic(`.ts angle-type work: ${work.calls} lexer passes, ${work.chars} characters lexed of ${text.length}; ${elapsed.toFixed(3)} ms`);
+  assertBoundedLexing('30 casts', text, work);
+  assert.ok(elapsed < CATASTROPHE_LIMIT_MS, `${elapsed.toFixed(3)} ms exceeds ${CATASTROPHE_LIMIT_MS} ms`);
+  assert.deepEqual(work.result.map((finding) => [finding.code, finding.line]), [['PCF_PAGES_API', lines.length - 2]]);
+});
+
+test('.ts files with hundreds of angle-bracket types stay analyzable', (t) => {
+  const guarded = withinGuard(`${CALL};`);
+  const control = (casts) => {
+    const lines = ['export class C {', '  public run(context: ComponentFramework.Context<IInputs>): void {', '    let v: unknown;'];
+    for (let i = 0; i < 1500; i += 1) {
+      lines.push(i % 5 === 0 && casts-- > 0
+        ? `    const el${i} = <HTMLDivElement>document.createElement("div"); v = <unknown>el${i};`
+        : `    const value${i}: Array<number> = [${i}, ${i + 1}]; total += value${i}.length > 1 ? ${i} : 0;`);
+    }
+    lines.push(`    ${guarded}`, '  }', '}');
+    return lines.join('\n');
+  };
+  const longType = `{ ${Array.from({ length: 400 }, (_, i) => `field${i}: string;`).join(' ')} }`;
+  for (const [name, text] of [
+    ['300 casts in a small file', `let v;\n${'v = <T>v;\n'.repeat(300)}${guarded}`],
+    ['600 casts in a 100 KB control', control(300)],
+    ['nested, adjacent and grouped casts', `let v;\n${'v = <A><B<C>>(<D>v); const f = <T>(x: T): T => x;\n'.repeat(100)}${guarded}`],
+    ['a type longer than 4096 characters', `const shape = <${longType}>raw;\n${guarded}`],
+  ]) {
+    const started = performance.now();
+    const work = lexWork(() => counting.gate.gateSources({ manifestModel: { features: [{ name: 'Device.captureImage' }] }, sources: [{ file: FILE, text }], hosts: ['pages'] }));
+    const elapsed = performance.now() - started;
+    const gated = work.result;
+    t.diagnostic(`${name}: ${work.calls} lexer passes, ${work.chars} characters lexed of ${text.length}; ${elapsed.toFixed(3)} ms`);
+    assert.deepEqual(gated, { ok: true, errors: [], warnings: [] }, name);
+    assertBoundedLexing(name, text, work);
+    assert.ok(elapsed < CATASTROPHE_LIMIT_MS, `${name}: ${elapsed.toFixed(3)} ms exceeds ${CATASTROPHE_LIMIT_MS} ms`);
+    const unguarded = text.replace(guarded, `${CALL};`);
+    const callLine = unguarded.split('\n').findIndex((line) => line.includes(CALL)) + 1;
+    assert.deepEqual(findingsFor(unguarded).map((finding) => [finding.code, finding.line]), [['PCF_PAGES_API', callLine]], name);
+  }
+});
+
+test('.ts angle-bracket types in strings, comments, template text and regexes never hide code', () => {
+  const lines = [
+    'let v;',
+    'const html = "(<b>" + `(<i>${v}<u>` + \'(<s>\' + `${`(<q>`}`;',
+    '// (<T> v = 1',
+    '/* = <T> */ const re = /(<T>)/g;',
+    ...Array(60).fill('v = <T>v; v = (<T>v); if (count < limit && other > 2) { v = <Array<T>>v; }'),
+    `${CALL};`,
+    'const note = `= <b>${v}</b> = <i>`; v = <T>v;',
+    `${CALL};`,
+  ];
+  const text = lines.join('\n');
+  assert.deepEqual(scanSource(FILE, text), []);
+  assert.deepEqual(findingsFor(text).map((finding) => [finding.code, finding.line]),
+    [['PCF_PAGES_API', lines.length - 2], ['PCF_PAGES_API', lines.length]]);
+});
+
+for (const relative of [
+  'AGENTS.md', path.join('references', 'pcf-testing.md'), path.join('references', 'pcf-best-practices.md'),
+]) {
+  test(`Pages documentation qualifies recognized writes and lexer fallback: ${relative}`, () => {
+    const text = fs.readFileSync(path.resolve(__dirname, '..', '..', relative), 'utf8');
+    assert.match(text, /writ(?:e|ing)[^.\n]*analyzer recognizes[^.\n]*ends the proof/i);
+    assert.match(text, /heuristic[^.\n]*miss unusual write forms/i);
+    assert.match(text, /analyzer or lexer cannot finish a file[^.\n]*PCF_CODE_UNPARSEABLE[^.\n]*warning/i);
+    assert.match(text, /Pages API calls[^.\n]*unguarded/i);
+    assert.match(text, /lexer failure[^.\n]*comments?[^.\n]*strings?[^.\n]*report/i);
+    if (relative === 'AGENTS.md') {
+      assert.match(text, /parameter default reaches the outer binding[^.\n]*body declares the same name/i);
+      assert.match(text, /`this` in a computed class member key[^\n]*enclosing method's[^.\n]*ends that method's proof/i);
+      assert.match(text, /Two forms behave as before[^\n]*type assertion or `satisfies`[^\n]*decorator with type arguments/i);
+      assert.match(text, /\.ts` files[^.\n]*angle-bracket types[^.\n]*JSX/i);
+      assert.match(text, /unterminated such type[^.\n]*lexer-failure path/i);
+    } else {
+      assert.doesNotMatch(text, /parameter-default writes|computed class member keys|U\+2028\/U\+2029|copied lexer's recursion limit/i);
+    }
+  });
+}

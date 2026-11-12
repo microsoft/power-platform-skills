@@ -41,7 +41,15 @@ function fullDataPayload() {
           id: 'site-scan',
           icon: '◐',
           label: 'Live Site Scan',
-          findings: [],
+          findings: [
+            {
+              id: 'perf-1',
+              severity: 'warning',
+              title: 'Power Pages Web API query is unbounded',
+              aiSuggestion: 'Add a page-size limit that matches this list UI instead of loading every row.',
+              mitigation: 'Use $top with paging or infinite scroll, then verify the page still renders all expected records.',
+            },
+          ],
           details: {},
         },
       ],
@@ -129,6 +137,10 @@ test('renders the shared security-review template when given a full data payload
     // regression that drops REVIEW_DATA substitution is caught even when the
     // placeholder is also removed.
     ['REVIEW_DATA section label', 'Live Site Scan'],
+    ['AI suggestion label', 'AI suggestion'],
+    ['AI suggestion text', 'Add a page-size limit that matches this list UI'],
+    ['Mitigation label', 'Mitigation'],
+    ['Mitigation text', 'Use $top with paging or infinite scroll'],
   ];
   for (const [label, value] of expectedSubstrings) {
     assert.ok(html.includes(value), `rendered HTML must include ${label} value "${value}"`);

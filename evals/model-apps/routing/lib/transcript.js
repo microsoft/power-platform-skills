@@ -21,6 +21,23 @@
 // Skill names are NOT namespaced. `assistant.message` is the earliest COMPLETE tool request;
 // `tool.execution_start` repeats it, so calls are de-duplicated by toolCallId.
 //
+// TURNS. Every recorded skill call carries `turn`, the 0-based index of the model response that
+// asked for it, because a skill requested in the first response is a different fact from one requested
+// after the agent had already read the workspace (see lib/grade.js: `decisionOf`).
+//   Copilot: the CLI marks its turns itself —
+//     {"type":"assistant.turn_start","data":{"turnId":"0"}} … one `assistant.message` … {"type":"assistant.turn_end","data":{"turnId":"0"}}
+//     (measured over real traces: exactly one `assistant.message` per turn, turnIds 0, 1, 2 …). A transcript with
+//     no turn_start events (an older CLI, a hand-written fixture) is read as one turn per `assistant.message`.
+//   Claude Code: events are NOT turns. A response can be printed as several `assistant` events, one per content
+//     block, that share `message.id`, and a tool result comes back between one response and the next:
+//       {"type":"assistant","message":{"id":"msg_01","content":[{"type":"text","text":"I'll look first."}]}}
+//       {"type":"assistant","message":{"id":"msg_01","content":[{"type":"tool_use","id":"toolu_01","name":"Glob",…}]}}
+//       {"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_01","content":"No files found"}]}}
+//       {"type":"assistant","message":{"id":"msg_02","content":[{"type":"tool_use","id":"toolu_02","name":"Skill",…}]}}   ← turn 1
+//     so a new turn starts when `message.id` changes. Where an id is missing the tool result is what separates
+//     two responses instead; the tool result alone is not used when ids exist, because Claude Code can start a
+//     tool while a later block of the same response is still streaming.
+//
 // Non-JSON lines (CLI banners, warnings on stderr merged into stdout) are ignored rather than
 // treated as errors: a transcript is evidence, and one noisy line must not void a trial.
 
@@ -38,12 +55,16 @@ class TranscriptParser {
     this.agent = agent;
     this.pluginName = pluginName;
     this.pluginSkills = new Set(pluginSkills);
-    this.skillCalls = [];        // every skill invocation, in order: { raw, name, ofPlugin }
+    this.skillCalls = [];        // every skill invocation, in order: { raw, name, ofPlugin, turn }
     this.loadedSkills = null;    // Claude only: the init event's skill list (isolation evidence)
     this.text = '';              // final assistant text (best-effort; for diagnostics only)
     this.result = null;          // the terminal `result` event, when the run got that far
     this.eventCount = 0;         // JSON events accepted — 0 means the agent never really ran
+    this.turn = -1;              // index of the model response being read; -1 until the first
     this._seen = new Set();
+    this._turnMarked = false;    // Copilot: the CLI sent turn_start events, so messages do not count turns
+    this._messageId = null;      // Claude: message.id of the response being read
+    this._toolResultSince = false; // Claude: a tool result came back since the last assistant event
   }
 
   /** First skill of the plugin under test, normalized (`genpage`), or null. */
@@ -98,17 +119,30 @@ class TranscriptParser {
     const m = rawName.match(/^([^:]+):(.+)$/);
     const name = m ? m[2] : rawName;
     const ofPlugin = m ? m[1] === this.pluginName && this.pluginSkills.has(name) : this.pluginSkills.has(name);
-    this.skillCalls.push({ raw: rawName, name, ofPlugin });
+    // A request seen before any turn marker (a transcript that starts mid-run) is read as the first turn.
+    this.skillCalls.push({ raw: rawName, name, ofPlugin, turn: Math.max(this.turn, 0) });
+  }
+
+  // See TURNS in the header: a new response is told from another block of the same one by `message.id`.
+  _claudeTurn(messageId) {
+    const startsNextTurn = this.turn < 0
+      || (messageId && this._messageId ? messageId !== this._messageId : this._toolResultSince);
+    if (startsNextTurn) this.turn += 1;
+    this._messageId = messageId || null;
+    this._toolResultSince = false;
   }
 
   _claude(ev) {
     if (ev.type === 'system' && ev.subtype === 'init' && Array.isArray(ev.skills)) {
       this.loadedSkills = ev.skills.slice();
     } else if (ev.type === 'assistant' && ev.message && Array.isArray(ev.message.content)) {
+      this._claudeTurn(ev.message.id);
       for (const c of ev.message.content) {
         if (c.type === 'tool_use' && c.name === 'Skill' && c.input) this._skill(c.id, c.input.skill);
         else if (c.type === 'text' && typeof c.text === 'string') this.text = c.text;
       }
+    } else if (ev.type === 'user') {
+      this._toolResultSince = true;
     } else if (ev.type === 'result') {
       this.result = { subtype: ev.subtype, isError: ev.is_error === true, turns: ev.num_turns, costUsd: ev.total_cost_usd };
     }
@@ -116,7 +150,11 @@ class TranscriptParser {
 
   _copilot(ev) {
     const d = ev.data || {};
-    if (ev.type === 'assistant.message') {
+    if (ev.type === 'assistant.turn_start') {
+      this._turnMarked = true;
+      this.turn += 1;
+    } else if (ev.type === 'assistant.message') {
+      if (!this._turnMarked) this.turn += 1;
       for (const r of d.toolRequests || []) {
         if (r.name === 'skill' && r.arguments) this._skill(r.toolCallId, r.arguments.skill);
       }

@@ -1,0 +1,60 @@
+# Example only: adapt this pipeline into your own Azure DevOps project.
+# Microsoft Learn documents Power Platform Build Tools task v2 and requires the
+# tool installer before other Power Platform tasks:
+# https://learn.microsoft.com/power-platform/alm/devops-build-tool-tasks
+trigger:
+  branches:
+    include:
+      - main
+  paths:
+    include:
+      - pcf/*
+
+pool:
+  vmImage: ubuntu-latest
+
+variables:
+  NodeVersion: '20.x'
+  SolutionName: ContosoPcfControls
+  SolutionProject: '$(Build.ArtifactStagingDirectory)/$(SolutionName)'
+  SolutionZip: '$(Build.ArtifactStagingDirectory)/$(SolutionName)/bin/Release/$(SolutionName)_managed.zip'
+
+steps:
+  - task: microsoft-IsvExpTools.PowerPlatform-BuildTools.tool-installer.PowerPlatformToolInstaller@2
+    displayName: PowerPlatformToolInstaller
+    inputs:
+      AddToolsToPath: true
+
+  - task: NodeTool@0
+    displayName: Use Node.js
+    inputs:
+      versionSpec: '$(NodeVersion)'
+
+  - script: |
+      npm ci
+      node node_modules/pcf-scripts/bin/pcf-scripts.js build --buildMode production
+    displayName: Build PCF control
+
+  - script: node node_modules/jest/bin/jest.js --ci --config jest.config.cjs --runInBand
+    displayName: Test PCF control
+
+  - script: |
+      mkdir -p "$(dirname "$(SolutionProject)")"
+      pac solution init --publisher-name Contoso --publisher-prefix contoso --outputDirectory "$(SolutionProject)"
+      cd "$(SolutionProject)"
+      pac solution add-reference --path "$(Build.SourcesDirectory)"
+      dotnet build -c Release -p:SolutionPackageType=Managed
+    displayName: Pack managed solution
+
+  - publish: '$(SolutionZip)'
+    displayName: Publish pipeline artifact
+    artifact: pcf-managed-solution
+
+  - task: microsoft-IsvExpTools.PowerPlatform-BuildTools.import-solution.PowerPlatformImportSolution@2
+    displayName: Import managed solution
+    inputs:
+      authenticationType: PowerPlatformSPN
+      PowerPlatformSPN: 'Dataverse service connection'
+      SolutionInputFile: '$(SolutionZip)'
+      AsyncOperation: true
+      MaxAsyncWaitTime: 60

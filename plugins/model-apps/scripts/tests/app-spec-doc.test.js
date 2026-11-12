@@ -53,7 +53,7 @@ function realisticSpec() {
         {
           name: 'Triage new tickets',
           description: 'See what came in overnight',
-          privileges: [{ entity: 'new_ticket', access: ['read', 'write'], scope: 'user' }],
+          privileges: [{ entity: 'new_ticket', access: ['read', 'write'], scope: 'user' }, { entity: 'new_customer', access: ['read'], scope: 'organization' }],
           surfaces: ['Active Tickets', 'overview'],
         },
         {
@@ -382,7 +382,7 @@ test('CLI fails cleanly when the spec is not valid JSON', () => {
   }
 });
 
-// --- Round-2 corrections (from adversarial review) -------------------------------------------
+// --- Corrections from adversarial review -------------------------------------------
 
 test('privilege scope is unioned per (table, ACCESS), never per table', () => {
   // Collapsing to one scope per table rendered `read@organization` + `write@user` as
@@ -445,7 +445,7 @@ test('a malformed or half-typed spec renders instead of throwing', () => {
   }
 });
 
-// --- Round-3 corrections (from adversarial review) -------------------------------------------
+// --- Corrections from adversarial review -------------------------------------------
 
 test('forms render their canonical formType, not the non-existent `type` field', () => {
   // Reading `f.type` rendered every QuickCreate/QuickView form as "main", hiding a real difference

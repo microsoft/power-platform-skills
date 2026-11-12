@@ -1,0 +1,160 @@
+{
+  "description": "Synthetic opportunity rows for eval 26, not captured from an environment: the Customer value shapes the page must handle and the state the canonical normalizer of references/rules.md gives each one.",
+  "lookup": {
+    "table": "opportunity",
+    "column": "customerid",
+    "readProperty": "_customerid_value",
+    "targets": [
+      "account",
+      "contact"
+    ]
+  },
+  "rows": [
+    {
+      "case": "account, qualified, with the annotation",
+      "row": {
+        "opportunityid": "0a000001-0000-4000-8000-000000000021",
+        "name": "Fabrikam renewal",
+        "_customerid_value": "/account(a1a1a1a1-0000-4000-8000-000000000001)",
+        "_customerid_value@Microsoft.Dynamics.CRM.lookuplogicalname": "account",
+        "_customerid_value@OData.Community.Display.V1.FormattedValue": "Fabrikam"
+      },
+      "expected": {
+        "state": "resolved",
+        "reference": {
+          "table": "account",
+          "id": "a1a1a1a1-0000-4000-8000-000000000001"
+        }
+      }
+    },
+    {
+      "case": "contact, qualified, no annotation",
+      "row": {
+        "opportunityid": "0a000002-0000-4000-8000-000000000022",
+        "name": "Lamna onboarding",
+        "_customerid_value": "/contact(c2c2c2c2-0000-4000-8000-000000000002)",
+        "_customerid_value@OData.Community.Display.V1.FormattedValue": "Rene Valdes"
+      },
+      "expected": {
+        "state": "resolved",
+        "reference": {
+          "table": "contact",
+          "id": "c2c2c2c2-0000-4000-8000-000000000002"
+        }
+      }
+    },
+    {
+      "case": "contact, bare id, with the annotation",
+      "row": {
+        "opportunityid": "0a000003-0000-4000-8000-000000000023",
+        "name": "Lamna expansion",
+        "_customerid_value": "c2c2c2c2-0000-4000-8000-000000000002",
+        "_customerid_value@Microsoft.Dynamics.CRM.lookuplogicalname": "contact",
+        "_customerid_value@OData.Community.Display.V1.FormattedValue": "Rene Valdes"
+      },
+      "expected": {
+        "state": "resolved",
+        "reference": {
+          "table": "contact",
+          "id": "c2c2c2c2-0000-4000-8000-000000000002"
+        }
+      }
+    },
+    {
+      "case": "bare id, no annotation (two targets: no table evidence)",
+      "row": {
+        "opportunityid": "0a000004-0000-4000-8000-000000000024",
+        "name": "Northwind pilot",
+        "_customerid_value": "b3b3b3b3-0000-4000-8000-000000000003",
+        "_customerid_value@OData.Community.Display.V1.FormattedValue": "Northwind"
+      },
+      "expected": {
+        "state": "needs-target",
+        "id": "b3b3b3b3-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "case": "explicit null",
+      "row": {
+        "opportunityid": "0a000005-0000-4000-8000-000000000025",
+        "name": "Unassigned lead",
+        "_customerid_value": null
+      },
+      "expected": {
+        "state": "unset"
+      }
+    },
+    {
+      "case": "annotation contradicts the prefix",
+      "row": {
+        "opportunityid": "0a000006-0000-4000-8000-000000000026",
+        "name": "Conflicting evidence",
+        "_customerid_value": "/account(a1a1a1a1-0000-4000-8000-000000000001)",
+        "_customerid_value@Microsoft.Dynamics.CRM.lookuplogicalname": "contact",
+        "_customerid_value@OData.Community.Display.V1.FormattedValue": "Fabrikam"
+      },
+      "expected": {
+        "state": "invalid"
+      }
+    },
+    {
+      "case": "annotation names a table outside the targets",
+      "row": {
+        "opportunityid": "0a000007-0000-4000-8000-000000000027",
+        "name": "Foreign table",
+        "_customerid_value": "a1a1a1a1-0000-4000-8000-000000000001",
+        "_customerid_value@Microsoft.Dynamics.CRM.lookuplogicalname": "lead",
+        "_customerid_value@OData.Community.Display.V1.FormattedValue": "Fabrikam"
+      },
+      "expected": {
+        "state": "invalid"
+      }
+    },
+    {
+      "case": "plural entity set prefix",
+      "row": {
+        "opportunityid": "0a000008-0000-4000-8000-000000000028",
+        "name": "Plural prefix",
+        "_customerid_value": "/accounts(a1a1a1a1-0000-4000-8000-000000000001)",
+        "_customerid_value@OData.Community.Display.V1.FormattedValue": "Fabrikam"
+      },
+      "expected": {
+        "state": "invalid"
+      }
+    },
+    {
+      "case": "equal label, account",
+      "row": {
+        "opportunityid": "0a000009-0000-4000-8000-000000000029",
+        "name": "Contoso hardware",
+        "_customerid_value": "/account(b3b3b3b3-0000-4000-8000-000000000003)",
+        "_customerid_value@Microsoft.Dynamics.CRM.lookuplogicalname": "account",
+        "_customerid_value@OData.Community.Display.V1.FormattedValue": "Contoso"
+      },
+      "expected": {
+        "state": "resolved",
+        "reference": {
+          "table": "account",
+          "id": "b3b3b3b3-0000-4000-8000-000000000003"
+        }
+      }
+    },
+    {
+      "case": "equal label, contact, and the same GUID as the account above",
+      "row": {
+        "opportunityid": "0a000010-0000-4000-8000-000000000020",
+        "name": "Contoso services",
+        "_customerid_value": "/contact(B3B3B3B3-0000-4000-8000-000000000003)",
+        "_customerid_value@Microsoft.Dynamics.CRM.lookuplogicalname": "contact",
+        "_customerid_value@OData.Community.Display.V1.FormattedValue": "Contoso"
+      },
+      "expected": {
+        "state": "resolved",
+        "reference": {
+          "table": "contact",
+          "id": "b3b3b3b3-0000-4000-8000-000000000003"
+        }
+      }
+    }
+  ]
+}

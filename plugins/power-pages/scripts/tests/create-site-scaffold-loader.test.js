@@ -42,3 +42,16 @@ test('create-site templates persist the selected content locale and direction', 
     );
   }
 });
+
+test('Astro scaffold declares its Power Pages directory build format', () => {
+  const config = JSON.parse(
+    fs.readFileSync(path.join(createSiteRoot, 'astro/powerpages.config.json'), 'utf8')
+  );
+
+  assert.deepEqual(config.framework, {
+    name: 'astro',
+    options: {
+      buildFormat: 'directory',
+    },
+  });
+});

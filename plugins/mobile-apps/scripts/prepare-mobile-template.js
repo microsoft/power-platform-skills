@@ -16,21 +16,33 @@ const REQUIRED_FILES = [
 
 const HOST_TSCONFIG = '@microsoft/power-apps-native-host/config/tsconfig';
 
+const GUIDANCE_FILES = [
+  'AGENTS.md',
+  'CLAUDE.md',
+  '.github/copilot-instructions.md',
+];
+
 const SHARED_FILES = [
   ['components/index.tsx', 'src/components/index.tsx'],
   ['hooks/index.ts', 'src/hooks/index.ts'],
   ['hooks/useCursorListData.ts', 'src/hooks/useCursorListData.ts'],
   ['hooks/useListData.ts', 'src/hooks/useListData.ts'],
   ['hooks/useSearchFilter.ts', 'src/hooks/useSearchFilter.ts'],
-  // The preview data layer's shared contract. Screens are built against `@/hooks/data` before
-  // any data source exists, so this must be present before the first screen skeleton is written.
-  ['hooks/data/core.ts', 'src/hooks/data/core.ts'],
   ['utils/index.ts', 'src/utils/index.ts'],
   ['utils/formatters.ts', 'src/utils/formatters.ts'],
   ['utils/text.ts', 'src/utils/text.ts'],
   ['utils/choices.ts', 'src/utils/choices.ts'],
   ['utils/dataverse.ts', 'src/utils/dataverse.ts'],
   ['tokens/index.ts', 'src/tokens/index.ts'],
+];
+
+// The preview data layer's shared contract, copied only for the screens-first build order
+// (`--screens-first`). Its screens are built against `@/hooks/data` before any data source
+// exists, so it must be present before the first screen skeleton is written. A data-model-first
+// app must not get it: `screen-builder` and `/edit-app` read an existing `src/hooks/data/` as a
+// data-layer app and would stop importing the generated services those screens are built on.
+const DATA_LAYER_FILES = [
+  ['hooks/data/core.ts', 'src/hooks/data/core.ts'],
 ];
 
 const LEGACY_EXAMPLE_FILES = [
@@ -191,14 +203,14 @@ function removeLegacyExamples(projectRoot) {
   return removed;
 }
 
-function copySharedFiles(projectRoot, samplesRoot) {
+function copySharedFiles(projectRoot, samplesRoot, files = SHARED_FILES) {
   for (const directory of ['components', 'hooks', 'utils', 'tokens', 'native']) {
     fs.mkdirSync(path.join(projectRoot, 'src', directory), { recursive: true });
   }
 
   const copied = [];
   const preserved = [];
-  for (const [sampleRelativePath, destinationRelativePath] of SHARED_FILES) {
+  for (const [sampleRelativePath, destinationRelativePath] of files) {
     const sourcePath = path.join(samplesRoot, sampleRelativePath);
     const destinationPath = path.join(projectRoot, destinationRelativePath);
     if (!fs.existsSync(sourcePath)) {
@@ -215,6 +227,53 @@ function copySharedFiles(projectRoot, samplesRoot) {
   }
 
   return { copied, preserved };
+}
+
+function assertPreparationPath(projectRoot, relativePath) {
+  // lstat each component: existsSync follows links and misses dangling ones.
+  // In particular, a customer-owned `.github` must never redirect guidance writes.
+  // relativePath is a repository-relative constant such as '.github/copilot-instructions.md',
+  // not a native root. path.join handles an untouched Windows root such as 'C:\\Apps\\Demo'.
+  const components = relativePath.split('/');
+  for (let index = 0; index < components.length; index += 1) {
+    const prefix = components.slice(0, index + 1).join('/');
+    const stat = fs.lstatSync(path.join(projectRoot, prefix), { throwIfNoEntry: false });
+    if (!stat) return;
+    if (stat.isSymbolicLink()) {
+      throw new Error(`Template preparation must not traverse a symlink: ${prefix}`);
+    }
+    const isParent = index < components.length - 1;
+    if (isParent ? !stat.isDirectory() : !stat.isFile()) {
+      throw new Error(`Template preparation target must be a ${isParent ? 'directory' : 'regular file'}: ${prefix}`);
+    }
+  }
+}
+
+function copyMissingGuidance(projectRoot, state) {
+  const copied = [];
+  const preserved = [];
+  const skipped = [];
+  for (const relativePath of GUIDANCE_FILES) {
+    assertPreparationPath(projectRoot, relativePath);
+    if (state.files.get(relativePath).exists) {
+      preserved.push(relativePath);
+      continue;
+    }
+    if (relativePath.includes('/')) {
+      // Node exposes no cross-platform openat/no-follow copy primitive. Never write
+      // through a replaceable nested parent after a path-only validation.
+      skipped.push(relativePath);
+      continue;
+    }
+    // Exclusive creation preserves even a customer file appearing after preflight.
+    // Track successful copies, not planned targets, so rollback owns only our files.
+    const sourcePath = path.join(__dirname, '..', 'template', relativePath);
+    fs.copyFileSync(sourcePath, path.join(projectRoot, relativePath), fs.constants.COPYFILE_EXCL);
+    state.createdGuidanceFiles.add(relativePath);
+    state.createdGuidanceContents.set(relativePath, fs.readFileSync(sourcePath));
+    copied.push(relativePath);
+  }
+  return { copied, preserved, skipped };
 }
 
 function verifyHostTsconfig(projectRoot) {
@@ -537,17 +596,23 @@ function assertNoDanglingLegacyImports(projectRoot) {
 }
 
 function capturePreparationState(projectRoot) {
+  if (fs.lstatSync(projectRoot).isSymbolicLink()) {
+    throw new Error('Template preparation must not traverse a symlink: project root');
+  }
   const relativeFiles = [
     'app.config.js',
     'package.json',
     'power.config.json',
     'app/_layout.tsx',
+    ...GUIDANCE_FILES,
     ...LEGACY_EXAMPLE_FILES,
     ...SHARED_FILES.map(([, destinationRelativePath]) => destinationRelativePath),
+    ...DATA_LAYER_FILES.map(([, destinationRelativePath]) => destinationRelativePath),
   ];
   const files = new Map();
 
   for (const relativePath of new Set(relativeFiles)) {
+    assertPreparationPath(projectRoot, relativePath);
     const filePath = path.join(projectRoot, relativePath);
     if (!fs.existsSync(filePath)) {
       files.set(relativePath, { exists: false });
@@ -571,11 +636,21 @@ function capturePreparationState(projectRoot) {
       existed: fs.existsSync(path.join(projectRoot, relativePath)),
     }));
 
-  return { directories, files };
+  return {
+    directories,
+    files,
+    createdGuidanceFiles: new Set(),
+    createdGuidanceContents: new Map(),
+  };
 }
 
 function restorePreparationState(projectRoot, state) {
+  const rollbackConflicts = [];
   for (const [relativePath, snapshot] of state.files) {
+    if (GUIDANCE_FILES.includes(relativePath) && !state.createdGuidanceFiles.has(relativePath)) {
+      continue;
+    }
+    assertPreparationPath(projectRoot, relativePath);
     const filePath = path.join(projectRoot, relativePath);
     if (snapshot.exists) {
       fs.mkdirSync(path.dirname(filePath), { recursive: true });
@@ -583,6 +658,13 @@ function restorePreparationState(projectRoot, state) {
       fs.chmodSync(filePath, snapshot.mode);
     } else if (fs.existsSync(filePath)) {
       const stat = fs.lstatSync(filePath);
+      if (GUIDANCE_FILES.includes(relativePath) && state.createdGuidanceFiles.has(relativePath)) {
+        const expectedContent = state.createdGuidanceContents.get(relativePath);
+        if (!stat.isFile() || !expectedContent || !fs.readFileSync(filePath).equals(expectedContent)) {
+          rollbackConflicts.push(relativePath);
+          continue;
+        }
+      }
       if (!stat.isFile()) {
         throw new Error(`Cannot roll back non-file preparation target: ${relativePath}`);
       }
@@ -596,6 +678,9 @@ function restorePreparationState(projectRoot, state) {
     if (fs.existsSync(directoryPath) && fs.readdirSync(directoryPath).length === 0) {
       fs.rmdirSync(directoryPath);
     }
+  }
+  if (rollbackConflicts.length > 0) {
+    throw new Error(`customer-modified guidance preserved: ${rollbackConflicts.join(', ')}`);
   }
 }
 
@@ -614,17 +699,28 @@ function prepareMobileTemplate(options) {
   let removedLegacyFiles;
   let sharedFiles;
   let webPreviewOutput;
+  let guidanceFiles;
   let writtenFiles;
   try {
     updateIdentity(projectRoot, options.displayName, options.slug);
-    webPreviewOutput = ensureWebPreviewOutput(projectRoot);
+    // The data-model-first order never starts the sample-data web preview, so its app.config.js
+    // stays exactly as the template ships it.
+    webPreviewOutput = options.screensFirst ? ensureWebPreviewOutput(projectRoot) : 'not-requested';
     removedPowerConfig = removeEmptyPowerConfig(projectRoot);
     removedLegacyFiles = removeLegacyExamples(projectRoot);
-    sharedFiles = copySharedFiles(projectRoot, samplesRoot);
+    sharedFiles = copySharedFiles(
+      projectRoot,
+      samplesRoot,
+      options.screensFirst ? [...SHARED_FILES, ...DATA_LAYER_FILES] : SHARED_FILES,
+    );
+    guidanceFiles = copyMissingGuidance(projectRoot, originalState);
     prepareRootLayout(projectRoot);
     assertNoDanglingLegacyImports(projectRoot);
     writtenFiles = [...originalState.files]
       .filter(([relativePath, snapshot]) => {
+        if (GUIDANCE_FILES.includes(relativePath)) {
+          return originalState.createdGuidanceFiles.has(relativePath);
+        }
         const filePath = path.join(projectRoot, relativePath);
         if (!fs.existsSync(filePath)) return false;
         return !snapshot.exists || !fs.readFileSync(filePath).equals(snapshot.content);
@@ -648,6 +744,9 @@ function prepareMobileTemplate(options) {
     copiedSharedFiles: sharedFiles.copied,
     preservedSharedFiles: sharedFiles.preserved,
     webPreviewOutput,
+    copiedGuidanceFiles: guidanceFiles.copied,
+    preservedGuidanceFiles: guidanceFiles.preserved,
+    skippedGuidanceFiles: guidanceFiles.skipped,
   };
 }
 
@@ -659,6 +758,7 @@ function parseArgs(argv) {
     else if (argument === '--display-name') options.displayName = argv[++index];
     else if (argument === '--slug') options.slug = argv[++index];
     else if (argument === '--samples-root') options.samplesRoot = argv[++index];
+    else if (argument === '--screens-first') options.screensFirst = true;
     else throw new Error(`Unknown argument: ${argument}`);
   }
   if (!options.workingDir) throw new Error('--working-dir is required');
@@ -671,6 +771,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+  DATA_LAYER_FILES,
   HOST_TSCONFIG,
   SHARED_FILES,
   assertFreshTemplate,
@@ -679,6 +780,7 @@ module.exports = {
   ensureProviderProps,
   ensureWebPreviewOutput,
   ensureSafeAreaProviderWrapper,
+  parseArgs,
   prepareMobileTemplate,
   prepareRootLayout,
   removeEmptyPowerConfig,

@@ -1,0 +1,4 @@
+Build an Order Approvals page for our existing sales orders: list the sales orders, show the one I select, and let me approve it with the existing Approve Order action.
+
+- Data source: Dataverse entity salesorder (already exists)
+- Specific requirements: approve the selected order with the Approve Order action

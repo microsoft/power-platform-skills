@@ -23,7 +23,6 @@ claude --plugin-dir /path/to/plugins/canvas-apps
 .plugin/plugin.json            ← Open Plugins metadata (name, version, keywords)
 .mcp.json                      ← MCP server config (canvas-authoring, auto-registered)
 AGENTS.md                      ← Plugin guidance for AI agents (this file)
-CLAUDE.md                      ← Symlink → AGENTS.md
 hooks.json                     ← Copilot-format hooks: userPromptTransformed
 hooks/
   hooks.json                   ← Claude-format hooks: UserPromptSubmit

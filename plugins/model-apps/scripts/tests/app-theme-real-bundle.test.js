@@ -1,0 +1,515 @@
+'use strict';
+
+// app.theme against the REAL vendored SDK (setAppTheme / getAppTheme) and a stateful fake of what it reads and writes
+// (helpers/app-theme-server.js), layered on the app-membership fake so the SAME SDK instance also holds the app's exact
+// Main-form obligation. The SDK is made over the strict theme read policy (lib/app-theme-reads.js), header-less like the
+// build's, unless a test asks for the solution header. These pin, at the wire: the request budget (a set publishes its
+// new version web resource and nothing else; the app is published once, through the publication port), what a set may
+// claim (a property, never a created record), and what a read the policy cannot place does to the outcome.
+
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const { planAppTheme, applyAppTheme, verifyAppTheme, downloadAppTheme } = require('../lib/app-theme.js');
+const { createAppPublication } = require('../lib/app-publication-policy.js');
+const { createPassthroughCreates } = require('../lib/creates-passthrough.js');
+const { applyAppMainForms } = require('../lib/app-components.js');
+const { APP, FORM_A, FORM_B, META } = require('./helpers/app-membership-sdk.js');
+const { SITEMAP } = require('./helpers/app-pin-server.js');
+const { appThemeServer, SENTINEL, SOLUTION, THEME_DEF, APPSETTING_TYPE } = require('./helpers/app-theme-server.js');
+
+const THEME = { basePaletteColor: '#0F6CBD', appHeader: { background: '#112233', foreground: '#FFFFFF' } };
+const OTHER = { basePaletteColor: '#5C2D91' };
+const ENVIRONMENT_THEME = 'contoso_/environment-theme.xml';
+const LOGO = 'contoso_/images/logo.svg';
+const UNPUBLISHED_ROWS = 'GET /appsettings/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()';
+const ENVIRONMENT_SETTING = "GET /RetrieveSetting(SettingName='CustomThemeDefinition')";
+const spec = (theme) => ({ app: { theme } });
+const appPublishes = (server) => server.writes().filter((line) => /<appmodule>/.test(line) || /^BATCH .*PublishXml/.test(line));
+const publishXml = (server) => server.writes().filter((line) => line.startsWith('POST /PublishXml'));
+const versionOf = (server) => server.theme.webResources.find((resource) => /\/apptheme\//.test(resource.name));
+
+// The build's create port as it is today (lib/creates-passthrough.js), recording every request it was handed.
+function recordingPort() {
+  const inner = createPassthroughCreates();
+  const port = { runs: [], run: (request, execute) => { port.runs.push(request); return inner.run(request, execute); } };
+  return port;
+}
+
+async function build(t, options = {}) {
+  const server = appThemeServer(t, options);
+  await server.sdk.initWorkspace();
+  await server.sdk.fetchArtifact('app', APP);
+  const appWrite = { publish: (id) => server.sdk.publishArtifact('app', id) };
+  const publication = createAppPublication({ appWrite, client: server.sdk.dataverse });
+  const creates = recordingPort();
+  const ctx = { sdk: server.sdk, appId: APP, publication, creates, publisherPrefix: 'contoso', ...(options.noSolution ? {} : { solution: SOLUTION }) };
+  const plan = (theme) => planAppTheme(spec(theme), ctx);
+  const run = async (theme) => applyAppTheme(await plan(theme), ctx);
+  return { ...server, ctx, publication, creates, plan, run };
+}
+
+test('REAL BUNDLE: a first set publishes its new version web resource only, adds both records to the solution, and the app is published once, by the port', async (t) => {
+  const server = await build(t);
+  const result = await server.run(THEME);
+  assert.deepEqual(result, { saved: ['app.theme'], unchanged: [], pendingPublish: ['app.theme'], refused: [], unknown: [], managedBindings: [] });
+  assert.deepEqual(server.creates.runs, [{ kind: 'appTheme', key: 'app.theme', identity: { appId: APP, settingDefinitionId: THEME_DEF }, childKeys: [] }],
+    'the port is handed the property (app + setting), no receipt, no server-assigned children');
+  const written = server.writes();
+  assert.match(written[0], /^POST \/webresourceset \{"name":"contoso_\/apptheme\/[0-9a-f]{16}\.xml"/);
+  assert.equal(publishXml(server).length, 1, written.join('\n'));
+  assert.match(publishXml(server)[0], /<webresources><webresource>[0-9a-f-]{36}<\/webresource><\/webresources>/);
+  assert.ok(written.some((line) => line.startsWith('POST /appsettings')), 'the row is created as a draft');
+  const adds = written.filter((line) => line.startsWith('POST /AddSolutionComponent'));
+  assert.equal(adds.length, 2, 'the header-less SDK added nothing; the version and the row are added here');
+  assert.ok(server.members().includes(`61:${versionOf(server).id}`));
+  assert.ok(server.members().includes(`${APPSETTING_TYPE}:${server.themeRow().id}`));
+  assert.deepEqual(appPublishes(server), [], 'the theme publishes no app');
+  assert.equal((await verifyAppTheme(spec(THEME), server.ctx))[0].state, 'pendingPublish');
+
+  assert.deepEqual(await server.publication.flush(), { published: [APP], withheld: [], failed: [] });
+  assert.equal(appPublishes(server).length, 1);
+  assert.deepEqual(await verifyAppTheme(spec(THEME), server.ctx), [{ key: 'app.theme', ok: true, state: 'live' }]);
+
+  const before = server.writes().length;
+  const again = await server.run({ ...THEME, basePaletteColor: '#0f6cbd' });
+  assert.deepEqual(again.unchanged, ['app.theme']);
+  assert.equal(server.writes().length, before, 'an equal theme sends nothing (its membership is proven read-only)');
+  assert.deepEqual(server.publication.owed(), []);
+
+  // A changed theme is the same property (the same pair at the port) and never deletes the version it supersedes.
+  const changed = await server.run(OTHER);
+  assert.deepEqual(changed.saved, ['app.theme']);
+  assert.deepEqual(server.creates.runs.map((run) => run.identity), [{ appId: APP, settingDefinitionId: THEME_DEF }, { appId: APP, settingDefinitionId: THEME_DEF }]);
+  assert.ok(!server.writes().some((line) => line.startsWith('DELETE /webresourceset')), 'no theme version is ever deleted');
+  assert.equal(server.theme.webResources.filter((resource) => /\/apptheme\//.test(resource.name)).length, 2);
+});
+
+test('REAL BUNDLE: an omitted theme sends no request at all', async (t) => {
+  const server = await build(t);
+  const mark = server.theme.requests.length;
+  assert.deepEqual(await server.plan(undefined), { operations: [], unknown: [] });
+  assert.deepEqual(await applyAppTheme(await server.plan(undefined), server.ctx), { saved: [], unchanged: [], pendingPublish: [], refused: [], unknown: [], managedBindings: [] });
+  assert.deepEqual(await verifyAppTheme({ app: {} }, server.ctx), []);
+  assert.deepEqual(server.theme.requests.slice(mark), []);
+});
+
+test('REAL BUNDLE: null removes the app\'s row (its DELETE only) and the environment theme applies after the app publish', async (t) => {
+  const server = await build(t, { environmentTheme: ENVIRONMENT_THEME });
+  await server.run(THEME);
+  await server.publication.flush();
+  const before = server.writes().length;
+  const result = await server.run(null);
+  assert.deepEqual(result.saved, ['app.theme']);
+  const sent = server.writes().slice(before);
+  assert.equal(sent.length, 1, sent.join('\n'));
+  assert.match(sent[0], /^DELETE \/appsettings\([0-9a-f-]{36}\)$/);
+  assert.equal(server.creates.runs.length, 1, 'a removal does not go through the create port');
+  assert.equal((await verifyAppTheme(spec(null), server.ctx))[0].state, 'pendingPublish');
+  // Pending removal: already saved, owed only its publication — no second DELETE.
+  const mark = server.writes().length;
+  const pending = await server.run(null);
+  assert.deepEqual([pending.unchanged, pending.pendingPublish], [['app.theme'], ['app.theme']]);
+  assert.deepEqual(server.writes().slice(mark), []);
+  assert.deepEqual(await server.publication.flush(), { published: [APP], withheld: [], failed: [] });
+  assert.equal(server.themeRow(), undefined);
+  assert.deepEqual(await verifyAppTheme(spec(null), server.ctx), [{ key: 'app.theme', ok: true, state: 'live' }]);
+  assert.equal((await server.sdk.getAppTheme(APP)).resolved.webResourceName, ENVIRONMENT_THEME);
+  // Absent: nothing to remove, no setter.
+  const absent = server.writes().length;
+  assert.deepEqual((await server.run(null)).unchanged, ['app.theme']);
+  assert.deepEqual(server.writes().slice(absent), []);
+});
+
+test('REAL BUNDLE: null removes a published "no theme" sentinel row, which otherwise keeps the environment theme from applying', async (t) => {
+  const server = await build(t, { environmentTheme: ENVIRONMENT_THEME, row: { published: SENTINEL } });
+  const info = await server.sdk.getAppTheme(APP);
+  assert.equal(info.row.state, 'published');
+  assert.equal(info.resolved.source, 'none', 'the sentinel resolves to no theme at all');
+  assert.equal((await verifyAppTheme(spec(null), server.ctx))[0].ok, false, 'not removed yet');
+  assert.deepEqual(await downloadAppTheme(server.ctx), { status: 'refused', code: 'APP_THEME_UNREPRESENTABLE' }, 'the sentinel is not null');
+  const result = await server.run(null);
+  assert.deepEqual(result.saved, ['app.theme']);
+  assert.deepEqual(server.writes().filter((line) => line.startsWith('DELETE ')).length, 1);
+  await server.publication.flush();
+  assert.equal((await server.sdk.getAppTheme(APP)).resolved.webResourceName, ENVIRONMENT_THEME);
+  assert.deepEqual(await verifyAppTheme(spec(null), server.ctx), [{ key: 'app.theme', ok: true, state: 'live' }]);
+});
+
+test('REAL BUNDLE: without the create port, the publication queue or the publisher prefix a set writes nothing', async (t) => {
+  for (const [missing, code] of [['creates', 'APP_THEME_CREATE_PORT_UNAVAILABLE'], ['publication', 'APP_THEME_PUBLISH_BLOCKED'], ['publisherPrefix', 'APP_THEME_PREREQUISITE_UNRESOLVED']]) {
+    const server = await build(t);
+    delete server.ctx[missing];
+    const result = await server.run(THEME);
+    assert.deepEqual(result.refused, [{ key: 'app.theme', code }], missing);
+    assert.deepEqual(server.writes(), [], missing);
+    assert.deepEqual(server.publication.owed(), [], missing);
+  }
+});
+
+test('REAL BUNDLE: the appsetting key not proven (absent, not active) is unknown before any write', async (t) => {
+  for (const keys of ['absent', 'inactive']) {
+    const server = await build(t, { keys });
+    const mark = server.theme.requests.length;
+    const result = await server.run(THEME);
+    assert.deepEqual(result.unknown, [{ key: 'app.theme', code: 'APP_THEME_IDENTITY_UNPROVEN' }], keys);
+    assert.deepEqual(server.writes(), [], keys);
+    assert.deepEqual(server.theme.requests.slice(mark).map((line) => line.split('?')[0]), ["GET /EntityDefinitions(LogicalName='appsetting')/Keys"], `${keys}: refused before the theme is read`);
+  }
+});
+
+test('REAL BUNDLE: a declared header logo must exist as an image before anything is written', async (t) => {
+  const missing = await build(t);
+  const refused = await missing.run({ ...THEME, logo: { webResourceName: LOGO, tooltip: 'Contoso' } });
+  assert.deepEqual(refused.refused, [{ key: 'app.theme', code: 'APP_THEME_PREREQUISITE_UNRESOLVED' }]);
+  assert.deepEqual(missing.writes(), []);
+  const present = await build(t, { images: [LOGO] });
+  const saved = await present.run({ ...THEME, logo: { webResourceName: LOGO, tooltip: 'Contoso' } });
+  assert.deepEqual(saved.saved, ['app.theme']);
+  assert.ok(!present.writes().some((line) => line.includes(LOGO) && /^(DELETE|PATCH)/.test(line)), 'the logo is only referenced');
+});
+
+// The required regression: the setter creates row A, and before it completes another writer replaces A with a row B of
+// the SAME value. The property is met (the app's row holds the declared theme), so the set may succeed — but B is not
+// this build's: it is never named as created, owned or deleted.
+test('REAL BUNDLE (regression): a same-value row another writer put in place of ours is never owned, created or deleted', async (t) => {
+  const server = await build(t, { solutionHeader: true });
+  let replaced;
+  server.afterNext('POST /appsettings', (theme) => {
+    const ours = theme.rows.find((row) => row.def === THEME_DEF);
+    theme.rows.splice(theme.rows.indexOf(ours), 1);
+    replaced = { ours: ours.id, theirs: server.addThemeRow({ draft: ours.draft }).id };
+  });
+  const result = await server.run(THEME);
+  assert.ok(replaced, 'the competing writer ran');
+  assert.equal(server.themeRow().id, replaced.theirs);
+  assert.deepEqual(result.managedBindings, [], 'neither row, nor the version, is claimed');
+  assert.deepEqual(result.saved, ['app.theme'], 'the property holds the declared theme');
+  assert.deepEqual(server.creates.runs, [{ kind: 'appTheme', key: 'app.theme', identity: { appId: APP, settingDefinitionId: THEME_DEF }, childKeys: [] }]);
+  assert.ok(!server.writes().some((line) => line.startsWith(`DELETE /appsettings(${replaced.theirs})`)), 'their row is never deleted');
+  await server.publication.flush();
+  assert.deepEqual(await verifyAppTheme(spec(THEME), server.ctx), [{ key: 'app.theme', ok: true, state: 'live' }]);
+});
+
+// The required regression: a row with no id, of the same value, beside the real one in an answer the SDK reads — on the
+// same page or on page 2. Nothing may be concluded from that answer: the operation is unknown, with no receipt.
+for (const page2 of [false, true]) {
+  test(`REAL BUNDLE (regression): a no-id same-value row after the set${page2 ? ', on page 2,' : ''} leaves it unknown with no receipt; the saved theme is kept`, async (t) => {
+    const server = await build(t, { solutionHeader: true });
+    const plan = await server.plan(THEME);
+    // Armed after the setter's last read (the environment's resolved setting, read after the row write for a new
+    // draft), so the next read of the row is the one that names it after the set.
+    server.injectRows(UNPUBLISHED_ROWS, () => [{ appsettingid: null, value: server.themeRow().draft, componentstate: 1, _settingdefinitionid_value: THEME_DEF }], { page2, arm: ENVIRONMENT_SETTING });
+    const result = await applyAppTheme(plan, server.ctx);
+    assert.ok(server.writes().some((line) => line.startsWith('POST /appsettings')), 'the row was written');
+    assert.equal(server.theme.requests.some((line) => line.includes('$skiptoken')), page2, 'the no-id row was served on the page asked for');
+    assert.deepEqual(result.saved, ['app.theme'], JSON.stringify(result));
+    assert.deepEqual(result.managedBindings, [], 'no receipt');
+    assert.deepEqual(result.unknown, [{ key: 'app.theme', code: 'APP_THEME_READ_INCOMPLETE', afterWrite: true }]);
+    // What the app's row holds is not known, so the same SDK does nothing more to that app's theme: neither a removal nor
+    // another set reads or writes anything (a later run reads it back first).
+    const mark = server.theme.requests.length;
+    for (const next of [null, OTHER]) {
+      assert.deepEqual((await server.run(next)).unknown, [{ key: 'app.theme', code: 'create-outcome-unknown' }], `then ${JSON.stringify(next)}`);
+    }
+    assert.deepEqual(server.theme.requests.slice(mark), [], 'no request for that app\'s theme after an unknown set');
+  });
+}
+
+// A transport loss while the set's own completion is being read back (the version and the app's row, after the row write)
+// leaves what the row holds as unknown as a malformed answer does: the same SDK must not remove or replace it.
+for (const next of [null, OTHER]) {
+  test(`REAL BUNDLE (regression): a transport loss reading the row back after the set is sticky; a later ${JSON.stringify(next)} reads and writes nothing`, async (t) => {
+    const server = await build(t);
+    const plan = await server.plan(THEME);
+    // Armed after the setter's last read (the environment's resolved setting), so the lost read is the proof's own.
+    server.afterNext(ENVIRONMENT_SETTING, () => server.failNext('GET /appsettings?', 'beforeCommit'));
+    const first = await applyAppTheme(plan, server.ctx);
+    assert.deepEqual(first.saved, ['app.theme'], JSON.stringify(first));
+    assert.deepEqual(first.unknown, [{ key: 'app.theme', code: 'CONNECTION_ERROR', afterWrite: true }]);
+    const mark = server.theme.requests.length;
+    assert.deepEqual((await server.run(next)).unknown, [{ key: 'app.theme', code: 'create-outcome-unknown' }]);
+    assert.deepEqual(server.theme.requests.slice(mark), [], 'no request for that app\'s theme after an unproven set');
+  });
+}
+
+// The neighbour that must stay repairable: once the set's completion is proven, a transport loss on the membership add is
+// known content with a missing member, so a later equal theme reads and names the explicit repair instead of stopping.
+test('REAL BUNDLE: a transport loss on the membership add of a proven set is not sticky; an equal retry names the repair', async (t) => {
+  const server = await build(t);
+  server.failNext('POST /AddSolutionComponent', 'beforeCommit');
+  const first = await server.run(THEME);
+  assert.deepEqual(first.saved, ['app.theme']);
+  assert.deepEqual(first.unknown, [{ key: 'app.theme', code: 'CONNECTION_ERROR', afterWrite: true }]);
+  const retry = await server.plan(THEME);
+  assert.equal(retry.refused && retry.refused[0].code, 'APP_THEME_MEMBERSHIP_MISSING', JSON.stringify(retry));
+});
+
+test('REAL BUNDLE: a no-id row in a read before any write leaves the set unknown with zero writes', async (t) => {
+  for (const page2 of [false, true]) {
+    const server = await build(t);
+    server.injectRows(UNPUBLISHED_ROWS, [{ appsettingid: null, value: 'contoso_/apptheme/0000000000000000.xml', componentstate: 1, _settingdefinitionid_value: THEME_DEF }], { page2 });
+    const plan = await server.plan(THEME);
+    assert.deepEqual(plan.unknown, [{ key: 'app.theme', code: 'APP_THEME_READ_INCOMPLETE' }]);
+    assert.deepEqual((await applyAppTheme(plan, server.ctx)).unknown, [{ key: 'app.theme', code: 'APP_THEME_READ_INCOMPLETE' }]);
+    assert.deepEqual(server.writes(), [], `page2 ${page2}`);
+  }
+});
+
+test('REAL BUNDLE: a version lookup that answers an id-less row of the version\'s name is unknown before any write (the SDK would read it as absent)', async (t) => {
+  const server = await build(t);
+  const plan = await server.plan(THEME);
+  server.injectRows("GET /webresourceset?$select=webresourceid,name,webresourcetype,content&$filter=name eq 'contoso_/apptheme/",
+    (path) => [{ webresourceid: null, name: /name eq '([^']+)'/.exec(path)[1], webresourcetype: 4, content: '' }]);
+  const result = await applyAppTheme(plan, server.ctx);
+  assert.deepEqual(result.unknown, [{ key: 'app.theme', code: 'APP_THEME_READ_INCOMPLETE' }]);
+  assert.deepEqual(result.saved, []);
+  assert.deepEqual(server.writes(), [], 'no version, no row');
+});
+
+test('REAL BUNDLE: an unplaceable read after the row write is unknown with partial work, and stops a later null in the same build', async (t) => {
+  const server = await build(t);
+  const plan = await server.plan(THEME);
+  server.injectRows(UNPUBLISHED_ROWS, [{ appsettingid: '99999999-0000-4000-8000-000000000001', value: 'x', componentstate: 1, _settingdefinitionid_value: '99999999-0000-4000-8000-0000000000ff' }], { arm: 'POST /appsettings' });
+  const result = await applyAppTheme(plan, server.ctx);
+  assert.deepEqual(result.unknown, [{ key: 'app.theme', code: 'APP_THEME_READ_INCOMPLETE', afterWrite: true }]);
+  assert.deepEqual(server.publication.owed(), []);
+  const mark = server.theme.requests.length;
+  const removal = await server.run(null);
+  assert.deepEqual(removal.unknown, [{ key: 'app.theme', code: 'create-outcome-unknown' }]);
+  assert.deepEqual(server.theme.requests.slice(mark), [], 'nothing is read or written for that app again in this build');
+  assert.deepEqual(await verifyAppTheme(spec(THEME), server.ctx), [{ key: 'app.theme', ok: false, state: 'unknown', code: 'create-outcome-unknown' }]);
+});
+
+test('REAL BUNDLE: a lost answer to the row write is unknown; a later build reads the saved draft back and only queues its publication', async (t) => {
+  // No solution, so the re-run's only owed work is the publication (membership repair is pinned by the next test).
+  const server = await build(t, { noSolution: true });
+  server.failNext('POST /appsettings', 'afterCommit');
+  const lost = await server.run(THEME);
+  assert.deepEqual(lost.unknown, [{ key: 'app.theme', code: 'CONNECTION_ERROR', afterWrite: true }]);
+  assert.deepEqual(lost.saved, []);
+  assert.deepEqual(server.publication.owed(), []);
+  assert.ok(server.themeRow(), 'the row write landed');
+  const sdk = server.freshSdk();
+  const publication = createAppPublication({ appWrite: { publish: () => { throw new Error('not in this test'); } }, client: sdk.dataverse });
+  const ctx = { ...server.ctx, sdk, publication };
+  const mark = server.writes().length;
+  const rerun = await applyAppTheme(await planAppTheme(spec(THEME), ctx), ctx);
+  assert.deepEqual(rerun.unknown, [], JSON.stringify(rerun));
+  assert.deepEqual(rerun.unchanged, ['app.theme']);
+  assert.deepEqual(publication.owed().map((entry) => entry.id), [APP]);
+  assert.deepEqual(server.writes().slice(mark), [], 'the saved theme is not sent again');
+});
+
+test('REAL BUNDLE: a set whose membership add fails keeps the saved theme; an equal retry refuses without writes until the explicit repair', async (t) => {
+  const server = await build(t);
+  server.failNext('POST /AddSolutionComponent', 500);
+  const first = await server.run(THEME);
+  assert.deepEqual(first.saved, ['app.theme']);
+  assert.deepEqual(first.pendingPublish, ['app.theme']);
+  assert.equal(first.unknown.length, 1);
+  assert.equal(first.unknown[0].afterWrite, true);
+  const mark = server.writes().length;
+  const retry = await server.plan(THEME);
+  assert.equal(retry.refused[0].code, 'APP_THEME_MEMBERSHIP_MISSING');
+  assert.deepEqual(retry.refused[0].missing, ['webResource', 'appSetting']);
+  assert.match(retry.refused[0].repair, /addSolutionComponent/);
+  assert.deepEqual((await applyAppTheme(retry, server.ctx)).refused, [{ key: 'app.theme', code: 'APP_THEME_MEMBERSHIP_MISSING' }]);
+  assert.deepEqual(server.writes().slice(mark), [], 'an equal theme never repairs silently');
+  await server.sdk.addSolutionComponent({ componentId: versionOf(server).id, componentType: 61, solutionUniqueName: SOLUTION, addRequiredComponents: false });
+  await server.sdk.addSolutionComponent({ componentId: server.themeRow().id, componentType: APPSETTING_TYPE, solutionUniqueName: SOLUTION, addRequiredComponents: false });
+  const repaired = await server.run(THEME);
+  assert.deepEqual([repaired.unchanged, repaired.refused, repaired.unknown], [['app.theme'], [], []]);
+});
+
+test('REAL BUNDLE: a queue that fails keeps the saved theme and reports unknown', async (t) => {
+  const server = await build(t);
+  server.ctx.publication = { queue: () => { throw Object.assign(new Error('x'), { code: 'PUBLICATION_TARGET_INVALID' }); } };
+  const result = await server.run(THEME);
+  assert.deepEqual(result.saved, ['app.theme']);
+  assert.deepEqual(result.unknown, [{ key: 'app.theme', code: 'PUBLICATION_TARGET_INVALID' }]);
+});
+
+test('REAL BUNDLE: a version gone after the set stops as create-completion-required, carrying the saved result', async (t) => {
+  const server = await build(t);
+  server.afterNext('POST /appsettings', (theme) => { theme.webResources.splice(theme.webResources.findIndex((resource) => /\/apptheme\//.test(resource.name)), 1); });
+  await assert.rejects(server.run(THEME), (error) => {
+    assert.equal(error.code, 'create-completion-required');
+    assert.equal(error.transient, false);
+    assert.deepEqual(error.detail, { missing: 'webResource' });
+    assert.deepEqual(error.appTheme.saved, ['app.theme']);
+    return true;
+  });
+});
+
+test('REAL BUNDLE: a theme cannot publish an app whose exact Main-form membership was edited after its push: withheld, zero app publish requests', async (t) => {
+  const server = await build(t, { pin: { members: [`1:${META.contoso_item}`, `62:${SITEMAP}`, `60:${FORM_B}`] } });
+  await applyAppMainForms(server.sdk, APP, { contoso_item: [FORM_A] }, { mainFormsOnUpdate: 'exact' });
+  const pushed = await server.sdk.pushArtifact('app', APP);
+  assert.equal(pushed.saved, true);
+  server.publication.recordExact(APP, pushed, { name: 'Membership', mainFormsByTable: { contoso_item: [FORM_A] } });
+  // Another writer puts the removed Main form back before the app is published.
+  server.state.members.add(`60:${FORM_B}`);
+  const result = await server.run(THEME);
+  assert.deepEqual(result.pendingPublish, ['app.theme']);
+  assert.equal(publishXml(server).length, 1, 'the version web resource alone');
+  assert.throws(() => server.publication.assertRawPublishAllowed(APP), { code: 'APP_PUBLISH_BYPASS_REFUSED' });
+  const out = await server.publication.flush();
+  assert.deepEqual(out, { published: [], withheld: [{ id: APP, code: 'APP_MAIN_FORM_PUBLISH_WITHHELD' }], failed: [] });
+  assert.deepEqual(appPublishes(server), [], 'no app publish request was sent');
+  assert.equal(server.publication.owed().length, 1, 'the theme stays owed');
+  assert.equal(server.publication.unsettled()[0].code, 'APP_MAIN_FORMS_NOT_EXACT');
+});
+
+test('REAL BUNDLE: download captures the app\'s own exact theme, omits an inherited one and keeps a pending removal', async (t) => {
+  const inherited = await build(t, { environmentTheme: ENVIRONMENT_THEME });
+  assert.deepEqual(await downloadAppTheme(inherited.ctx), { status: 'omitted' }, 'the environment\'s theme is never copied into the app');
+  await inherited.run(THEME);
+  assert.deepEqual(await downloadAppTheme(inherited.ctx), { status: 'captured', theme: { appHeader: { background: '#112233', foreground: '#FFFFFF' }, basePaletteColor: '#0F6CBD' }, pendingPublish: true });
+  await inherited.publication.flush();
+  assert.equal((await downloadAppTheme(inherited.ctx)).pendingPublish, false);
+  await inherited.run(null);
+  assert.deepEqual(await downloadAppTheme(inherited.ctx), { status: 'captured', theme: null, pendingPublish: true });
+});
+
+// The solution the membership is proven in is read through the SDK's getSolution, which takes the first row of the first
+// page. Every row of every page must be the solution asked for, or nothing is added to it.
+for (const [label, rows, page2] of [
+  ['an id-less row of the solution\'s name on page 2', [{ solutionid: null, uniquename: SOLUTION }], true],
+  ['a row of another solution beside it', [{ solutionid: '99999999-0000-4000-8000-0000000000aa', uniquename: 'OtherSolution' }], false],
+]) {
+  test(`REAL BUNDLE: a solution lookup answering ${label} adds no member and leaves the set unknown; the saved theme is kept`, async (t) => {
+    const server = await build(t);
+    server.injectRows('GET /solutions?', rows, { page2 });
+    const result = await server.run(THEME);
+    assert.deepEqual(result.saved, ['app.theme']);
+    assert.deepEqual(result.unknown, [{ key: 'app.theme', code: 'APP_THEME_READ_INCOMPLETE', afterWrite: true }], JSON.stringify(result));
+    assert.equal(server.theme.requests.some((line) => line.startsWith('GET /solutions?$skiptoken')), page2, 'every page was read');
+    assert.deepEqual(server.writes().filter((line) => line.startsWith('POST /AddSolutionComponent')), [], 'nothing is added to an unplaced solution');
+  });
+}
+
+// RetrieveSetting answers one SettingDetail. A detail of another setting, or of a type the theme setting cannot have
+// (it is text: SettingDataType String, 1), proves nothing about what the app resolves.
+for (const [label, change] of [
+  ['another setting', (detail) => ({ ...detail, Name: 'OtherSetting' })],
+  ['an invalid data type', (detail) => ({ ...detail, DataType: -999 })],
+  ['a boolean data type', (detail) => ({ ...detail, DataType: 2 })],
+  ['no data type', ({ DataType, ...detail }) => detail],
+]) {
+  test(`REAL BUNDLE: a resolved setting answering ${label} is unknown, never live`, async (t) => {
+    const server = await build(t);
+    await server.run(THEME);
+    await server.publication.flush();
+    assert.deepEqual(await verifyAppTheme(spec(THEME), server.ctx), [{ key: 'app.theme', ok: true, state: 'live' }], 'live before the change');
+    server.theme.settingDetail = change;
+    assert.deepEqual(await verifyAppTheme(spec(THEME), server.ctx), [{ key: 'app.theme', ok: false, state: 'unknown', code: 'APP_THEME_READ_INCOMPLETE' }]);
+  });
+}
+
+// The set's own completion (the version it names exists, and the app's row holds it) is required whether or not the build
+// has a solution; only the membership reads and adds depend on one.
+test('REAL BUNDLE: with no solution, a version gone after the set still stops as create-completion-required', async (t) => {
+  const server = await build(t, { noSolution: true });
+  server.afterNext('POST /appsettings', (theme) => { theme.webResources.splice(theme.webResources.findIndex((resource) => /\/apptheme\//.test(resource.name)), 1); });
+  await assert.rejects(server.run(THEME), (error) => {
+    assert.equal(error.code, 'create-completion-required');
+    assert.deepEqual(error.detail, { missing: 'webResource' });
+    assert.deepEqual(error.appTheme.saved, ['app.theme']);
+    return true;
+  });
+  assert.deepEqual(server.writes().filter((line) => /solution/i.test(line)), [], 'no solution read or add without a solution');
+});
+
+test('REAL BUNDLE: with no solution, a complete set reads its completion back and touches no solution', async (t) => {
+  const server = await build(t, { noSolution: true });
+  const result = await server.run(THEME);
+  assert.deepEqual([result.saved, result.unknown, result.refused], [['app.theme'], [], []]);
+  assert.deepEqual(server.theme.requests.filter((line) => /solution/i.test(line)), [], 'no solution read or add');
+  assert.ok(server.theme.requests.some((line) => line.startsWith('GET /webresourceset?') && line.includes('/apptheme/') && !line.includes('content')), 'the version is looked up by name after the set');
+});
+
+// Download: the header logo a theme names is part of what a spec needs to rebuild it. One that is gone, or is no image,
+// is a portability loss the download must say, never an exact capture.
+test('REAL BUNDLE: download refuses a theme whose header logo is gone, and names the logo of a theme whose logo exists', async (t) => {
+  const server = await build(t, { images: [LOGO] });
+  await server.run({ ...THEME, logo: { webResourceName: LOGO, tooltip: 'Contoso' } });
+  const captured = await downloadAppTheme(server.ctx);
+  assert.equal(captured.status, 'captured');
+  assert.deepEqual(captured.logo, { webResourceName: LOGO, webResourceType: 11 });
+  server.theme.webResources.splice(server.theme.webResources.findIndex((resource) => resource.name === LOGO), 1);
+  assert.deepEqual(await downloadAppTheme(server.ctx), { status: 'refused', code: 'APP_THEME_LOGO_UNAVAILABLE' });
+  assert.deepEqual(server.writes().filter((line) => line.includes(LOGO)), [], 'download writes nothing');
+});
+
+// An image that still exists but whose bytes are empty is captured: the capture checks that the logo is there and is an
+// image, not that it can be exported. Whether it can is decided by the download's logo preflight (download-model-app.js
+// classifyThemeLogo), which refuses it — app-membership-download.test.js pins that refusal.
+test('REAL BUNDLE: download captures a theme whose header logo exists with no content (the export preflight decides)', async (t) => {
+  const server = await build(t, { images: [LOGO] });
+  await server.run({ ...THEME, logo: { webResourceName: LOGO } });
+  const image = server.theme.webResources.find((resource) => resource.name === LOGO);
+  image.content = '';
+  image.publishedContent = '';
+  const captured = await downloadAppTheme(server.ctx);
+  assert.equal(captured.status, 'captured');
+  assert.deepEqual(captured.logo, { webResourceName: LOGO, webResourceType: 11 });
+});
+
+// The build engine (lib/sdk-build.js) over the same server and SDK: a themed build reads the theme back once, after the
+// app publication that paid it, before it calls itself complete. An accepted publish is not proof that the app resolves
+// the theme; a build with no theme makes no theme read at all.
+const { inOwnFolder } = require('./helpers/own-app-folder.js');
+const { runSdkBuild: runSdkBuildInPlace } = require('../lib/sdk-build.js');
+const { membershipSpec } = require('./helpers/app-membership-sdk.js');
+const runSdkBuild = inOwnFolder(runSdkBuildInPlace);
+const THEME_READS = /^GET \/(appsettings|RetrieveSetting|settingdefinitions)/;
+
+async function engineBuild(t, theme, arrange = () => {}) {
+  const server = appThemeServer(t, { engine: true });
+  await server.sdk.initWorkspace();
+  await server.sdk.fetchArtifact('app', APP);
+  arrange(server);
+  const built = membershipSpec({ hidden: false, mainForms: false });
+  if (theme !== undefined) built.app.theme = theme;
+  let result;
+  let error;
+  try {
+    result = await runSdkBuild(built, { sdk: server.sdk, provisionSdk: server.sdk, apply: true, phases: ['app-shell'], creates: createPassthroughCreates(), warn: () => {} });
+  } catch (thrown) {
+    error = thrown;
+  }
+  const lastAppPublish = server.theme.requests.findLastIndex((line) => /<appmodule>/.test(line));
+  return {
+    server, result, error,
+    appPublishes: server.writes().filter((line) => /<appmodule>/.test(line)).length,
+    readsAfterPublish: lastAppPublish < 0 ? [] : server.theme.requests.slice(lastAppPublish + 1).filter((line) => THEME_READS.test(line)),
+  };
+}
+
+test('REAL BUNDLE ENGINE: a themed build reads the theme back after the app publication that paid it, and completes when the app resolves it', async (t) => {
+  const { server, result, error, appPublishes, readsAfterPublish } = await engineBuild(t, THEME);
+  assert.equal(error, undefined, error && error.message);
+  assert.ok(server.themeRow(), 'the real setter ran');
+  assert.ok(appPublishes >= 1, 'the app was published');
+  assert.ok(readsAfterPublish.length > 0, 'the theme is read back after the app publication');
+  assert.deepEqual(result.incomplete || [], []);
+});
+
+test('REAL BUNDLE ENGINE: a theme the app does not resolve after its accepted publication leaves the build incomplete (APP_THEME_UNVERIFIED), with no publish again', async (t) => {
+  const live = await engineBuild(t, THEME);
+  const { server, error, appPublishes } = await engineBuild(t, THEME, (fake) => {
+    fake.afterNext('POST /appsettings', () => fake.afterNext('POST /PublishXml', (state) => state.resolved.set(THEME_DEF, SENTINEL)));
+  });
+  assert.ok(server.themeRow(), 'the real setter ran');
+  assert.ok(error, 'an unresolved theme cannot complete the build');
+  assert.deepEqual((error.incomplete || []).map((entry) => entry.code), ['APP_THEME_UNVERIFIED'], error.message);
+  assert.match(error.incomplete[0].message, /--verify/);
+  assert.equal(error.retry, 'never');
+  assert.equal(appPublishes, live.appPublishes, 'the app publication is not retried');
+});
+
+test('REAL BUNDLE ENGINE: a build whose spec declares no theme makes no theme read', async (t) => {
+  const { server, error } = await engineBuild(t, undefined);
+  assert.equal(error, undefined, error && error.message);
+  assert.deepEqual(server.theme.requests.filter((line) => THEME_READS.test(line)), []);
+});

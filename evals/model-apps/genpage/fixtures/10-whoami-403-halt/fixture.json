@@ -1,0 +1,12 @@
+{
+  "contractVersion": 2,
+  "provenance": "synthetic",
+  "description": "Constructed refusal trace, not an agent capture. The planner confirms cnt_widget is absent by an exact logical-name search; the auth pre-flight then gets a 403 from WhoAmI while az and pac are signed in as different identities, and the orchestrator shows the advice verbatim, including the az login --username command for the pac identity, and stops before any entity-builder dispatch, provisioning, page generation or upload.",
+  "contracts": [
+    "plugins/model-apps/agents/genpage-planner.md Step 4: Entity Detection",
+    "plugins/model-apps/skills/genpage/SKILL.md Phase 2a: Pre-flight: az + pac + Dataverse"
+  ],
+  "expectedOutcome": "refused",
+  "refusal": { "stage": "auth" },
+  "toolResults": "tool-results.json"
+}

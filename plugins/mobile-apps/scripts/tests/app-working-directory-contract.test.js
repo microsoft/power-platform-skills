@@ -7,7 +7,7 @@ const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 const { shellBlocks } = require('./helpers/markdown-shell-blocks');
-const { createSkillWorkflow } = require('./helpers/create-skill');
+const { createSkillDataModelFirst, createSkillWorkflow } = require('./helpers/create-skill');
 
 const pluginRoot = path.resolve(__dirname, '../..');
 const nativeRoot = path.join(pluginRoot, 'skills/add-native');
@@ -263,18 +263,20 @@ test('documented normalization arguments preserve literal root contents without 
 
 test('delegated creation planning and recovery blocks bind each fresh invocation to the owner root', (t) => {
   const { directory, owner, caller } = fixture(t);
-  const create = createSkillWorkflow();
-  const sections = [
+  // Both build orders carry these helper sections; each pair is [flow, recovery section end].
+  const blocks = [
+    [createSkillWorkflow(), '#### Post-plan publisher-prefix gate'],
+    [createSkillDataModelFirst(), '#### Step 3.0a'],
+  ].flatMap(([create, recoveryEnd]) => [
     ['### Foreground Dataverse planning snapshot and evidence', '#### Planner completion dispatch'],
-    ['#### Dataverse planning recovery', '#### Post-plan publisher-prefix gate'],
-  ];
-  const blocks = sections.flatMap(([start, end]) => {
+    ['#### Dataverse planning recovery', recoveryEnd],
+  ].flatMap(([start, end]) => {
     const begin = create.indexOf(start);
     const finish = create.indexOf(end, begin);
     assert.ok(begin >= 0 && finish > begin);
     return shellBlocks(create.slice(begin, finish));
-  });
-  assert.equal(blocks.length, 4);
+  }));
+  assert.equal(blocks.length, 8);
   for (const block of blocks) {
     assert.ok(block.startsWith(`${guard}\n`));
     const rootProbe = `${block.split('\n')[0]}\nnode -p "process.cwd()"`;

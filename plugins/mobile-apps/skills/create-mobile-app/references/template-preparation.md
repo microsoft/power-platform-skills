@@ -1,16 +1,28 @@
 # Template preparation
 
-What `scripts/prepare-mobile-template.js` does at `/create-mobile-app` Step 3.2, and why.
+What `scripts/prepare-mobile-template.js --screens-first` does at Step 3.2 of the screens-first build order, and why.
 The skill only runs the script; read this when the script fails, when you change it, or when a later step needs one of the boundaries below.
 
-The script is the only owner of these mutations. It updates identity, adds the
-`POWER_APPS_WEB_PREVIEW` web-output override to the template's `customizeExpoConfig`
-hook (SKILL.md Step 3.5 explains why), removes only recognized legacy example
-hooks/query-client files, copies shared helpers (including the data layer's
-`src/hooks/data/core.ts`) only when missing, verifies that TypeScript inherits the
-host configuration, and structurally verifies the root provider/theme/safe-area
-contract. It preserves custom navigation, existing helper bytes, `offlineProfile`,
-provider props, and the template's `@ts-ignore` generation boundaries.
+The script is the only owner of these mutations. It updates identity, removes
+only recognized legacy example hooks/query-client files, copies shared helpers
+only when missing, verifies that TypeScript inherits the host configuration, and
+structurally verifies the root provider/theme/safe-area contract. It preserves
+custom navigation, existing helper bytes, `offlineProfile`, provider props, and
+the template's `@ts-ignore` generation boundaries.
+
+`--screens-first` adds the two things only this build order needs: the
+`POWER_APPS_WEB_PREVIEW` web-output override in the template's `customizeExpoConfig`
+hook ([`screens-first.md`](screens-first.md) Step 3.5 explains why), and the data
+layer's `src/hooks/data/core.ts`. The data-model-first order runs the script
+without the flag, because an `src/hooks/data/` folder makes `screen-builder` and
+`/edit-app` treat the app as a data-layer app.
+
+Preparation also copies missing app-local guidance from `template/AGENTS.md`,
+`template/CLAUDE.md`, and `template/.github/copilot-instructions.md`. Existing
+customer guidance is preserved byte-for-byte; no symlinked destination is
+followed. `copiedGuidanceFiles` and `preservedGuidanceFiles` describe the result,
+and only actual copies appear in `writtenFiles`. Do not overwrite a preserved
+file just to make the default skill routing appear.
 
 **Generated ownership boundary:** Step 3.2 must not create, reset, delete, or
 write anything under `src/generated/`. Only Power Apps schema/data-source

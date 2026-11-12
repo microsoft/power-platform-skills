@@ -35,7 +35,7 @@ remote diagnostics or analytics until the user gives an explicit instruction cov
 Environment-ID confirmation alone is insufficient. This is user-level integration instruction,
 not tenant-admin consent or a plugin-enforced per-request gateway; existing authorization still applies.
 
-1. Check Node.js 22/24 LTS and Azure CLI 2.54+ (`az version`).
+1. Check Node.js 22+ (prefer a maintained LTS release) and Azure CLI 2.54+ (`az version`).
    Use official installation guidance in the README; never install or change global settings automatically.
    The bundle is ready to run; source development uses `npm ci` then `npm run build`
    from this directory in a repository checkout, never during MCP launch.

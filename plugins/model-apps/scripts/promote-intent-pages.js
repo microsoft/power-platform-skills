@@ -19,14 +19,16 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { parseArgs, validateFlags, readJsonArg, emitResult } = require('./lib/dataverse-auth.js');
+const { makeWritesBlocking } = require('./lib/output-redaction.js');
 const { migrateAppSpec } = require('./lib/app-spec.js');
 const { pageKey, pageFile } = require('./lib/page-plan.js');
 const { navReferencedKeys, navMalformedRefs, navTargetParity, strayPageRefs, describePageRefLocations, pageRefAdvice, frontierNote, PAGEREF_RULE } = require('./lib/pageref-resolver.js');
 // The structural gate (empty, truncated, prose, elided) is shared with genpage-worker-output.js, so a
 // page one gate refuses the other refuses too. See lib/page-structure.js for each check and why.
-const { pageStructureProblems: structuralProblems } = require('./lib/page-structure.js');
+const { pageStructure, pageStructureProblems: structuralProblems } = require('./lib/page-structure.js');
+const { typescriptProviderOptions } = require('./lib/typescript-provider.js');
 
-function validatePage(page, absWorkingDir) {
+function validatePage(page, absWorkingDir, { typescript } = {}) {
   const key = pageKey(page);
   const file = pageFile(page);
 
@@ -42,7 +44,11 @@ function validatePage(page, absWorkingDir) {
   if (!fs.existsSync(abs)) return { key, file, problems: ['file was never written'] };
 
   const code = fs.readFileSync(abs, 'utf8');
-  const problems = structuralProblems(code);
+  // `typescript`: a caller's provider (lib/typescript-provider.js) — the parser is handed the resolved namespace, never the provider as given.
+  const { problems, code: refusalCode } = pageStructure(code, typescriptProviderOptions(typescript).parse);
+  // A valid page nested too deeply for the parser is refused with the compile's own code and the page's name, and nothing else is said of it: what the navigation
+  // checks below would find is read from the lexer's wrong view of it.
+  if (refusalCode) return { key, file, code: refusalCode, problems: problems.map((p) => `page "${page.name || key}" (${file}): ${p}`) };
 
   // Cross-page nav must be exactly what the spec declares, checked BEFORE promotion. The build
   // HALTs on a malformed PAGEREF or a nav parity mismatch, so catching it here keeps the failure
@@ -75,6 +81,7 @@ function main() {
     needValue: ['spec', 'working-dir'],
   });
   if (flagError) {
+    makeWritesBlocking(process.stdout, process.stderr);
     process.stderr.write(`✗ ${flagError}\n${USAGE}\n`);
     process.exit(1);
   }
@@ -97,10 +104,12 @@ function main() {
     originalText = fs.readFileSync(specPath, 'utf8');
     raw = JSON.parse(originalText);
   } catch (e) {
+    makeWritesBlocking(process.stdout, process.stderr);
     process.stderr.write(`cannot read app spec at ${specPath}: ${e.message}\n`);
     process.exit(3);
   }
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    makeWritesBlocking(process.stdout, process.stderr);
     process.stderr.write(`app spec at ${specPath} is not a JSON object\n`);
     process.exit(3);
   }
@@ -133,7 +142,10 @@ function main() {
   const failed = results.filter((r) => r.problems.length);
   if (failed.length) {
     // Fail-closed: the spec on disk is untouched, so the caller can regenerate just the bad pages
-    // and re-run this command.
+    // and re-run this command. Every failed page's diagnostics go out on both streams and the process
+    // exits right after, so the writes are made blocking first: on Linux and macOS a pipe would
+    // otherwise take only what fits at once (lib/output-redaction.js).
+    makeWritesBlocking(process.stdout, process.stderr);
     process.stdout.write(JSON.stringify({ ok: false, promoted: [], failed }, null, 2) + '\n');
     process.stderr.write(
       `promotion aborted — ${failed.length} of ${results.length} page(s) failed validation; app-spec.json was NOT modified\n`
@@ -176,6 +188,7 @@ function main() {
     fs.renameSync(tmp, specPath);
   } catch (e) {
     try { fs.unlinkSync(tmp); } catch { /* nothing to clean up */ }
+    makeWritesBlocking(process.stdout, process.stderr);
     process.stderr.write(`failed to write ${specPath}: ${e.message}\n`);
     process.exit(3);
   }

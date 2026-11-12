@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-// Creates a cloud flow consumer metadata YAML file for Power Pages code sites.
+// Creates a cloud flow consumer metadata YAML file for Power Pages SPA sites.
 //
 // Field naming follows PAPortalCommon.cs ConvertToReadableJson (git format):
 //   - adx_* scalar fields have the "adx_" prefix stripped
@@ -10,7 +10,7 @@
 //   - adx_flowapiurl → flowapiurl
 //   - adx_flowtriggerurl → flowtriggerurl
 //   - adx_metadata → metadata
-//   - adx_websiteid is NOT written — not required for code sites
+//   - adx_websiteid is NOT written — not required for SPA sites
 //   - M2M relationship adx_CloudFlowConsumer_adx_webrole kept as-is
 //   - statecode/statuscode defaults omitted
 //   - Empty string values written as ''
@@ -120,7 +120,7 @@ function yamlStr(val) {
 }
 
 // Fields sorted alphabetically, matching PAPortalCommon.cs ConvertToReadableJson output.
-// websiteid is intentionally omitted — not required for code sites.
+// websiteid is intentionally omitted — not required for SPA sites.
 const yamlLines = [
   'adx_CloudFlowConsumer_adx_webrole:',
   ...webRoleIds.map(id => `  - ${id}`),

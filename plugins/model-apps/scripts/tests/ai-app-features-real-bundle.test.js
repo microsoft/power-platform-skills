@@ -341,3 +341,67 @@ test('REAL BUNDLE: disabling is NOT gated — a false is written even when the o
   assert.ok(save, 'a disable must be written even with the gate off');
   assert.strictEqual(String(save.body.Value), '1', 'and 1 means DISABLED, not platform default');
 });
+
+// --- an override that is saved but not yet published ---------------------------------------------------
+// A write lands in the app's UNPUBLISHED layer (`componentstate` 1). The proof used to read only the published
+// `appsettings` projection, so a feature on a freshly created app came back `notPersisted` and the build wrote it
+// again after a publish. The bundle now reads the unpublished layer too and answers `applied` with
+// `pendingPublish: true` — which the build must NOT count as in force (rebucketPendingPublish), or a build without
+// `--publish` reports rows that no runtime serves and `--verify` (which reads the published layer) contradicts it.
+
+test('REAL BUNDLE: an override still in the unpublished layer is `applied` with pendingPublish — and the proof reads that layer', async () => {
+  const { sdk, calls } = await freshSdk({ gate: '2', effective: '2', overrideRows: [{ value: '2', componentstate: 1 }] });
+  const r = await sdk.setAppAiFeatures(APP, { formFill: true }, { ...FAST, appModuleId: APP_ID });
+  assert.deepStrictEqual(r.applied, ['formFill']);
+  assert.strictEqual(r.outcomes[0].status, 'applied');
+  assert.strictEqual(r.outcomes[0].pendingPublish, true, 'saved, taking effect when the app is published');
+  const proof = calls.find((c) => c.method === 'GET' && c.url.includes('/appsettings'));
+  assert.match(decodeURIComponent(proof.url), /appsettings\/Microsoft\.Dynamics\.CRM\.RetrieveUnpublishedMultiple\(\)/, 'the proof reads the unpublished-aware function, not the published collection');
+});
+
+test('REAL BUNDLE: a row already in force carries no pendingPublish', async () => {
+  for (const rows of [[{ value: '2', componentstate: 0 }], [{ value: '2' }]]) {
+    const { sdk } = await freshSdk({ gate: '2', effective: '2', overrideRows: rows });
+    const r = await sdk.setAppAiFeatures(APP, { formFill: true }, { ...FAST, appModuleId: APP_ID });
+    assert.deepStrictEqual(r.applied, ['formFill']);
+    assert.strictEqual(r.outcomes[0].pendingPublish, undefined, JSON.stringify(rows));
+  }
+});
+
+test('REAL BUNDLE: the build files a pendingPublish outcome outside `applied`, and a settled one stays where it is', async () => {
+  const { rebucketPendingPublish } = require('../lib/ai-app-settings.js');
+  const { sdk } = await freshSdk({ gate: '2', effective: '2', overrideRows: [{ value: '2', componentstate: 1 }] });
+  const pending = rebucketPendingPublish(await sdk.setAppAiFeatures(APP, { formFill: true }, { ...FAST, appModuleId: APP_ID }));
+  assert.deepStrictEqual([pending.applied, pending.pendingPublish], [[], ['formFill']]);
+  assert.strictEqual(pending.outcomes[0].status, 'pendingPublish');
+  assert.match(pending.outcomes[0].reason, /not in force until the app is published/);
+
+  const { sdk: settled } = await freshSdk({ gate: '2', effective: '2', overrideRows: [{ value: '2' }] });
+  const r = rebucketPendingPublish(await settled.setAppAiFeatures(APP, { formFill: true }, { ...FAST, appModuleId: APP_ID }));
+  assert.deepStrictEqual(r.applied, ['formFill']);
+  assert.strictEqual(r.pendingPublish, undefined, 'no bucket is invented for a result with nothing pending');
+});
+
+test('rebucketPendingPublish moves only the flagged features, once, and tolerates results with no detail', () => {
+  const { rebucketPendingPublish } = require('../lib/ai-app-settings.js');
+  const result = {
+    applied: ['formFill', 'nlSearch', 'm365'], skipped: [], notPersisted: [], unverified: [], failed: [],
+    outcomes: [
+      { feature: 'formFill', status: 'applied', appOverrideExists: true },
+      { feature: 'nlSearch', status: 'applied', appOverrideExists: true, pendingPublish: true },
+      { feature: 'm365', status: 'applied', appOverrideExists: true, pendingPublish: true },
+    ],
+  };
+  rebucketPendingPublish(result);
+  assert.deepStrictEqual(result.applied, ['formFill']);
+  assert.deepStrictEqual(result.pendingPublish, ['nlSearch', 'm365']);
+  assert.deepStrictEqual(result.outcomes.map((o) => o.status), ['applied', 'pendingPublish', 'pendingPublish']);
+  // Idempotent: a second pass finds nothing still reading `applied`.
+  rebucketPendingPublish(result);
+  assert.deepStrictEqual(result.pendingPublish, ['nlSearch', 'm365']);
+  // A result with no per-feature detail (an older SDK shape) is returned untouched.
+  const bare = { applied: ['formFill'] };
+  assert.strictEqual(rebucketPendingPublish(bare), bare);
+  assert.deepStrictEqual(bare, { applied: ['formFill'] });
+  assert.strictEqual(rebucketPendingPublish(undefined), undefined);
+});

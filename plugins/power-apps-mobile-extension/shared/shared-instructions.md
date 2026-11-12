@@ -55,6 +55,11 @@ Every skill operates **entirely on the control's own working tree plus public pa
 
 ## 1. Read-first protocol
 
+The `/telemetry` support skill is an exception to the authoring read-first and
+artifact prerequisites below: after reading this file, follow
+[`telemetry.md`](./telemetry.md) and the skill's local control workflow only.
+It needs Node.js 20+, not PAC, authentication, a control project or native tools.
+
 At Step 1 of every skill:
 1. Read this file (`shared/shared-instructions.md`).
 2. Read [`shared/prereq-check.md`](./prereq-check.md) and run the sanity-check one-liner that matches the skill's needs.
@@ -86,6 +91,7 @@ Per-skill check matrix:
 | `/build-ios-binary` | Mac + Xcode | Runs `xcodebuild archive` on a throwaway staging copy. Mac-only. |
 | `/assemble-ppmplugin` | `jar` (JDK) | `jar cMf` over the staged manifest + slices. |
 | `/audit-ppmplugin` | `jar` (JDK); `dexdump`/`strings` optional | Unzips + static checks against the wrap-runtime contract. |
+| `/telemetry` | Node.js 20+ only | Reads/sets the per-user transmission preference; no auth or native build work. |
 
 **When in doubt, run less.** A missing build dependency surfaces naturally via the command that fails (e.g. a missing `platforms;android-35` makes Gradle fail resource linking → failure handler points back to `prereq-check.md`). Pre-checking is not free — it slows every run and surfaces failures unrelated to what the skill is about to do.
 

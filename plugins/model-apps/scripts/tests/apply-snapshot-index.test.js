@@ -81,11 +81,12 @@ test('optional projection hashes + sitemap hash are recorded when provided', () 
 
 test('missing/empty created maps are defensive (no throw, empty submaps)', () => {
   const a = indexArtifacts(spec(), {});
-  assert.deepStrictEqual(a.pages, {});
+  // `pages` (and `dashboards`) are null-prototype maps (lib/own-keys.js: a page's key can be `constructor`), so their entries are compared.
+  assert.deepStrictEqual({ ...a.pages }, {});
   assert.deepStrictEqual(a.views, {});
   assert.deepStrictEqual(a.app, {});
   const b = indexArtifacts({}, {});
-  assert.deepStrictEqual(b.pages, {});
+  assert.deepStrictEqual({ ...b.pages }, {});
 });
 
 test('a page with no content hash records sourceSha:null (still id-tracked)', () => {

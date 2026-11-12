@@ -71,7 +71,7 @@ test('all documentation references resolve inside a symlink-free plugin subtree'
     return files;
   }
   const files = [...await walk(path.join(root, 'skills')), ...await walk(path.join(root, 'references')),
-    ...['README.md', 'AGENTS.md', 'CLAUDE.md'].map(file => path.join(root, file))];
+    ...['README.md', 'AGENTS.md'].map(file => path.join(root, file))];
   for (const file of files) {
     const text = await readFile(file, 'utf8');
     assert.doesNotMatch(text, /C:\\(?:Users|ProcessMining)|microsoft\.ghe\.com|correlationId:\s*[^` ]+/i);
@@ -95,7 +95,7 @@ test('first-party source comments describe current contracts rather than impleme
 });
 
 test('package uses repository integration layout without changing safety or capabilities', async () => {
-  const docs = ['README.md', 'AGENTS.md', 'CLAUDE.md', 'skills/setup/SKILL.md',
+  const docs = ['README.md', 'AGENTS.md', 'skills/setup/SKILL.md',
     'references/connection-patterns.md', 'references/development.md',
     '.plugin/plugin.json', '.claude-plugin/plugin.json'];
   for (const file of docs) {
@@ -220,7 +220,7 @@ test('manifest bootstrap reports a missing bundle and permits unconfigured start
 });
 
 test('install-time files exist within the plugin and contain no fixed local machine paths', async () => {
-  for (const file of ['README.md', 'AGENTS.md', 'CLAUDE.md', 'scripts/build.mjs', 'scripts/test.mjs',
+  for (const file of ['README.md', 'AGENTS.md', 'scripts/build.mjs', 'scripts/test.mjs',
     'server/mcp.mjs', 'plugin.json', 'mcp.json', '.plugin/plugin.json', '.claude-plugin/plugin.json', '.mcp.json']) {
     const text = await readFile(path.join(root, file), 'utf8');
     assert.doesNotMatch(text, /C:\\(?:Users|ProcessMining)|microsoft\.ghe\.com/i);
@@ -250,7 +250,7 @@ test('investigation guidance is self-contained and separates continuation from r
   for (const file of [
     ...analysisSkills.map(skill => `skills/${skill}/SKILL.md`),
     'references/analysis-contract.md', 'references/filters-and-units.md', 'references/formulas.md',
-    'README.md', 'AGENTS.md', 'CLAUDE.md', 'references/development.md'
+    'README.md', 'AGENTS.md', 'references/development.md'
   ]) {
     const text = await readFile(path.join(root, file), 'utf8');
     assert.doesNotMatch(text, /six polls|180 seconds|six polls\/180 seconds/i, file);

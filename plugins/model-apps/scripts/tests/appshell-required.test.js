@@ -9,7 +9,9 @@
 // 19 existing tests build minimal specs with no `appShell` under the default `deploy` profile and
 // assert they validate clean, and the download round-trip depends on that permissiveness. So the
 // contract stays "optional to validation", and the BUILD is what reports the problem — with a
-// message that says exactly what to add.
+// message that says exactly what to add. It now reports it before anything is written, from the
+// spec alone (lib/app-navigation.js, pinned in app-navigation-build.test.js); the error `appDef`
+// throws is the backstop these tests keep pinned.
 //
 // Found by live deep-testing the ai-features phase, whose spec legitimately declared no navigation.
 const test = require('node:test');
@@ -17,6 +19,7 @@ const assert = require('node:assert');
 
 const { validateAppSpec } = require('../lib/app-spec.js');
 const { appDef } = require('../lib/sdk-build.js');
+const { navigationVerdict } = require('../lib/app-navigation.js');
 
 const base = () => ({
   solution: { uniqueName: 'ZZTest', publisherPrefix: 'zzt' },
@@ -70,9 +73,16 @@ test('a valid appShell builds a sitemap — the guard is not a blanket reject', 
   assert.strictEqual(json.siteMap.areas[0].groups[0].subAreas[0].entity, 'zzt_thing');
 });
 
-test('an EMPTY areas[] is still allowed through — it is a valid, if empty, sitemap', () => {
+// `areas: []` is VALID for validation, and appDef builds it into an empty sitemap instead of throwing — which is why a refusal, when there is one, comes from
+// the navigation check (lib/app-navigation.js) with its own message. Whether a build writes it depends on the app: Dataverse refuses to CREATE a sitemap with no
+// entry, so a new app is refused before anything is written, and accepts one on an UPDATE, so an app that exists is built, with a warning that it is left with
+// no navigation entries.
+test('an EMPTY areas[] is valid and appDef builds it into an empty sitemap — the navigation check, not appDef, refuses it for a new app and lets an existing one through', () => {
   const spec = base();
   spec.appShell = { areas: [] };
+  assert.deepStrictEqual(((validateAppSpec(spec) || {}).errors || []).filter((e) => /appShell/.test(e)), [], 'valid for validation');
   const json = appDef(spec, emptyResult(), {});
-  assert.deepStrictEqual(json.siteMap.areas, [], 'an explicit empty areas[] is a choice, not a mistake');
+  assert.deepStrictEqual(json.siteMap.areas, [], 'appDef does not throw on it: an explicit empty areas[] is a different thing from no areas[] at all');
+  assert.strictEqual(navigationVerdict(spec, { appExists: false }).outcome, 'refuse', 'a new app is refused before anything is written');
+  assert.strictEqual(navigationVerdict(spec, { appExists: true }).outcome, 'warn', 'an app that exists is built, and told what it is left with');
 });

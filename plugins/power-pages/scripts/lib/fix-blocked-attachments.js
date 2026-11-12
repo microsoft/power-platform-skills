@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 // Checks and optionally fixes the blockedattachments setting on a
-// Dataverse environment. Power Pages code sites use .js files in their
+// Dataverse environment. Power Pages SPA sites use .js files in their
 // compiled output; environments with .js in blockedattachments reject
 // uploads (pac pages upload-code-site) and solution imports (deploy-pipeline).
 //
@@ -11,7 +11,7 @@
 //
 // The blocked-attachment list is semicolon-separated (e.g.,
 // "exe;dll;js;vbs;..."). This script removes only the extensions that are
-// needed by Power Pages code sites (.js; optionally .css if blocked).
+// needed by Power Pages SPA sites (.js; optionally .css if blocked).
 //
 // Usage:
 //   node fix-blocked-attachments.js

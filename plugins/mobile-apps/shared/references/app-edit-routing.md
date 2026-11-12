@@ -17,6 +17,14 @@ or starting a planner; do not broaden the available CLI surface.
 
 ## Direct requests
 
+Distinguish a confirmed fresh starter from an existing or customized app using
+the supplied intent and minimal local markers. Shipped starter routes alone do
+not prove generation, and a missing plan alone does not prove freshness. If
+unclear, ask before choosing creation or editing. A native-control request in a
+confirmed fresh starter stays with `/add-native` and its standalone prerequisites
+and approval gates; do not invoke `/edit-app` or silently start full app creation.
+Current approved create/edit children retain their owner even when a plan exists.
+
 For an existing mobile app, use a lightweight **entry-choice gate** before loading
 or invoking `/edit-app`. Check only the supplied request/caller context and local
 project markers needed to identify the app. Do not run health/type checks, scan
@@ -62,10 +70,14 @@ memory-bank update. Do not ask the user to run a second command themselves.
 The entry choice approves entering that workflow, not its mutations: preserve
 its impact/plan approval and explicit approval for data-source removals.
 
-If full integration was selected but the app's plan is missing, report that
-prerequisite and ask whether to restore it or choose a limited implementation-only
-operation. Implementation-only work does not require a complete app plan.
-Do not re-scaffold over the app or fabricate a complete plan from one request.
+If full integration was selected for a confirmed existing or customized app whose
+plan is missing, invoke `/edit-app`.
+Its read-only inspection creates an inferred current-state baseline before proposing
+the requested delta.
+The entry choice authorizes delegation only; retain `/edit-app`'s impact and mutation
+approval gates.
+Implementation-only work does not require a complete app plan.
+Do not re-scaffold over the app or infer an existing app when its state is unclear.
 Outside an existing app, retain the skill's project prerequisites and standalone
 planning behavior; brand-only design generation need not create an app.
 

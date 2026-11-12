@@ -167,11 +167,41 @@ After the prereq sanity check passes:
 > /create-mobile-app build me a small notes app
 ```
 
-Expected: one setup question and one screen-list approval, then your first screen running in the build plan's phone about five minutes after the prompt, before any table or connector exists. After you confirm it, the design system, data model, and connections are added. End state: a working Notes app with a project-local Metro session ready to scan and debug. If anything fails, the [memory bank](#glossary) remembers where you left off — re-run the same command and it resumes.
+Expected: first a build-order question. With **Screens first** (recommended), one setup question and one screen-list approval follow, then your first screen runs in the build plan's phone about five minutes after the prompt, before any table or connector exists; after you confirm it, the design system, data model, and connections are added. With **Data model first**, ~6 prompts (wizard + gates) approve the architecture, data model, and screens up front, then ~5 minutes of scaffolding, table creation, and parallel screen builds. Either way, the end state is a working Notes app with a project-local Metro session ready to scan and debug. Pass `--screens-first` or `--data-model-first` to skip the question.
+
+If creation stops, explicitly ask to continue that creation. The skill checks
+the [memory bank](#glossary), saved build-plan progress, and current artifacts,
+then confirms the unfinished phase and continues in the build order it started with.
+A plan written before app initialization
+is not a completed app. Opening an existing app or asking for a feature change
+does not automatically resume creation, even if a memory bank exists.
 
 ## Quick examples
 
-The plugin is conversational — you describe what you want and the skill drives the rest. Five typical flows:
+The plugin is conversational: slash commands are optional when the agent host
+loads the app guidance and advertises the matching skills. Describe the task
+naturally, such as "Add signature capture", "Connect a data source", or "Upgrade
+this app's dependencies". The agent selects the most specific matching skill by
+description and supported scope, then invokes it after any required entry
+consent rather than asking you to repeat the prompt as a command.
+
+The intent table in the generated app guidance is examples, not a closed
+allowlist. Future or custom skills advertised by your host are eligible too.
+An ambiguous scope prompts clarification; a missing plugin requires approval
+before installation or enabling. Opening the folder alone starts nothing, and
+`edit-app` is not the default for every request. Existing approval gates and
+fresh-template safeguards still apply.
+
+There is no extra approval just to select or load a clearly matching skill.
+Approvals cover the work: integration scope/cost, Dataverse schema/data changes,
+installations, native builds, and deployment. Dataverse workflows validate the
+app root and selected environment/tenant, inspect existing inventory, and show
+the proposed changes before mutation approval. Missing skills or unresolved
+targets block that work instead of falling back to ad-hoc commands. Approval to
+install a plugin never authorizes its Dataverse changes; current approvals are
+reused only for the same target and scope.
+
+Five typical flows:
 
 ### 1. Create a new app from a one-liner
 
@@ -179,7 +209,9 @@ The plugin is conversational — you describe what you want and the skill drives
 > /create-mobile-app I want a field inspection app where technicians log site visits with photos, GPS location, and notes
 ```
 
-What happens:
+What happens: the skill first asks for a **build order**. Both make the same app; they differ in what you see first. Pass `--screens-first` or `--data-model-first` to skip the question.
+
+**Screens first (recommended)** - watch your screens get built and run live in the build plan's phone within minutes, then make them real:
 1. **Setup question** (~30s) — one question for the app name, environment, look, and, for a short prompt, the features to build
 2. **Scaffold** — validates the prepared template folder and runs `pa app init` while the screens are planned
 3. **Screen graph gate** — approve the screen list, navigation, and the data each screen shows
@@ -189,7 +221,18 @@ What happens:
 7. **Make it real** — auth, Dataverse tables, native capabilities, and connectors, then the app's data layer is switched from sample data to the real sources without touching the screens
 8. **Dev server** — the plugin starts a portable Metro session; scan the QR with your native dev client and use `/debug-app` against its persisted sanitized log
 
-End state: a working app you can iterate on with hot reload. Your first screen runs in the build plan's phone about five minutes after the prompt, not counting the time you spend answering; the rest of the build happens after you confirm the screens.
+Your first screen runs in the build plan's phone about five minutes after the prompt, not counting the time you spend answering; the rest of the build happens after you confirm the screens.
+
+**Data model first** - approve the architecture and data model up front, then build the screens on real data:
+1. **Wizard** (~30s) — confirms device class / aesthetic
+2. **Requirements brief** — the orchestrator infers features (data entry, camera, location), pre-checks them, asks you to confirm or adjust
+3. **Industry confirmation** — only fires if the inference is shaky (your description matched multiple industries, or none)
+4. **Up to 4 approval gates** — data platform + native capabilities + connectors → Dataverse model when selected → screen graph → screen specs (reviewed in markdown before code is written)
+5. **Design system** — brand inputs (logo, brand doc, website, or free-text) → cost picker → style picker → component reference sheet → branded screen previews
+6. **Scaffold + build** — validates the prepared template folder, runs `pa app init`, verifies installed dependencies, generates schemas, builds Dataverse tables, wires connectors, spawns N parallel screen-builders for the TSX
+7. **Dev server** — the plugin starts a portable Metro session; scan the QR with your native dev client and use `/debug-app` against its persisted sanitized log
+
+End state: a working app you can iterate on with hot reload.
 
 ### 2. Add Dataverse tables to an existing app
 
@@ -282,7 +325,29 @@ separate approval. Cloud-flow integration is not supported.
 > /report-issue                  # copy-paste-ready GitHub issue body
 ```
 
-Use `/edit-app` for post-generation improvements. It first inspects the existing app and asks only for missing intent details (which screen, table, scanned field, launch point, brand source, etc.). Then it updates `native-app-plan.md` when the request changes the plan, applies the generated app edits, runs the relevant verification, updates `memory-bank.md`, and regenerates `preview.html` when UI changed. You do not need to manually run `npm run generate-schemas`, `npx --no-install tsc --noEmit`, or `/preview-screens` after each edit unless you are doing diagnostics outside the skill.
+Use `/edit-app` for post-generation improvements. Users can invoke it directly
+or ask naturally, for example, "This app already exists; add an asset detail
+screen." For a natural-language existing-app feature request, the generated app
+guidance asks whether the user wants **Implementation only**, **Full app
+integration**, or **Cancel**. Full integration invokes `/edit-app` with the
+original request; it does not merely recommend the command or ask the user to
+repeat the prompt. Reported failures still go to `/debug-app`, dependency or
+template upgrades go to `/check-updates`, and small app-owned fixes remain
+small.
+
+A fresh starter is not an already-generated app. Native-control requests such
+as "Add signature capture" use `/add-native` and its standalone prerequisites;
+they do not automatically start `/edit-app` or full app creation. An existing
+app with a missing plan is not considered fresh and must not be re-scaffolded.
+
+`/edit-app` first inspects the existing app and asks only for missing intent
+details (which screen, table, scanned field, launch point, brand source, etc.).
+Then it updates `native-app-plan.md` when the request changes the plan, applies
+the generated app edits, runs the relevant verification, updates
+`memory-bank.md`, and regenerates `preview.html` when UI changed. You do not
+need to manually run `npm run generate-schemas`,
+`npx --no-install tsc --noEmit`, or `/preview-screens` after each edit unless
+you are doing diagnostics outside the skill.
 
 Common follow-ups:
 
@@ -310,9 +375,40 @@ Example edit flows:
 
 ## Commands
 
+**For an app problem, try `/debug-app` before reporting an issue.** It can
+distinguish local setup/configuration problems from app-code or package defects
+and collect useful evidence without assuming a Microsoft package is broken.
+
+```text
+/debug-app startup "npm run dev fails before the QR appears"
+/debug-app "QR won't open the app"
+/debug-app "orders screen is empty"
+```
+
+If diagnostics cannot resolve the issue, use `/report-issue` with the sanitized
+findings and original reproduction steps. Do not include raw logs or credentials.
+A confirmed package defect should be reported rather than patched locally.
+This is a recommended first step, not a barrier to an explicit issue-report
+request; plugin installation/loading failures may need reporting before any
+app-level skill can run.
+
+For startup or QR-opening failures, use `/debug-app startup "<symptom>"` even
+when no native app is loaded. It inspects installation/lock consistency, relevant
+Node requirements, installed versions, and package entry points before proposing
+a repair. Restoring the same locked dependencies and restarting Metro each need
+explicit approval; upgrades remain outside this workflow. A successful install
+is not an app fix: the original startup or device symptom must be verified.
+`--no-fix` performs inspection only. Creation offers this same startup path if
+its `npm run dev` launch fails; it does not start indefinite runtime monitoring.
+
+The inspector checks static metadata, not every possible startup cause. When
+those checks do not explain the symptom, diagnosis follows the original error
+into relevant app scripts/configuration or reports the missing evidence. Clean
+metadata alone never means the app is healthy.
+
 | Command | Status | Description |
 | --- | --- | --- |
-| `/create-mobile-app` | ✅ v0 | Orchestrator — starts from a fresh installed `expo-app-standalone` template folder, runs `pa app init`, plans and builds the screens on sample data and shows them in a live web preview first, then gates architecture and data model planning, resolves the selected environment tenant, discovers tenant-visible app registrations and checks the complete required permission profile, lets the user select or create one (or skip auth), then applies data/native/connectors, builds screens, starts dev server |
+| `/create-mobile-app` | ✅ v0 | Orchestrator — starts from a fresh installed `expo-app-standalone` template folder and asks for a build order: screens first (recommended) plans and builds the screens on sample data and shows them in a live web preview before architecture and data model planning, while data model first approves the architecture, data model, and screens up front. Either way it runs `pa app init`, resolves the selected environment tenant, discovers tenant-visible app registrations and checks the complete required permission profile, lets the user select or create one (or skip auth), then applies data/native/connectors, builds screens, starts dev server |
 | `/set-app-registration-native` | ✅ v0 | Auth helper — discovers tenant-visible app registrations, checks the applicable native runtime permission profile, opens the environment-specific Wrap page for creation or repair, and writes the selected client ID to `auth.config.json`. |
 | `/add-dataverse` | ✅ v0 | Add Dataverse — connect to existing tables, or create / extend tables in Tier 0 → N order via the Dataverse Web API, then generate TS services. Accepts ER diagrams via image / Mermaid / text, or spawns the data-model-architect agent. |
 | `/setup-datamodel` | ✅ v0 | Plan and approve a scoped Dataverse/connector change. Choose data-only work or full `/edit-app` integration; `--plan-only` returns a proposal without applying it. |
@@ -320,7 +416,7 @@ Example edit flows:
 | `/add-native` | ✅ v0 | Add a supported native capability/control (camera, image-picker, barcode/QR scanner, document-picker, PDF viewer/report, pen/signature, secure-store, file-system, sharing, haptics, etc.) — verifies the module already ships in the template and writes typed wrappers under `src/native/` without installing native packages or editing `app.config.js` |
 | `/list-connections` | ✅ v0 | Finds or creates a Power Platform connection ID, or resolves a solution connection reference, for `pa app add data-source`. Use when adding non-Dataverse connectors or re-binding after a 401. |
 | `/edit-app` | ✅ v0 | Post-generation app editor — updates affected sections of `native-app-plan.md`, applies Dataverse/native/design/connector changes, rebuilds affected screens, runs verification, updates `memory-bank.md`, and regenerates `preview.html` when UI changed. `--plan-only` preserves the old docs-only behavior. |
-| `/debug-app` | ✅ v0 | Monitors live `.powernative/metro-logs/` files with a durable byte cursor, stores host-neutral cursor/audit/health state under `.powernative/debug-app/`, diagnoses runtime and silent data-path failures, and verifies bounded fixes without depending on host terminal IDs. |
+| `/debug-app` | ✅ v0 | Diagnoses install/startup/QR failures before an app is loaded, then monitors live sanitized `.powernative` logs for runtime or silent failures. Same-lock restoration and Metro restart require explicit approval; it does not upgrade dependencies. `startup` returns without the runtime monitor; `--no-fix` stays non-mutating. |
 | `/setup-app-insights` | ✅ v0 | Configure optional customer-owned Application Insights telemetry — discover or accept an existing Azure resource and wire `app.json` → `expo.extra.appInsightsConfig` + `PowerAppsProvider`, change the resource, or disable it. Off by default; invoking it is the opt-in. Also delegated to by `/edit-app`. Never provisions Azure resources or stores the connection string. |
 | `/check-updates` | ✅ v0 | Standalone dependency maintenance — checks for a plugin update and restart first, then presents, approves, updates, and validates direct packages one at a time in host, other `@microsoft/*`, and remaining npm package order. |
 | `/deploy` | ✅ v0 | Build + push — `npm run build` then `pa app push` to the env in `power.config.json`. **Does not** drive `expo run:ios` or `expo run:android` (out of scope for v0). |

@@ -3,13 +3,13 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
-const os = require("node:os");
 const path = require("node:path");
 
 const { read, write, TTL_MS } = require("../lib/telemetry/region/region-cache");
+const { makeTempDir } = require("./helpers/temp-dirs");
 
 function mkTmp() {
-  return fs.mkdtempSync(path.join(os.tmpdir(), "ppskills-rc-"));
+  return makeTempDir("ppskills-rc-");
 }
 
 // Path of an org's per-org cache file under a config dir.
@@ -79,7 +79,7 @@ test("read returns null when JSON is malformed", () => {
 });
 
 test("write swallows disk errors (target dir unwritable)", () => {
-  const notADir = path.join(os.tmpdir(), "ppskills-not-a-dir-" + Date.now());
+  const notADir = path.join(mkTmp(), "not-a-dir");
   fs.writeFileSync(notADir, "");
   assert.doesNotThrow(() => write(orgIdA, entryUS, notADir));
 });

@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "control": {
+    "namespace": "Contoso.Controls",
+    "name": "DatasetCards",
+    "displayName": "Dataset cards",
+    "description": "Shows records as cards",
+    "template": "dataset-standard"
+  },
+  "hosts": ["pages"],
+  "connectivity": "online",
+  "properties": [
+    { "name": "label", "usage": "input", "type": "SingleLine.Text", "required": false }
+  ],
+  "features": [],
+  "deploy": { "solution": "ContosoCore", "publisherPrefix": null },
+  "bindings": [],
+  "pages": { "journeys": ["form-field"] }
+}

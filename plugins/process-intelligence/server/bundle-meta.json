@@ -151,7 +151,7 @@
       "format": "esm"
     },
     "node_modules/zod/v4/core/util.js": {
-      "bytes": 34363,
+      "bytes": 34840,
       "imports": [
         {
           "path": "node_modules/zod/v4/core/core.js",
@@ -252,7 +252,7 @@
       "format": "esm"
     },
     "node_modules/zod/v4/core/schemas.js": {
-      "bytes": 105968,
+      "bytes": 107291,
       "imports": [
         {
           "path": "node_modules/zod/v4/core/checks.js",
@@ -1328,7 +1328,7 @@
       "format": "esm"
     },
     "node_modules/zod/v4/core/compile.js": {
-      "bytes": 91611,
+      "bytes": 92003,
       "imports": [
         {
           "path": "node_modules/zod/v4/core/core.js",
@@ -3123,7 +3123,7 @@
       "format": "esm"
     },
     "node_modules/@modelcontextprotocol/sdk/dist/esm/shared/protocol.js": {
-      "bytes": 51762,
+      "bytes": 53923,
       "imports": [
         {
           "path": "node_modules/@modelcontextprotocol/sdk/dist/esm/server/zod-compat.js",
@@ -3538,7 +3538,7 @@
       "imports": []
     },
     "node_modules/fast-uri/lib/utils.js": {
-      "bytes": 20835,
+      "bytes": 22505,
       "imports": [],
       "format": "cjs"
     },
@@ -3554,7 +3554,7 @@
       "format": "cjs"
     },
     "node_modules/fast-uri/index.js": {
-      "bytes": 22264,
+      "bytes": 25881,
       "imports": [
         {
           "path": "node_modules/fast-uri/lib/utils.js",
@@ -4588,7 +4588,7 @@
       "format": "esm"
     },
     "node_modules/@modelcontextprotocol/sdk/dist/esm/shared/transport.js": {
-      "bytes": 1478,
+      "bytes": 5247,
       "imports": [],
       "format": "esm"
     },
@@ -4604,7 +4604,7 @@
       "format": "esm"
     },
     "node_modules/@modelcontextprotocol/sdk/dist/esm/shared/auth.js": {
-      "bytes": 8232,
+      "bytes": 8736,
       "imports": [
         {
           "path": "node_modules/zod/v4/index.js",
@@ -4625,7 +4625,7 @@
       "format": "esm"
     },
     "node_modules/@modelcontextprotocol/sdk/dist/esm/client/auth.js": {
-      "bytes": 40372,
+      "bytes": 47017,
       "imports": [
         {
           "path": "node_modules/pkce-challenge/dist/index.node.js",
@@ -4656,6 +4656,11 @@
           "path": "node_modules/@modelcontextprotocol/sdk/dist/esm/server/auth/errors.js",
           "kind": "import-statement",
           "original": "../server/auth/errors.js"
+        },
+        {
+          "path": "node_modules/@modelcontextprotocol/sdk/dist/esm/shared/transport.js",
+          "kind": "import-statement",
+          "original": "../shared/transport.js"
         }
       ],
       "format": "esm"
@@ -4682,7 +4687,7 @@
       "format": "esm"
     },
     "node_modules/@modelcontextprotocol/sdk/dist/esm/client/streamableHttp.js": {
-      "bytes": 22564,
+      "bytes": 23781,
       "imports": [
         {
           "path": "node_modules/@modelcontextprotocol/sdk/dist/esm/shared/mediaType.js",
@@ -4819,7 +4824,7 @@
       "format": "esm"
     },
     "package.json": {
-      "bytes": 399,
+      "bytes": 385,
       "imports": [],
       "format": "esm",
       "with": {
@@ -4978,7 +4983,7 @@
       "format": "esm"
     },
     "src/cli.mjs": {
-      "bytes": 9787,
+      "bytes": 9785,
       "imports": [
         {
           "path": "src/errors.mjs",
@@ -5252,13 +5257,13 @@
           "bytesInOutput": 561
         },
         "node_modules/fast-uri/lib/utils.js": {
-          "bytesInOutput": 17956
+          "bytesInOutput": 19002
         },
         "node_modules/fast-uri/lib/schemes.js": {
           "bytesInOutput": 6582
         },
         "node_modules/fast-uri/index.js": {
-          "bytesInOutput": 17632
+          "bytesInOutput": 19094
         },
         "node_modules/ajv/dist/runtime/uri.js": {
           "bytesInOutput": 295
@@ -5429,7 +5434,7 @@
           "bytesInOutput": 10313
         },
         "node_modules/zod/v4/core/util.js": {
-          "bytesInOutput": 24807
+          "bytesInOutput": 25130
         },
         "node_modules/zod/v4/core/core.js": {
           "bytesInOutput": 3352
@@ -5453,7 +5458,7 @@
           "bytesInOutput": 54
         },
         "node_modules/zod/v4/core/schemas.js": {
-          "bytesInOutput": 78389
+          "bytesInOutput": 79408
         },
         "node_modules/zod/v4/core/memoizer.js": {
           "bytesInOutput": 7526
@@ -5654,7 +5659,7 @@
           "bytesInOutput": 1330
         },
         "node_modules/zod/v4/core/compile.js": {
-          "bytesInOutput": 58517
+          "bytesInOutput": 58892
         },
         "node_modules/zod/v4/core/api.js": {
           "bytesInOutput": 23723
@@ -5729,7 +5734,7 @@
           "bytesInOutput": 528
         },
         "node_modules/@modelcontextprotocol/sdk/dist/esm/shared/protocol.js": {
-          "bytesInOutput": 36025
+          "bytesInOutput": 37487
         },
         "node_modules/@modelcontextprotocol/sdk/dist/esm/validation/ajv-provider.js": {
           "bytesInOutput": 2044
@@ -5747,13 +5752,13 @@
           "bytesInOutput": 416
         },
         "node_modules/@modelcontextprotocol/sdk/dist/esm/shared/transport.js": {
-          "bytesInOutput": 705
+          "bytesInOutput": 3398
         },
         "node_modules/pkce-challenge/dist/index.node.js": {
           "bytesInOutput": 1464
         },
         "node_modules/@modelcontextprotocol/sdk/dist/esm/shared/auth.js": {
-          "bytesInOutput": 6441
+          "bytesInOutput": 6917
         },
         "node_modules/@modelcontextprotocol/sdk/dist/esm/shared/auth-utils.js": {
           "bytesInOutput": 924
@@ -5762,7 +5767,7 @@
           "bytesInOutput": 3474
         },
         "node_modules/@modelcontextprotocol/sdk/dist/esm/client/auth.js": {
-          "bytesInOutput": 21179
+          "bytesInOutput": 24158
         },
         "node_modules/eventsource-parser/dist/index.js": {
           "bytesInOutput": 7757
@@ -5771,7 +5776,7 @@
           "bytesInOutput": 669
         },
         "node_modules/@modelcontextprotocol/sdk/dist/esm/client/streamableHttp.js": {
-          "bytesInOutput": 14602
+          "bytesInOutput": 15569
         },
         "node_modules/@modelcontextprotocol/sdk/dist/esm/experimental/tasks/server.js": {
           "bytesInOutput": 7900
@@ -5795,7 +5800,7 @@
           "bytesInOutput": 2162
         },
         "package.json": {
-          "bytesInOutput": 394
+          "bytesInOutput": 380
         },
         "src/bridge.mjs": {
           "bytesInOutput": 10995
@@ -5807,10 +5812,10 @@
           "bytesInOutput": 10553
         },
         "src/cli.mjs": {
-          "bytesInOutput": 8946
+          "bytesInOutput": 8944
         }
       },
-      "bytes": 1274176
+      "bytes": 1286962
     }
   }
 }

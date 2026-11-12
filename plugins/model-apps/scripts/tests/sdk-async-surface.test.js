@@ -27,8 +27,8 @@
 // matched against the RAW source and only dismissed when two INDEPENDENT signals agree, so a flaw
 // in its lexer produces a false positive (loud, waivable) rather than a hidden call.
 //
-// It is not sound, and cannot be made sound with regular expressions. Four rounds of adversarial
-// review each found new constructs, and the residual known limits are:
+// It is not sound, and cannot be made sound with regular expressions. Repeated adversarial
+// review kept finding new constructs, and the residual known limits are:
 //   * PARAMETER destructuring — `function use({ getArtifact }) { getArtifact(id); }`. No textual
 //     anchor distinguishes an ObjectPattern from an ObjectExpression, so trying to catch it flagged
 //     every mock object literal in the suite. An AST distinguishes them; a regex cannot.
@@ -441,7 +441,7 @@ test('GUARD-THE-GUARD: the matcher catches evasions and does not fire on look-al
       "if (c) /['\"]/.test(v);\nconst a = provision.getArtifact('f', id);",
     'a call after an apostrophe that cannot be a string (unterminated on its line)':
       "const n = 5; // it's fine\nconst a = provision.getArtifact('f', id);",
-    // Sol round 3: SAME-LINE ambiguity, where the newline fallback cannot help. These are the
+    // SAME-LINE ambiguity, where the newline fallback cannot help. These are the
     // cases that motivated inverting the scan to dismiss-only-when-provably-inert.
     'SAME LINE: a regex after a control paren whose quote could close before the call':
       "if (c) /['\"]/.test(v) && provision.getArtifact('form', id);",
@@ -449,12 +449,12 @@ test('GUARD-THE-GUARD: the matcher catches evasions and does not fire on look-al
       "const n = x++ / provision.getArtifact('form', id) / divisor;",
     'SAME LINE: a regex containing a backtick, with a real template later on the line':
       "if (c) /`/.test(v) && provision.getArtifact('f', id); const s = `ok`;",
-    // Sol round 3: binding forms a narrow character class silently missed.
+    // Binding forms a narrow character class silently missed.
     'destructured with a DEFAULT': "const { getArtifact = fallback } = provision;",
     'destructured with a rename AND a default': "const { getArtifact: read = fallback } = provision;",
     'destructured with a REST element': "const { getArtifact, ...rest } = provision;",
     'destructured with a COMPUTED key': "const { ['getArtifact']: read } = provision;",
-    // Sol round 4: constructs where NO raw candidate was produced, or both dismissal signals
+    // Constructs where NO raw candidate was produced, or both dismissal signals
     // agreed wrongly.
     'a comment between receiver and method (comments are whitespace in JS)':
       "provision /* note */ .getArtifact('form', id);",
@@ -466,7 +466,7 @@ test('GUARD-THE-GUARD: the matcher catches evasions and does not fire on look-al
       "if (c) /`/.test(v);\n /* legacy */ provision.getArtifact('f', id);\nconst s = `ok`;",
     'a default that is a CALL in a destructuring pattern':
       "const { getArtifact = fallback() } = provision;",
-    // Sol round 5 (non-blocking, fixed anyway): a LINE comment is whitespace too, and a composed
+    // A LINE comment is whitespace too, and a composed
     // desync could satisfy the block-comment-continuation exception on a multiplication line.
     'a LINE comment between receiver and method':
       "provision // note\n  .getArtifact('form', id);",
@@ -528,7 +528,7 @@ test('GUARD-THE-GUARD: the matcher catches evasions and does not fire on look-al
   const waiverCase = (line) => isWaiverLine(line);
   assert.strictEqual(waiverCase('  // sdk-async-ok: handed to Promise.all'), true, 'a whole-line comment waives');
   assert.strictEqual(waiverCase("  console.log('sdk-async-ok');"), false, 'a marker inside a STRING must not waive');
-  // Sol round 3: inference-from-absence also mistook regex and template text for a comment.
+  // Inference-from-absence also mistook regex and template text for a comment.
   assert.strictEqual(waiverCase('  const marker = /sdk-async-ok/;'), false, 'a marker inside a REGEX must not waive');
   assert.strictEqual(waiverCase('  const marker = `${v}sdk-async-ok`;'), false, 'a marker inside a TEMPLATE must not waive');
   assert.strictEqual(waiverCase('  x(); // sdk-async-ok'), false,
@@ -621,141 +621,10 @@ test('the committed bundle MATCHES its recorded provenance (a bundle-only change
   assert.strictEqual(prov.nostub, false,
     'the committed bundle was built WITH the stubs (a NOSTUB build pulls in shell packages that '
     + 'must not ship in a public repo)');
-  // The recorded subject is committed to a PUBLIC repo, so it must not carry the upstream
-  // merge-tool's PR id: unresolvable from here, and it advertises a tracker nobody reading this can
-  // open. `sanitizeSubject` strips it at record time; this pins the committed artifact, which is the
-  // thing that actually ships.
-  //
-  // Asserts against the sanitizer's OWN patterns rather than a local copy, so a prefix shape added
-  // there can never be one this check silently stops looking for.
-  const { MERGE_PREFIXES } = require(path.resolve(__dirname, '..', '_vendor-build', 'sanitize-subject.js'));
-  assert.strictEqual(typeof prov.subject, 'string', 'the upstream commit subject is recorded');
-  for (const re of MERGE_PREFIXES) {
-    assert.doesNotMatch(prov.subject, re,
-      `the recorded subject must not keep an upstream merge-tool prefix (matched ${re})`);
-  }
-});
-
-// The sanitizer that produces the above. Unit-tested against the shapes the SDK's own history
-// actually emits, plus the cases where it must NOT fire — a subject that merely mentions a merge is
-// prose, and over-stripping would destroy the only human-readable part of the provenance record.
-//
-// Every id used here is SYNTHETIC. An earlier version of this test quoted the real upstream PR id as
-// its example, which reintroduced into a public file exactly the identifier the function exists to
-// remove — the fix and the test cancelling each other out.
-test('sanitizeSubject strips merge-tool prefixes and nothing else', () => {
-  const { sanitizeSubject, NO_DESCRIPTION } = require(path.resolve(__dirname, '..', '_vendor-build', 'sanitize-subject.js'));
-
-  assert.strictEqual(
-    sanitizeSubject('Merged PR 12345678: feat(cds-maker-sdk): configurable authoring LCID'),
-    'feat(cds-maker-sdk): configurable authoring LCID');
-  assert.strictEqual(
-    sanitizeSubject('merged pr 42 : fix(sdk): tolerate a missing label'),
-    'fix(sdk): tolerate a missing label');
-  // A GitHub merge subject with a description after the branch ref keeps only the description.
-  assert.strictEqual(
-    sanitizeSubject('Merge pull request #4312 from someone/some-branch: fix(sdk): tolerate a missing label'),
-    'fix(sdk): tolerate a missing label');
-  // The `#` is OPTIONAL — not every tool emits it, and requiring it let a real merge subject through
-  // untouched while every test stayed green.
-  assert.strictEqual(
-    sanitizeSubject('Merge pull request 4312 from someone/some-branch: fix(sdk): x'),
-    'fix(sdk): x');
-  // The ref is matched with [^:\s]+, not \S+. A greedy \S+ swallows a colon that belongs to the
-  // DESCRIPTION, silently deleting the part that says what changed.
-  assert.strictEqual(
-    sanitizeSubject('Merge pull request #9 from owner/ref:fix(sdk): tolerate x'),
-    'fix(sdk): tolerate x');
-
-  // Must NOT fire: the prefix is anchored, so a mid-sentence mention survives verbatim.
-  const prose = 'fix(sdk): revert the change merged PR 99 introduced';
-  assert.strictEqual(sanitizeSubject(prose), prose, 'a mid-sentence mention is prose, not a prefix');
-  const plain = 'feat(sdk): add setHeaderAndNavigationRefresh';
-  assert.strictEqual(sanitizeSubject(plain), plain, 'an already-clean subject is unchanged');
-
-  // A subject that is ONLY a prefix yields a neutral placeholder. Returning the ORIGINAL (the
-  // previous behaviour) put the identifier straight back and produced a value that failed the
-  // committed-provenance assertion above — the sanitizer breaking its own contract.
-  assert.strictEqual(sanitizeSubject('Merged PR 123:'), NO_DESCRIPTION);
-  assert.strictEqual(sanitizeSubject('Merge pull request #4312 from someone/some-branch'), NO_DESCRIPTION,
-    'GitHub puts the description on the body line, so a bare merge subject is entirely prefix');
-  // COLONLESS prefix-only subject. This is supported deliberately: requiring the colon left it
-  // unchanged, and the invariant test could not see the hole because it uses the same patterns as
-  // its oracle. Recorded as an exact input->output pair so the decision is visible, not implied.
-  assert.strictEqual(sanitizeSubject('Merged PR 123'), NO_DESCRIPTION,
-    'a bare "Merged PR <n>" with no colon is still entirely prefix');
-
-  // NEGATIVE CONTROLS for the colon-or-end alternation: text after the id is a real description, so
-  // the subject is prose and must survive untouched. If these ever start changing, the alternation
-  // has become too greedy.
-  for (const keep of ['Merged PR 99 rollback of the shell change', 'Merge pull request 7 from owner/ref is not this shape']) {
-    assert.strictEqual(sanitizeSubject(keep), keep, `must not fire on: ${keep}`);
-  }
-  // Non-strings pass through, because `git()` records null when the call fails and null must stay
-  // distinguishable from an empty subject.
-  assert.strictEqual(sanitizeSubject(null), null);
-});
-
-test('sanitizeSubject strips ARBITRARILY nested prefixes, not a fixed number', () => {
-  // A capped loop looked defensive and silently reintroduced the bug past the cap: at a cap of 8,
-  // nine nested prefixes returned a value still carrying the ninth. Depths well past any plausible
-  // cap are asserted here. This cannot PROVE no cap is ever reintroduced — a cap above 100 would
-  // still pass — but it catches any cap small enough that a reviewer would plausibly write it.
-  const { sanitizeSubject, NO_DESCRIPTION } = require(path.resolve(__dirname, '..', '_vendor-build', 'sanitize-subject.js'));
-
-  for (const depth of [1, 2, 8, 9, 25, 100]) {
-    const nested = Array.from({ length: depth }, (_, i) => `Merged PR ${i + 1}: `).join('') + 'real description';
-    assert.strictEqual(sanitizeSubject(nested), 'real description',
-      `depth ${depth} must strip every prefix`);
-  }
-  // Nested prefixes with NO description at the end still resolve to the placeholder.
-  const bare = Array.from({ length: 12 }, (_, i) => `Merged PR ${i + 1}:`).join(' ');
-  assert.strictEqual(sanitizeSubject(bare), NO_DESCRIPTION);
-  // Mixed tools nest too.
-  assert.strictEqual(
-    sanitizeSubject('Merged PR 5: Merge pull request 9 from owner/ref: real desc'),
-    'real desc');
-});
-
-test('sanitizeSubject output can NEVER match a merge prefix (the actual contract)', () => {
-  // Case-by-case assertions only prove the cases someone thought of. The property that matters is
-  // that NO input produces an output still carrying a prefix — which is what the committed
-  // PROVENANCE.json must satisfy.
-  //
-  // STATED LIMIT, because it is easy to over-read this test: its oracle is MERGE_PREFIXES, the same
-  // set the implementation strips with. It therefore proves "no output matches a pattern we
-  // enumerate" — NOT "no output retains a merge prefix in some syntax nobody enumerated". A new
-  // merge-tool syntax is invisible to both halves at once. The exact input->output assertions above
-  // are what pin the enumerated shapes; this pins that stripping is exhaustive for them.
-  const { sanitizeSubject, MERGE_PREFIXES } = require(path.resolve(__dirname, '..', '_vendor-build', 'sanitize-subject.js'));
-
-  const corpus = [
-    'Merged PR 12345678: feat(sdk): x',
-    'Merged PR 123:',
-    'Merged PR 123',
-    '  merged   pr   7  :  ',
-    'Merge pull request #4312 from someone/some-branch',
-    'Merge pull request 4312 from someone/some-branch',
-    'Merge pull request #4312 from someone/some-branch: desc',
-    'Merge pull request #9 from owner/ref:fix(sdk): tolerate x',
-    'Merged PR 1: Merged PR 2: doubly prefixed',
-    Array.from({ length: 9 }, (_, i) => `Merged PR ${i + 1}: `).join('') + 'nine deep',
-    Array.from({ length: 40 }, (_, i) => `Merged PR ${i + 1}: `).join('') + 'forty deep',
-    'Merged PR 5: Merge pull request 9 from owner/ref: mixed nesting',
-    'feat(sdk): plain',
-    'fix(sdk): revert the change merged PR 99 introduced',
-    'Merged PR 99 rollback of the shell change',
-    '',
-    '   ',
-  ];
-
-  for (const input of corpus) {
-    const out = sanitizeSubject(input);
-    for (const re of MERGE_PREFIXES) {
-      assert.doesNotMatch(out, re,
-        `sanitizeSubject(${JSON.stringify(input)}) returned ${JSON.stringify(out)}, which still matches ${re}`);
-    }
-  }
+  // The record names its source by commit SHA alone. It once also carried the subject of the commit the build ran on — normally
+  // the monorepo's HEAD, a change that is usually not about the SDK at all — and a commit subject in a public file is an internal
+  // change title, which can even carry a merge tool's PR id. The build no longer writes one; this keeps one from coming back.
+  assert.strictEqual('subject' in prov, false, 'PROVENANCE.json carries no commit subject: the SHA is what identifies the source');
 });
 
 test('the real vendored bundle agrees with ASYNC_SDK_METHODS (no drift in either direction)', async () => {
@@ -858,30 +727,275 @@ test('an unparseable file is REPORTED, never silently skipped', () => {
 //
 // Checked by SOURCE SCAN because the factories are CLI-internal — none is exported, so there is no
 // seam to drive a construction failure through. The property checked is the one that matters
-// (construction happens inside a guarded region that cleans up), not a brittle line-order heuristic:
+// (the construction sits inside the block of a `try` whose catch or finally cleans up), not a brittle line-order heuristic:
 // an earlier attempt compared `const cleanup` and `initWorkspace` offsets and wrongly flagged
 // teardown-model-app.js, which declares cleanup after the init but inside a try whose catch removes
 // the directory.
+//
+// Where a helper builds the SDK (verify-model-app.js, below its factory) the construction is not written in the factory's own tree,
+// so what is checked for it is its place in the text: after the directory is made, and behind the guarding `try`.
+//
+// The guard is the `catch` or `finally` of the first `try` after the directory is made that sits in the same function as
+// the `mkdtempSync` call — the one the SDK construction is behind — and no other clause in the file. Not simply the first
+// `try` in the text: verify-model-app.js's `dispose` helper has a `try` of its own between the `mkdtempSync` and the guard.
+// And not a cleanup elsewhere, such as a later `finally` that removes a download's folder: that says nothing about a
+// workspace whose construction failed, so it must neither satisfy this check nor, when it changes shape, break it. Both
+// happened while the check accepted any cleanup call within 200 characters of any later `catch` or `finally`:
+// verify-model-app.js passed through an unrelated `finally { fs.rmSync(...) }` further down (the cleanup its own guard
+// calls, `dispose()`, was not one the pattern knew), and went red when that `finally` called a helper instead.
+//
+// The syntax tree is read, not the text: a cleanup named in a comment or a string is not one, and the end of the `try`
+// is where the parser says it is.
+//
+// What the guard may remove the directory with: `cleanup()` (build, download and provision-entities hand one to their
+// caller), `dispose()` (verify's) and `fs.rmSync()` itself (ai-preflight, provision-solution, teardown).
+const WORKSPACE_CLEANUP_CALLS = new Set(['cleanup', 'dispose', 'rmSync']);
+const FUNCTION_NODES = new Set(['FunctionDeclaration', 'FunctionExpression', 'ArrowFunctionExpression']);
+
+/** The name a call goes by: `cleanup()` is 'cleanup', `fs.rmSync()` and `require('fs').rmSync()` are 'rmSync'; null when it has none. */
+function calledName(call) {
+  return call.callee.type === 'Identifier' ? call.callee.name : calleeMethodName(call.callee);
+}
+
+/**
+ * How `src` guards the throwaway workspace it makes. null when it makes none — no `mkdtempSync` or `makeTempWorkspace`, or no `createMakerSdk` call
+ * to guard — else `{ problem }`: null when the guard is sound, otherwise what is wrong with it. The construction is found by
+ * position, as the first one after the directory is made (verify-model-app.js builds its SDK in a helper below the factory).
+ */
+function throwawayWorkspaceGuard(src) {
+  const parsed = parseForGuard(src);
+  if (!parsed) return { problem: 'the source did not parse, so the guard could not be inspected' };
+  const made = [];
+  const constructions = [];
+  const tries = [];
+  walk(parsed.ast, (node, ancestors) => {
+    // `ancestors` is closest first: the first function in it is the one this node is written in (null at the top level).
+    const scope = ancestors.find((a) => FUNCTION_NODES.has(a.type)) || null;
+    // The directory is made by `fs.mkdtempSync` — what every entry point called before the plugin had one maker of throwaway workspaces — or by a call of
+    // `makeTempWorkspace` (lib/temp-workspace.js), which is what they call now. A CALL: the name is also in the import that brings the function in.
+    if (node.type === 'Identifier' && node.name === 'mkdtempSync') made.push({ node, scope });
+    else if (node.type === 'CallExpression' && calledName(node) === 'makeTempWorkspace') made.push({ node, scope });
+    else if (node.type === 'CallExpression' && calledName(node) === 'createMakerSdk') constructions.push({ node, scope });
+    else if (node.type === 'TryStatement') tries.push({ node, scope });
+  });
+  const firstAfter = (found, offset, accept = () => true) => found
+    .filter((f) => f.node.start > offset && accept(f))
+    .sort((a, b) => a.node.start - b.node.start)[0];
+  const dirMade = firstAfter(made, -1);
+  if (!dirMade || constructions.length === 0) return null;
+  const construction = firstAfter(constructions, dirMade.node.start);
+  if (!construction) {
+    return { problem: 'no createMakerSdk call follows mkdtempSync, so there is no construction to see inside the guard — it must come after the directory is made' };
+  }
+  const guarded = firstAfter(tries, dirMade.node.start, (f) => f.scope === dirMade.scope);
+  // A construction written in the function that made the directory must lie in the BLOCK of that try — one before the try, or in its
+  // catch or finally, or after it, is outside the guard. One written in another function (verify's makeProvision, which the guarded
+  // block calls) has no place in this tree to compare with the block, so only its order against the try is checked.
+  const insideGuard = (found) => (found.scope === dirMade.scope
+    ? guarded.node.block.start <= found.node.start && found.node.end <= guarded.node.block.end
+    : guarded.node.start <= found.node.start);
+  if (!guarded || !insideGuard(construction)) {
+    return {
+      problem: 'the createMakerSdk construction after mkdtempSync must be inside a try — the constructor builds the '
+        + 'filesystem adapter and can throw, and the caller\'s finally is unreachable until this function returns',
+    };
+  }
+  // …and the guard must actually reclaim the directory, not merely swallow the error.
+  let removes = false;
+  for (const clause of [guarded.node.handler && guarded.node.handler.body, guarded.node.finalizer]) {
+    walk(clause, (node) => {
+      if (node.type === 'CallExpression' && WORKSPACE_CLEANUP_CALLS.has(calledName(node))) removes = true;
+    });
+  }
+  return {
+    problem: removes ? null : 'the guard around SDK construction — the catch or finally of the first try after mkdtempSync, in the '
+      + 'function that made it — must remove the throwaway directory (cleanup(), dispose() or rmSync) before the error leaves',
+  };
+}
+
+// The check on sources small enough to read. `factory` is the plain layout: the guard is a clause of the one `try`. `verifyShaped`
+// is verify-model-app.js's: a `dispose()` helper defined before the guard, with a `try` of its own — the first `try` after the
+// `mkdtempSync` in the text — the guard calling it, the construction behind a helper, and a later, unrelated function that removes
+// another folder in a `finally`: the one thing the old check mistook for the guard.
+const factory = (guard) => `
+  const fs = require('node:fs');
+  async function make(env) {
+    const dir = fs.mkdtempSync('model-app-');
+    const cleanup = () => fs.rmSync(dir, { recursive: true, force: true });
+    try {
+      const sdk = createMakerSdk({ instanceUrl: env });
+      await sdk.initWorkspace();
+      return { sdk, cleanup };
+    } ${guard}
+  }`;
+const verifyShaped = ({ guard, elsewhere }) => `
+  const fs = require('node:fs');
+  async function throwawaySdk(env) {
+    const dir = fs.mkdtempSync('verify-dashboard-');
+    const dispose = () => { try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* best-effort */ } };
+    try {
+      return { sdk: await makeProvision(env, dir), dispose };
+    } ${guard}
+  }
+  async function makeProvision(env, dir) {
+    const sdk = createMakerSdk({ instanceUrl: env });
+    await sdk.initWorkspace();
+    return sdk;
+  }
+  async function downloadPage(id) {
+    const outDir = fs.mkdtempSync('verify-page-');
+    try { return await download(id, outDir); } finally { ${elsewhere} }
+  }`;
+const VERIFY_GUARD = 'catch (e) { dispose(); throw e; }';
+const FOLDER_CLEANUP = 'try { fs.rmSync(outDir, { recursive: true, force: true }); } catch { /* leave the temp dir */ }';
+const GUARD_PROBLEM = /must remove the throwaway directory/;
+
+test('the guard check accepts the cleanups the entry points use, in a catch or in a finally', () => {
+  for (const guard of [
+    'catch (err) { cleanup(); throw err; }',
+    'catch (err) { dispose(); throw err; }',
+    'catch (err) { try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* best-effort */ } throw err; }',
+    'finally { fs.rmSync(dir, { recursive: true, force: true }); }',
+    'catch (err) { error = err; } finally { require(\'fs\').rmSync(dir, { force: true }); }',
+  ]) {
+    assert.deepStrictEqual(throwawayWorkspaceGuard(factory(guard)), { problem: null }, guard);
+  }
+});
+
+test('the guard check reads a directory made by makeTempWorkspace — what the entry points call — exactly as one made by mkdtempSync', () => {
+  const made = (guard) => `
+    async function make(env) {
+      const dir = makeTempWorkspace('model-app-');
+      try { const sdk = createMakerSdk({ instanceUrl: env }); await sdk.initWorkspace(); return { sdk }; } ${guard}
+    }`;
+  assert.deepStrictEqual(throwawayWorkspaceGuard(made('catch (err) { fs.rmSync(dir, { recursive: true, force: true }); throw err; }')), { problem: null });
+  assert.match(throwawayWorkspaceGuard(made('catch (err) { throw err; }')).problem, GUARD_PROBLEM);
+  const unguarded = `
+    async function make(env) {
+      const dir = makeTempWorkspace('model-app-');
+      const sdk = createMakerSdk({ instanceUrl: env });
+      try { await sdk.initWorkspace(); } catch (err) { cleanup(); throw err; }
+      return sdk;
+    }`;
+  assert.match(throwawayWorkspaceGuard(unguarded).problem, /must be inside a try/);
+});
+
+test('the guard check does not take for a cleanup what is not one: no clause, a comment, a string, a helper it does not know', () => {
+  for (const guard of [
+    'catch (err) { throw err; }',
+    'catch (err) { /* cleanup(); */ throw err; }',
+    'catch (err) { console.error("cleanup()"); throw err; }',
+    'catch (err) { removeWorkspace(dir); throw err; }',
+    'catch (err) { error = err; } finally { done(); }',
+  ]) {
+    // `cleanup` is defined, with its `fs.rmSync`, before the `try` in every one of these: that is not the guard either.
+    assert.match(throwawayWorkspaceGuard(factory(guard)).problem, GUARD_PROBLEM, guard);
+  }
+});
+
+test('MUTATION: a guard whose cleanup is gone is caught, although another cleanup follows later in the file', () => {
+  assert.deepStrictEqual(throwawayWorkspaceGuard(verifyShaped({ guard: VERIFY_GUARD, elsewhere: FOLDER_CLEANUP })), { problem: null }, 'the unmutated layout is sound');
+  const mutated = verifyShaped({ guard: 'catch (e) { throw e; }', elsewhere: FOLDER_CLEANUP });
+  // The later `finally` still removes a folder, and that is the cleanup the old check took for the guard's.
+  assert.ok(/finally \{ try \{ fs\.rmSync\(outDir/.test(mutated));
+  assert.match(throwawayWorkspaceGuard(mutated).problem, GUARD_PROBLEM);
+});
+
+test('a cleanup elsewhere in the file may change shape without touching the verdict on the guard', () => {
+  for (const elsewhere of [FOLDER_CLEANUP, 'removeDownloadDir(outDir);', '']) {
+    assert.deepStrictEqual(throwawayWorkspaceGuard(verifyShaped({ guard: VERIFY_GUARD, elsewhere })), { problem: null }, elsewhere);
+  }
+});
+
+test('the guard check flags a construction that comes before any try, and one that is not after the directory is made', () => {
+  const src = `
+    async function make(env) {
+      const dir = fs.mkdtempSync('model-app-');
+      const sdk = createMakerSdk({ instanceUrl: env });
+      try { await sdk.initWorkspace(); } catch (err) { cleanup(); throw err; }
+      return sdk;
+    }`;
+  assert.match(throwawayWorkspaceGuard(src).problem, /must be inside a try/);
+  const before = `
+    function build(env) { return createMakerSdk({ instanceUrl: env }); }
+    async function make(env) {
+      const dir = fs.mkdtempSync('model-app-');
+      try { return { sdk: build(env), dir }; } catch (err) { cleanup(); throw err; }
+    }`;
+  assert.match(throwawayWorkspaceGuard(before).problem, /no createMakerSdk call follows mkdtempSync/);
+});
+
+test('the guard check refuses a construction that is not in the block of the try that guards it — before the try, in its catch, or after it — and keeps its order-only rule for a helper', () => {
+  const inFunction = (beforeTry, inTry, afterTry) => `
+    const fs = require('node:fs');
+    async function make(env) {
+      const dir = fs.mkdtempSync('model-app-');
+      ${beforeTry}
+      try {
+        ${inTry}
+      } catch (err) { fs.rmSync(dir, { recursive: true, force: true }); throw err; }
+      ${afterTry}
+    }`;
+  const build = 'createMakerSdk({ instanceUrl: env })';
+  // The sound layout, and then the same try with the construction moved out of its block.
+  assert.deepStrictEqual(throwawayWorkspaceGuard(inFunction('', `const sdk = ${build}; await sdk.initWorkspace();`, '')), { problem: null });
+  // A try of its own comes first and the real guard follows: the construction sits between them, after the first try and before the guarding one.
+  assert.match(throwawayWorkspaceGuard(inFunction(`try { fs.accessSync(dir); } catch (err) { fs.rmSync(dir, { recursive: true, force: true }); throw err; } const early = ${build};`, 'await later();', '')).problem, /must be inside a try/);
+  assert.match(throwawayWorkspaceGuard(inFunction('', 'await later();', `const late = ${build};`)).problem, /must be inside a try/);
+  // In the catch of the guarding try: a construction that fails there is not behind the cleanup the catch runs.
+  const inCatch = `
+    const fs = require('node:fs');
+    async function make(env) {
+      const dir = fs.mkdtempSync('model-app-');
+      try { await ready(); } catch (err) { const sdk = ${build}; fs.rmSync(dir, { recursive: true, force: true }); throw err; }
+    }`;
+  assert.match(throwawayWorkspaceGuard(inCatch).problem, /must be inside a try/);
+});
+
+test('the guard check counts only the catch and the finally of the guarding try: a cleanup defined or called in its block is not the guard', () => {
+  // teardown-model-app.js defines `cleanup` inside the guarded block, so a scan that walked the whole `try` would take that for the guard.
+  for (const inTry of [
+    'const cleanup = () => fs.rmSync(dir, { recursive: true, force: true });',
+    'cleanup();',
+    'fs.rmSync(dir, { recursive: true, force: true });',
+    'dispose();',
+  ]) {
+    const src = `
+      const fs = require('node:fs');
+      async function make(env) {
+        const dir = fs.mkdtempSync('model-app-');
+        try {
+          ${inTry}
+          const sdk = createMakerSdk({ instanceUrl: env });
+          await sdk.initWorkspace();
+          return { sdk };
+        } catch (err) { throw err; }
+      }`;
+    assert.match(throwawayWorkspaceGuard(src).problem, GUARD_PROBLEM, inTry);
+  }
+});
+
+test('the guard check has nothing to say about a file that makes no workspace or builds no SDK, and reports one it cannot parse', () => {
+  assert.strictEqual(throwawayWorkspaceGuard('const sdk = createMakerSdk({});'), null);
+  assert.strictEqual(throwawayWorkspaceGuard('const dir = fs.mkdtempSync("x-"); try { run(dir); } finally { fs.rmSync(dir); }'), null);
+  assert.match(throwawayWorkspaceGuard('const dir = fs.mkdtempSync("x-"); createMakerSdk(;;;(').problem, /did not parse/);
+});
+
 test('every CLI that mints a throwaway workspace constructs the SDK INSIDE its cleanup guard', () => {
   const dir = path.join(__dirname, '..');
   const files = fs.readdirSync(dir).filter((f) => f.endsWith('.js'));
   const checked = [];
   for (const file of files) {
     const src = fs.readFileSync(path.join(dir, file), 'utf8');
-    const mk = src.indexOf('mkdtempSync');
-    if (mk < 0 || !/createMakerSdk\(/.test(src)) continue;
-    const tryAt = src.indexOf('try {', mk);
-    const ctorAt = src.indexOf('createMakerSdk(', mk);
-    assert.ok(tryAt >= 0 && tryAt < ctorAt,
-      `${file}: the createMakerSdk construction after mkdtempSync must be inside a try — the constructor builds the `
-      + 'filesystem adapter and can throw, and the caller\'s finally is unreachable until this function returns');
-    // …and the guard must actually reclaim the directory, not merely swallow the error.
-    const after = src.slice(tryAt);
-    assert.ok(/catch[\s\S]{0,200}?(cleanup\(\)|rmSync)/.test(after) || /finally[\s\S]{0,200}?(cleanup\(\)|rmSync)/.test(after),
-      `${file}: the guard around SDK construction must remove the throwaway directory (cleanup()/rmSync) before rethrowing`);
+    if (!/\b(mkdtempSync|makeTempWorkspace)\b/.test(src) || !/createMakerSdk\(/.test(src)) continue;
+    const guard = throwawayWorkspaceGuard(src);
+    if (!guard) continue;
+    assert.ok(guard.problem === null, `${file}: ${guard.problem}`);
     checked.push(file);
   }
-  // A scan that matches nothing "passes" forever. These are the five entry points that own a
-  // throwaway workspace today; if one is renamed the count changes and this fails loudly.
-  assert.ok(checked.length >= 5, `expected to scan at least 5 entry points, scanned ${checked.length}: ${checked.join(', ')}`);
+  // A scan that matches nothing "passes" forever. These are the seven entry points that own a
+  // throwaway workspace today, named below as well as counted, so that none can drop out of the scan while the count still holds.
+  const entryPoints = ['ai-preflight.js', 'build-model-app.js', 'download-model-app.js', 'provision-entities.js', 'provision-solution.js', 'teardown-model-app.js', 'verify-model-app.js'];
+  for (const entry of entryPoints) assert.ok(checked.includes(entry), `${entry} was not scanned; scanned ${checked.join(', ')}`);
+  assert.ok(checked.length >= entryPoints.length, `expected to scan at least ${entryPoints.length} entry points, scanned ${checked.length}: ${checked.join(', ')}`);
 });

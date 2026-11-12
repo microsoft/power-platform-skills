@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<manifest>
+  <control namespace="{{namespace}}" constructor="{{name}}" version="{{version}}" display-name-key="{{name}}" description-key="{{name}}_Description" control-type="virtual">
+    <external-service-usage enabled="false" />
+    <data-set name="sampleDataSet" display-name-key="Dataset_Display_Key" cds-data-set-options="displayCommandBar:false;displayViewSelector:false;displayQuickFind:false">
+      <property-set name="sampleProperty" display-name-key="Property_Display_Key" description-key="Property_Desc_Key" of-type="SingleLine.Text" usage="bound" required="false" />
+    </data-set>
+    <resources>
+      <code path="index.ts" order="1" />
+      <css path="css/{{name}}.css" order="1" />
+      <resx path="strings/{{name}}.1033.resx" version="1.0.0" />
+      <platform-library name="React" version="{{reactPlatformVersion}}" />
+      <platform-library name="Fluent" version="{{fluentPlatformVersion}}" />
+    </resources>
+    <!-- Features are declared only when this control's code uses them. -->
+  </control>
+</manifest>

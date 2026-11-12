@@ -29,11 +29,12 @@ Source of truth for every screen built in a Power Apps mobile app. Produces thre
 2. `brand/tokens.ts` — importable Tamagui token export
 3. `brand/design-system.html` — deterministic visual gallery (zero LLM cost)
 
-Design-system and Tamagui integration are complementary, not alternatives. `/design-system` owns user-facing brand/design decisions and preview artifacts; `/create-mobile-app` Step 9.2 applies [`references/tamagui-integration.md`](./references/tamagui-integration.md) as internal implementation plumbing so those decisions become Tamagui tokens, aliases, and provider props. The old separate `tamagui-design-system` skill existed before this split was clear; keeping it separate made users choose implementation details and added prompt surface. Do not reintroduce it as a user-invocable skill.
+Design-system and Tamagui integration are complementary, not alternatives. `/design-system` owns user-facing brand/design decisions and preview artifacts; `/create-mobile-app` Step 9.2 (screens first) or Step 9b (data model first) applies [`references/tamagui-integration.md`](./references/tamagui-integration.md) as internal implementation plumbing so those decisions become Tamagui tokens, aliases, and provider props. The old separate `tamagui-design-system` skill existed before this split was clear; keeping it separate made users choose implementation details and added prompt surface. Do not reintroduce it as a user-invocable skill.
 
 ## When to use
 
-- **`/create-mobile-app` Step 9** — auto-invoked after the preview gate, while the live web preview of the already-built screens is running; the tokens it writes restyle that preview
+- **`/create-mobile-app` Step 9** (screens first) — auto-invoked after the preview gate, while the live web preview of the already-built screens is running; the tokens it writes restyle that preview
+- **`/create-mobile-app` Step 6.75** (data model first) — auto-invoked after scaffold + `pa app init`, before screen builders
 - **Standalone** — `/design-system` callable any time to create or refresh a brand system
 - **Refresh** — `/design-system --refresh <dimension>` to change one aspect
 - **Reskin** — `/design-system --reskin` for full visual layer swap
@@ -227,7 +228,7 @@ only after the applicable approval.
 
      For first-time defaults, skip the full `brand/design-system.md` write — only `brand/tokens.ts` is needed. If a prior full design exists, do not silently replace its tokens with defaults: Sub-step 3.5 must approve the concrete token delta and corresponding spec-section updates together, or preserve both unchanged. Record the chosen source in `memory-bank.md` only after approval under `## Design`: `direction: polished-inspection (default — white + Power-Platform green, demo-friendly enterprise polish)` so future runs know what was picked.
   2. **Mini-preview (Sub-step 6.5 lite)** — skip it when the context carries `live_preview: <url>`, for the reason given in Sub-step 6.5. Otherwise render exactly 3 screens (List + Form + Detail archetypes from the plan's `## Screens`; if fewer exist, render whichever do) using the same HTML preview template + Tamagui-to-HTML mapping as `screen-planner`, with `brand/tokens.ts` values substituted. Write to `<working_dir>/_plan_preview.html` — the canonical filename. `/create-mobile-app` takes its screen carousel from that file and the build plan links it, so writing anything else leaves both empty on this path. Open it in the browser on standalone runs only; in orchestrator mode print the path, because the build plan already links it. Print: `"→ Polished-inspection preview ready at file://<working_dir>/_plan_preview.html — confirm the look (or re-run /design-system --direction <inspection|saas|product> to switch)."`
-  3. **Return DONE** so Step 9.2 of the orchestrator picks up `brand/tokens.ts` and applies [`references/tamagui-integration.md`](./references/tamagui-integration.md) in brand-import mode.
+  3. **Return DONE** so the orchestrator's Step 9.2 (screens first) or Step 9b (data model first) picks up `brand/tokens.ts` and applies [`references/tamagui-integration.md`](./references/tamagui-integration.md) in brand-import mode.
 
   **Return DONE only after the approved tokens are available** (written after the boundary, or unchanged existing tokens reused). Cancellation or missing approval never authorizes a write to satisfy this requirement. The label promises "applied defaults"; the implementation must deliver tokens AND a preview (the live app counts when `live_preview` is set), otherwise the user has no way to verify the look short of waiting for full screen-builders + emulator boot. The preview is fast (HTML, no JS execution) and uses the same renderer Sub-step 6.5 uses for paths (a)/(b).
 
@@ -770,7 +771,7 @@ for light/dark artifacts, explicit absence, and restoration of runtime wiring.
 | Consumer | Reads from brand/ | Behavior |
 |---|---|---|
 | `screen-builder` | `brand/design-system.md` (MANDATORY) | Negatives = HARD RULES. Token references required. |
-| Tamagui integration reference | `brand/tokens.ts` and approved dark palette | Applied through native-host theme helpers by `/create-mobile-app` Step 9.2 or `/edit-app` Step 5 |
+| Tamagui integration reference | `brand/tokens.ts` and approved dark palette | Applied through native-host theme helpers by `/create-mobile-app` Step 9.2 / 9b or `/edit-app` Step 5 |
 | `preview-screens` | `visual_companion` flag | Renders previews with brand tokens |
 | `/edit-app` | Routes approved visual changes here | Owns Design plan, runtime wiring, affected screen changes, and final verification |
 | `/deploy` | `brand/` shipped in bundle | No special handling |
@@ -781,7 +782,7 @@ for light/dark artifacts, explicit absence, and restoration of runtime wiring.
 
 | Scenario | Behavior |
 |---|---|
-| New project via `/create-mobile-app` | Step 9 runs, brand/ exists |
+| New project via `/create-mobile-app` | Step 9 (screens first) or Step 6.75 (data model first) runs, brand/ exists |
 | Project scaffolded before this feature | No brand/ → screen-builder falls back to `## Design Direction` only |
 | `/design-system` standalone in existing project | Generates brand/, future runs pick it up |
 | `/design-system --reskin` | Re-runs style picking and updates brand/ artifacts |

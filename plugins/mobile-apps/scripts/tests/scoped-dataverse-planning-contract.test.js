@@ -7,7 +7,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 const { cacheMatchesTarget, canUseCachedResolution, parseArgs } = require('../resolve-environment');
-const { createSkillWorkflow } = require('./helpers/create-skill');
+const { createSkillDataModelFirst, createSkillWorkflow } = require('./helpers/create-skill');
 
 const pluginRoot = path.resolve(__dirname, '../..');
 const read = (file) => fs.readFileSync(path.join(pluginRoot, file), 'utf8').replace(/\r\n?/g, '\n');
@@ -17,7 +17,12 @@ const planning = read(planningPath);
 const setup = skill('setup-datamodel');
 const edit = skill('edit-app');
 const dataverse = skill('add-dataverse');
-const create = createSkillWorkflow();
+// Each build order keeps its own copy of the Dataverse planning helper sections, numbered for
+// its own run.
+const createFlows = [
+  { order: 'screens-first', create: createSkillWorkflow(), recoveryEnd: '#### Post-plan publisher-prefix gate', apply: '12' },
+  { order: 'data-model-first', create: createSkillDataModelFirst(), recoveryEnd: '#### Step 3.0a', apply: '8' },
+];
 
 function section(text, start, end) {
   const from = text.indexOf(start);
@@ -138,10 +143,12 @@ test('scoped planning adapts only the named create helper sections, not its wiza
   assert.match(evidence, /valid cache is planning evidence only, never write authorization/);
   assert.match(evidence, /Never dispatch on failed\/stale output/);
   assert.match(evidence, /Agents read only the\ncompact sidecar; the full snapshot is an opaque validator input/);
-  const helper = section(create, '### Foreground Dataverse planning snapshot and evidence', '#### Planner completion dispatch');
-  inOrder(helper, 'resolve-environment.js', 'create-dataverse-snapshot.js', 'render-dataverse-architect-evidence.js', '--validate-only');
-  assert.match(helper, /--read-concurrency 1/);
-  assert.doesNotMatch(helper, /Task: mobile-app:native-app-planner|Invoke skill: \/create-mobile-app/);
+  for (const { create } of createFlows) {
+    const helper = section(create, '### Foreground Dataverse planning snapshot and evidence', '#### Planner completion dispatch');
+    inOrder(helper, 'resolve-environment.js', 'create-dataverse-snapshot.js', 'render-dataverse-architect-evidence.js', '--validate-only');
+    assert.match(helper, /--read-concurrency 1/);
+    assert.doesNotMatch(helper, /Task: mobile-app:(?:native-app|architecture)-planner|Invoke skill: \/create-mobile-app/);
+  }
   assert.doesNotMatch(planning, /^(?:Invoke skill: \/create-mobile-app|Task: mobile-app:native-app-planner|.*--approval-receipt )/m);
 });
 
@@ -217,10 +224,12 @@ test('structured metadata expansion and deterministic revision precede generic r
   assert.match(recovery, /already-unavailable names are not fetched repeatedly/);
   assert.match(recovery, /On no progress,\nrevise inline using current evidence/);
   assert.match(recovery, /Never import creation's Gate 1\/2 prompts/);
-  const canonical = section(create, '#### Dataverse planning recovery', '#### Post-plan publisher-prefix gate');
-  assert.match(canonical, /NEW_DETAIL_NAMES = requested names - DETAIL_ATTEMPTED_NAMES/);
-  assert.match(canonical, /NEW_PROPOSED_NAMES = requested names - PROPOSED_CHECKED_NAMES/);
-  assert.match(canonical, /If it is empty, do not issue another network request/);
+  for (const { create, recoveryEnd } of createFlows) {
+    const canonical = section(create, '#### Dataverse planning recovery', recoveryEnd);
+    assert.match(canonical, /NEW_DETAIL_NAMES = requested names - DETAIL_ATTEMPTED_NAMES/);
+    assert.match(canonical, /NEW_PROPOSED_NAMES = requested names - PROPOSED_CHECKED_NAMES/);
+    assert.match(canonical, /If it is empty, do not issue another network request/);
+  }
   for (const owner of [
     section(setup, '#### Path B', '#### Path C'),
     section(edit, 'For the Data Model handoff', 'For Native Capabilities (no separate agent)'),
@@ -292,12 +301,16 @@ test('legacy child handoffs require current approval and cannot bypass invalid c
 
 test('creation retains its complete receipt-owned fast path and fails closed on partial artifacts', () => {
   const flags = ['schema-contract', 'approval-receipt', 'execution-reconciliation', 'operation-manifest', 'publish-checkpoint'];
-  const handoff = section(create, 'Invoke skill: /add-dataverse', '\n```');
   const fast = section(dataverse, '#### Step 2a', '#### Step 2b');
-  assert.match(handoff, /orchestrator: create-mobile-app/);
-  for (const flag of flags) {
-    assert.match(handoff, new RegExp(`--${flag} <working_dir>/\\.tmp/`));
-    assert.match(fast, new RegExp(`--${flag} <working_dir>/\\.tmp/`));
+  for (const { create, apply } of createFlows) {
+    const handoff = section(create, 'Invoke skill: /add-dataverse', '\n```');
+    assert.match(handoff, /orchestrator: create-mobile-app/);
+    for (const flag of flags) {
+      assert.match(handoff, new RegExp(`--${flag} <working_dir>/\\.tmp/`));
+      assert.match(fast, new RegExp(`--${flag} <working_dir>/\\.tmp/`));
+    }
+    assert.match(section(create, `### Step ${apply} — Apply`, 'Invoke skill: /add-dataverse'),
+      new RegExp(`Step ${apply} cannot create or refresh this receipt`));
   }
   assert.match(fast, /supplies all five paths/);
   assert.match(fast, /entirely absent fast-path handoff[\s\S]*fallback/);
@@ -306,7 +319,6 @@ test('creation retains its complete receipt-owned fast path and fails closed on 
   assert.match(fast, /Do not reconstruct tables[\s\S]*from Markdown on this path/);
   assert.match(fast, /Supplied execution\nartifacts never override `--plan-only` or a planning-phase caller/);
   assert.match(fast, /return the proposal without entering Step 3/);
-  assert.match(section(create, '### Step 12 — Apply', 'Invoke skill: /add-dataverse'), /Step 12 cannot create or refresh this receipt/);
 });
 
 test('both publish paths still require cache recovery before completion without replaying writes', () => {

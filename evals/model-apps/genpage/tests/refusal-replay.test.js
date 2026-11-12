@@ -50,8 +50,11 @@ test('discovery distinguishes unreadable output from a genuine empty success and
     events: [{ command: 'node list-connections.js https://contoso.crm.dynamics.com', rawOutput, result, userMessage: result.error }],
   });
   const empty = { ok: true, connections: [], connectionReferences: [] };
-  assert.deepEqual(discoveryProblems(make('No connections found.\n', empty)), []);
-  for (const raw of ['Warning: failed to retrieve connector metadata.\n', '-----  -----\n', 'Unsupported header\n']) {
+  // `pac connection list` says an environment has no connections by printing the grid's header with no rows under it — one space between the names, because each column is as wide as its
+  // widest cell plus one space and there is no cell. That is a genuine empty success. No sentence is: PAC's `ConnectionNotFound` resource string is not printed by the command, and the other
+  // wording is one this module used to guess.
+  assert.deepEqual(discoveryProblems(make('Connected as [maker001]\r\nId Name API Id Status\r\n\r\n', empty)), []);
+  for (const raw of ['No connections were found in the passed environment.\n', 'No connections found.\n', 'Warning: failed to retrieve connector metadata.\n', '-----  -----\n', 'Unsupported header\n']) {
     assert.ok(discoveryProblems(make(raw, empty)).length, raw);
   }
   const connectorId = '/providers/Microsoft.PowerApps/apis/shared_sharepointonline';

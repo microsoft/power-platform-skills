@@ -60,6 +60,34 @@ function createAngularProject(t, angularConfig, htmlPath, html) {
   return projectRoot;
 }
 
+function createAstroProject(t, frameworkConfig) {
+  const projectRoot = createTempProject(t);
+  writeProjectFile(projectRoot, 'powerpages.config.json', JSON.stringify({
+    $schema: 'https://www.schemastore.org/powerpages.config.json',
+    compiledPath: 'dist',
+    siteName: 'Contoso Customer Portal',
+    defaultLandingPage: 'index.html',
+    ...(frameworkConfig === undefined ? {} : { framework: frameworkConfig }),
+  }));
+  writeProjectFile(projectRoot, 'package.json', JSON.stringify({
+    scripts: { build: 'astro build', dev: 'astro dev' },
+    dependencies: { astro: '^7.1.0' },
+  }));
+  writeProjectFile(projectRoot, '.gitignore', 'node_modules\n');
+  writeProjectFile(projectRoot, 'astro.config.mjs', `
+    import { defineConfig } from 'astro/config';
+    export default defineConfig({ output: 'static', build: { format: 'directory' } });
+  `);
+  writeProjectFile(
+    projectRoot,
+    'src/layouts/Layout.astro',
+    '<html lang="en-US" dir="ltr"><body><slot /></body></html>'
+  );
+  writeProjectFile(projectRoot, 'src/pages/index.astro', '<p>Home</p>');
+  writeProjectFile(projectRoot, '.git/HEAD', 'ref: refs/heads/main\n');
+  return projectRoot;
+}
+
 function runValidator(projectRoot) {
   return spawnSync(process.execPath, [VALIDATOR_PATH], {
     input: JSON.stringify({ cwd: projectRoot }),
@@ -159,6 +187,36 @@ test('create-site validator reports ambiguous Angular index configuration', (t) 
   assert.equal(result.status, 2);
   assert.match(result.stderr, /Root document configuration is invalid/);
   assert.match(result.stderr, /multiple application index documents/);
+});
+
+test('create-site validator accepts the Astro directory upload contract', (t) => {
+  const projectRoot = createAstroProject(t, {
+    name: 'astro',
+    options: { buildFormat: 'directory' },
+  });
+
+  const result = runValidator(projectRoot);
+  assert.equal(result.status, 0, result.stderr);
+});
+
+test('create-site validator requires the Astro framework upload contract', (t) => {
+  const missingFramework = runValidator(createAstroProject(t));
+  assert.equal(missingFramework.status, 2);
+  assert.match(missingFramework.stderr, /Astro sites require framework\.name "astro"/);
+  assert.match(
+    missingFramework.stderr,
+    /Astro sites require framework\.options\.buildFormat "directory"/
+  );
+
+  const wrongFormat = runValidator(createAstroProject(t, {
+    name: 'astro',
+    options: { buildFormat: 'file' },
+  }));
+  assert.equal(wrongFormat.status, 2);
+  assert.match(
+    wrongFormat.stderr,
+    /Astro sites require framework\.options\.buildFormat "directory"/
+  );
 });
 
 test('create-site validator accepts approved language through direct arguments', (t) => {

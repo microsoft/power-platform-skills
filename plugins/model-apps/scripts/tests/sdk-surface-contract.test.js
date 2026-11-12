@@ -35,11 +35,17 @@ const SKILL_SDK_SURFACE = [
   'addElement',
   'addEntityPrivilegesToRole',
   'addSolutionComponent',
+  // `scripts/data-fix.js` plans a row repair by reads only and applies it through the SDK's conditional row writer
+  // (lib/data-fix-runner.js).
+  'applyDataFix',
   'associateRecords',
   'configureRowSummary',
   'createAlternateKey',
   'createArtifact',
   'createColumn',
+  // A new table's ordinary columns follow the table in ONE atomic change set (entity-provision.js), which needs the
+  // transport's `postRaw` (lib/sdk-http-client.js); a refusal falls back to `createColumn` per column.
+  'createColumns',
   'createCustomerColumn',
   'createGlobalOptionSet',
   'createPersonaRole',
@@ -49,6 +55,9 @@ const SKILL_SDK_SURFACE = [
   'createTable',
   'createWebResource',
   'deleteAppCascade',
+  // A page create resumed under a caller-held turn id drops the workspace's stale local copy of a page the server no longer holds
+  // (genpage-sdk.js dropLocalCopy), so the page is staged as new. Local only: nothing is sent.
+  'deleteArtifact',
   'deleteGlobalOptionSet',
   'deleteRecord',
   'deleteRelationship',
@@ -57,24 +66,67 @@ const SKILL_SDK_SURFACE = [
   'deleteSolution',
   'deleteTable',
   'deleteWebResource',
+  // A reconcile pushes an artifact only when its workspace copy differs from the last-synced snapshot
+  // (unsynced-edits.js). The check fails open: without this method the engine writes as it always did.
+  'diffArtifact',
   'disassociateRecords',
   'enrichDefaultViews',
+  // Declared business rules and business process flows (lib/rule-settlement.js, lib/bpf-settlement.js) stage the workflow row's
+  // write first, save its id and body before anything is sent, then send exactly that staged write under the artifact lock.
+  'executePrepared',
+  // `scripts/solution-settings.js template --solution` exports the solution it makes the deployment settings of (unmanaged), then reads the
+  // package by staging it (`getDeploymentSettingsTemplate`); `import` applies the settings file in the import (`importSolution`).
+  'exportSolution',
   'fetchArtifact',
+  // Quick Find resolves the table's one default Quick Find view from the SDK's own list (lib/quick-find.js).
+  'fetchArtifactList',
   'fetchEntityMetadata',
+  // `scripts/solutions.js inspect --include-artifacts` lists what the SDK can read of a solution (lib/solution-inventory.js).
+  'fetchSolution',
   'findArtifact',
   'findColumns',
   'findTables',
+  // `scripts/genpage.js types` writes the RuntimeTypes a page is authored against (lib/genpage-sdk.js `runtimeTypes`): the SDK's own generator, one read of the
+  // tables' metadata that loads no compiler — in place of `pac model genpage generate-types`.
+  'generateGenPageRuntimeTypes',
   'getAiReadiness',
+  // app.theme (lib/app-theme.js) reads the app's stored and resolved theme, and writes it with publish:false.
+  'getAppTheme',
   'getArtifact',
   'getColumnVisualization',
+  // `scripts/connector.js` reads a connector's operations and one operation's schema through the Power Apps connectors API (the SDK's
+  // connectivity reads, which need the factory's `connectivity` option); `scripts/list-connections.js` lists the connections.
+  'getConnectorOperationSchema',
+  'getDeploymentSettingsTemplate',
+  // The push preview (lib/push-preview.js) previews exactly the set it prepared in its throwaway workspace, and these
+  // name that set; `previewPush` answers per artifact.
+  'getDirtyArtifacts',
   'getEntityPrivileges',
+  // `scripts/list-languages.js` reads the environment's languages (the planner's language detection, in place of
+  // `pac model list-languages`): LCIDs only — three GETs, no workspace — and maps them to culture codes itself.
+  'getEnvironmentLanguages',
+  // The dry run's read-only question to the app folder's workspace (workspaceBindingNote in lib/workspace-binding.js): which
+  // environment it belongs to. It reads manifest.json and nothing else — unlike `listArtifacts`, which also parses every
+  // saved copy it lists.
+  'getManifest',
   'getSolution',
+  // Recovery of an unconfirmed web-resource write verifies the recorded id's name before touching its content.
+  'getWebResource',
+  'importSolution',
   'initWorkspace',
   'insertStatusValue',
+  // Verify's command-control inspection and dashboard witness (lib/feature-verify.js), by reads only.
+  'inspectArtifact',
   // The deferred routing-description push reads the app copy's dirty flag, so it never replays an earlier
   // run's unpushed edits (sdk-build.js).
   'listArtifacts',
+  'listConnections',
+  'listConnectorOperations',
   'moveElement',
+  // The staging half of the declared-workflow write above: it builds the request without sending it.
+  'prepareArtifactUnlocked',
+  'previewPush',
+  'previewPushAll',
   'publishArtifact',
   // Step 8 publishes the app and every table whose default-view enrichment was saved but not yet
   // published in ONE PublishXml envelope (one customization lock, one publish job) instead of one
@@ -89,6 +141,8 @@ const SKILL_SDK_SURFACE = [
   'retrieveSetting',
   'seedRecordGraph',
   'setAppAiFeatures',
+  // app.theme (lib/app-theme.js) reads the app's stored and resolved theme, and writes it with publish:false.
+  'setAppTheme',
   'setColumnVisualization',
   // Offers a form to specific security roles (AB#6648526). The roles are NOT a relationship —
   // `systemform` reports `CanBeInManyToMany: { Value: false, CanBeChanged: false }` and there is no
@@ -101,7 +155,15 @@ const SKILL_SDK_SURFACE = [
   // Written by the app-shell phase for `app.newLook` — the modern shell is a per-app SETTING
   // (`NewLookAlwaysOn`), not an appmodule column.
   'saveSettingValue',
+  // The SDK's own write wrapper: it runs a schema write, then forgets the metadata the SDK cached for the table. The name column's length of
+  // a table an earlier attempt created is written through the raw client, addressed by MetadataId, instead of through `updateColumn`, which
+  // resolves the column by name (entity-provision.js, updateTextColumnLengthById) — and so asks for the same cache invalidation. The call is
+  // optional (an SDK without it has no cache to forget), which is why a bundle that drops it must be noticed HERE: nothing else would fail.
+  'schemaWrite',
   'setEntityIcon',
+  // App Spec `solution.version` (lib/configuration-artifacts.js): the SDK writes the solution row's version, so a bundle
+  // that drops it would turn a declared version into a silent no-op.
+  'setSolutionVersion',
   // Wave 2 header/navigation refresh (`app.headerNavigationRefresh`). Used instead of a raw setting
   // write because the value is a Number TRI-STATE where ON is '2', not '1' — writing '1' is accepted
   // by the API and silently fails to enable the feature. The SDK owns that encoding.
@@ -111,6 +173,8 @@ const SKILL_SDK_SURFACE = [
   'updateRecord',
   'updateTable',
   'updateWebResource',
+  // Holds the workspace lock around the declared-workflow staging and send, so no other write to the same artifact interleaves.
+  'withArtifactLock',
   // ⚠ `validateBusinessRule` was REMOVED from this list deliberately. The SDK no longer exposes it:
   // the designer's completeness validator now runs INTERNALLY on every business-rule save, so an
   // incomplete rule is refused by `pushArtifact` rather than by an opt-in call. Re-adding it here
