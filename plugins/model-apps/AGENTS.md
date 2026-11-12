@@ -3127,7 +3127,11 @@ charts phases. A spec that uses none of them takes the legacy paths unchanged. W
   its publication is listed unverified beside it: the saved body is proved, the published layer is not. A sub-grid's
   view is resolved as the build resolves it (`resolveSubgridView` mirrors `subgridViewId`: the named spec view, else the first spec view of the child table, else the default
   public view) and matched exactly: a declared view the environment lacks fails, an ambiguous or unreadable
-  one leaves the host out as unverified, and the oracle has no wildcard. A quick view's target is looked up by
+  one leaves the host out as unverified, and the oracle has no wildcard. When the named view is a declared one (the
+  last declaration of that name on the child table, the one whose id the build embeds), it is the row its managed
+  binding or its `viewId` names (`viewIdentity`, `boundSubgridView`), read by id and never by name: a binding
+  that is unsettled or a pin that contradicts it leaves the host out as unverified, and a bound row that is gone
+  or is not a public view of the child table fails. A quick view's target is looked up by
   name (ambiguous → unverified), unless the spec declares that Quick View form with a managed binding: then it is
   the bound row (`formIdentity`, `readBoundFormId`), never one of its name, and a binding that is unsettled,
   pinned elsewhere, or a row that does not answer as it leaves that host out as unverified. A host left out is

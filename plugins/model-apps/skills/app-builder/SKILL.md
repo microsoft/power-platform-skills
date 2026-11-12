@@ -186,7 +186,8 @@ prod-ready** app; don't under-build (a bare table list) or over-build (surfaces 
   `overwrite:form:` for changes made elsewhere): explain it and let the maker choose. `--verify` checks a
   declared form against the spec, sub-grid views included. It reads the form its binding records, never one
   of the same name: a form whose binding is pending or unusable is listed unverified, and a bound form that is
-  gone fails. A form whose publish is unconfirmed is checked on its saved form, and its publish is listed
+  gone fails. A sub-grid's declared view and a declared Quick View form are held to their bindings the same way.
+  A form whose publish is unconfirmed is checked on its saved form, and its publish is listed
   unverified beside that check. A download brings declared forms back only with `--include-managed --managed-manifest <store
   file>` (one with an event handler comes back with its handler library as an `external` web resource when
   that library is this publisher's own unmanaged script; otherwise it is left out and named in

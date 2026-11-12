@@ -2677,7 +2677,7 @@ async function verifySpec(spec, read, opts = {}) {
         const t = tables[g.family];
         if (!t) continue;
         if (g.family === 'form' && declaredForms.has(g.key)) {
-          await verifyManagedForm(spec, declaredForms.get(g.key), g, read, { add, unverified, formIdentity, readBoundFormId });
+          await verifyManagedForm(spec, declaredForms.get(g.key), g, read, { add, unverified, formIdentity, readBoundFormId, viewIdentity });
           continue;
         }
         if (g.family === 'dashboard' && declaredDashboards.has(g.key)) {
@@ -3230,12 +3230,23 @@ function declaredFormsByKey(spec) {
 // view as the build finds it (the `isdefault` row of the table's public views, else the first). Answers { id }, or
 // { missing } when a view the spec declares is not in the environment (the grid the build would embed cannot be there),
 // or { unverified } when the answer is ambiguous, unreadable or empty: never an unconstrained target.
-async function resolveSubgridView(spec, sg, child, read) {
+// A DECLARED spec view (views[].reconcile "declared") with a managed binding or a viewId pin is identified as the top-level view check
+// identifies it (viewIdentity), never by its name: the build embeds the id it holds for that (table, name), which is the LAST
+// declaration of that name (sdk-build.js records created views by table and name, so a later twin overwrites an earlier one) — so
+// that declaration's identity is the one asked. One unsettled, or contradicted by its pin, leaves the host out as unverified; a
+// bound or pinned row is read by its id alone and must be a public view (querytype 0) of the child table, its name not compared,
+// so a view a maker renamed is still the view and a namesake made beside it is never taken in its place. A view with neither a
+// binding nor a pin keeps the name read below.
+async function resolveSubgridView(spec, sg, child, read, viewIdentity) {
   if (!read || typeof read.queryRecords !== 'function') return { unverified: 'this reader cannot read views' };
   const own = (spec.views || []).filter((v) => v && v.entity && String(v.entity).toLowerCase() === child);
   const named = (sg.view && own.find((v) => v.name === sg.view)) || own[0];
   if (named) {
     const label = `the view '${named.name}' of '${child}' that the sub-grid shows`;
+    const target = own.filter((v) => v.name === named.name).pop();
+    const who = typeof viewIdentity === 'function' ? viewIdentity(target) : null;
+    if (who && (who.open || who.conflict)) return { unverified: `${label}: ${who.open || who.conflict}; the requested host target was not compared` };
+    if (who) return boundSubgridView(read, child, label, who);
     let rows;
     try {
       rows = await read.queryRecords('savedquery', { select: ['savedqueryid'], filter: `returnedtypecode eq '${odataLit(child)}' and name eq '${odataLit(named.name)}' and querytype eq 0`, top: 2 });
@@ -3257,17 +3268,44 @@ async function resolveSubgridView(spec, sg, child, read) {
   return def && def.savedqueryid ? { id: def.savedqueryid } : { unverified: `'${child}' has no public view the sub-grid could show` };
 }
 
+// A sub-grid's declared view, read by the id its binding or pin gives (`who` from viewIdentity: { id, by }). The answer, e.g.
+// [{ savedqueryid: '<guid>', returnedtypecode: 'contoso_child', querytype: 0 }], must be that one row, on the child table, a public
+// view: savedquery querytype 0 (https://learn.microsoft.com/power-apps/developer/data-platform/reference/entities/savedquery#querytype-choicesoptions),
+// which a reader may give as a number or a numeric string. Anything else is a host the build's grid cannot show ({ missing }); only
+// a read that throws is { unverified }. Never followed by a read by name or of the default view.
+async function boundSubgridView(read, child, label, who) {
+  let rows;
+  try {
+    rows = await read.queryRecords('savedquery', { select: ['savedqueryid', 'returnedtypecode', 'querytype'], filter: `savedqueryid eq ${who.id}`, top: 1 });
+  } catch (error) {
+    return { unverified: `${label} could not be read: ${String((error && error.message) || error)}` };
+  }
+  if (Array.isArray(rows) && rows.length === 0) return { missing: `${label}: ${who.by} was not found on its table; a view of the same name is not taken in its place` };
+  const row = Array.isArray(rows) && rows.length === 1 ? rows[0] : null;
+  if (!row || typeof row !== 'object') return { missing: `${label}: ${who.by} could not be identified: the read did not return one view row` };
+  const id = String(row.savedqueryid || '').trim().toLowerCase().replace(/^\{|\}$/g, '');
+  if (id !== who.id) return { missing: `${label}: the read of ${who.by} answered another row; a view of the same name is not taken in its place` };
+  if (row.returnedtypecode == null || row.returnedtypecode === '' || row.querytype == null || row.querytype === '') return { missing: `${label}: ${who.by} was read without its table or query type` };
+  if (String(row.returnedtypecode).toLowerCase() !== child || Number(row.querytype) !== 0) {
+    return { missing: `${label}: ${who.by} is not a public view of '${child}' (table '${row.returnedtypecode}', query type ${row.querytype})` };
+  }
+  return { id: who.id };
+}
+
 // One committed form group the spec still declares, held to its declaration by the helper's oracle (verifyDeclaredForm) over a
 // fresh read of the bound form. What verify cannot rebuild exactly as the build did is checked as far as it can be, and said so:
 //   - a sub-grid's view is resolved as the build resolves it (resolveSubgridView) and matched exactly; a declared view the
-//     environment does not hold fails the form, and one that cannot be identified leaves the host out, listed as unverified;
+//     environment does not hold fails the form, and one that cannot be identified leaves the host out, listed as unverified. A view the
+//     spec DECLARES with a managed binding or a pin is the row that identity names (viewIdentity), never one of its name: one that is
+//     unsettled or contradicted by its pin leaves the host out the same way, and a bound row that is gone or is not a public view of
+//     the child table fails the form;
 //   - a quick view's form is found by its (table, name) as a QuickView form; none or several answering cannot be judged, so the
 //     host is left out and listed as unverified rather than failed. A quick view form the spec DECLARES (forms[].reconcile
 //     "declared") with a managed binding is found by that binding instead (formIdentity, readBoundFormId), never by its name: one
 //     unsettled, pinned elsewhere, or not answering as its bound row is left out and listed as unverified the same way.
 // A group whose publication is still in flight (dispatching or unconfirmed) is checked on its saved form like any other, and listed
 // as unverified too: the published layer it will show is not known yet.
-async function verifyManagedForm(spec, f, g, read, { add, unverified, formIdentity, readBoundFormId }) {
+async function verifyManagedForm(spec, f, g, read, { add, unverified, formIdentity, readBoundFormId, viewIdentity }) {
   const name = `${g.key} (${g.root.id})`;
   if (!read || typeof read.declaredForm !== 'function') { unverified.push(`managed:form ${g.key} (this reader cannot read a form by id)`); return; }
   if (!g.consumerState || !g.consumerState.children) { unverified.push(`managed:form ${g.key} (the managed group carries no child state to check)`); return; }
@@ -3291,7 +3329,7 @@ async function verifyManagedForm(spec, f, g, read, { add, unverified, formIdenti
     const rel = sg && sg.childEntity ? subgridRelationshipName(spec, f.entity, sg.childEntity) : null;
     if (!rel) { unverified.push(`managed:form ${g.key} (the sub-grid for '${sg && sg.childEntity}' names no relationship the spec declares)`); continue; }
     const child = String(sg.childEntity).toLowerCase();
-    const view = await resolveSubgridView(spec, sg, child, read);
+    const view = await resolveSubgridView(spec, sg, child, read, viewIdentity);
     if (view.missing) { missingViews.push(`form-host: ${view.missing}`); continue; }
     if (view.unverified) { unverified.push(`managed:form ${g.key} (${view.unverified})`); continue; }
     subgrids.push({ targetEntity: child, relationshipName: rel, viewId: view.id });

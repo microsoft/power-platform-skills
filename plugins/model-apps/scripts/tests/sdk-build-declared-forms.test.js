@@ -2317,3 +2317,134 @@ test('verify holds a declared Main to the QuickView its binding names: a renamed
       'two QuickViews answer its name, the bound one and its namesake: which one it is cannot be told, as before');
   });
 });
+
+// --- a sub-grid's declared view, by the identity its binding or pin gives ---------------------------------------------------------
+
+// A declared Main whose sub-grid shows a declared view, built with stable create identities so the store binds the view as it binds
+// the form. `twins` declares two keyed views of one name: the build embeds the LAST one's id, as it records created views by name.
+function boundViewSpec({ twins = false } = {}) {
+  const s = linkedSpec();
+  s.createIdentity = 'stable-v1';
+  s.languageCode = 1033;
+  s.views = twins
+    ? [{ entity: 'contoso_item', name: 'Kids', key: 'first', reconcile: 'declared', columns: ['contoso_name'] }, { entity: 'contoso_item', name: 'Kids', key: 'last', reconcile: 'declared', columns: ['contoso_name', 'contoso_code'] }]
+    : [{ entity: 'contoso_item', name: 'Kids', reconcile: 'declared', columns: ['contoso_name'] }];
+  s.forms[0].subgrids = [{ childEntity: 'contoso_item', view: 'Kids', label: 'Children' }];
+  return s;
+}
+const VIEW_KEY = 'contoso_item/Kids';
+const KIDS = "the view 'Kids' of 'contoso_item' that the sub-grid shows";
+const viewReadsSince = (org, mark) => org.calls.slice(mark).filter((c) => c.method === 'GET' && /^\/savedqueries/.test(c.path)).map((c) => decodeURIComponent(c.path));
+// The sub-grid's own reads of a view: by its id (with its table and query type), by its name, or the table's default. The managed view
+// checks read each bound view too; those are not the sub-grid's.
+const subgridReadsSince = (org, mark) => viewReadsSince(org, mark).filter((p) => p.includes('$select=savedqueryid,returnedtypecode,querytype&') || / and querytype eq 0/.test(p));
+const hostLines = (r) => (r.unverified || []).filter((u) => u.startsWith(`managed:form ${KEY} (`));
+const viewRowOf = (org, id) => org.fake.rows('savedqueries').find((row) => row.data.savedqueryid === id);
+// Every layer of a fake savedquery row, so a by-id read and a collection read see the same change.
+const layersOf = (row) => [row.data, row.publishedData].filter(Boolean);
+async function viewNamesake(org, row) {
+  const before = new Set(org.fake.rows('savedqueries').map((r) => r.data.savedqueryid));
+  const { savedqueryid, ...body } = row.data;
+  void savedqueryid;
+  await org.fake.httpClient.post(`${org.origin}/api/data/v9.2/savedqueries`, { ...body, name: 'Kids' });
+  return org.fake.rows('savedqueries').find((r) => !before.has(r.data.savedqueryid)).data.savedqueryid;
+}
+async function builtBoundView(opts) {
+  const org = createFakeBuildOrg({ entities: LINKED });
+  const dir = newDir();
+  const s = boundViewSpec(opts);
+  assert.deepEqual(validateAppSpec(s, { profile: 'deploy' }).errors, []);
+  const built = await build(org, dir, s, { phases: ['views', 'forms'] });
+  assert.equal(built.err, undefined, chainText(built.err));
+  const manifest = manifestOf(org, dir);
+  const viewId = (key) => manifest.groups.find((g) => g.family === 'view' && g.key === key).root.id;
+  const { read } = await verifyReader(org);
+  return { org, s, manifest, viewId, read, built };
+}
+
+test('verify holds a declared form\'s sub-grid to the view its binding or pin names: one a maker renamed beside a namesake passes, a gone or non-public one fails, and no view is read by name', async () => {
+  await withForms(true, async () => {
+    const { org, s, manifest, viewId, read } = await builtBoundView();
+    const id = viewId(VIEW_KEY);
+    const bound = viewRowOf(org, id);
+    for (const layer of layersOf(bound)) layer.name = 'Kids Renamed';
+    const decoy = await viewNamesake(org, bound);
+    const unbound = { ...manifest, groups: manifest.groups.filter((g) => g.family !== 'view') };
+    const pinned = structuredClone(s);
+    pinned.views[0].viewId = `{${id.toUpperCase()}}`;
+    for (const [what, spec, m] of [['bound', s, manifest], ['bound and pinned to it', pinned, manifest], ['pinned, with no binding', pinned, unbound]]) {
+      const mark = org.calls.length;
+      const r = await verifySpec(spec, read, { phases: ['forms'], managedManifest: m });
+      assert.deepEqual(managedChecks(r).map((c) => [c.present, c.detail]), [[true, '']], what);
+      assert.deepEqual(hostLines(r), [], what);
+      const reads = subgridReadsSince(org, mark);
+      assert.ok(reads.length === 1 && reads[0].includes(`savedqueryid eq ${id}`), `${what}: the view is read once, by its id: ${JSON.stringify(reads)}`);
+      assert.ok(!reads.some((p) => /name eq 'Kids'/.test(p) || p.includes(decoy) || /querytype eq 0/.test(p)), `${what}: neither its name nor the default view is read: ${JSON.stringify(reads)}`);
+    }
+    const by = `the view its managed binding (${VIEW_KEY}) is bound to (${id})`;
+    const failsWith = async (detail, what) => {
+      const r = await verifySpec(s, read, { phases: ['forms'], managedManifest: manifest });
+      assert.deepEqual(managedChecks(r).map((c) => c.present), [false], what);
+      assert.ok(managedChecks(r)[0].detail.startsWith(`form-host: ${KIDS}: ${detail}`), `${what}: ${managedChecks(r)[0].detail}`);
+      assert.deepEqual(hostLines(r), [], what);
+    };
+    // Not a public view of the child table: a personal-type query, or another table.
+    for (const [what, field, value, words] of [['query type 64', 'querytype', 64, `${by} is not a public view of 'contoso_item' (table 'contoso_item', query type 64)`], ['another table', 'returnedtypecode', 'contoso_other', `${by} is not a public view of 'contoso_item' (table 'contoso_other', query type 0)`]]) {
+      const was = bound.data[field];
+      for (const layer of layersOf(bound)) layer[field] = value;
+      try { await failsWith(words, what); } finally { for (const layer of layersOf(bound)) layer[field] = was; }
+    }
+    // The bound view is gone: the namesake left beside it is not taken in its place.
+    const byId = (c) => c.method === 'GET' && /^\/savedqueries/.test(c.path) && decodeURIComponent(c.path).includes(`savedqueryid eq ${id}`);
+    let restore = org.intercept(byId, () => ({ status: 200, headers: {}, body: { value: [] } }));
+    try { await failsWith(`${by} was not found on its table; a view of the same name is not taken in its place`, 'gone'); } finally { restore(); }
+    // A read that fails leaves the host out, listed unverified; the rest of the saved form is still proved.
+    restore = org.intercept(byId, () => ({ status: 500, headers: {}, body: { error: { code: '0x80040216', message: 'unexpected' } } }));
+    let failed;
+    try { failed = await verifySpec(s, read, { phases: ['forms'], managedManifest: manifest }); } finally { restore(); }
+    assert.deepEqual(managedChecks(failed).map((c) => [c.present, c.detail]), [[true, '']]);
+    assert.equal(hostLines(failed).length, 1, JSON.stringify(failed.unverified));
+    assert.ok(hostLines(failed)[0].startsWith(`managed:form ${KEY} (${KIDS} could not be read: `), hostLines(failed)[0]);
+  });
+});
+
+test('verify leaves a declared form\'s sub-grid out when its view\'s binding is not settled or its pin contradicts it, and reads no view for it', async () => {
+  await withForms(true, async () => {
+    const { org, s, manifest, viewId, read } = await builtBoundView();
+    const id = viewId(VIEW_KEY);
+    await viewNamesake(org, viewRowOf(org, id));
+    const groups = manifest.groups.filter((g) => g.family !== 'view');
+    const OTHER_VIEW = '99999999-0000-4000-8000-000000000009';
+    const pinnedElsewhere = structuredClone(s);
+    pinnedElsewhere.views[0].viewId = OTHER_VIEW;
+    const settled = (code) => `its managed binding (${VIEW_KEY}) is not settled (${code}) — unverified, not proven correct`;
+    for (const [what, spec, m, reason] of [
+      ['pending', s, { ...manifest, groups, pending: [{ family: 'view', key: VIEW_KEY, code: 'managed-attempt-pending', root: { id } }] }, settled('managed-attempt-pending')],
+      ['not usable', s, { ...manifest, groups, invalid: [{ family: 'view', key: VIEW_KEY, code: 'managed-binding-group-invalid' }] }, settled('managed-binding-group-invalid')],
+      ['pinned elsewhere', pinnedElsewhere, manifest, `its viewId ${OTHER_VIEW} is not the view its managed binding (${VIEW_KEY}) is bound to (${id}); correct or remove the viewId`],
+    ]) {
+      const mark = org.calls.length;
+      const r = await verifySpec(spec, read, { phases: ['forms'], managedManifest: m });
+      assert.deepEqual(managedChecks(r).map((c) => [c.present, c.detail]), [[true, '']], what);
+      assert.deepEqual(hostLines(r), [`managed:form ${KEY} (${KIDS}: ${reason}; the requested host target was not compared)`], what);
+      assert.deepEqual(subgridReadsSince(org, mark), [], `${what}: no view is read for the sub-grid`);
+    }
+  });
+});
+
+test('verify holds a sub-grid to the last of two keyed views of one name, the one the build embeds, and an unbound view is still read by its name', async () => {
+  await withForms(true, async () => {
+    const { org, s, manifest, viewId, read, built } = await builtBoundView({ twins: true });
+    const last = viewId('last');
+    assert.equal(built.out.created.views['contoso_item|Kids'], last, 'the build embeds the last declaration');
+    const mark = org.calls.length;
+    const r = await verifySpec(s, read, { phases: ['forms'], managedManifest: manifest });
+    assert.deepEqual(managedChecks(r).map((c) => [c.present, c.detail]), [[true, '']]);
+    assert.deepEqual(hostLines(r), []);
+    const reads = subgridReadsSince(org, mark);
+    assert.ok(reads.length === 1 && reads[0].includes(`savedqueryid eq ${last}`), JSON.stringify(reads));
+    // With no binding for either twin, each is found by its name as before, and two rows answer it: the host is unverified.
+    const unbound = await verifySpec(s, read, { phases: ['forms'], managedManifest: { ...manifest, groups: manifest.groups.filter((g) => g.family !== 'view') } });
+    assert.deepEqual(hostLines(unbound), [`managed:form ${KEY} (${KIDS} could not be identified: more than one view answers its name)`]);
+  });
+});
