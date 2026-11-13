@@ -102,10 +102,9 @@ interface InspectionSource
 const sample = createMockSource<Inspection, InspectionDraft>(inspectionFixtures, {
   searchFields: ['title', 'siteName'],
   sort: (a, b) => a.scheduledFor.localeCompare(b.scheduledFor),
-  fromDraft: (draft, id) => ({
-    ...draft,
-    id,
-    siteName: siteFixtures.find((site) => site.id === draft.siteId)?.name ?? '',
+  derive: (record) => ({
+    ...record,
+    siteName: siteFixtures.find((site) => site.id === record.siteId)?.name ?? '',
   }),
 });
 const inspectionSource: InspectionSource = {
@@ -154,6 +153,8 @@ Hook names follow the contract: `use<Entity>List` (wrapping `useCursorListData` 
 Every mutation returns a `MutationResult`, so a screen branches on `result.ok` and renders `result.message` inline.
 Mutations invalidate the entity's query key, so a list the user returns to already shows the new record.
 A reference field is stored as `<name>Id` beside its `(from <Entity>)` display value, as `siteId` and `siteName` are above.
+Compute every `(from <Entity>)` value in the mock source's `derive`, which runs on create and on every update, so an edit that changes the reference also changes the name the screens show and search.
+`fromDraft` runs on create only; use it for create-time defaults such as a starting status.
 
 ## Device actions
 

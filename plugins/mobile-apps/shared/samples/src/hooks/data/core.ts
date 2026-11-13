@@ -106,9 +106,17 @@ export interface MockSourceOptions<T, Draft> {
   sort?: (a: T, b: T) => number;
   /**
    * Builds a stored record from a create draft. Needed when the record has fields the form does
-   * not supply, such as a derived display name or a default status.
+   * not supply on create, such as a default status. Runs on create only: put a value computed
+   * from other fields in `derive` instead.
    */
   fromDraft?: (draft: Draft, id: string) => T;
+  /**
+   * Recomputes values derived from other fields, such as a reference's `(from <Entity>)` display
+   * name. Runs on every create and update, after the draft or patch is applied, so an edit that
+   * changes `siteId` also changes `siteName`; computed only on create, the old name would keep
+   * showing, and matching searches, after the edit.
+   */
+  derive?: (record: T) => T;
   /**
    * Simulated round trip. Without it the preview never shows a loading state, so a screen whose
    * skeleton or spinner is broken looks fine until it meets a real network.
@@ -148,7 +156,7 @@ export function createMockSource<T extends { id: string }, Draft = Omit<T, 'id'>
   fixtures: readonly T[],
   options: MockSourceOptions<T, Draft> = {},
 ): EntityOperations<T, Draft> {
-  const { searchFields = [], sort, fromDraft, latencyMs = 250 } = options;
+  const { searchFields = [], sort, fromDraft, derive = (record: T) => record, latencyMs = 250 } = options;
   let records: T[] = fixtures.map((record) => ({ ...record }));
 
   const toRecord = fromDraft ?? ((draft: Draft, id: string) => ({ ...draft, id }) as unknown as T);
@@ -173,7 +181,7 @@ export function createMockSource<T extends { id: string }, Draft = Omit<T, 'id'>
 
     async create(draft) {
       await wait(latencyMs);
-      const created = toRecord(draft, nextMockId());
+      const created = derive(toRecord(draft, nextMockId()));
       records = [created, ...records];
       return created;
     },
@@ -182,7 +190,7 @@ export function createMockSource<T extends { id: string }, Draft = Omit<T, 'id'>
       await wait(latencyMs);
       const index = records.findIndex((record) => record.id === id);
       if (index < 0) throw new Error(`No sample record with id ${id}`);
-      const updated = { ...records[index], ...patch } as T;
+      const updated = derive({ ...records[index], ...patch } as T);
       records = records.map((record, i) => (i === index ? updated : record));
       return updated;
     },

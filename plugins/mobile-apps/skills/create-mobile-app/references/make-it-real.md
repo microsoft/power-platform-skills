@@ -115,7 +115,7 @@ cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1;
 ENV_ID=$(node -e "process.stdout.write(require('./power.config.json').environmentId || '')")
 node "${PLUGIN_ROOT}/scripts/resolve-environment.js" "$ENV_ID" > .resolved-environment.json || exit 1
 node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir . set --section environment --json-file .resolved-environment.json
-node "${PLUGIN_ROOT}/scripts/seed-memory-bank.js" --working-dir . --requirements .tmp/requirements.json --environment .resolved-environment.json --cli-binary pa
+node "${PLUGIN_ROOT}/scripts/seed-memory-bank.js" --working-dir . --requirements .tmp/requirements.json --environment .resolved-environment.json --cli-binary pa --visual-companion '<visual_companion>'
 ```
 
 `.resolved-environment.json` holds the Dataverse URL and tenant that Steps 10-12 use.

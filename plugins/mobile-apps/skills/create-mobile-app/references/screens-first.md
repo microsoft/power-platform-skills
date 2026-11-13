@@ -158,7 +158,7 @@ Set tentative defaults:
 - `<visual_companion> = yes` — governs static HTML previews: `/preview-screens` wherever it runs, and a later `/edit-app` re-plan. **A create run opens exactly one browser surface, whatever this is set to:** the build plan at Step 3. The live web preview at Step 6.3 runs inside the plan's phone frame instead of a tab of its own. Every opener in `/design-system` and its style picker is gated on `CODE_APPS_NATIVE_ORCHESTRATING=1`, which this skill passes, and Step 9 tells `/design-system` to skip its static screen mockups because the live preview supersedes them. `/design-system` may change the flag to `no`; persist the final value to memory-bank for future runs.
 - `<design_vibe_opt_in> = deferred` — Step 9 sets the real value. While `deferred`, nothing asks for a direction: the plan keeps a placeholder `## Design Direction: <deferred — set by /design-system>` block, and screens use the look's defaults.
 
-**`--no-design` escape hatch.** For headless / token-constrained runs, set `--no-design` in `$ARGUMENTS`. It forces `<visual_companion> = no`, and short-circuits Step 9 to a no-op (the preview keeps the template's default theme, and screens keep the look's defaults).
+**`--no-design` escape hatch.** For headless / token-constrained runs, set `--no-design` in `$ARGUMENTS`. It forces `<visual_companion> = no`, which Step 3.4 records in the memory bank, and short-circuits Step 9 to a no-op (the preview keeps the template's default theme, and screens keep the look's defaults).
 
 Then write two files with the `Write` tool, in one message. The app name came from the user, so it does not go through a shell argument:
 
@@ -200,7 +200,7 @@ node "$DOCS" --working-dir . set --section environment --json-file .tmp/environm
 # 3.4 Scaffold gate, schema map, memory bank
 npx --no-install tsc --noEmit || exit 37
 npm run generate-schemas || exit 38
-node "${PLUGIN_ROOT}/scripts/seed-memory-bank.js" --working-dir . --requirements .tmp/requirements.json --environment .tmp/environment.json --cli-binary pa || echo "WARN memory bank not seeded"
+node "${PLUGIN_ROOT}/scripts/seed-memory-bank.js" --working-dir . --requirements .tmp/requirements.json --environment .tmp/environment.json --cli-binary pa --visual-companion '<visual_companion>' || echo "WARN memory bank not seeded"
 node "$DOCS" --working-dir . step --id scaffold --status done
 node "${PLUGIN_ROOT}/scripts/find-free-port.js" --start 19006
 ```
@@ -244,7 +244,7 @@ The file is CLI-generated: verify it, never hand-edit it, and leave it out of th
 
 A clean `tsc` here proves preparation and `init` left a buildable app.
 `generate-schemas` writes the connector schema map the root layout imports; Metro cannot bundle the app without it.
-`seed-memory-bank.js` fills the bank's fact rows it knows now; a seeding warning does not stop the run, and Step 9.0 seeds it again with the resolved environment.
+`seed-memory-bank.js` fills the bank's fact rows it knows now and records `<visual_companion>` as the `visual_companion:` line `/preview-screens` reads; a seeding warning does not stop the run, and Step 9.0 seeds it again with the resolved environment, keeping the creation date, the creating plugin version, and the recorded preference.
 
 #### 3.5 — Start the preview server
 

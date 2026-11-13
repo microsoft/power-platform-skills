@@ -5,6 +5,7 @@ const { spawnSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const test = require('node:test');
+const vm = require('node:vm');
 const { createSkillDataModelFirst, createSkillWorkflow } = require('./helpers/create-skill');
 const {
   hasNavigationTapGuard,
@@ -171,4 +172,41 @@ test('daysFromToday returns the local calendar date, not the UTC one', () => {
   });
   assert.strictEqual(run.status, 0, run.stderr);
   assert.deepStrictEqual(JSON.parse(run.stdout), ['2026-11-12', '2026-11-13', '2026-11-11']);
+});
+
+test('the mock source recomputes a reference display value on update, not only on create', async (t) => {
+  // A screen edits a record's reference (`siteId`) and then shows and searches its display value
+  // (`siteName`). Computed only when the record is created, the old name kept showing after the
+  // edit. This runs the shipped createMockSource itself: Node's own type stripping turns core.ts
+  // into JavaScript, so the test exercises the code builders copy, not a re-typed imitation.
+  const { stripTypeScriptTypes } = require('node:module');
+  if (typeof stripTypeScriptTypes !== 'function') {
+    t.skip('this Node version cannot strip TypeScript types; covered on the Node 22 CI jobs');
+    return;
+  }
+  const source = read('shared/samples/src/hooks/data/core.ts')
+    // The React hooks at the bottom are not exercised here, so their imports become empty stubs.
+    .replace(/^import .*$/gm, '')
+    .replace(/^export /gm, '');
+  const context = vm.createContext({ setTimeout });
+  vm.runInContext(`${stripTypeScriptTypes(source)}\nthis.createMockSource = createMockSource;`, context);
+
+  const sites = [{ id: 's1', name: 'North yard' }, { id: 's2', name: 'South dock' }];
+  const sample = context.createMockSource(
+    [{ id: 'i1', title: 'Crane check', siteId: 's1', siteName: 'North yard' }],
+    {
+      searchFields: ['title', 'siteName'],
+      latencyMs: 0,
+      derive: (record) => ({ ...record, siteName: sites.find((site) => site.id === record.siteId)?.name ?? '' }),
+    },
+  );
+
+  const created = await sample.create({ title: 'Dock survey', siteId: 's2' });
+  assert.strictEqual(created.siteName, 'South dock', 'create fills the display value');
+
+  const updated = await sample.update('i1', { siteId: 's2' });
+  assert.strictEqual(updated.siteName, 'South dock', 'update recomputes it from the new reference');
+  assert.strictEqual((await sample.get('i1')).siteName, 'South dock', 'and stores the recomputed record');
+  const { items } = await sample.list({ pageSize: 10, search: 'north' });
+  assert.strictEqual(items.length, 0, 'search no longer finds the old name');
 });
