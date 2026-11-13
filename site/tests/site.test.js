@@ -537,7 +537,7 @@ test('site build includes a linked evaluations page without depending on media o
   const result = build({ repoRoot: REPO_ROOT, outDir, basePath: '/' });
   assert.ok(result.files.includes('evaluations/index.html'));
   assert.match(fs.readFileSync(path.join(outDir, 'index.html'), 'utf8'), /href="evaluations\/"/);
-  assert.match(fs.readFileSync(path.join(outDir, 'evaluations/index.html'), 'utf8'), /Offline only/);
+  assert.doesNotMatch(fs.readFileSync(path.join(outDir, 'evaluations/index.html'), 'utf8'), /Offline only/);
   assert.ok(fs.existsSync(path.join(outDir, 'assets', 'evaluations.css')));
   const args = parseArgs(['--eval-results', 'a.json', '--eval-results', 'results']);
   assert.deepEqual(args.evalResults, [path.resolve('a.json'), path.resolve('results')]);

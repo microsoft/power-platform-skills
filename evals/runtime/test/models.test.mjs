@@ -6,10 +6,10 @@ test('default matrix pairs each evaluated model with a different medium-effort j
   const matrix = evaluationMatrix({ skills: ['create-site', 'setup-auth'] });
   assert.equal(matrix.length, 8);
   assert.deepEqual(matrix.filter(item => item.skill === 'create-site').map(item => [item.model, item.judgeModel]), [
-    ['claude-opus-5', 'gpt-6.1-sol'],
-    ['claude-sonnet-5.5', 'claude-opus-5'],
-    ['gpt-6-astra', 'claude-opus-5'],
-    ['gpt-6.1-sol', 'claude-opus-5'],
+    ['claude-opus-4.8', 'gpt-6.1-sol'],
+    ['claude-sonnet-5.5', 'claude-opus-4.8'],
+    ['gpt-6-sol', 'claude-opus-4.8'],
+    ['gpt-6.1-sol', 'claude-opus-4.8'],
   ]);
   for (const item of matrix) {
     assert.notEqual(item.model, item.judgeModel);

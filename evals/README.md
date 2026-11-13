@@ -24,9 +24,9 @@ The validation workflow runs on Linux, Windows and macOS without model credentia
 Its native CLI test creates real isolated sessions and invokes a skill against a local dummy provider, without requesting model generation.
 
 The manual workflow runs four pinned models at medium reasoning effort:
-`claude-opus-5`, `claude-sonnet-5.5`, `gpt-6-astra`, and `gpt-6.1-sol`.
-These are the current Sonnet and Sol versions verified against the Copilot catalog; explicit versions keep runs attributable.
-Sol judges Opus; Opus judges the other three.
+`claude-opus-4.8`, `claude-sonnet-5.5`, `gpt-6-sol`, and `gpt-6.1-sol`.
+All four were listed as enabled in the GitHub Actions Copilot model catalog; the probe completed inference with Opus 4.8, Sonnet 5.5 and GPT-6.1 Sol.
+GPT-6.1 Sol judges Opus 4.8; Opus 4.8 judges the other three.
 The judge must differ from the evaluated model.
 Manual dispatch can override the comma-separated model list, judge model, agent effort and judge effort.
 Unsupported model/effort choices fail rather than silently falling back.
@@ -35,7 +35,7 @@ The runner supports focused debugging with native Actions authentication or `--l
 
 ```bash
 node evals/runtime/run.mjs run --skill setup-auth --runs 1 --local-auth \
-  --model claude-opus-5 --judge-model gpt-6.1-sol \
+  --model claude-opus-4.8 --judge-model gpt-6.1-sol \
   --reasoning-effort medium --judge-reasoning-effort medium \
   --out evals/reports/auth-review
 ```
