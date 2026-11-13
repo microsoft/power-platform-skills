@@ -3603,6 +3603,11 @@ warns); a clean pair changes nothing.
 Recovery also compares a Custom API's or duplicate rule's workspace copy with its snapshot (the SDK's `diffArtifact`,
 over a storage that refuses writes and a client that refuses requests) in `prepare` and `resolve`, and an unsent
 edit stops both with `create-completion-required`, the code the build's `refuseLocalDraft` uses.
+`createDeclarationsOf` (`lib/configuration-create-guard.js`), the declaration list of the recovery command and of every
+entry guard, also lists each page the build writes (`pagesStatingBindings`) as a `page` declaration that depends on the
+Custom APIs its `actionBindings` name and the connection references its `connectorBindings` name, so a deferral is
+refused while a page still calls the root and a build stops on a page that calls a deferred root. An action binding named
+exactly as a built-in Dataverse operation (`isBuiltInOperation`) depends on nothing.
 The receipt, its quarantine markers and archives are owned by the plugin: while a build or recovery runs, no
 other process may change, rename, create, sync or restore files in that workspace folder. The plugin's own
 entries coordinate through the app build lease and the receipt's record lease (`lib/record-lease.js`); an

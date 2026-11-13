@@ -97,9 +97,12 @@ the receipt.
   connection reference unit also needs `--accept-current-private-state` after you review
   its private values, which recovery neither compares nor prints. Acceptance records that you accept the
   current state; it does not prove what an earlier request did.
-- **`defer`**: first remove the unit's root (and anything that depends on it) from the App Spec. The
-  unit stays recorded. A later build can do unrelated work, but stops again if the App Spec brings the
-  root back, under its key, its name or its id. Deferral does not cancel the earlier request and does not
+- **`defer`**: first remove the unit's root (and anything that depends on it) from the App Spec. That
+  includes a page binding that names it: an `actionBindings` entry naming a Custom API, or a
+  `connectorBindings` entry naming a connection reference (an action binding named exactly `WhoAmI` or
+  `RetrieveVersion` is a built-in operation and names no Custom API). The unit stays recorded. A later
+  build can do unrelated work, but stops again if the App Spec brings the root back, under its key, its
+  name or its id, or a page binding names it again. Deferral does not cancel the earlier request and does not
   make the workspace safe to delete.
 - **`cancel-unsent`**: only for a unit no request of which was sent. It is local cancellation, not a
   conclusion drawn from rows being absent.

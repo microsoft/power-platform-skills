@@ -381,3 +381,42 @@ for (const [label, kind, key, type, s] of [
     assert.deepEqual(org.writes(mark), []);
   });
 }
+
+// A page the build writes calls what its bindings name: a Custom API through `actionBindings`, a connection reference through
+// `connectorBindings`. A root a page still calls is not out of the build, so deferring it is refused while the page names it, and a
+// page that names a deferred root stops every build guard. A binding to another name, and one named exactly as a built-in Dataverse
+// operation (WhoAmI is no Custom API), depend on nothing.
+// A spec of schema 2, where a sitemap entry names a page by its key.
+const pageWith = (bindings) => ({
+  schemaVersion: 2,
+  pages: [{ key: 'main', name: 'Main', source: { kind: 'tsx', codeFile: 'main.tsx' }, ...bindings }],
+  appShell: { areas: [{ label: 'Main', groups: [{ label: 'Links', subAreas: [{ page: 'main', title: 'Main' }] }] }] },
+});
+for (const [label, kind, key, gone, binding, other] of [
+  ['an action binding', 'custom-api', 'contoso_Calc', spec({ apis: false }),
+    { actionBindings: [{ name: 'contoso_Calc', isFunction: true }] }, { actionBindings: [{ name: 'contoso_Other', isFunction: true }, { name: 'WhoAmI', isFunction: true }] }],
+  ['a connector binding', 'connection-reference', 'contoso_c1', { ...spec({ apis: false }), connectionReferences: [] },
+    { connectorBindings: [{ logicalName: 'contoso_C1', connectorId: SP }] }, { connectorBindings: [{ logicalName: 'contoso_c2', connectorId: SP }] }],
+]) {
+  test(`defer is refused while a page still calls the root through ${label}, and a build guard refuses the page after deferral`, async () => {
+    const app = appWithUnit(spec(), kind, key);
+    const calling = { ...gone, ...pageWith(binding) };
+    assert.equal(require('../lib/app-spec.js').validateAppSpec(calling).ok, true);
+    fs.writeFileSync(path.join(app.appDir, 'app-spec.json'), JSON.stringify(calling));
+    const prepareArgv = ['prepare', '--app-dir', app.appDir, '--env', ENV, '--unit', app.unitId, '--resolution', 'defer'];
+    const refused = await run(prepareArgv, { httpClient: noClient });
+    assert.equal(refused.ok, false);
+    assert.equal(refused.payload.code, 'configuration-create-pending', JSON.stringify(refused.payload));
+    assert.equal((await run(['inspect', '--app-dir', app.appDir], { httpClient: noClient })).payload.units[0].state, 'open');
+    // A page that calls other names (and the built-in WhoAmI) does not hold the root: the deferral goes on.
+    const unrelated = { ...gone, ...pageWith(other) };
+    fs.writeFileSync(path.join(app.appDir, 'app-spec.json'), JSON.stringify(unrelated));
+    const prepared = await run(prepareArgv, { httpClient: noClient });
+    assert.equal(prepared.ok, true, JSON.stringify(prepared.payload));
+    const done = await run(['resolve', '--app-dir', app.appDir, '--env', ENV, '--unit', app.unitId, '--resolution', 'defer', '--approval-token', prepared.payload.approvalToken], { httpClient: noClient });
+    assert.equal(done.payload.code, 'configuration-create-reconciled', JSON.stringify(done.payload));
+    assert.equal(G.assertConfigurationCreatesClear(app.workspaceDir, { spec: unrelated, env: ENV, languageCode: 1033 }).deferredUnits, 1);
+    // After deferral, a page that calls the root again stops the build guard.
+    assert.throws(() => G.assertConfigurationCreatesClear(app.workspaceDir, { spec: calling, env: ENV, languageCode: 1033 }), (e) => e.code === 'configuration-create-pending' && e.retry === 'never');
+  });
+}

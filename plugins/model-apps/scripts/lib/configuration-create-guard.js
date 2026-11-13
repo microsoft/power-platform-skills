@@ -66,6 +66,32 @@ function createDeclarationsOf(spec) {
     if (typeof e.key !== 'string') return;
     out.push({ kind: 'duplicate-rule', key: e.key, names: [e.key, ...(typeof e.name === 'string' && e.name ? [e.name] : [])] });
   });
+  out.push(...pageBindingDeclarationsOf(spec));
+  return out;
+}
+
+// A page the build writes depends on what its bindings name: an `actionBindings` entry on the Custom API of that unique name, a
+// `connectorBindings` entry on the connection reference of that logical name (lib/page-binding-targets.js, which reads the same two
+// tables before a rebuild writes them). A deferred root a page still calls is not out of the build, so each such page is a
+// declaration of its own kind ('page', which matches no receipt root) that depends on those roots. Only pages the build would write
+// count (pagesStatingBindings of a full build: a TSX source, a stated binding), and an action binding named EXACTLY as a reviewed
+// built-in Dataverse operation (WhoAmI, RetrieveVersion) names no Custom API, so it depends on nothing.
+//   { name: 'contoso_Calc', isFunction: true }                         -> { kind: 'custom-api', key: 'contoso_calc', name: 'contoso_Calc' }
+//   { logicalName: 'contoso_c1', connectorId: '/providers/.../shared_x' } -> { kind: 'connection-reference', key: 'contoso_c1', name: 'contoso_c1' }
+function pageBindingDeclarationsOf(spec) {
+  if (!Array.isArray(spec.pages) || !spec.pages.length) return [];
+  const { pagesStatingBindings, isBuiltInOperation } = require('./page-binding-targets.js');
+  const { PAGE_BINDINGS } = require('./page-bindings.js');
+  const refsOf = (page, list, kind) => (Array.isArray(page[list]) ? page[list] : [])
+    .filter((entry) => !(list === 'actionBindings' && isBuiltInOperation(entry)))
+    .map((entry) => (entry && typeof entry[PAGE_BINDINGS[list]] === 'string' ? entry[PAGE_BINDINGS[list]].trim() : ''))
+    .filter(Boolean)
+    .map((name) => ({ kind, key: lower(name), name }));
+  const out = [];
+  for (const page of pagesStatingBindings(spec)) {
+    const dependsOn = [...refsOf(page, 'actionBindings', 'custom-api'), ...refsOf(page, 'connectorBindings', 'connection-reference')];
+    if (dependsOn.length) out.push({ kind: 'page', key: String(page.key), names: [], dependsOn });
+  }
   return out;
 }
 
