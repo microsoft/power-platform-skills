@@ -17,8 +17,8 @@ const planning = read(planningPath);
 const setup = skill('setup-datamodel');
 const edit = skill('edit-app');
 const dataverse = skill('add-dataverse');
-// Each build order keeps its own copy of the Dataverse planning helper sections, numbered for
-// its own run.
+// Both build orders include the same shared Dataverse planning steps; the helper expands each
+// include inline, so every assertion below checks the text a run actually reads.
 const createFlows = [
   { order: 'screens-first', create: createSkillWorkflow(), recoveryEnd: '#### Post-plan publisher-prefix gate', apply: '12' },
   { order: 'data-model-first', create: createSkillDataModelFirst(), recoveryEnd: '#### Step 3.0a', apply: '8' },
@@ -310,7 +310,7 @@ test('creation retains its complete receipt-owned fast path and fails closed on 
       assert.match(fast, new RegExp(`--${flag} <working_dir>/\\.tmp/`));
     }
     assert.match(section(create, `### Step ${apply} — Apply`, 'Invoke skill: /add-dataverse'),
-      new RegExp(`Step ${apply} cannot create or refresh this receipt`));
+      /This step cannot create or refresh this receipt/);
   }
   assert.match(fast, /supplies all five paths/);
   assert.match(fast, /entirely absent fast-path handoff[\s\S]*fallback/);

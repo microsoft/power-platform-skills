@@ -210,6 +210,7 @@ Five typical flows:
 ```
 
 What happens: the skill first asks one **setup question** (~30s) — the app name, environment, look, and, for a short prompt, the features to build. It then shows the brief and asks for a **build order**; choosing one confirms the brief, and typing a change revises it. Both orders make the same app; they differ in what you see first. Pass `--screens-first` or `--data-model-first` to skip the question.
+An app whose data all comes from connectors (SharePoint, SQL, and so on) is not asked: it builds data model first, because its screens need the connector's real data rather than samples.
 
 **Screens first (recommended)** - watch your screens get built and run live in the build plan's phone within minutes, then make them real:
 1. **Scaffold** — validates the prepared template folder and runs `pa app init` while the screens are planned

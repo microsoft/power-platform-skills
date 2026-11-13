@@ -179,15 +179,31 @@ If the description asks for Application Insights, telemetry, analytics, or monit
 Custom event names the user gives belong in the brief, so screens can emit them through `getCustomEventsLogger()`.
 
 **Write the brief**: 4-8 bullets covering who uses the app, what they do, the records it keeps, statuses, integrations, device features, and constraints.
+
+**Classify where the data lives**, applying [`connectivity-intent-ownership.md`](${PLUGIN_ROOT}/shared/references/connectivity-intent-ownership.md) (offline wording is context, not a data source):
+
+- `connector-only` only when every record source and write target is an explicit non-Dataverse connector or system of record (SharePoint, SQL, Outlook, ...), and the app needs no app-owned persistent rows, retained File/Image artifact, existing Dataverse table, or Dataverse-backed native capability.
+- `required` for every other case, including ambiguity. Do not infer connector-only merely because the brief names a connector.
+
+This is a recommendation, not a decision: the architecture gate still asks the user to choose the data platform.
+
 Then write `<working_dir>/.tmp/requirements.json` with the `Write` tool.
 Every value in it came from the user, so none of it goes through a shell argument:
-`{"appName","slug","platforms":"iOS and Android","aesthetic","industry","brief","features":[],"environmentId"}`.
-`industry` is the domain the brief implies, in a few words ("warehouse operations").
+`{"appName","slug","platforms":"iOS and Android","aesthetic","industry","brief","features":[],"environmentId","dataPlanningMode"}`.
+`industry` is the domain the brief implies, in a few words ("warehouse operations"), and `dataPlanningMode` is the classification above.
 Both flows read the requirements from this file and ask none of them again.
 
 #### Choose the build order
 
-`--screens-first` or `--data-model-first` in `$ARGUMENTS` chooses without asking; print the brief as a log instead.
+**A `connector-only` brief builds data model first, and is not asked.**
+Screens first builds on sample data, which is only worth having when the app owns its data: a connector's records already exist, and their shape comes from the connector's own interface, which only exists once the connector is added.
+Print the brief as a log, then:
+
+> "→ Your app reads and writes through <connectors>, so I'll connect them first and build the screens against their real data."
+
+`--screens-first` does not override this; say so in the same line.
+
+Otherwise, `--screens-first` or `--data-model-first` in `$ARGUMENTS` chooses without asking; print the brief as a log instead.
 Otherwise ask one `AskUserQuestion` that opens with the brief, so choosing an order also confirms what gets built:
 
 | Header | Question | Options |

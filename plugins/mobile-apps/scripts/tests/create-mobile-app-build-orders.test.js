@@ -64,6 +64,25 @@ test('the build order is asked once, after routing confirms a fresh creation', (
   assert.match(question, /read the chosen flow file and continue at its Step 1/);
 });
 
+test('a connector-only brief builds data model first without asking', () => {
+  // Screens first previews on sample data, which has nothing to offer when every record lives in a
+  // connector: its shape comes from the connector's own interface. The classification happens once,
+  // in SKILL.md, and both flows read it instead of inferring their own.
+  const step0 = entry.slice(entry.indexOf('### Step 0 '));
+  const classify = step0.indexOf('**Classify where the data lives**');
+  const choose = step0.indexOf('#### Choose the build order');
+  assert.ok(classify > 0 && classify < choose, 'the data source is classified before the build order');
+  assert.match(step0.slice(classify, choose), /"dataPlanningMode"/);
+  const question = step0.slice(choose, step0.indexOf('#### Creation continuation'));
+  const routing = question.indexOf('**A `connector-only` brief builds data model first, and is not asked.**');
+  assert.ok(routing >= 0 && routing < question.indexOf('one `AskUserQuestion`'), 'the route comes before the question');
+  assert.match(question, /`--screens-first` does not override this/);
+  for (const flow of [screensFirst + makeItReal, dataModelFirst]) {
+    assert.doesNotMatch(flow, /infer a provisional Dataverse planning mode/i, 'flows read the classification, not re-derive it');
+    assert.match(flow, /dataPlanningMode/);
+  }
+});
+
 test('each flow records its build order in the plan, and a continuation keeps it', () => {
   assert.match(screensFirst, /`\{"appName","dataPlatform":"unknown","buildOrder":"screens-first"\}`/);
   assert.match(dataModelFirst, /\{"appName":"<displayName>","dataPlatform":"unknown","buildOrder":"data-model-first"\}/);

@@ -4,7 +4,29 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const skillDir = path.resolve(__dirname, '..', '..', '..', 'skills', 'create-mobile-app');
-const read = (file) => fs.readFileSync(path.join(skillDir, file), 'utf8').replace(/\r\n?/g, '\n');
+const raw = (file) => fs.readFileSync(path.join(skillDir, file), 'utf8').replace(/\r\n?/g, '\n');
+
+// Steps both build orders run live once, in their own references/<step>.md file, and each flow
+// pulls one in under its own numbered heading with a line such as:
+//   **Shared step:** read [`auth-config.md`](auth-config.md) and follow it in full.
+// The model reads the file at that point, so contract tests see its body there too. A shared file
+// opens with a note about itself (title, step-number table) that ends at SHARED_BODY_MARK; only
+// the body after it is the step.
+const SHARED_STEP = /^\*\*Shared step:\*\* read \[`([\w.-]+\.md)`\]\(\1\) and follow it in full\.$/gm;
+const SHARED_BODY_MARK = '<!-- The step starts here; everything above is about the file. -->';
+
+function sharedStepBody(file) {
+  const text = raw(path.join('references', file));
+  const at = text.indexOf(SHARED_BODY_MARK);
+  if (at < 0) throw new Error(`shared step ${file} has no body marker`);
+  return text.slice(at + SHARED_BODY_MARK.length).replace(/^\n+/, '').replace(/\n+$/, '');
+}
+
+function sharedStepFiles(text) {
+  return [...text.matchAll(SHARED_STEP)].map((match) => match[1]);
+}
+
+const read = (file) => raw(file).replace(SHARED_STEP, (_line, file) => sharedStepBody(file));
 
 // /create-mobile-app is split so the model loads only the build order it runs:
 //   SKILL.md                         routing, the creation-state table, Step 0, and the
@@ -64,6 +86,7 @@ function createSkillDataModelFirstExecution() {
 }
 
 module.exports = {
+  SHARED_STEP,
   createSkillDataModelFirst,
   createSkillDataModelFirstExecution,
   createSkillEntry,
@@ -71,4 +94,5 @@ module.exports = {
   createSkillPhaseA,
   createSkillPhaseB,
   createSkillWorkflow,
+  sharedStepFiles,
 };

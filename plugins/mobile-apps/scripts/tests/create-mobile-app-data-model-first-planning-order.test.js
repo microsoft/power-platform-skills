@@ -60,10 +60,11 @@ test('planning contracts contain no unresolved merge markers', () => {
 });
 
 test('connectivity wording is owned by the post-materialization offline flow', () => {
-  const classification = section(
-    createSkill,
-    'Infer a provisional Dataverse planning mode before Step 2c',
-    '**Design decisions are deferred to Step 6.75**',
+  // SKILL.md classifies the brief once, for both build orders; this flow reads the result.
+  const classification = section(createSkill, '**Classify where the data lives**', '#### Choose the build order');
+  assert.match(
+    section(createSkill, 'Read the provisional Dataverse planning mode before Step 2c', '**Design decisions are deferred to Step 6.75**'),
+    /`dataPlanningMode` in the requirements/,
   );
   assert.match(classification, /connectivity-intent-ownership\.md/i);
   assert.doesNotMatch(classification, /Dataverse offline data/);
@@ -116,7 +117,7 @@ test('data platform and integrations are approved before Dataverse modeling', ()
   );
   assert.match(
     section(createSkill, '### Foreground Dataverse planning snapshot', '**Hard rule — planner writes'),
-    /Gate 1-approved[\s\S]*<dataverse_planning_mode>/i,
+    /`<dataverse_planning_mode>` approved at the architecture gate/i,
   );
 
   const architectureGate = planner.indexOf(
@@ -356,7 +357,7 @@ test('reuse-only apps retain a verified materialized inventory without replaying
   assert.match(seeding, /verify-dataverse-services\.js/);
   const offline = section(createSkill, '### Offline profile', '### Step 9 — Apply native capabilities');
   assert.match(offline, /including reused tables/);
-  assert.match(offline, /read-only manifest\s+recovery in Step 8\.5/);
+  assert.match(offline, /read-only manifest\s+recovery in Seed sample data/);
 });
 
 test('offline profile opt-in runs after Dataverse materialization and before native wiring', () => {

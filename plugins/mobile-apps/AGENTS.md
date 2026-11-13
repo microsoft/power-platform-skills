@@ -54,8 +54,10 @@ Do not add preparation rewrites for `scheme`, `package`, `bundleIdentifier`, `sr
 4. **Safety guardrails** — Confirm before deploys, before global installs, before edits outside the project root.
 5. **Memory bank** — Persist `memory-bank.md` in the project root.
 6. **Two build orders** - `/create-mobile-app` routes the request, gathers the
-   requirements with one setup question, and then asks for a build order (showing
-   the brief) at Step 0 of `skills/create-mobile-app/SKILL.md`, then loads only
+   requirements with one setup question, classifies where the data lives, and
+   then asks for a build order (showing the brief) at Step 0 of
+   `skills/create-mobile-app/SKILL.md`; a connector-only brief skips the question
+   and builds data model first. It then loads only
    that order's flow file. Keep each order's steps in its own flow file, and keep
    what both share (routing, the creation-state table, the requirements, the
    child-skill handoff context) in `SKILL.md`.
@@ -84,6 +86,18 @@ Do not add preparation rewrites for `scheme`, `package`, `bundleIdentifier`, `sr
      approve the applicable data model and screen plan, and screens are built
      last on generated services. Its apps have no `src/hooks/data/`, so shared
      agents and `/edit-app` treat them as legacy-mode apps.
+   - **Shared steps.** A step both orders run the same way lives once, in its
+     own flat file under `references/` (publisher prefix, Dataverse planning
+     snapshot and recovery, post-plan prefix check, auth, apply data model,
+     sample data, offline profile, native capabilities, connectors, stylistic
+     sweep, dev server, debug handoff, summary). Each flow keeps the numbered
+     heading and its telemetry checkpoint, then says
+     `` **Shared step:** read [`<file>.md`](<file>.md) and follow it in full. ``
+     Fix a shared step in its file, never in a flow, so there is one place to
+     fix it. Shared files name steps rather than number them, and open with a
+     table mapping each name to both orders' step numbers. Tests read the flows
+     through `scripts/tests/helpers/create-skill.js`, which expands each include
+     so assertions see the text a run reads.
 7. **Persisted plan** — Write `native-app-plan.md` (Mermaid ER + per-screen specs + native capabilities matrix) as the source of truth that sub-skills `Read`.
 8. **CLI compatibility** — Resolve the Power Apps CLI per [`shared/cli-binary.md`](./shared/cli-binary.md) and run code-app lifecycle and data-source commands as `$PA …` in the canonical grouped `pa` form — never a bare `pa`, `power-apps`, or `npx pa`. Every other agent-run `npx` (`tsc`, `expo`, `qrcode`, …) also uses `--no-install` against a package the template pins; never `npx --yes` or a bare `npx <pkg>` that can download from the registry. Use `scripts/resolve-environment.js` plus `az` tokens for Dataverse environment URL/tenant discovery and Azure/Entra operations. See [`shared/shared-instructions.md`](./shared/shared-instructions.md).
    Mobile Node helpers use `scripts/lib/process-runner.js` for external CLI
@@ -110,7 +124,7 @@ Do not add preparation rewrites for `scheme`, `package`, `bundleIdentifier`, `sr
     - `DONE_WITH_CONCERNS` requires at least one concern. If none, use `DONE`.
     - In `/create-mobile-app` only, `NEEDS_CONTEXT: dataverse-planning-mode:<required|connector-only>` from the `gate-only` architecture pass is a phase-completion signal, not a retry. The canonical handler validates the approved architecture before continuing; other phases cannot use it to change the data platform.
     - Special early-return signals (`INDUSTRY_CONFIRM_REQUESTED:`, `DESIGN_VIBE_REQUESTED:`) pre-date this protocol and remain in effect — they are special-cased "ask the user one question and re-spawn me" handoffs, not terminal returns.
-    - The canonical orchestrator handler lives in each `/create-mobile-app` build order's flow: `## Sub-agent return status` in [`references/screens-first.md`](./skills/create-mobile-app/references/screens-first.md) (with the architecture and Dataverse signals in Step 10.0 of [`references/make-it-real.md`](./skills/create-mobile-app/references/make-it-real.md)), and Step 3.0 of [`references/data-model-first.md`](./skills/create-mobile-app/references/data-model-first.md). Future skills that spawn agents should reference them rather than duplicating the switch.
+    - The canonical orchestrator handler lives in each `/create-mobile-app` build order's flow: `## Sub-agent return status` in [`references/screens-first.md`](./skills/create-mobile-app/references/screens-first.md) (with the architecture and Dataverse signals in Step 10.0 of [`references/make-it-real.md`](./skills/create-mobile-app/references/make-it-real.md) and the shared [`references/dataverse-planning-recovery.md`](./skills/create-mobile-app/references/dataverse-planning-recovery.md)), and Step 3.0 of [`references/data-model-first.md`](./skills/create-mobile-app/references/data-model-first.md). Future skills that spawn agents should reference them rather than duplicating the switch.
 13. **Every run documents itself in `docs/`** - [`scripts/app-docs.js`](scripts/app-docs.js) writes `<app>/docs/create-app-plan.html`, a living Fluent-format plan in the same visual language as the Power Pages `/create-site` artifacts (shared encoder ported to [`scripts/lib/render-template.js`](scripts/lib/render-template.js)). It records the environment, the confirmed brief, the screen plan, the design system, the architecture, and the data model with a colour-coded ER diagram, plus per-phase progress in the order of the run's build order (`buildOrder` in `docs/.run-plan.json`; a plan without one is data-model-first). In the screens-first order its phone frame shows the live web preview while the app runs on sample data, and that phone is the only place the preview appears (Step 3.5 starts Expo without `--web`). Each render also writes `create-app-plan.version.js`, and the open page reloads only when that version changes, because a reload restarts the app in the phone. Sections are written **when the decision is made**, so an aborted run still explains itself. The ER, column tables and new/reused/extended colouring are all derived from `dataModel.tables[]`, so populate those structurally rather than only shipping a Mermaid string. It is best-effort and must never gate, retry, or fail a build.
 14. **Metro lifecycle is project-local** — template `metro.config.js` delegates to `createPowerAppsMetroConfig`, whose host implementation writes sanitized `.powernative/metro-logs/` output during normal `npm run dev`; `/debug-app` locates and tails those files directly, with its cursor, health, and audit state under `.powernative/debug-app/`. Do not restore required `BashOutput`/terminal-ID behavior or host-specific project state directories. Host terminal APIs may be optional conveniences only. Never write unsanitized Metro output to disk. Runtime monitoring requires a live logged PID/port; bounded startup diagnosis may use correlated failed-launch output as historical evidence, never as a live runtime session.
 15. **First-party native package defects are reported, not patched in customer projects** — a `node_modules/@microsoft/power-apps-native-*` frame alone is not proof of package ownership; first rule out invalid app usage against the package's public contract. Once a defect is confirmed inside one of these packages, do not edit `node_modules/`, generate `patch-package` or postinstall rewrites, vendor or fork the package, replace it with a git/tarball/local dependency, or shadow it through resolver aliases. Capture sanitized reproduction evidence and route to `/report-issue`.

@@ -21,7 +21,7 @@ const {
 const { ensureAppInstanceId, findAppInstanceId } = require('../lib/app-identity');
 const { TRACKED_SKILL_NAMES } = require('../lib/mobileapp-hook-utils');
 const { readProcessScope } = require('../lib/mobile-telemetry-session');
-const { createSkillDataModelFirst, createSkillWorkflow } = require('./helpers/create-skill');
+const { createSkillDataModelFirst, createSkillWorkflow, sharedStepFiles } = require('./helpers/create-skill');
 
 const PLUGIN_ROOT = path.resolve(__dirname, '..', '..');
 const TELEMETRY_CLI = path.join(
@@ -534,10 +534,16 @@ test('create-mobile-app uses precise checkpoint names at major workflow boundari
 
 // The reference files each alternative run reads after SKILL.md, for skills whose references
 // hold more than one flow.
+// A flow's shared steps (references/<step>.md files it includes) are part of its run too.
+const createRunFlow = (...files) => {
+  const dir = path.join(PLUGIN_ROOT, 'skills', 'create-mobile-app');
+  const shared = files.flatMap((file) => sharedStepFiles(fs.readFileSync(path.join(dir, file), 'utf8')));
+  return [...files, ...[...new Set(shared)].map((file) => path.join('references', file))];
+};
 const RUN_FLOWS = {
   'create-mobile-app': [
-    ['references/screens-first.md', 'references/make-it-real.md'],
-    ['references/data-model-first.md'],
+    createRunFlow('references/screens-first.md', 'references/make-it-real.md'),
+    createRunFlow('references/data-model-first.md'),
   ],
 };
 

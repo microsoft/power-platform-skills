@@ -101,21 +101,21 @@ test('skill contracts read logs and persist host-neutral state under .powernativ
   // The QR generator must come from the template's pinned devDependency, never a registry fetch.
   assert.match(createSkill, /npx --no-install qrcode -o "\$METRO_QR"/);
   assert.doesNotMatch(createSkill, /npx --yes|npm_config_registry=/);
-  assert.match(createSkill, /continue through the optional Step 16\.5 debug handoff and print the Step 17 summary/);
+  assert.match(createSkill, /continue through the optional debug handoff and print the summary/);
   assert.doesNotMatch(createSkill, /stops after Step 16/);
   assert.doesNotMatch(createSkill, /npx expo start|without rerunning the `predev` schema hook/);
   assert.doesNotMatch(createSkill, /delegates Metro terminal output.*power-apps-native-host\/metro-logger/);
   assert.doesNotMatch(createSkill, /scripts\/metro-session\.js|dev:expo|copy the plugin wrapper/i);
 
-  // The data-model-first order launches Metro at its own Step 12 and checks the lifecycle
-  // scripts inline, as it always has.
+  // The data-model-first order launches Metro at its own Step 12 through the same shared
+  // dev-server step, and checks the lifecycle scripts inline, as it always has.
   const dataModelFirst = createSkillDataModelFirst();
   assert.match(dataModelFirst, /^### Step 12 [^\r\n]*Metro writes project-local logs/m);
   assert.match(dataModelFirst, /createPowerAppsMetroConfig/);
   assert.match(dataModelFirst, /template owns the `dev` and `predev` command bodies/);
   assert.match(dataModelFirst, /for \(const scriptName of \['dev', 'predev'\]\)/);
   assert.match(dataModelFirst, /npx --no-install qrcode -o "\$METRO_QR"/);
-  assert.match(dataModelFirst, /continue through the optional Step 12\.5 debug handoff and print the Step 13 summary/);
+  assert.match(dataModelFirst, /continue through the optional debug handoff and print the summary/);
   assert.doesNotMatch(dataModelFirst, /npx --yes|npm_config_registry=|npx expo start/);
   assert.match(debugSkill, /\.powernative\/metro-logs/);
   assert.match(debugSkill, /\.powernative\/debug-app/);

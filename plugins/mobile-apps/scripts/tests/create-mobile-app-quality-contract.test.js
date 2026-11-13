@@ -64,7 +64,7 @@ test('approved architecture precedes typed discovery without retrying the normal
   assert.doesNotMatch(architecture, /create-dataverse-snapshot\.js|detect-publisher-prefix\.js/);
   const concepts = skill.slice(conceptsStart, commandsStart);
   // The approved screens' Data Contract is the primary source of concepts in the preview-first flow.
-  assert.match(concepts, /approved Data Contract[\s\S]*approved architecture/);
+  assert.match(concepts, /approved architecture[\s\S]*approved Data Contract's entities and fields are the primary concepts/);
   assert.match(concepts, /exclude connector-owned\s+records from Dataverse candidate selection/);
   assert.doesNotMatch(skill, /planning-timings\.js|PLANNING_TIMINGS_PATH/);
   assert.doesNotMatch(skill, /telemetry-output|PLANNING_TELEMETRY_PATH/);
@@ -198,8 +198,8 @@ test('offline setup follows materialized Dataverse data and never infers connect
   assert.match(design, /Offline profile setup is intentionally deferred/);
   const offlineSetup = skill.slice(offline, native);
   assert.match(offlineSetup, /Do not infer connector-only from a missing manifest/);
-  assert.match(offlineSetup, /read-only manifest\s+recovery in Step 12\.5 before asking/);
-  assert.match(offlineSetup, /If verification still fails, report\s+`BLOCKED: offline setup requires the materialized Dataverse manifest from Step 12`/);
+  assert.match(offlineSetup, /read-only manifest\s+recovery in Seed sample data before asking/);
+  assert.match(offlineSetup, /If verification still fails, report\s+`BLOCKED: offline setup requires the materialized Dataverse manifest from the Apply data model step`/);
   assert.match(skill, /seeding step fails[\s\S]*continue to the offline-profile phase/);
 });
 
@@ -310,7 +310,7 @@ test('authentication discovers and checks registrations before writing a client 
     skill.indexOf('### Step 12 — Apply data model'),
   );
   const discovery = auth.indexOf('discover-app-registrations.js');
-  const write = auth.indexOf('#### 11.3 Verify and write the selected client ID');
+  const write = auth.indexOf('#### Verify and write the selected client ID');
 
   assert.ok(discovery >= 0 && discovery < write);
   assert.match(auth, /all tenant app registrations visible to the signed-in user/);
@@ -356,6 +356,6 @@ test('authentication discovers and checks registrations before writing a client 
   assert.match(auth, /Treat any nonzero exit,[\s\S]*empty registration list as a discovery failure/);
   assert.match(auth, /Do not retry or ask the user to repair Azure CLI authentication/);
   assert.match(auth, /App registration discovery was unavailable\. Paste the Entra ID app registration client ID/);
-  assert.match(auth, /continue to 7\.3 with permission check `unavailable`/);
+  assert.match(auth, /continue to "Verify and write the selected client ID" with permission check `unavailable`/);
   assert.doesNotMatch(auth, /tenant-wide admin consent is not required/);
 });

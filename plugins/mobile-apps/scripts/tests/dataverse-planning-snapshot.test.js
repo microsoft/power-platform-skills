@@ -1491,7 +1491,7 @@ test('planning contracts require snapshot-only and monotonic incremental expansi
       createSkill: createSkillDataModelFirst(),
       embedGate: /only exit `0` permits\s+embedding and Gate 2/,
       architectureAcceptance: /Gate 1\s+architecture acceptance does not satisfy this data-model precondition/,
-      validationGate: /same validation MUST run before Gate 2 is shown/,
+      validationGate: /same validation MUST run before the data model gate is shown/,
     },
   ]) {
     const planner = fs.readFileSync(path.join(pluginRoot, 'agents', flow.planner), 'utf8');
