@@ -712,3 +712,133 @@ test('ids: every compiled id is the existing create identity, and a child added 
   assert.equal(writes[0].body.customapirequestparameterid, added[0].id);
   assert.equal(h.org.rows('customapis').length, 1);
 });
+
+// The rule's lifecycle is proved at the graph reads around the one publication action, not by the polling GET alone: before
+// the action a new rule must still read unpublished (it was never published; one already reading published is not published
+// again), and after it the last graph read must show the state the unit requires before the unit leaves the receipt.
+const setRuleState = (org, statecode, statuscode) => Object.assign(org.rows('duplicaterules')[0], { statecode, statuscode });
+const LIFECYCLE_STATES = [['published', 1, 2], ['publishing', 0, 1]];
+
+test('lifecycle: a new rule that already reads published or publishing before its publication is not published: publication-pending, the slot unsent, the next preflight sends nothing', async () => {
+  for (const [why, statecode, statuscode] of LIFECYCLE_STATES) {
+    const c = compile('duplicateRule', 'email');
+    const condition = unitRow(c, 'rule-condition');
+    const h = await harness({ fault: ({ method, body, org }) => (method === 'POST' && body && body.duplicateruleconditionid === condition.id ? { transform: (a) => { setRuleState(org, statecode, statuscode); return a; } } : null) });
+    const error = await halted(h.writer.executeCreateUnit(c));
+    assert.deepEqual(h.writes().filter((q) => PUBLISH.test(q.path)), [], `${why}: the action is never sent`);
+    assert.equal(error.code, 'configuration-create-publication-pending', why);
+    const [u] = h.saved().units;
+    assert.equal(u.publication.dispatch, 'prepared', `${why}: the slot was not sealed`);
+    assert.ok(u.rows.every((r) => r.role !== 'create' || r.dispatch === 'verified'), `${why}: every row verified`);
+    const mark = h.org.requests.length;
+    assert.throws(() => preflight(h, [declarationOf(c)]), (e) => e.name === 'ConfigurationCreateHalt', why);
+    assert.equal(h.org.requests.length, mark, `${why}: the preflight sent nothing`);
+  }
+});
+
+test('lifecycle: the last graph read must show the new rule published; unpublished or publishing there keeps the unit (acknowledged) and stops publication-pending', async () => {
+  for (const [why, statecode, statuscode] of [['unpublished', 0, 0], ['publishing', 0, 1]]) {
+    const c = compile('duplicateRule', 'email');
+    const root = c.unit.root.id;
+    let published = false;
+    let reads = 0;
+    const h = await harness({ fault: ({ method, path: p, org }) => {
+      if (method === 'POST' && PUBLISH.test(p)) published = true;
+      // After the action: the first root read (the polling GET) sees it published; the second (the last graph read) does not.
+      else if (published && method === 'GET' && p.startsWith(`/duplicaterules(${root})`) && ++reads === 2) setRuleState(org, statecode, statuscode);
+      return null;
+    } });
+    const error = await halted(h.writer.executeCreateUnit(c));
+    assert.equal(reads >= 2, true, `${why}: the last graph read happened`);
+    assert.equal(error.code, 'configuration-create-publication-pending', why);
+    assert.equal(h.writes().filter((q) => PUBLISH.test(q.path)).length, 1, `${why}: one action`);
+    const [u] = h.saved().units;
+    assert.equal(u.publication.dispatch, 'acknowledged', `${why}: the unit is kept`);
+    const mark = h.org.requests.length;
+    assert.throws(() => preflight(h, [declarationOf(c)]), (e) => e.code === 'configuration-create-publication-pending', why);
+    assert.equal(h.org.requests.length, mark);
+  }
+});
+
+test('lifecycle: a new rule declared unpublished that reads published or publishing at its graph read is a content conflict, and its unit is kept', async () => {
+  for (const [why, statecode, statuscode] of LIFECYCLE_STATES) {
+    const c = compile('duplicateRule', 'x');
+    assert.equal(c.unit.publicationRequired, false);
+    const condition = unitRow(c, 'rule-condition');
+    const h = await harness({ fault: ({ method, body, org }) => (method === 'POST' && body && body.duplicateruleconditionid === condition.id ? { transform: (a) => { setRuleState(org, statecode, statuscode); return a; } } : null) });
+    const error = await halted(h.writer.executeCreateUnit(c));
+    assert.equal(error.code, 'configuration-create-content-conflict', why);
+    assert.deepEqual(h.writes().filter((q) => PUBLISH.test(q.path)), []);
+    assert.equal(h.saved().units.length, 1, `${why}: the unit is kept`);
+  }
+});
+
+test('lifecycle: the rule states the unit expects still complete it (a new published rule, a new unpublished rule)', async () => {
+  for (const key of ['email', 'x']) {
+    const c = compile('duplicateRule', key);
+    const h = await harness();
+    await h.writer.executeCreateUnit(c);
+    assert.equal(h.org.rows('duplicaterules')[0].statecode, c.unit.publicationRequired ? 1 : 0);
+    assert.deepEqual(h.saved().units, []);
+  }
+});
+
+test('acknowledgment: an id the answer names but cannot be read, or an error member of any type, is never an acknowledgment even when the header names the id', () => {
+  const id = '0b7c6f5e-0000-4000-8000-000000000001';
+  const at = (x) => `https://contoso.crm.dynamics.com/api/data/v9.2/duplicaterules(${x})`;
+  const ack = (answer) => W.classifyCreateAcknowledgment(answer, { id, idColumn: 'duplicateruleid' });
+  for (const [answer, why] of [
+    [{ status: 201, headers: { 'OData-EntityId': at(id) }, body: { duplicateruleid: 'not-an-id' } }, /unreadable id/],
+    [{ status: 201, headers: { 'OData-EntityId': at(id) }, body: { duplicateruleid: null } }, /unreadable id/],
+    [{ status: 201, headers: { 'OData-EntityId': at(id) }, body: { duplicateruleid: 42 } }, /unreadable id/],
+    [{ status: 201, headers: { Location: 'https://contoso.crm.dynamics.com/somewhere' }, body: { duplicateruleid: id } }, /no readable id/],
+    [{ status: 201, headers: { 'OData-EntityId': at(id) }, body: { duplicateruleid: id, error: 'replaced' } }, /an error/],
+    [{ status: 201, headers: { 'OData-EntityId': at(id) }, body: { duplicateruleid: id, Error: 7 } }, /an error/],
+    [{ status: 201, headers: { 'OData-EntityId': at(id) }, body: { duplicateruleid: id, error: null } }, /an error/],
+  ]) {
+    const got = ack(answer);
+    assert.equal(got.ok, false, JSON.stringify(answer));
+    assert.match(got.reason, why, JSON.stringify(answer));
+  }
+  // The measured and documented shapes stay acknowledgments: a header-identified 201 representation (with or without the
+  // id column) and a bodyless 204.
+  assert.deepEqual(ack({ status: 201, headers: { 'OData-EntityId': at(id) }, body: { duplicateruleid: id, name: 'n' } }), { ok: true });
+  assert.deepEqual(ack({ status: 201, headers: { 'OData-EntityId': at(id) }, body: { name: 'n' } }), { ok: true });
+  assert.deepEqual(ack({ status: 204, headers: { 'OData-EntityId': at(id) } }), { ok: true });
+  const pub = W.classifyNewRulePublicationAcknowledgment;
+  for (const answer of [
+    { status: 200, headers: {}, body: { error: 'the response was replaced by an intermediary' } },
+    { status: 200, headers: {}, body: { Error: 1 } },
+    { status: 200, headers: {}, body: { asyncoperationid: 'x', error: null } },
+    { status: 204, headers: { 'content-type': 'text/plain' }, body: 'truncated non-JSON answer' },
+    { status: 204, headers: {}, body: { asyncoperationid: 'x' } },
+  ]) assert.equal(pub(answer).ok, false, JSON.stringify(answer));
+  assert.deepEqual(pub({ status: 200, headers: {}, body: { asyncoperationid: 'x', statecode: 0, statuscode: 0, operationtype: 7 } }), { ok: true });
+  assert.deepEqual(pub({ status: 204, headers: {}, body: '' }), { ok: true });
+});
+
+test('acknowledgment through the client: a malformed id in a 201, or a malformed or error publication answer, stops there with nothing after it', async () => {
+  const c = compile('duplicateRule', 'email');
+  const malformed = await harness({ fault: ({ method, path: p }) => (method === 'POST' && p === '/duplicaterules' ? { transform: (a) => ({ ...a, statusCode: 201, body: JSON.stringify({ duplicateruleid: 'not-an-id' }) }) } : null) });
+  const error = await halted(malformed.writer.executeCreateUnit(c));
+  assert.deepEqual(malformed.writes().map((q) => `${q.method} ${q.path}`), ['POST /duplicaterules'], 'no condition or publication after it');
+  assert.equal(error.code, 'configuration-create-pending');
+  assert.equal(malformed.saved().units[0].rows.find((r) => r.id === c.unit.root.id).dispatch, 'dispatched');
+  for (const [why, answer] of [
+    ['an error member that is not an object', (a) => ({ ...a, statusCode: 200, headers: { 'content-type': 'application/json' }, body: JSON.stringify({ error: 'the response was replaced by an intermediary' }) })],
+    ['a 204 with a body', (a) => ({ ...a, statusCode: 204, headers: { 'content-type': 'text/plain' }, body: 'truncated non-JSON answer' })],
+  ]) {
+    const h = await harness({ fault: ({ method, path: p }) => (method === 'POST' && PUBLISH.test(p) ? { transform: answer } : null) });
+    const e = await halted(h.writer.executeCreateUnit(compile('duplicateRule', 'email')));
+    assert.equal(e.code, 'configuration-create-publication-pending', why);
+    assert.equal(h.saved().units[0].publication.dispatch, 'dispatched', `${why}: not acknowledged`);
+  }
+  // A header-identified 201 representation and a bodyless 204 publication still complete the unit.
+  const ok = await harness({ fault: ({ method, path: p }) => {
+    if (method === 'POST' && p === '/duplicaterules') return { transform: (a) => ({ ...a, statusCode: 201, headers: { ...a.headers, 'content-type': 'application/json' }, body: JSON.stringify({ name: 'Same email' }) }) };
+    if (method === 'POST' && PUBLISH.test(p)) return { transform: (a) => ({ ...a, statusCode: 204, headers: {}, body: '' }) };
+    return null;
+  } });
+  await ok.writer.executeCreateUnit(compile('duplicateRule', 'email'));
+  assert.deepEqual(ok.saved().units, []);
+});

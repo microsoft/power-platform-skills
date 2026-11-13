@@ -9,10 +9,10 @@
 //     POST /<entity set>   the compiled body, byte for byte, inside withConfigurationWrite (no HTTP retry of any kind)
 //     accept only a direct acknowledgment of THAT id (classifyCreateAcknowledgment)
 //     GET the exact row and compare its public projection with what was sent; then mark the row verified
-//   observe the whole root graph again (new rows, preserved rows, parent links, no unexpected child)
+//   observe the whole root graph again (new rows, preserved rows, parent links, no unexpected child; a rule reads unpublished)
 //   prove solution membership through the caller's existing membership helpers (never for a value row)
 //   a NEW rule whose intended state is published: one header-free PublishDuplicateRule action (publishNewRuleOnce)
-//   observe the graph a last time, then remove the unit from the receipt
+//   observe the graph a last time (a rule reads the state its unit declared), then remove the unit from the receipt
 //
 // Nothing here pushes an SDK artifact, calls updateElement, or retries: a lost answer, a 4xx after the seal, a mismatched
 // read or a failed receipt transition stops the build with a configuration-create-* code and leaves the receipt, which the
@@ -54,16 +54,24 @@ function headerOf(headers, name) {
   const value = key === undefined ? undefined : headers[key];
   return Array.isArray(value) ? value[0] : value;
 }
-const hasErrorEnvelope = (body) => isPlain(body) && (isPlain(body.error) || isPlain(body.Error));
+// An OData error arrives as { "error": { "code": "0x80040217", "message": "..." } }, and some surfaces capitalize it as
+// "Error". The member is refused whatever its value holds: { "error": "..." }, { "Error": 7 } and { "error": null } are not
+// the shape of any acknowledgment measured for these requests, so none of them may be read as one.
+const hasErrorEnvelope = (body) => isPlain(body) && (Object.prototype.hasOwnProperty.call(body, 'error') || Object.prototype.hasOwnProperty.call(body, 'Error'));
+// What a 204 may carry: nothing. The client answers undefined for an empty body; null, '' and {} are the same nothing from
+// other transports. A text or a non-empty object under 204 is not a No Content answer.
+const isBodyless = (body) => body === undefined || body === null || body === '' || (isPlain(body) && !Object.keys(body).length);
 const isMultipart = (headers) => /^\s*multipart\//i.test(String(headerOf(headers, 'content-type') || ''));
-// The id the OData-EntityId (or Location) header names, as the service writes it for a created row:
+// The id the OData-EntityId (or, without it, the Location) header names, as the service writes it for a created row:
 //   OData-EntityId: https://contoso.crm.dynamics.com/api/data/v9.2/duplicaterules(0b7c6f5e-0000-4000-8000-000000000001)
-// Only the last parenthesized segment is read, and only a GUID counts; anything else is no id.
+// Only the last parenthesized segment is read, and only a GUID counts. Answers { present, id }: `present` when either header
+// is there at all, so a header that names something unreadable is told apart from no header.
 function entityIdOf(headers) {
-  const raw = headerOf(headers, 'odata-entityid') || headerOf(headers, 'location');
-  if (typeof raw !== 'string') return null;
-  const m = /\(([^()]+)\)\s*$/.exec(raw);
-  return m ? normalizeGuid(m[1]) || null : null;
+  const entityId = headerOf(headers, 'odata-entityid');
+  const raw = entityId !== undefined ? entityId : headerOf(headers, 'location');
+  if (raw === undefined) return { present: false, id: null };
+  const m = typeof raw === 'string' ? /\(([^()]+)\)\s*$/.exec(raw) : null;
+  return { present: true, id: m ? normalizeGuid(m[1]) || null : null };
 }
 
 /**
@@ -71,7 +79,8 @@ function entityIdOf(headers) {
  *   classifyCreateAcknowledgment(answer, { id, idColumn }) -> { ok: true } | { ok: false, reason }
  * Accepted, as measured live for these tables: 204 No Content with no error envelope, whose OData-EntityId (when present)
  * names `id`; or 201 Created whose body or OData-EntityId names `id`. Refused: any other status (202 Accepted, 207
- * Multi-Status, every 3xx/4xx/5xx), a multipart body, an error envelope, a body that is not an object for a 201, or an id
+ * Multi-Status, every 3xx/4xx/5xx), a multipart body, an `error`/`Error` member of any type, a 204 with a body, a body that
+ * is not an object for a 201, an OData-EntityId/Location header or an id column that is present but holds no GUID, or an id
  * that is not `id`. A refusal is never a proof that nothing was created.
  */
 function classifyCreateAcknowledgment(answer, { id, idColumn } = {}) {
@@ -83,15 +92,21 @@ function classifyCreateAcknowledgment(answer, { id, idColumn } = {}) {
   if (status !== 201 && status !== 204) return no(`the create was answered ${status}, not as a direct acknowledgment`);
   if (isMultipart(headers)) return no('the create was answered with a multipart body');
   if (hasErrorEnvelope(body)) return no('the create was answered with an error');
-  const named = entityIdOf(headers);
-  if (headerOf(headers, 'odata-entityid') !== undefined && !named) return no('the create answer names no readable id');
+  const header = entityIdOf(headers);
+  if (header.present && !header.id) return no('the create answer names no readable id');
+  const named = header.id;
   if (named && named !== expected) return no('the create answer names another row');
   if (status === 204) {
-    if (body !== undefined && body !== null && body !== '' && !(isPlain(body) && !Object.keys(body).length)) return no('a 204 answer carried a body');
+    if (!isBodyless(body)) return no('a 204 answer carried a body');
     return { ok: true };
   }
   if (!isPlain(body)) return no('the 201 answer has no readable body');
-  const bodyId = nonEmpty(idColumn) && typeof body[idColumn] === 'string' ? normalizeGuid(body[idColumn]) : null;
+  // A 201 representation names its row in the id column, e.g. { "duplicateruleid": "0b7c6f5e-...", "name": "..." }. The
+  // column may be absent (a $select without it), but when it is there it must be a GUID: an unreadable id is not an
+  // absent one, and a header naming the right row does not make it readable.
+  const hasIdColumn = nonEmpty(idColumn) && Object.prototype.hasOwnProperty.call(body, idColumn);
+  const bodyId = hasIdColumn && typeof body[idColumn] === 'string' ? normalizeGuid(body[idColumn]) || null : null;
+  if (hasIdColumn && !bodyId) return no('the create answer names an unreadable id');
   if (bodyId && bodyId !== expected) return no('the create answer names another row');
   if (!bodyId && !named) return no('the 201 answer names no row');
   return { ok: true };
@@ -100,9 +115,11 @@ function classifyCreateAcknowledgment(answer, { id, idColumn } = {}) {
 /**
  * Whether the direct answer to the one PublishDuplicateRule action acknowledges it:
  *   classifyNewRulePublicationAcknowledgment(answer) -> { ok: true } | { ok: false, reason }
- * Accepted: a complete 200 or 204 with no error envelope (live, the action answers 200 with the asyncoperation row it
- * queued; no JobId is read or kept). Refused: any other status (202, 207 included), a multipart body, an error envelope, or a
- * 200 whose body is not a JSON object.
+ * Accepted: a complete 200 with a JSON object body, or a 204 with no body, and no `error`/`Error` member. Live, the action
+ * answers 200 with the asyncoperation row it queued, e.g.
+ *   { "@odata.context": "...", "asyncoperationid": "...", "name": "...", "operationtype": 7, "statecode": 0, "statuscode": 0 }
+ * (no JobId is read or kept). Refused: any other status (202, 207 included), a multipart body, an error member of any type,
+ * a 200 whose body is not a JSON object, or a 204 that carries a body.
  */
 function classifyNewRulePublicationAcknowledgment(answer) {
   const no = (reason) => ({ ok: false, reason });
@@ -112,6 +129,7 @@ function classifyNewRulePublicationAcknowledgment(answer) {
   if (isMultipart(headers)) return no('the publication was answered with a multipart body');
   if (hasErrorEnvelope(body)) return no('the publication was answered with an error');
   if (status === 200 && !isPlain(body)) return no('the publication answer is not readable');
+  if (status === 204 && !isBodyless(body)) return no('a 204 publication answer carried a body');
   return { ok: true };
 }
 
@@ -186,6 +204,24 @@ function createDefaultConfigurationWriter({ bridge, dataverse, workspaceDir, con
     }
     if (observed.size) throw halt('configuration-create-content-conflict', unit, stateHandle, { reason: 'the root holds a row the unit does not name', dispatched: true });
     return graph;
+  }
+
+  // A rule's lifecycle at a graph read. The graph's root carries ruleState: 'unpublished' (statecode 0, statuscode 0),
+  // 'published' (1/2) or null for anything else, a publication in flight (0/1) included. Before the publication action every
+  // rule of a unit must read unpublished: a rule created moments ago that already reads published or publishing was changed
+  // by someone else, and publishing it again (or completing a unit that declared it unpublished) would hide that. After it,
+  // the rule must read what the unit declared. A mismatch keeps the unit, so the next build's preflight stops on it:
+  //   the unit publishes the rule     -> publication-pending (the maker accepts it if it is published, or publishes it;
+  //                                      nothing is published again automatically)
+  //   the unit keeps it unpublished   -> content-conflict (it reads published or publishing; recovery reads it the same way)
+  // A read is only an observation: it never stands in for the action's own acknowledgment.
+  function assertRuleState(graph, unit, stateHandle, expected, step) {
+    if (unit.root.kind !== 'duplicate-rule') return;
+    const observed = (graph.root && graph.root.ruleState) || null;
+    if (observed === expected) return;
+    const reason = `the rule reads ${observed || 'neither unpublished nor published (a publication in flight)'} where ${expected} is required`;
+    if (unit.publicationRequired) throw halt('configuration-create-publication-pending', unit, stateHandle, { reason, transition: step, dispatched: true });
+    throw halt('configuration-create-content-conflict', unit, stateHandle, { reason, transition: step, dispatched: true });
   }
 
   /**
@@ -263,7 +299,7 @@ function createDefaultConfigurationWriter({ bridge, dataverse, workspaceDir, con
       await proveRow(handle, unit, row, stateHandle);
       transition(() => S.markCreateRowVerified(stateHandle, row.id));
     }
-    await observeGraph(unit, stateHandle);
+    assertRuleState(await observeGraph(unit, stateHandle), unit, stateHandle, 'unpublished', unit.publicationRequired ? 'publication-seal' : 'complete');
     if (typeof membership === 'function') {
       let unproven;
       try {
@@ -274,7 +310,7 @@ function createDefaultConfigurationWriter({ bridge, dataverse, workspaceDir, con
       if (!Array.isArray(unproven) || unproven.length) throw halt('configuration-create-membership-incomplete', unit, stateHandle, { reason: 'a row of the unit is not proven a member of the solution', dispatched: true });
     }
     if (unit.publicationRequired) await publishNewRuleOnce(handle, stateHandle);
-    await observeGraph(unit, stateHandle);
+    assertRuleState(await observeGraph(unit, stateHandle), unit, stateHandle, unit.publicationRequired ? 'published' : 'unpublished', 'complete');
     transition(() => S.completeCreateUnit(stateHandle));
     const childIds = {};
     for (const row of created) if (row.id !== unit.root.id) childIds[row.key] = row.id;
