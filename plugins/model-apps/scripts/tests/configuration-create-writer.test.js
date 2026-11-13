@@ -51,8 +51,8 @@ const KT = P.CONFIGURATION_CREATE_KIND_TABLE;
 const RKT = P.CONFIGURATION_CREATE_RECEIPT_KIND_TABLE;
 const PUBLISH = /^\/duplicaterules\(([^)]+)\)\/Microsoft\.Dynamics\.CRM\.PublishDuplicateRule$/;
 
-const compile = (kind, key, { s = spec(), solution = SOL } = {}) => {
-  const c = P.compileConfigurationCreateUnit(s, { kind, key, bindings: A.readDeploymentBindings(deploy(), s), solution });
+const compile = (kind, key, { s = spec(), solution = SOL, d = deploy(), baseline, additions } = {}) => {
+  const c = P.compileConfigurationCreateUnit(s, { kind, key, bindings: A.readDeploymentBindings(d, s), solution, ...(baseline ? { baseline, additions } : {}) });
   assert.equal(c.ok, true, `${kind} ${key}: ${c.reason}`);
   return c;
 };
@@ -67,13 +67,15 @@ const lost = () => Object.assign(new Error('socket hang up'), { code: 'ECONNRESE
 //   { lose: true }               the org commits the request, then the answer is lost (the socket closes)
 //   { drop: true }               the request never reaches the org, and no answer comes back
 //   { answer, commit? }          this answer instead of the org's (after the org commits it, with commit: true)
+//   { transform }                the org's own answer, as transform(answer) returns it ({ statusCode, headers, body: text })
 // Anything else lets the org answer.
-async function harness({ fault, leaseDeps, contextSolution = SOL, workspaceDir = makeTempDir('cfg-writer-ws-'), publicationReads, membershipOrg = false } = {}) {
-  const org = createConfigOrg({ tables: [{ logicalName: 'contact', attributes: ['emailaddress1', 'lastname'] }], solution: { uniqueName: SOL, version: '1.0.0.0', prefix: 'contoso' }, childrenJoin: membershipOrg });
+async function harness({ fault, leaseDeps, contextSolution = SOL, workspaceDir = makeTempDir('cfg-writer-ws-'), publicationReads, membershipOrg = false, pageSize, liveRowShape } = {}) {
+  const org = createConfigOrg({ tables: [{ logicalName: 'contact', attributes: ['emailaddress1', 'lastname'] }], solution: { uniqueName: SOL, version: '1.0.0.0', prefix: 'contoso' }, childrenJoin: membershipOrg, ...(pageSize ? { pageSize } : {}), ...(liveRowShape ? { liveRowShape } : {}) });
   const request = async (req) => {
     const method = String(req.method).toUpperCase();
     const where = decodeURIComponent(new URL(req.url).pathname + new URL(req.url).search).replace(/^\/api\/data\/v9\.\d/, '');
     const f = fault ? await fault({ method, path: where, body: req.body ? JSON.parse(String(req.body)) : undefined, org }) : null;
+    if (f && f.transform) return f.transform(await org.request(req));
     if (f && f.lose) { await org.request(req); throw lost(); }
     if (f && f.drop) { org.requests.push({ method, path: where, dropped: true, headers: req.headers, body: req.body ? JSON.parse(String(req.body)) : undefined }); throw lost(); }
     if (f && f.answer) {
@@ -267,6 +269,9 @@ test('a complete non-2xx answer after the seal is not proof that nothing was cre
     { statusCode: 202, headers: {}, body: '' },
     { statusCode: 207, headers: { 'content-type': 'application/json' }, body: '{}' },
     { statusCode: 200, headers: { 'content-type': 'multipart/mixed; boundary=b' }, body: '--b--' },
+    { statusCode: 401, headers: { 'content-type': 'application/json' }, body: '{"error":{"code":"0x80072560","message":"x"}}' },
+    { statusCode: 403, headers: { 'content-type': 'application/json' }, body: '{"error":{"code":"0x80040220","message":"x"}}' },
+    { statusCode: 404, headers: { 'content-type': 'application/json' }, body: '{"error":{"code":"0x80040217","message":"x"}}' },
   ]) {
     const c = compile('connectionReference', 'contoso_c1');
     const h = await harness({ fault: ({ method }) => method === 'POST' ? { answer } : null });
@@ -418,4 +423,292 @@ test('the receipt: a failure to seal sends nothing, and a receipt another writer
   const error = await halted(h2.writer.executeCreateUnit(c2));
   assert.match(error.code, /^configuration-create-/);
   assert.equal(h2.writes().length, 1, 'the second row was never sent');
+});
+
+// A storage fault on the receipt itself (lib/configuration-create-state.js saves it with an atomic rename): once armed, the rename
+// onto the receipt that comes `skip` renames later fails with EIO, which no rename retry repeats. Renames of other files pass.
+function receiptRenameFault() {
+  const original = fs.renameSync;
+  let armed = null;
+  let renames = 0;
+  fs.renameSync = function renameSync(from, to, ...rest) {
+    if (path.basename(String(to)) === S.STATE_FILE) {
+      renames += 1;
+      if (armed !== null) {
+        if (armed === 0) { armed = null; throw Object.assign(new Error('EIO: i/o error, rename'), { code: 'EIO' }); }
+        armed -= 1;
+      }
+    }
+    return original.call(this, from, to, ...rest);
+  };
+  return { arm: (skip = 0) => { armed = skip; }, renames: () => renames, restore: () => { fs.renameSync = original; } };
+}
+const G = () => require('crypto').randomUUID();
+const page = (answer, edit) => { const body = JSON.parse(answer.body); edit(body); return { ...answer, body: JSON.stringify(body) }; };
+
+test('the proof read: a request parameter the declaration leaves optional-by-default, read back optional, is a content conflict', async () => {
+  const c = compile('customApi', 'contoso_Calc');
+  const a = c.unit.rows.find((r) => r.kind === 'api-request' && r.key.toLowerCase().endsWith(':a'));
+  assert.ok(a, 'parameter A (no isOptional in the declaration)');
+  const h = await harness({ fault: ({ method, path: p, org }) => { if (method === 'GET' && p.startsWith(`/customapirequestparameters(${a.id})`)) org.sets.get('customapirequestparameters').get(a.id).isoptional = true; return null; } });
+  const error = await halted(h.writer.executeCreateUnit(c));
+  assert.equal(error.code, 'configuration-create-content-conflict');
+  assert.equal(h.writes().length, 2, 'the API and parameter A, nothing after');
+  assert.equal(h.saved().units[0].rows.find((r) => r.id === a.id).dispatch, 'dispatched', 'never marked verified');
+});
+
+test('publication: a 401, 429 or 5xx answer to the action is one attempt, never retried by the transport', async () => {
+  for (const status of [401, 429, 500, 503]) {
+    const c = compile('duplicateRule', 'email');
+    const h = await harness({ fault: ({ method, path: p }) => method === 'POST' && PUBLISH.test(p) ? { answer: { statusCode: status, headers: { 'content-type': 'application/json', 'retry-after': '0' }, body: '{"error":{"code":"0x80040216","message":"x"}}' } } : null });
+    const error = await halted(h.writer.executeCreateUnit(c));
+    assert.equal(error.code, 'configuration-create-publication-pending', String(status));
+    assert.equal(h.writes().filter((q) => PUBLISH.test(q.path)).length, 1, `${status}: exactly one action reached the service`);
+    assert.equal(h.saved().units[0].publication.dispatch, 'dispatched');
+  }
+});
+
+test('the receipt: a failed save at each later step stops the build there, with nothing sent after it', async (t) => {
+  const fault = receiptRenameFault();
+  t.after(() => fault.restore());
+  const stopped = (error) => assert.equal(error.code, 'configuration-create-persistence-uncertain', error.message);
+
+  // The seal of the publication: the action is never sent, and the next preflight reads the receipt with GETs only (none).
+  {
+    const c = compile('duplicateRule', 'email');
+    const h = await harness();
+    stopped(await halted(h.writer.executeCreateUnit(c, { membership: async () => { fault.arm(0); return []; } })));
+    assert.equal(h.writes().filter((q) => PUBLISH.test(q.path)).length, 0, 'the action was not sent');
+    assert.equal(h.saved().units[0].publication.dispatch, 'prepared');
+    const mark = h.org.requests.length;
+    assert.throws(() => preflight(h, [declarationOf(c)]), (e) => /^configuration-create-/.test(e.code));
+    assert.equal(h.org.requests.length, mark, 'the preflight sent nothing');
+  }
+  // The verified mark after an acknowledged create: the next row is never sealed or sent.
+  {
+    const c = compile('customApi', 'contoso_Calc');
+    const root = c.unit.root.id;
+    const h = await harness({ fault: ({ method, path: p }) => { if (method === 'GET' && p.startsWith(`/customapis(${root})`)) fault.arm(0); return null; } });
+    stopped(await halted(h.writer.executeCreateUnit(c)));
+    assert.equal(h.writes().length, 1, 'the root only');
+    const [u] = h.saved().units;
+    assert.equal(u.rows.find((r) => r.id === root).dispatch, 'dispatched', 'the mark was not saved');
+    assert.ok(u.rows.filter((r) => r.id !== root).every((r) => r.dispatch === 'prepared'));
+  }
+  // The seal of a later row: that row is never sent.
+  {
+    const c = compile('customApi', 'contoso_Calc');
+    const root = c.unit.root.id;
+    const h = await harness({ fault: ({ method, path: p }) => { if (method === 'GET' && p.startsWith(`/customapis(${root})`)) fault.arm(1); return null; } });
+    stopped(await halted(h.writer.executeCreateUnit(c)));
+    assert.equal(h.writes().length, 1, 'the second row was never sent');
+    const [u] = h.saved().units;
+    assert.equal(u.rows.find((r) => r.id === root).dispatch, 'verified');
+    assert.ok(u.rows.filter((r) => r.id !== root).every((r) => r.dispatch === 'prepared'));
+  }
+  // The completion (the last save of a whole unit): the build stops and the unit stays in the receipt for the next preflight.
+  {
+    const probe = await harness();
+    const before = fault.renames();
+    await probe.writer.executeCreateUnit(compile('connectionReference', 'contoso_c1'));
+    const saves = fault.renames() - before;
+    const c = compile('connectionReference', 'contoso_c1');
+    const h = await harness();
+    fault.arm(saves - 1);
+    stopped(await halted(h.writer.executeCreateUnit(c)));
+    assert.equal(h.writes().length, 1);
+    assert.equal(h.saved().units[0].rows[0].dispatch, 'verified');
+    const mark = h.org.requests.length;
+    assert.throws(() => preflight(h, [declarationOf(c)]), (e) => /^configuration-create-/.test(e.code));
+    assert.equal(h.org.requests.length, mark);
+  }
+});
+
+test('the graph read: a child listed twice across pages, a child naming another parent, or a next page this build cannot follow is unreadable, and nothing is sent again', async () => {
+  const set = '/customapirequestparameters?';
+  const cases = [
+    ['listed twice', () => {
+      let first;
+      return ({ method, path: p }) => {
+        if (method !== 'GET' || !p.startsWith(set)) return null;
+        if (!p.includes('$skiptoken')) return { transform: (a) => { first = JSON.parse(a.body).value[0].customapirequestparameterid; return a; } };
+        return { transform: (a) => page(a, (b) => { b.value[0].customapirequestparameterid = first; }) };
+      };
+    }],
+    ['another parent', () => ({ method, path: p }) => method === 'GET' && p.startsWith(set) && p.includes('$skiptoken') ? { transform: (a) => page(a, (b) => { b.value[0]._customapiid_value = G(); }) } : null],
+    ['a link that is not https', () => ({ method, path: p }) => method === 'GET' && p.startsWith(set) && !p.includes('$skiptoken') ? { transform: (a) => page(a, (b) => { b['@odata.nextLink'] = b['@odata.nextLink'].replace(/^https:/, 'http:'); }) } : null],
+    ['a relative link', () => ({ method, path: p }) => method === 'GET' && p.startsWith(set) && !p.includes('$skiptoken') ? { transform: (a) => page(a, (b) => { b['@odata.nextLink'] = b['@odata.nextLink'].replace(/^https:\/\/[^/]+/, ''); }) } : null],
+    ['more records with no link', () => ({ method, path: p }) => method === 'GET' && p.startsWith(set) && !p.includes('$skiptoken') ? { transform: (a) => page(a, (b) => { delete b['@odata.nextLink']; b['@Microsoft.Dynamics.CRM.morerecords'] = true; }) } : null],
+  ];
+  for (const [why, make] of cases) {
+    const c = compile('customApi', 'contoso_Calc');
+    const created = c.unit.rows.filter((r) => r.role === 'create').length;
+    const h = await harness({ pageSize: 1, fault: make() });
+    const error = await halted(h.writer.executeCreateUnit(c));
+    assert.equal(error.code, 'configuration-create-graph-unreadable', why);
+    assert.equal(h.writes().length, created, `${why}: every row once, nothing again`);
+    assert.ok(h.org.requests.some((q) => q.method === 'GET' && q.path.includes('$skiptoken')) || why !== 'listed twice', `${why}: the read did page`);
+  }
+  // The same paged read with nothing wrong in it completes.
+  const h = await harness({ pageSize: 1 });
+  await h.writer.executeCreateUnit(compile('customApi', 'contoso_Calc'));
+  assert.ok(h.org.requests.some((q) => q.method === 'GET' && q.path.includes('$skiptoken')), 'the read paged');
+});
+
+test('the plug-in type of a new Custom API is never sent, proven or kept: a GET that names one, or another one later, still verifies', async () => {
+  const c = compile('customApi', 'contoso_Calc');
+  const root = c.unit.root.id;
+  const withPluginType = ({ method, path: p }) => method === 'GET' && p.startsWith(`/customapis(${root})`) ? { transform: (a) => page(a, (b) => { b._plugintypeid_value = G(); }) } : null;
+  const h = await harness({ fault: withPluginType });
+  const done = await h.writer.executeCreateUnit(c);
+  assert.equal(done.rootId, root);
+  assert.ok(h.org.requests.filter((q) => q.method === 'GET' && q.path.startsWith(`/customapis(${root})`)).length >= 2, 'read more than once, a different plug-in type each time');
+  // Kept in the receipt: the API row verified with a plug-in type on its read, the receipt names none.
+  const c2 = compile('customApi', 'contoso_Calc');
+  const firstChild = c2.unit.rows.find((r) => r.role === 'create' && r.id !== root);
+  const h2 = await harness({ fault: (q) => (q.method === 'POST' && q.body && q.body.customapirequestparameterid === firstChild.id ? { lose: true } : withPluginType(q)) });
+  await halted(h2.writer.executeCreateUnit(c2));
+  const bytes = fs.readFileSync(path.join(h2.workspaceDir, S.STATE_FILE), 'utf8');
+  assert.equal(h2.saved().units[0].rows.find((r) => r.id === root).dispatch, 'verified');
+  assert.doesNotMatch(bytes, /plugintype/i);
+});
+
+test('rows read without an ETag (as a live rule and connection reference are) are proven without one, and no write carries If-Match', async () => {
+  const h = await harness({ liveRowShape: true });
+  for (const [kind, key] of [['duplicateRule', 'email'], ['duplicateRule', 'x'], ['connectionReference', 'contoso_c1']]) await h.writer.executeCreateUnit(compile(kind, key));
+  assert.equal(h.org.rows('duplicaterules').find((r) => r.name === 'Same email').statecode, 1);
+  for (const q of h.writes()) for (const name of Object.keys(q.headers || {})) assert.doesNotMatch(name, /^if-(none-)?match$/i);
+  assert.deepEqual(h.saved().units, []);
+});
+
+test('a unit this build did not compile (a forged or copied handle) is refused before anything is saved, read or sent', async () => {
+  const c = compile('connectionReference', 'contoso_c1');
+  const h = await harness();
+  for (const forged of [{ handle: {}, unit: c.unit }, { handle: { ...c.handle }, unit: c.unit }, { unit: c.unit }, null]) {
+    const error = await halted(h.writer.executeCreateUnit(forged));
+    assert.equal(error.code, 'configuration-create-shape-refused');
+    assert.equal(error.dispatched, false);
+  }
+  assert.equal(h.org.requests.length, 0);
+  assert.equal(fs.existsSync(path.join(h.workspaceDir, S.STATE_FILE)), false, 'no receipt');
+});
+
+test('a second compile of a root whose unit is still open is refused pending with nothing sent: after a lost answer, and while the first is in flight', async () => {
+  const c = compile('customApi', 'contoso_Calc');
+  const root = c.unit.root.id;
+  const h = await harness({ fault: ({ method, body }) => method === 'POST' && body && body.customapiid === root ? { lose: true } : null });
+  await halted(h.writer.executeCreateUnit(c));
+  const mark = h.org.requests.length;
+  const again = compile('customApi', 'contoso_Calc');
+  assert.equal(again.unit.root.id, root, 'the same ids');
+  assert.equal((await halted(h.writer.executeCreateUnit(again))).code, 'configuration-create-pending');
+  assert.equal(h.org.requests.length, mark, 'nothing read or sent');
+
+  let release;
+  let reached;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const atPost = new Promise((resolve) => { reached = resolve; });
+  const h2 = await harness({ fault: async ({ method, body }) => { if (method === 'POST' && body && body.customapiid === root) { reached(); await gate; } return null; } });
+  const first = h2.writer.executeCreateUnit(compile('customApi', 'contoso_Calc'));
+  await atPost;
+  const before = h2.org.requests.length;
+  assert.equal((await halted(h2.writer.executeCreateUnit(compile('customApi', 'contoso_Calc')))).code, 'configuration-create-pending');
+  assert.equal(h2.org.requests.length, before, 'the second sent nothing');
+  release();
+  await first;
+  assert.equal(h2.writes().filter((q) => q.body && q.body.customapiid === root).length, 1, 'the API was sent once');
+  assert.equal(h2.org.rows('customapis').length, 1);
+});
+
+test('the receipt holds the same bytes whatever the private inputs are (values, connections, default values, schemas)', async () => {
+  const other = {
+    s: spec({
+      environmentVariables: [
+        { schemaName: 'contoso_V', type: 'string', defaultValue: 'other-default' },
+        { schemaName: 'contoso_J', type: 'json', valueSchema: '{"other":"schema"}', name: 'J', description: 'D', isRequired: true },
+      ],
+    }),
+    d: { EnvironmentVariables: [{ SchemaName: 'contoso_V', Value: 'other-value' }], ConnectionReferences: [{ LogicalName: 'contoso_c1', ConnectionId: 'other-connection' }] },
+  };
+  // The receipt's random parts (the epoch and the unit's ids) are fixed before the comparison; everything else must be equal.
+  const fixed = (dir) => {
+    const st = S.readConfigurationCreateState(dir, { kindTable: RKT });
+    return S.serializeCreateState({ ...st, epoch: '00000000-0000-4000-8000-000000000000', units: st.units.map((u) => ({ ...u, unitId: '00000000-0000-4000-8000-000000000001', attemptId: '00000000-0000-4000-8000-000000000002' })) });
+  };
+  for (const [kind, key] of [['environmentVariable', 'contoso_V'], ['environmentVariable', 'contoso_J'], ['connectionReference', 'contoso_c1']]) {
+    const saved = [];
+    for (const variant of [{}, other]) {
+      const c = compile(kind, key, variant);
+      const last = c.unit.rows.filter((r) => r.role === 'create').pop();
+      const h = await harness({ fault: ({ method, body }) => method === 'POST' && body && body[KT[last.kind].idColumn] === last.id ? { lose: true } : null });
+      await halted(h.writer.executeCreateUnit(c));
+      saved.push(fixed(h.workspaceDir));
+    }
+    assert.equal(saved[1], saved[0], `${kind} ${key}`);
+    for (const secret of [...PRIVATE, 'other-default', 'other-value', 'other-connection', '{"other":"schema"}']) assert.ok(!saved[0].includes(secret) && !saved[1].includes(secret), `${kind} ${key}: ${secret}`);
+  }
+});
+
+test('deleted and recreated after a lost answer (the same row again, or a namesake at another id): still pending, nothing sent, and accepting it needs the private review', async () => {
+  for (const how of ['the same row again', 'a namesake at another id']) {
+    const c = compile('environmentVariable', 'contoso_V');
+    const value = c.unit.rows.find((r) => r.kind === 'env-value');
+    const h = await harness({ fault: ({ method, body }) => method === 'POST' && body && body.environmentvariablevalueid === value.id ? { lose: true } : null });
+    assert.equal((await halted(h.writer.executeCreateUnit(c))).code, 'configuration-create-pending');
+    const values = h.org.sets.get('environmentvariablevalues');
+    const row = values.get(value.id);
+    values.delete(value.id);
+    if (how === 'the same row again') values.set(value.id, row);
+    else { const id = G(); values.set(id, { ...row, environmentvariablevalueid: id }); }
+    const mark = h.org.requests.length;
+    assert.throws(() => preflight(h, [declarationOf(c)]), (e) => e.code === 'configuration-create-pending', how);
+    assert.equal((await halted(h.writer.executeCreateUnit(compile('environmentVariable', 'contoso_V')))).code, 'configuration-create-pending', how);
+    assert.equal(h.org.requests.length, mark, `${how}: nothing read or sent`);
+    // The unit holds a value row: accepting the current state is offered only with the private review.
+    const st = h.saved();
+    const offer = S.prepareResolutionOffer(h.workspaceDir, { kindTable: RKT, context: h.context, unitId: st.units[0].unitId, mode: 'accept-current', observedPublicSha256: 'a'.repeat(64), expectedRevision: st.revision });
+    assert.equal(offer.privateAcknowledgmentRequired, true, how);
+  }
+});
+
+test('ids: every compiled id is the existing create identity, and a child added under an existing root at a random (legacy) id derives under that id', async () => {
+  const I = require('../lib/creates-identity.js');
+  const scope = { kind: 'solution', solution: SOL };
+  const rootId = (kind, key) => I.stableCreateIdV1({ scope, kind, keyParts: [key] });
+  const childKind = { 'env-value': 'environmentVariableValue', 'api-request': 'customApiRequestParameter', 'api-response': 'customApiResponseProperty', 'rule-condition': 'duplicateRuleCondition' };
+  const childParts = (r) => (r.kind === 'env-value' ? ['value'] : [r.key.slice(r.key.indexOf(':') + 1)]);
+  for (const [kind, key] of ROOTS) {
+    const { unit } = compile(kind, key);
+    assert.equal(unit.root.id, rootId(kind, key.toLowerCase()), `${kind} ${key}`);
+    for (const r of unit.rows.filter((x) => x.id !== unit.root.id)) {
+      assert.equal(r.parentId, unit.root.id);
+      assert.equal(r.id, I.stableChildIdV1(unit.root.id, childKind[r.kind], childParts(r)), `${kind} ${key} ${r.kind} ${r.key}`);
+    }
+  }
+  // An API created long ago at a random id, with parameter A only; the declaration now adds B.
+  const legacy = G();
+  const onlyA = spec({ customApis: [{ ...spec().customApis[0], requestParameters: [spec().customApis[0].requestParameters[0]], responseProperties: [] }] });
+  const seed = compile('customApi', 'contoso_Calc', { s: onlyA });
+  const h = await harness();
+  for (const r of seed.unit.rows) {
+    const q = P.compiledRowRequest(seed.handle, r.id);
+    const body = q.body.split(seed.unit.root.id).join(legacy);
+    await h.org.request({ url: `${h.org.origin}/api/data/v9.2${q.path}`, method: 'POST', headers: { 'content-type': 'application/json' }, body });
+  }
+  const s = spec({ customApis: [{ ...spec().customApis[0], responseProperties: [] }] });
+  const baseline = await P.captureConfigurationBaseline(h.sdk.dataverse, { kind: 'customApi', rootId: legacy });
+  assert.equal(baseline.ok, true, baseline.reason);
+  const full = compile('customApi', 'contoso_Calc', { s });
+  const slotB = full.unit.rows.find((r) => r.kind === 'api-request' && r.key.toLowerCase().endsWith(':b')).key;
+  const c = compile('customApi', 'contoso_Calc', { s, baseline, additions: [slotB] });
+  const added = c.unit.rows.filter((r) => r.role === 'create');
+  assert.equal(added.length, 1);
+  assert.equal(added[0].parentId, legacy);
+  assert.equal(added[0].id, I.stableChildIdV1(legacy, 'customApiRequestParameter', ['b']));
+  const mark = h.org.requests.length;
+  await h.writer.executeCreateUnit(c);
+  const writes = h.writes(mark);
+  assert.equal(writes.length, 1, 'only the new parameter');
+  assert.equal(writes[0].body.customapirequestparameterid, added[0].id);
+  assert.equal(h.org.rows('customapis').length, 1);
 });

@@ -229,7 +229,14 @@ function createDefaultConfigurationWriter({ bridge, dataverse, workspaceDir, con
    */
   async function executeCreateUnit(compiled, { membership } = {}) {
     const handle = compiled && compiled.handle;
-    const unit = P.compiledUnitOf(handle);
+    // Only a handle this process's compiler issued holds requests (a copy or a look-alike holds none): anything else is a
+    // closed refusal like every other stop here, before anything is saved, read or sent.
+    let unit;
+    try {
+      unit = P.compiledUnitOf(handle);
+    } catch {
+      throw S.configurationCreateHalt('configuration-create-shape-refused', { reason: 'the unit was not compiled by this build', transition: 'prepare', dispatched: false });
+    }
     if (executed.has(handle)) throw halt('configuration-create-shape-refused', unit, null, { reason: 'this compiled unit was already executed', transition: 'prepare', dispatched: false });
     executed.add(handle);
     if (lower(unit.solution) !== lower(context.solutionUniqueName)) {
@@ -274,7 +281,7 @@ function createDefaultConfigurationWriter({ bridge, dataverse, workspaceDir, con
     return { rootId: unit.root.id, childIds, created: created.map((r) => r.id) };
   }
 
-  return { executeCreateUnit, publishNewRuleOnce, sendCompiledRow };
+  return { executeCreateUnit, publishNewRuleOnce };
 }
 
 module.exports = {
