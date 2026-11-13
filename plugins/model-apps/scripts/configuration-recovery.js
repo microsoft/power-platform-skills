@@ -34,7 +34,7 @@ const path = require('node:path');
 const { parseArgs, validateFlags, readJsonArg, emitResult, dataverseOrigin } = require('./lib/dataverse-auth.js');
 const { migrateAppSpec } = require('./lib/app-spec.js');
 const { appUniqueName } = require('./lib/app-unique-name.js');
-const { withAppBuildLease } = require('./lib/app-operation-lease.js');
+const { withAppBuildLease, buildLockName } = require('./lib/app-operation-lease.js');
 const { readOnlyHttpClient } = require('./lib/readonly-operations.js');
 const { isRestrictedSolution } = require('./lib/system-solutions.js');
 const A = require('./lib/configuration-artifacts.js');
@@ -470,13 +470,17 @@ async function quarantine(args, spec, deps) {
 }
 
 // prepare and resolve hold the app's build lease, as a build and a teardown do, so no build can run while the receipt changes. A held
-// lease is the receipt's state-busy stop.
+// lease is the receipt's state-busy stop. Its next step says to "inspect the lock named above", so the reason names the lock file: the
+// same path the build-locked refusal quotes. A lock whose owner is proved gone is taken over by withAppBuildLease (and said through
+// `warn`); one whose owner runs or cannot be judged is never taken, so it is this stop.
 async function withLease(args, spec, deps, fn) {
+  const app = appUniqueName(spec);
   try {
-    return await withAppBuildLease({ workspaceDir: args.workspaceDir, appUniqueName: appUniqueName(spec), warn: deps.warn, ...(deps.owner ? { owner: deps.owner } : {}) }, fn);
+    return await withAppBuildLease({ workspaceDir: args.workspaceDir, appUniqueName: app, warn: deps.warn, ...(deps.owner ? { owner: deps.owner } : {}) }, fn);
   } catch (error) {
     if (error && error.code === 'build-locked') {
-      throw halt('configuration-create-state-busy', { reason: 'another build, teardown or recovery holds the build lock of this app in this workspace' });
+      const lock = path.join(args.workspaceDir, buildLockName(app));
+      throw halt('configuration-create-state-busy', { reason: `its lock ${lock} is held by another build, teardown or recovery of this app, or its owner could not be proved gone` });
     }
     throw error;
   }

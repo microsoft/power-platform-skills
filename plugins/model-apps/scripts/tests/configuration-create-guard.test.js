@@ -1,21 +1,19 @@
 'use strict';
-// The configuration create receipt guard at every entry that can change an environment for an app (#807): the build command, the
-// build engine, the changed-only flow and teardown's own check, each over a REAL receipt written by lib/configuration-create-state.js.
-// An open unit, a receipt of another environment, a deferred root brought back and an unacknowledged quarantine stop an apply with a
-// retry-never halt before anything is read or sent; a workspace with no receipt is unchanged; a dry run only warns.
+// The configuration create receipt guard module (lib/configuration-create-guard.js, #807) over a REAL receipt written by
+// lib/configuration-create-state.js: what it builds from an App Spec, its acknowledgment of quarantines, teardown's stricter check and
+// the engine's one-attempt use of an acknowledgment. What each entry point does with it is in configuration-create-entry-guards.test.js.
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { makeTempDir } = require('./helpers/temp-dirs.js');
-const { appFolder, command, settle, ENV } = require('./helpers/build-command-harness.js');
+const { ENV } = require('./helpers/build-command-harness.js');
 const { appUniqueName } = require('../lib/app-unique-name.js');
 const A = require('../lib/configuration-artifacts.js');
 const P = require('../lib/configuration-create-plan.js');
 const S = require('../lib/configuration-create-state.js');
 const G = require('../lib/configuration-create-guard.js');
 const { runSdkBuild } = require('../lib/sdk-build.js');
-const flow = require('../lib/changed-only-flow.js');
 const { runRecoveryCommand } = require('../configuration-recovery.js');
 const { RETRY } = require('../lib/retry-policy.js');
 
@@ -104,15 +102,17 @@ test('teardown refuses every receipt but an empty valid one', () => {
   const quarantined = makeTempDir('cfg-guard-');
   quarantine(quarantined);
   assert.throws(() => G.assertTeardownClear(quarantined), (e) => e.retry === RETRY.NEVER && /^configuration-create-/.test(e.code));
-});
-
-test('the build engine stops an open unit under its lease before it reads anything', async () => {
-  const dir = makeTempDir('cfg-guard-');
-  writeReceipt(dir);
-  const reads = [];
-  const sdk = { queryRecords: async (entity) => { reads.push(entity); return [{ solutionid: '11111111-1111-4111-8111-111111111111' }]; } };
-  await assert.rejects(runSdkBuild(spec(), { sdk, provisionSdk: sdk, apply: true, workspaceDir: dir, env: ENV, preResolvedLanguageCode: 1033, phases: ['solution'] }), halts('configuration-create-pending'));
-  assert.deepEqual(reads, []);
+  // What a crash can leave: an archive whose marker was never written, a marker whose archive is missing. Both are kept and refused.
+  for (const drop of ['quarantine', 'unreadable']) {
+    const dir = makeTempDir('cfg-guard-');
+    const id = quarantine(dir);
+    const ext = drop === 'quarantine' ? 'json' : 'bin';
+    fs.rmSync(path.join(dir, `configuration-create-state.${drop}.${id}.${ext}`));
+    const before = fs.readdirSync(dir).sort();
+    assert.throws(() => G.assertTeardownClear(dir), (e) => e.retry === RETRY.NEVER && /^configuration-create-/.test(e.code), drop);
+    assert.throws(() => guard(dir, { phases: ['app-shell'] }), (e) => e.retry === RETRY.NEVER && /^configuration-create-/.test(e.code), `${drop}: a build without configuration work is stopped too`);
+    assert.deepEqual(fs.readdirSync(dir).sort(), before, `${drop}: nothing is removed`);
+  }
 });
 
 test('the engine spends a quarantine acknowledgment on one attempt: a second run with the same one is stopped', async () => {
@@ -124,61 +124,4 @@ test('the engine spends a quarantine acknowledgment on one attempt: a second run
   // The first run passes the guard (whatever the phases then answer); the second is refused at the guard.
   await runSdkBuild(spec(), opts).catch((e) => assert.notEqual(e.code, 'configuration-create-quarantined', e.message));
   await assert.rejects(runSdkBuild(spec(), opts), halts('configuration-create-quarantined'));
-});
-
-test('the changed-only flow stops an open unit before it reads the snapshot or the live app', async () => {
-  const dir = makeTempDir('cfg-guard-');
-  writeReceipt(dir);
-  const calls = [];
-  await assert.rejects(flow.runChangedOnlyApply({ spec: spec(), opts: { workspaceDir: dir, apply: true, env: ENV, preResolvedLanguageCode: 1033 }, deps: {
-    log: () => {},
-    readContent: () => { calls.push('readContent'); return null; },
-    resolveLiveIdentity: async () => { calls.push('resolveLiveIdentity'); return null; },
-    buildModelApp: async () => { calls.push('buildModelApp'); return { ok: true }; },
-  } }), halts('configuration-create-pending'));
-  assert.deepEqual(calls, []);
-});
-
-test('the build command stops an apply over an open unit before the SDK is made; a dry run warns and notes it', async () => {
-  const folder = appFolder(spec());
-  fs.mkdirSync(folder.workspaceDir, { recursive: true });
-  const unitId = writeReceipt(folder.workspaceDir);
-  const applied = command(folder);
-  const outcome = await settle(applied);
-  assert.ok(outcome.thrown, JSON.stringify(outcome));
-  halts('configuration-create-pending')(outcome.thrown);
-  assert.equal(outcome.thrown.unitId, unitId);
-  assert.ok(!applied.calls.includes('sdk') && !applied.calls.includes('engine'), applied.calls.join(','));
-
-  const dry = command(folder, { apply: false });
-  await settle(dry);
-  assert.ok(dry.calls.includes('engine'), dry.calls.join(','));
-  assert.equal(dry.printed.payload.configurationCreate.code, 'configuration-create-pending');
-  assert.equal(dry.printed.payload.configurationCreate.unitId, unitId);
-  assert.match(dry.cli.stderrText(), /An --apply of this App Spec stops here/);
-});
-
-test('the build command validates --acknowledge-quarantined-configuration and hands the validated acknowledgment to the build', async () => {
-  const folder = appFolder(spec());
-  fs.mkdirSync(folder.workspaceDir, { recursive: true });
-  const id = quarantine(folder.workspaceDir);
-  const refused = command(folder);
-  const stopped = await settle(refused);
-  halts('configuration-create-quarantined')(stopped.thrown);
-  assert.ok(!refused.calls.includes('engine'));
-  const seen = [];
-  const run = command(folder, { argv: ['--acknowledge-quarantined-configuration', id], engine: (held, o) => { seen.push(o.configurationQuarantineAcknowledgment); return { ok: true, dryRun: false, created: {} }; } });
-  await settle(run);
-  assert.equal(seen.length, 1, run.calls.join(','));
-  assert.deepEqual([...seen[0].quarantineIds], [id]);
-  const stale = await settle(command(folder, { argv: ['--acknowledge-quarantined-configuration', '00000000-0000-4000-8000-000000000000'] }));
-  halts('configuration-create-approval-stale')(stale.thrown);
-});
-
-test('a workspace with no receipt runs the build command as before', async () => {
-  const folder = appFolder(spec());
-  const run = command(folder);
-  await settle(run);
-  assert.ok(run.calls.includes('engine'), run.calls.join(','));
-  assert.equal(run.printed.payload.configurationCreate, undefined);
 });

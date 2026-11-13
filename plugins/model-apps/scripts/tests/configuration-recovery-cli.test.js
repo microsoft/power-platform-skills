@@ -9,11 +9,14 @@ const path = require('node:path');
 const { makeTempDir } = require('./helpers/temp-dirs.js');
 const { createConfigOrg } = require('./helpers/fake-config-org.js');
 const { createAzHttpClient } = require('../lib/sdk-http-client.js');
-const { withAppBuildLease } = require('../lib/app-operation-lease.js');
+const { withAppBuildLease, buildLockName } = require('../lib/app-operation-lease.js');
+const { ownerStamp } = require('../lib/process-owner.js');
+const { deadPid } = require('./helpers/kill-target-client.js');
 const { appUniqueName } = require('../lib/app-unique-name.js');
 const A = require('../lib/configuration-artifacts.js');
 const P = require('../lib/configuration-create-plan.js');
 const S = require('../lib/configuration-create-state.js');
+const G = require('../lib/configuration-create-guard.js');
 const { runRecoveryCommand, currentIntentOf } = require('../configuration-recovery.js');
 
 const SOL = 'ContosoSol';
@@ -188,28 +191,104 @@ test('defer reads nothing, needs the root gone from the App Spec, and leaves the
   assert.equal(after.payload.clear, false);
 });
 
-test('a prepare while the app build lock is held is configuration-create-state-busy', async () => {
+test('a prepare while the app build lock is held is configuration-create-state-busy, and names the lock', async () => {
   const app = appWithUnit(spec({ apis: false }), 'connection-reference', 'contoso_c1');
   await withAppBuildLease({ workspaceDir: app.workspaceDir, appUniqueName: appUniqueName(spec()), warn: () => {} }, async () => {
     const r = await run(['prepare', '--app-dir', app.appDir, '--env', ENV, '--unit', app.unitId, '--resolution', 'cancel-unsent'], { httpClient: noClient });
     assert.equal(r.payload.code, 'configuration-create-state-busy', JSON.stringify(r.payload));
+    assert.ok(r.payload.reason.includes(path.join(app.workspaceDir, buildLockName(appUniqueName(spec())))), r.payload.reason);
+    assert.match(r.payload.nextStep, /inspect the lock named above/);
   });
+});
+
+test('a lock left by a recovery or build that is proved gone is taken over and said; one whose owner runs is never taken', async () => {
+  const app = appWithUnit(spec({ apis: false }), 'connection-reference', 'contoso_c1');
+  const lock = path.join(app.workspaceDir, buildLockName(appUniqueName(spec())));
+  const argv = ['prepare', '--app-dir', app.appDir, '--env', ENV, '--unit', app.unitId, '--resolution', 'cancel-unsent'];
+  // An owner that runs (this process, by a record ten minutes old) is never judged abandoned, however old.
+  const running = JSON.stringify({ ...ownerStamp({ now: () => Date.now() - 10 * 60 * 1000 }), rnd: 'held' });
+  fs.writeFileSync(lock, running);
+  const refused = await run(argv, { httpClient: noClient });
+  assert.equal(refused.payload.code, 'configuration-create-state-busy', JSON.stringify(refused.payload));
+  assert.equal(fs.readFileSync(lock, 'utf8'), running, 'the lock is left as it was');
+  fs.writeFileSync(lock, JSON.stringify({ ...ownerStamp({ pid: deadPid() }), rnd: 'held' }));
+  const warnings = [];
+  const prepared = await run(argv, { httpClient: noClient, warn: (w) => warnings.push(w) });
+  assert.equal(prepared.ok, true, JSON.stringify(prepared.payload));
+  assert.ok(warnings.some((w) => /released the build lock .* is no longer running/.test(w)), warnings.join('\n'));
+  assert.ok(!fs.existsSync(lock), 'the lock taken over is let go again');
 });
 
 test('an unreadable receipt is quarantined only with --acknowledge-unknown-dispatch, and inspect then names the build acknowledgment', async () => {
   const app = appWithUnit(spec(), 'connection-reference', 'contoso_c1');
-  fs.writeFileSync(path.join(app.workspaceDir, 'configuration-create-state.v1.json'), '{"not":"a receipt"}');
+  const unreadable = Buffer.from('{"not":"a receipt"}\r\n\u0000tail', 'utf8');
+  fs.writeFileSync(path.join(app.workspaceDir, 'configuration-create-state.v1.json'), unreadable);
   const seen = await run(['inspect', '--app-dir', app.appDir, '--env', ENV], { httpClient: noClient });
   assert.equal(seen.payload.receipt, 'invalid');
   assert.equal(seen.payload.clear, false);
   const done = await run(['resolve', '--app-dir', app.appDir, '--resolution', 'quarantine-unreadable', '--acknowledge-unknown-dispatch'], { httpClient: noClient });
   assert.equal(done.ok, false);
   assert.equal(done.payload.code, 'configuration-create-reconciled', JSON.stringify(done.payload));
+  assert.equal(done.payload.serviceReads, 0);
   assert.match(done.payload.nextStep, /--acknowledge-quarantined-configuration/);
+  // The bytes are kept exactly, in the archive beside the marker.
+  assert.deepEqual(fs.readFileSync(path.join(app.workspaceDir, `configuration-create-state.unreadable.${done.payload.quarantineId}.bin`)), unreadable);
   const after = await run(['inspect', '--app-dir', app.appDir], { httpClient: noClient });
   assert.equal(after.payload.quarantines.length, 1);
   assert.equal(after.payload.quarantines[0].quarantineId, done.payload.quarantineId);
   assert.ok(after.payload.nextSteps.some((s) => s.includes(`--acknowledge-quarantined-configuration ${done.payload.quarantineId}`)));
+});
+
+test('defer is refused while another declaration still depends on the deferred root', async () => {
+  const both = {
+    ...spec({ apis: false }),
+    environmentVariables: [{ schemaName: 'contoso_V', type: 'string' }, { schemaName: 'contoso_D', type: 'dataSource', connectorId: SP, parameterKey: 'dataset', parentSchemaName: 'contoso_V' }],
+  };
+  const app = appWithUnit(both, 'environmentVariable', 'contoso_V');
+  // The root is gone from the App Spec, but the data-source variable still names it as its parent.
+  fs.writeFileSync(path.join(app.appDir, 'app-spec.json'), JSON.stringify({ ...both, environmentVariables: [both.environmentVariables[1]] }));
+  const r = await run(['prepare', '--app-dir', app.appDir, '--env', ENV, '--unit', app.unitId, '--resolution', 'defer'], { httpClient: noClient });
+  assert.equal(r.ok, false);
+  assert.equal(r.payload.code, 'configuration-create-pending', JSON.stringify(r.payload));
+  const after = await run(['inspect', '--app-dir', app.appDir], { httpClient: noClient });
+  assert.equal(after.payload.units[0].state, 'open');
+});
+
+test('a resolution invalidates the changed-only snapshot, and a separate build then passes the receipt guard', async () => {
+  const org = orgOf();
+  const app = appWithUnit(spec(), 'custom-api', 'contoso_Calc');
+  await sendRows(org, app.compiled);
+  const { httpClient } = clientOver(org);
+  const invalidated = [];
+  const deps = { httpClient, invalidate: (dir) => { invalidated.push(dir); return { ok: true }; } };
+  assert.throws(() => G.assertConfigurationCreatesClear(app.workspaceDir, { spec: spec(), env: ENV, languageCode: 1033 }), (e) => e.code === 'configuration-create-pending');
+  const prepared = await run(['prepare', '--app-dir', app.appDir, '--env', ENV, '--unit', app.unitId, '--resolution', 'accept-current'], deps);
+  assert.equal(prepared.ok, true, JSON.stringify(prepared.payload));
+  assert.deepEqual(invalidated, [], 'a prepare changes nothing');
+  const argv = ['resolve', '--app-dir', app.appDir, '--env', ENV, '--unit', app.unitId, '--resolution', 'accept-current', '--approval-token', prepared.payload.approvalToken];
+  if (prepared.payload.privateAcknowledgmentRequired) argv.push('--accept-current-private-state');
+  const done = await run(argv, deps);
+  assert.equal(done.payload.code, 'configuration-create-reconciled', JSON.stringify(done.payload));
+  assert.deepEqual(invalidated.map((d) => path.resolve(d)), [path.resolve(app.workspaceDir)]);
+  assert.equal(G.assertConfigurationCreatesClear(app.workspaceDir, { spec: spec(), env: ENV, languageCode: 1033 }).deferredUnits, 0);
+});
+
+test('a resolve over a workspace holding an unproven legacy configuration copy is refused before the receipt changes', async () => {
+  const app = appWithUnit(spec(), 'custom-api', 'contoso_Calc');
+  fs.writeFileSync(path.join(app.appDir, 'app-spec.json'), JSON.stringify(spec({ apis: false })));
+  const prepared = await run(['prepare', '--app-dir', app.appDir, '--env', ENV, '--unit', app.unitId, '--resolution', 'defer'], { httpClient: noClient });
+  assert.equal(prepared.ok, true, JSON.stringify(prepared.payload));
+  // A copy an earlier plugin version wrote, with no metadata snapshot beside it: nothing proves it is what the environment held.
+  const copy = path.join(app.workspaceDir, 'connection-references', 'contoso_c1.json');
+  fs.mkdirSync(path.dirname(copy), { recursive: true });
+  fs.writeFileSync(copy, JSON.stringify({ connectionreferencelogicalname: 'contoso_c1', connectionid: 'edited by hand' }));
+  const receipt = path.join(app.workspaceDir, 'configuration-create-state.v1.json');
+  const before = fs.readFileSync(receipt);
+  const r = await run(['resolve', '--app-dir', app.appDir, '--env', ENV, '--unit', app.unitId, '--resolution', 'defer', '--approval-token', prepared.payload.approvalToken], { httpClient: noClient });
+  assert.equal(r.ok, false);
+  assert.equal(r.payload.code, 'WORKSPACE_LEGACY_CONFIGURATION_COPY', JSON.stringify(r.payload));
+  assert.deepEqual(fs.readFileSync(receipt), before, 'the receipt is unchanged');
+  assert.ok(fs.existsSync(copy), 'the copy is left as it was');
 });
 
 test('the current intent is compiled the way the build compiled the unit: over a preserved root, and under the recorded parent definition', () => {

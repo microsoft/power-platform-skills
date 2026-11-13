@@ -3591,8 +3591,10 @@ or deferred unit, an unreadable receipt, a quarantine marker or archive — refu
 `configuration-create-workspace-in-use`, before the fence, in `beforeRename` and in `beforeRemove` against the
 isolated folder). A teardown apply now holds the app's build lease too, so a concurrent build or teardown of
 the same app in the workspace gets `build-locked`. The legacy original/snapshot pair check of
-`workspace-configuration-memory.js` is exported (`checkLegacyConfigurationPair`) so the guard and recovery
-refuse a dirty legacy copy against the real workspace with the existing `WORKSPACE_LEGACY_CONFIGURATION_COPY`.
+`workspace-configuration-memory.js` is exported (`checkLegacyConfigurationPair`, with
+`legacyConfigurationArtifacts` listing every pair on disk) so `configuration-recovery.js` refuses a dirty
+legacy copy in the real workspace with the existing `WORKSPACE_LEGACY_CONFIGURATION_COPY` before it changes a
+receipt; a build still meets the same check through its in-memory storage wrapper.
 The receipt, its quarantine markers and archives are owned by the plugin: while a build or recovery runs, no
 other process may change, rename, create, sync or restore files in that workspace folder. The plugin's own
 entries coordinate through the app build lease and the receipt's record lease (`lib/record-lease.js`); an
@@ -3609,6 +3611,7 @@ before any read. The build's `--acknowledge-quarantined-configuration <id>[,<id>
 validated against the workspace's quarantines (`validateQuarantineAcknowledgment`), handed to the first
 attempt only and spent by the engine (a WeakSet), never persisted and never accepted by teardown. Maker guide
 and stop-code table: [`docs/configuration-create-recovery.md`](docs/configuration-create-recovery.md). Tests:
+`tests/configuration-create-entry-guards.test.js` (each entry point, its shortcuts included),
 `tests/configuration-create-guard.test.js`, `tests/configuration-recovery-cli.test.js`,
 `tests/teardown-model-app.test.js` ("teardown CLI ... receipt", "... holds its lease").
 

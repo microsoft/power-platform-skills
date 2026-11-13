@@ -37,15 +37,16 @@ restore files in that workspace folder:
   folder while you build or recover.
 - Do not edit, move or delete those files by hand, and do not copy them in from another folder.
 
-The plugin's own builds, teardowns and recovery commands wait for each other: they hold the app's build
-lock, and every change to the receipt holds the receipt's own lock. An outside change made while one of them
-runs is not protected against. If one happened, stop, keep the workspace exactly as it is (do not delete or
-restore anything in it), and run `inspect` to see where it stands.
+The plugin's own builds, teardowns and recovery `prepare` and `resolve` commands never run at the same time
+for one app in one workspace: each holds the app's build lock, and a second one is refused (it does not wait)
+while the first runs. Every change to the receipt also holds the receipt's own lock. An outside change made
+while one of them runs is not protected against. If one happened, stop, keep the workspace exactly as it is
+(do not delete or restore anything in it), and run `inspect` to see where it stands.
 
 ## The commands
 
-All commands print one JSON object on stdout. They hold the app's build lock, so no build or teardown of
-that app can run at the same time.
+All commands print one JSON object on stdout. `prepare` and `resolve` hold the app's build lock, so no build
+or teardown of that app can run at the same time. `inspect` only reads and takes no lock.
 
 ```text
 node "${PLUGIN_ROOT}/scripts/configuration-recovery.js" inspect
