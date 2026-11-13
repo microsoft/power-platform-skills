@@ -3600,6 +3600,9 @@ app's durable workspace under its lease, before it makes the SDK: its configurat
 solution-scoped SDK's throwaway workspace, so the in-memory wrapper alone never meets a draft left there. A dirty,
 malformed or orphaned pair stops an apply with `WORKSPACE_LEGACY_CONFIGURATION_COPY` before any request (a dry run
 warns); a clean pair changes nothing.
+Recovery also compares a Custom API's or duplicate rule's workspace copy with its snapshot (the SDK's `diffArtifact`,
+over a storage that refuses writes and a client that refuses requests) in `prepare` and `resolve`, and an unsent
+edit stops both with `create-completion-required`, the code the build's `refuseLocalDraft` uses.
 The receipt, its quarantine markers and archives are owned by the plugin: while a build or recovery runs, no
 other process may change, rename, create, sync or restore files in that workspace folder. The plugin's own
 entries coordinate through the app build lease and the receipt's record lease (`lib/record-lease.js`); an

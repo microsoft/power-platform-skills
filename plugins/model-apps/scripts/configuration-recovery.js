@@ -43,7 +43,8 @@ const P = require('./lib/configuration-create-plan.js');
 const S = require('./lib/configuration-create-state.js');
 const R = require('./lib/configuration-create-recovery.js');
 const { createDeclarationsOf } = require('./lib/configuration-create-guard.js');
-const { legacyConfigurationArtifacts, checkLegacyConfigurationPair } = require('./lib/workspace-configuration-memory.js');
+const { legacyConfigurationArtifacts, checkLegacyConfigurationPair, isLegacyCopyRefusal } = require('./lib/workspace-configuration-memory.js');
+const { hasUnsyncedEdits } = require('./lib/unsynced-edits.js');
 
 const USAGE = 'Usage: node scripts/configuration-recovery.js inspect|prepare|resolve --app-dir <app-folder> [--env <url>] '
   + '[--unit <unitId>] [--resolution accept-current|defer|cancel-unsent|quarantine-unreadable] [--approval-token <token>] '
@@ -279,12 +280,67 @@ function contextOf({ origin, spec, languageCode, saved }) {
 
 // Before a receipt changes, every environment-variable or connection-reference copy an earlier plugin version left in the workspace must
 // be proved clean (workspace-configuration-memory.js): a copy that may hold an unsent edit is a local draft the operator must see first.
-function localDraftCheck(workspaceDir) {
+// A Custom API's or duplicate rule's copy is the build's own workspace artifact: the build stops on one that holds an unsent edit before
+// its overwriting fetch reads the row back (configuration-artifacts.js refuseLocalDraft, create-completion-required), so recovery must
+// not settle the unit over it either. Both prepare and resolve run this (configuration-create-recovery.js checkResolution), so a draft
+// made after prepare is still refused.
+function localDraftCheck(workspaceDir, { origin, unit }) {
   return async () => {
     const { createNodeWorkspaceStorage } = require('./lib/maker-sdk.js');
     const storage = createNodeWorkspaceStorage(workspaceDir);
     for (const { folder, id } of legacyConfigurationArtifacts(storage)) await checkLegacyConfigurationPair(storage, folder, id);
+    const type = unit && unit.root ? DRAFT_TYPE_OF[unit.root.kind] : undefined;
+    if (type && holdsCopyFileOf(workspaceDir, unit.root.id) && await hasUnsyncedEdits(readOnlySdkOver(storage, origin), type, unit.root.id, { rethrow: isLegacyCopyRefusal })) {
+      const error = new Error(`create-completion-required: the workspace copy of the ${unit.root.kind} ${unit.root.id} holds an edit the environment has not seen, `
+        + 'or cannot be compared with its last-synced snapshot. Recovery never fetches over or discards it, and changed nothing.');
+      error.code = 'create-completion-required';
+      error.unitId = unit.unitId;
+      error.rootId = unit.root.id;
+      error.rootKind = unit.root.kind;
+      error.nextStep = 'Keep the copy if it holds work you want: move that change into the App Spec. Discard the copy only once nothing in it is '
+        + 'needed (delete its two files in the workspace, the copy and its .metadata snapshot), then run inspect again.';
+      throw error;
+    }
   };
+}
+
+// The SDK artifact type of each receipt root kind whose workspace copy a build fetches over (configuration-artifacts.js refuseLocalDraft).
+// The two sensitive kinds are never kept in a workspace by this version; their copies are the legacy pairs checked above.
+const DRAFT_TYPE_OF = Object.freeze({ 'custom-api': KT['custom-api'].bindingKind, 'duplicate-rule': KT['duplicate-rule'].bindingKind });
+
+// Does the workspace hold any file of the root's copy (`<type folder>/<id>.json` or `.metadata/<type folder>/<id>.meta.json`), e.g.
+//   .maker-workspace/custom-apis/3a1702cb-....json  and  .maker-workspace/.metadata/custom-apis/3a1702cb-....meta.json
+// With none there is no draft to keep, and the SDK is not asked: over a workspace a build never initialised (no manifest.json, as for a
+// receipt written before the first fetch) its diff throws WORKSPACE_NOT_INITIALIZED, which the compare would read as a draft. With any
+// file there the SDK's diff decides, and a diff that cannot be made counts as a draft (fails closed). Ids are GUIDs; the SDK writes them
+// lower-case, so the match ignores case.
+function holdsCopyFileOf(workspaceDir, id) {
+  let names;
+  try {
+    names = fs.readdirSync(workspaceDir, { recursive: true });
+  } catch (error) {
+    if (error && error.code === 'ENOENT') return false;
+    throw error;
+  }
+  const wanted = new Set([`${id}.json`, `${id}.meta.json`].map((n) => n.toLowerCase()));
+  return names.some((n) => wanted.has(path.basename(String(n)).toLowerCase()));
+}
+
+// An SDK over the durable workspace that can only compare a copy with its snapshot (diffArtifact reads the two files of an initialised
+// workspace). Its storage refuses every write and delete and its client refuses every request, so nothing it is asked can fetch over,
+// rewrite or discard a draft, or reach the environment.
+function readOnlySdkOver(storage, origin) {
+  const { createMakerSdk } = require('./lib/maker-sdk.js');
+  const refused = (what) => async () => { throw new Error(`configuration recovery compares workspace copies only: ${what} refused`); };
+  const writes = new Set(['writeTextAtomic', 'deleteFile', 'deleteByPrefix', 'ensureContainer']);
+  const readOnly = new Proxy(storage, {
+    get(target, key) {
+      if (writes.has(key)) return refused(`workspace ${String(key)}`);
+      const value = Reflect.get(target, key, target);
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
+  return createMakerSdk({ workspaceStorage: readOnly, instanceUrl: origin, httpClient: { request: refused('a service request'), send: refused('a service request') } });
 }
 
 // ── Results ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -409,7 +465,7 @@ async function resolveUnit(args, spec, deps) {
       // Computed only when a unit is there to compare it with; an unknown unit is refused by the recovery module (approval-stale).
       currentPublicIntentSha256: args.resolution === 'accept-current' && unit ? currentIntentOf(spec, unit, { bindings, solution: saved.solutionUniqueName }) : undefined,
       declarations: createDeclarationsOf(spec),
-      checkLocalDrafts: localDraftCheck(args.workspaceDir),
+      checkLocalDrafts: localDraftCheck(args.workspaceDir, { origin: args.origin, unit }),
       ...(deps.invalidate ? { invalidate: deps.invalidate } : {}),
       ...(deps.leaseDeps ? { leaseDeps: deps.leaseDeps } : {}),
     };

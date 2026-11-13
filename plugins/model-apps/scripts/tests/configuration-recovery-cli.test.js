@@ -129,7 +129,7 @@ test('inspect of rows never sent describes each one for manual completion, with 
   const org = orgOf();
   const app = appWithUnit(spec(), 'custom-api', 'contoso_Calc');
   const { httpClient } = clientOver(org);
-  const writesBefore = org.writes.length;
+  const writesBefore = org.requests.length;
   const r = await run(['inspect', '--app-dir', app.appDir, '--env', ENV], { httpClient });
   assert.equal(r.ok, true, JSON.stringify(r.payload));
   const [u] = r.payload.units;
@@ -138,7 +138,7 @@ test('inspect of rows never sent describes each one for manual completion, with 
   assert.equal(u.manualCompletion.length, 3);
   assert.ok(u.manualCompletion.every((m) => m.method === 'POST' && typeof m.entitySet === 'string' && typeof m.idColumn === 'string'));
   assert.match(r.payload.manualCompletionNote, /Not executed/);
-  assert.equal(org.writes.length, writesBefore);
+  assert.deepEqual(org.writes(writesBefore), []);
   assert.deepEqual(org.unexpected, []);
 });
 
@@ -147,7 +147,7 @@ test('accept-current: a unit whose rows all landed is prepared and resolved with
   const app = appWithUnit(spec(), 'custom-api', 'contoso_Calc');
   await sendRows(org, app.compiled);
   const { httpClient } = clientOver(org);
-  const writesBefore = org.writes.length;
+  const writesBefore = org.requests.length;
   const seen = await run(['inspect', '--app-dir', app.appDir, '--env', ENV], { httpClient });
   assert.equal(seen.payload.units[0].outcome, 'match', JSON.stringify(seen.payload.units[0]));
   const prepared = await run(['prepare', '--app-dir', app.appDir, '--env', ENV, '--unit', app.unitId, '--resolution', 'accept-current'], { httpClient });
@@ -158,7 +158,7 @@ test('accept-current: a unit whose rows all landed is prepared and resolved with
   const done = await run(argv, { httpClient });
   assert.equal(done.ok, false, 'a resolution is never a build success');
   assert.equal(done.payload.code, 'configuration-create-reconciled', JSON.stringify(done.payload));
-  assert.equal(org.writes.length, writesBefore, 'recovery sent no write');
+  assert.deepEqual(org.writes(writesBefore), [], 'recovery sent no write');
   const after = await run(['inspect', '--app-dir', app.appDir], { httpClient: noClient });
   assert.equal(after.payload.units.length, 0);
   // A used token is spent.
@@ -314,3 +314,70 @@ test('the current intent is compiled the way the build compiled the unit: over a
   // A declaration that is gone has no intent.
   assert.equal(currentIntentOf({ ...s, customApis: [] }, grown, { bindings, solution: SOL }), null);
 });
+
+// The SDK as a build left it in the app's durable workspace: the bundle itself, fetching the recorded root into the workspace as the
+// build's overwriting read does, so the copy and its last-synced snapshot are real SDK files.
+const bundle = require('../vendor/cds-maker-sdk.cjs');
+async function workspaceCopy(org, workspaceDir, type, id) {
+  const sdk = bundle.createMakerSdk({
+    workspaceStorage: bundle.createNodeWorkspaceStorage(workspaceDir),
+    instanceUrl: org.origin,
+    httpClient: createAzHttpClient(org.origin, { getToken: () => 'test-token-0123456789abcdef', request: org.request, sleep: async () => {} }),
+  });
+  await sdk.initWorkspace();
+  await sdk.fetchArtifact(type, id, { overwrite: true });
+  return sdk;
+}
+const RULE = { key: 'check', name: 'Same surname', entity: 'contact', status: 'unpublished', conditions: [{ key: 'name', column: 'lastname', match: 'exact' }] };
+const acceptArgv = (app, extra = []) => ['--app-dir', app.appDir, '--env', ENV, '--unit', app.unitId, '--resolution', 'accept-current', ...extra];
+
+// A Custom API's or duplicate rule's copy in the workspace is the build's own artifact, and the build stops on one that holds an edit
+// never sent (create-completion-required) rather than fetch over it. Recovery must not settle the unit over it either: it compares the
+// copy with its snapshot (the SDK's own diff, over a storage that refuses writes and a client that refuses requests) in prepare and again
+// in resolve, so a draft made after prepare is refused too. A clean copy changes nothing.
+for (const [label, kind, key, type, s] of [
+  ['Custom API', 'custom-api', 'contoso_Calc', 'customApi', spec()],
+  ['duplicate rule', 'duplicate-rule', 'check', 'duplicateRule', { ...spec({ apis: false }), duplicateDetectionRules: [RULE] }],
+]) {
+  test(`accept-current refuses a unit whose ${label} copy in the workspace holds an unsent edit, in prepare and after it, and keeps the copy`, async () => {
+    const org = orgOf();
+    const app = appWithUnit(s, kind, key);
+    await sendRows(org, app.compiled);
+    const id = app.compiled.unit.root.id;
+    const sdk = await workspaceCopy(org, app.workspaceDir, type, id);
+    const { httpClient } = clientOver(org);
+    const receipt = path.join(app.workspaceDir, 'configuration-create-state.v1.json');
+    const mark = org.requests.length;
+    // A clean copy: prepare goes on.
+    const prepared = await run(['prepare', ...acceptArgv(app)], { httpClient });
+    assert.equal(prepared.ok, true, JSON.stringify(prepared.payload));
+    // A draft made after prepare: resolve is refused, the receipt and the draft are kept.
+    await sdk.updateElement(type, id, '/description', 'a local draft never sent');
+    assert.ok((await sdk.diffArtifact(type, id)).changes.length > 0, 'the SDK reports the draft');
+    const copyFiles = () => fs.readdirSync(app.workspaceDir, { recursive: true }).filter((f) => f.endsWith(`${id}.json`) || f.endsWith(`${id}.meta.json`)).sort()
+      .map((f) => [f, fs.readFileSync(path.join(app.workspaceDir, f)).toString('hex')]);
+    const before = { receipt: fs.readFileSync(receipt), copy: copyFiles() };
+    assert.equal(before.copy.length, 2, JSON.stringify(before.copy.map(([f]) => f)));
+    const resolveArgv = ['resolve', ...acceptArgv(app, ['--approval-token', prepared.payload.approvalToken]), ...(prepared.payload.privateAcknowledgmentRequired ? ['--accept-current-private-state'] : [])];
+    const done = await run(resolveArgv, { httpClient });
+    assert.equal(done.ok, false);
+    assert.equal(done.payload.code, 'create-completion-required', JSON.stringify(done.payload));
+    assert.equal(done.payload.rootId, id);
+    assert.equal(done.payload.unitId, app.unitId);
+    assert.deepEqual(fs.readFileSync(receipt), before.receipt, 'the receipt is unchanged');
+    assert.deepEqual(copyFiles(), before.copy, 'the copy and its snapshot are kept byte for byte');
+    // A fresh prepare over the draft is refused the same way.
+    const again = await run(['prepare', ...acceptArgv(app)], { httpClient });
+    assert.equal(again.payload.code, 'create-completion-required', JSON.stringify(again.payload));
+    assert.equal((await run(['inspect', '--app-dir', app.appDir], { httpClient: noClient })).payload.units.length, 1, 'the unit is still recorded');
+    assert.deepEqual(org.writes(mark), [], 'recovery sent no write');
+    assert.deepEqual(org.unexpected, []);
+    // Once the maker discards the copy (nothing in it is needed), the unit is reconciled.
+    for (const [f] of before.copy) fs.rmSync(path.join(app.workspaceDir, f));
+    const prepared2 = await run(['prepare', ...acceptArgv(app)], { httpClient });
+    assert.equal(prepared2.ok, true, JSON.stringify(prepared2.payload));
+    const settled = await run(['resolve', ...acceptArgv(app, ['--approval-token', prepared2.payload.approvalToken]), ...(prepared2.payload.privateAcknowledgmentRequired ? ['--accept-current-private-state'] : [])], { httpClient });
+    assert.equal(settled.payload.code, 'configuration-create-reconciled', JSON.stringify(settled.payload));
+    assert.deepEqual(org.writes(mark), []);
+  });
+}

@@ -198,6 +198,9 @@ Every stop has `retry: "never"`: do not rerun the same command blindly; take the
 The existing refusals for an older plugin's workspace copy (`WORKSPACE_LEGACY_CONFIGURATION_COPY`) and for
 unsynced drafts keep their codes and remedies, and recovery checks them too: keep the drafts, restore the
 original/snapshot pair, then `inspect` again.
+A Custom API or duplicate rule whose copy in the app's workspace holds an edit never sent stops `prepare` and
+`resolve` with `create-completion-required`, as it stops a build: move that change into the App Spec, or delete
+the copy and its `.metadata` snapshot once nothing in it is needed, then `inspect` again.
 
 ## Not supported
 
