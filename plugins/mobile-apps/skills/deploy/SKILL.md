@@ -129,7 +129,8 @@ affected Dataverse service. Follow
 [data-performance.md](../../shared/references/data-performance.md), including
 typed result/pagination and offline-runtime verification. If a query's required
 capability is missing, STOP and point to `/check-updates` plus the user-run
-retained-source refresh. Never install, refresh, migrate queries, or rewrap
+retained-source refresh as optional manual follow-up, not a workflow to invoke.
+Never install, refresh, migrate queries, or rewrap
 silently during deployment. Older apps that do not use these features are not
 required to upgrade. An SDK/CLI-only JavaScript update does not itself require
 a new native base; native-package/runtime changes keep their existing gates.

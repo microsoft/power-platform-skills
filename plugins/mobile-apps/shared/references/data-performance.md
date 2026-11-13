@@ -16,9 +16,14 @@ The `screen-planner` flags this in the per-screen spec as `pagination: cursor` o
 
 ## Query availability
 
-New apps use Power Apps SDK `1.6.0` and CLI `1.4.1` from the template.
-These releases support `expand` on `get`/`getAll`, `apply` on `getAll`,
+Power Apps SDK `1.6.0` and CLI `1.4.1` are the first verified query pair.
+Newer compatible SDKs and query-ready generated services support
+`expand` on `get`/`getAll`, `apply` on `getAll`,
 generic result projections, and `getSavedQuery` with complete-link pagination.
+New-app creation still selects an exact published template through
+[mobile-release-lifecycle.md](mobile-release-lifecycle.md). Query requirements
+do not replace its native release contract or independently override its pins;
+the bundled template is only a legacy test fixture.
 FetchXML execution, SQL, typed parameter aliases, and personal `userQuery`
 APIs are not part of this contract. Do not invent service methods for them.
 
@@ -38,11 +43,36 @@ and failed type-checks are blockers, not permission to hand-edit generated code.
 Include the verified features alongside the Generated Services snapshot.
 Recheck after dependency, binding, environment, or generated-code changes.
 
-**Existing apps are not migrated.** Keep their current queries and computed
-columns. `/check-updates` can offer individually approved SDK/CLI updates and
-tell the user to refresh retained data sources. It does not rewrite screens,
-replace the template, delete columns, or run refresh on the user's behalf.
-A dependency upgrade alone does not refresh services or adopt new queries.
+### Existing apps: manual prerequisites
+
+**Existing apps are not migrated.** Keep their current queries, calculated
+columns, refresh owners, and data. Query discovery is read-only and never
+installs packages, starts `/check-updates`, refreshes sources, or rewrites
+customer code.
+
+| Observed state | Message / action |
+|---|---|
+| SDK predates `1.6.0` or is missing | Explain the required SDK capability and stop only the unavailable new feature. The customer updates compatible packages through their approved package/release workflow. Existing supported reads continue unchanged. |
+| SDK is new enough; generated methods/options are stale | Ask the customer to refresh the affected retained binding with a query-capable CLI, then regenerate schemas and type-check. Do not run refresh automatically. |
+| SDK and actual generated contract support the requested feature | Use the approved query in new app/feature code. Do not convert unrelated existing reads. |
+
+Resolve the exact, unambiguous registration using
+[Refresh a retained source](data-source-removal.md#refresh-a-retained-source)
+and the local CLI using [cli-binary.md](../cli-binary.md). Show the customer
+the resolved equivalent of:
+
+```bash
+$PA app refresh data-source --name '<registered-name>' --non-interactive
+npm run generate-schemas
+npx --no-install tsc --noEmit
+```
+
+Refresh bindings sequentially. A null `bindingName` requires resolving the
+stored schema's real name, never an array index or guessed display label.
+This is manual guidance, not an instruction for the agent to execute these
+commands. If the user later explicitly invokes `/check-updates`, preserve that
+workflow's package-owned compatibility, coordinated release, and approval rules.
+An SDK update or service refresh alone does not migrate application queries.
 
 This is the **online Dataverse** contract. The native online bridge forwards
 SDK-built queries; native offline execution is owned by a different runtime.

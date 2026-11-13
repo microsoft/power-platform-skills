@@ -260,12 +260,29 @@ function topLevelKeys(body) {
   const keys = [];
   let depth = 0;
   let inString = null;
+  let inLineComment = false;
+  let inBlockComment = false;
   let i = 0;
-  let pendingKeyStart = 0;
+  let keyText = '';
   let lookForKey = true;
 
   while (i < body.length) {
     const ch = body[i];
+    const next = body[i + 1];
+    if (inLineComment) {
+      if (ch === '\n') inLineComment = false;
+      i++;
+      continue;
+    }
+    if (inBlockComment) {
+      if (ch === '*' && next === '/') {
+        inBlockComment = false;
+        i += 2;
+      } else {
+        i++;
+      }
+      continue;
+    }
     if (inString) {
       if (ch === '\\') {
         i += 2;
@@ -275,8 +292,18 @@ function topLevelKeys(body) {
       i++;
       continue;
     }
+    if (ch === '/' && (next === '/' || next === '*')) {
+      // Comments can contain punctuation and appear before a key or its colon:
+      // `{ /* aggregate */ apply /* expression */: 'aggregate($count as total)' }`.
+      if (depth === 0 && lookForKey) keyText += ' ';
+      inLineComment = next === '/';
+      inBlockComment = next === '*';
+      i += 2;
+      continue;
+    }
     if (ch === '"' || ch === "'" || ch === '`') {
       inString = ch;
+      if (depth === 0) lookForKey = false;
       i++;
       continue;
     }
@@ -297,13 +324,12 @@ function topLevelKeys(body) {
     }
     if (ch === ',') {
       lookForKey = true;
-      pendingKeyStart = i + 1;
+      keyText = '';
       i++;
       continue;
     }
     if (lookForKey && ch === ':') {
-      // Identifier just before `:` — slice from pendingKeyStart.
-      const segment = body.slice(pendingKeyStart, i).trim();
+      const segment = keyText.trim();
       if (/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(segment)) {
         keys.push(segment);
       }
@@ -311,6 +337,7 @@ function topLevelKeys(body) {
       i++;
       continue;
     }
+    if (lookForKey) keyText += ch;
     i++;
   }
   return keys;

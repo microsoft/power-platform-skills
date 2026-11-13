@@ -4,6 +4,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { createRequire } = require('node:module');
+const semver = require('./vendor/semver.cjs');
 const {
   configuredDataSources,
   dataSourceEntries,
@@ -15,14 +16,8 @@ const CLI_VERSION = '1.4.1';
 const FEATURES = ['expand', 'apply', 'saved-query'];
 
 function supportsRelease(version, minimum) {
-  const match = /^(\d+)\.(\d+)\.(\d+)(?:\+[0-9A-Za-z.-]+)?$/.exec(version || '');
-  if (!match) return false;
-  const actual = match.slice(1).map(Number);
-  const required = minimum.split('.').map(Number);
-  // Only the released major is verified; prereleases and a future major need review.
-  return actual[0] === required[0]
-    && (actual[1] > required[1]
-      || (actual[1] === required[1] && actual[2] >= required[2]));
+  const release = typeof version === 'string' ? semver.valid(version) : null;
+  return Boolean(release && !semver.prerelease(release) && semver.gte(release, minimum));
 }
 
 function installedVersion(projectRoot, name) {
@@ -106,6 +101,15 @@ function checkQuerySupport(projectRoot, tables = []) {
       supported: Object.fromEntries(FEATURES.map((feature) => [feature, sdkSupported && generated[feature]])),
     };
   });
+  const messages = [];
+  if (!sdkSupported) {
+    messages.push(`Dataverse query features require Power Apps SDK ${SDK_VERSION} or newer. `
+      + 'Keep existing queries unchanged; update compatible packages manually before using these features.');
+  }
+  if (services.some((service) => FEATURES.some((feature) => !service.generated[feature]))) {
+    messages.push(`Generated query methods/options are missing. Manually refresh the retained data sources `
+      + `with a query-capable CLI (verified with ${CLI_VERSION}), then regenerate schemas and type-check.`);
+  }
   return {
     sdkVersion,
     cliVersion,
@@ -113,6 +117,7 @@ function checkQuerySupport(projectRoot, tables = []) {
     generatorSupported: supportsRelease(cliVersion, CLI_VERSION),
     testedVersions: { sdk: SDK_VERSION, cli: CLI_VERSION },
     scope: 'SDK and generated online Dataverse services; offline execution is not verified by this check',
+    messages,
     services,
   };
 }
@@ -140,8 +145,9 @@ function main(argv = process.argv.slice(2)) {
     if (required.length && (!report.services.length || report.services.some(
       (service) => required.some((feature) => !service.supported[feature]),
     ))) {
-      throw new Error('Required Dataverse query support is unavailable. Use /check-updates for '
-        + 'an approved SDK/CLI update, then refresh the retained data sources. Do not edit generated files.');
+      throw new Error('Required Dataverse query support is unavailable. '
+        + (report.messages.join(' ') || 'The requested generated Dataverse service is not available.')
+        + ' No project files were changed; do not edit generated files or migrate existing queries.');
     }
     return 0;
   } catch (error) {
