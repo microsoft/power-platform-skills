@@ -13,7 +13,6 @@ const { runCommand: runCommandIn } = require('./helpers/configuration-command.js
 const { createAzHttpClient } = require('../lib/sdk-http-client.js');
 const { createMakerSdk, createNodeWorkspaceStorage } = require('../lib/maker-sdk.js');
 const { configurationSendOnce } = require('../lib/configuration-transport.js');
-const { attachConfigurationCreateBridge } = require('../lib/configuration-create-writer.js');
 const { buildModelApp } = require('../build-model-app.js');
 const { STAGES } = require('../lib/stages.js');
 const { STATE_FILE } = require('../lib/configuration-create-state.js');
@@ -187,6 +186,8 @@ test('the SDK never pushes, creates, edits or publishes a configuration artifact
     };
   }
   const workspaceDir = makeTempDir('cfg-create-int-ws-');
+  // Required here, not at the top, so the rest of this file depends on the build's requests alone, not on this module.
+  const { attachConfigurationCreateBridge } = require('../lib/configuration-create-writer.js');
   attachConfigurationCreateBridge(sdk, { httpClient, apiUrl: (p) => sdk.dataverse.apiUrl(p), sleep: async () => {} });
   const build = (spec) => buildModelApp(spec, { apply: true, env: org.origin, phases: STAGES.data, workspaceDir, retryDelayMs: 0 }, { sdk, log: () => {}, warn: () => {} });
   const first = await build(makeSpec());
@@ -329,3 +330,128 @@ test('a declaration the compiler refuses stops the build before any request is s
   assert.deepEqual(out.org.requests.filter((q) => q.method !== 'GET' && /^\/customapi/.test(q.path)), []);
   for (const r of receiptsIn(out.appDir)) assert.deepEqual(r.units, [], 'no unit saved');
 });
+
+// The rule's lifecycle through the build command: a final graph read that contradicts the publication keeps the unit, and the
+// maker following the ordinary remedy (an explicit status: 'published') gets no PATCH and no second publication; a rule that
+// already reads published before its publication is never published again.
+test('a new rule read unpublished at the last graph read after its publication keeps the unit, and the next build (status published) sends nothing', async () => {
+  const org = orgOf();
+  const original = org.request;
+  let published = false;
+  let reads = 0;
+  org.request = async (req) => {
+    const where = decodeURIComponent(new URL(req.url).pathname).replace(/^\/api\/data\/v9\.\d/, '');
+    if (req.method === 'POST' && PUBLISH.test(where)) published = true;
+    else if (published && req.method === 'GET' && /^\/duplicaterules\([^)]+\)$/.test(where) && ++reads === 2) Object.assign(org.rows('duplicaterules').find((r) => r.name === 'Contacts with same email'), { statecode: 0, statuscode: 0 });
+    return original(req);
+  };
+  const first = await runCommand(makeSpec(), { org });
+  const mark = org.requests.length;
+  const republish = makeSpec({ duplicateDetectionRules: makeSpec().duplicateDetectionRules.map((r) => (r.key === 'email' ? { ...r, status: 'published' } : r)) });
+  const again = await runCommand(republish, { org, appDir: first.appDir });
+  assert.deepEqual(org.writes(mark), [], 'no PATCH, no second publication, no write of any kind');
+  assert.notEqual(first.exitCode, 0);
+  assert.match(failed(first), /configuration-create-publication-pending/);
+  const units = receiptsIn(first.appDir).flatMap((r) => r.units);
+  assert.equal(units.length, 1, 'the unit is kept');
+  assert.equal(units[0].publication.dispatch, 'acknowledged');
+  assert.notEqual(again.exitCode, 0);
+  assert.match(failed(again), /configuration-create-publication-pending/);
+  assert.equal(org.requests.filter((q) => PUBLISH.test(q.path)).length, 1, 'published once in all');
+  notEligible(first.appDir, 'either build');
+});
+
+test('a new rule that already reads published before its publication is not published again, and the next build sends nothing', async () => {
+  const org = orgOf();
+  const original = org.request;
+  let email = null;
+  org.request = async (req) => {
+    const where = decodeURIComponent(new URL(req.url).pathname).replace(/^\/api\/data\/v9\.\d/, '');
+    const answer = await original(req);
+    if (req.method === 'POST' && where === '/duplicaterules' && JSON.parse(req.body).name === 'Contacts with same email') email = JSON.parse(req.body).duplicateruleid;
+    // Published by someone else as soon as its condition is committed: the graph read before the action sees it published.
+    if (email && req.method === 'POST' && where === '/duplicateruleconditions' && /duplicaterules\(([^)]+)\)/.exec(JSON.parse(req.body)['regardingobjectid@odata.bind'] || '')?.[1] === email) {
+      Object.assign(org.rows('duplicaterules').find((r) => r.duplicateruleid === email), { statecode: 1, statuscode: 2 });
+    }
+    return answer;
+  };
+  const first = await runCommand(makeSpec(), { org });
+  const mark = org.requests.length;
+  const again = await runCommand(makeSpec(), { org, appDir: first.appDir });
+  assert.deepEqual(org.requests.filter((q) => PUBLISH.test(q.path)).map((q) => q.path), [], 'never published by the build');
+  assert.deepEqual(org.writes(mark), [], 'the next build sends nothing');
+  assert.notEqual(first.exitCode, 0);
+  assert.match(failed(first), /configuration-create-publication-pending/);
+  const units = receiptsIn(first.appDir).flatMap((r) => r.units);
+  assert.equal(units.length, 1);
+  assert.equal(units[0].publication.dispatch, 'prepared');
+  assert.notEqual(again.exitCode, 0);
+  notEligible(first.appDir, 'either build');
+});
+
+// The whole-build interruption matrix: for each of the eight row kinds, the first create of that kind is interrupted (its answer
+// lost after the org committed it, or the request held before it reached the org and released later). The next whole build,
+// with the same declaration and deployment settings, must attempt no second create of it (neither again nor at a fresh id),
+// keep the receipt naming the exact attempted id, send no write of any kind, and record no applied state as a success.
+const MATRIX_SET_OF = Object.fromEntries(Object.entries(CONFIGURATION_CREATE_KIND_TABLE).map(([kind, k]) => [kind, k.entitySet]));
+const matrixSpec = () => makeSpec({ connectionReferences: [{ logicalName: 'contoso_c1', connectorId: '/providers/Microsoft.PowerApps/apis/shared_sharepointonline' }] });
+function interrupting(org, set, mode) {
+  const attempts = [];
+  let held = null;
+  return { attempts, origin: org.origin, requests: org.requests, rows: org.rows, writes: org.writes, unexpected: org.unexpected, sets: org.sets,
+    release: () => (held ? org.request(held) : null),
+    async request(req) {
+      const where = decodeURIComponent(new URL(req.url).pathname).replace(/^\/api\/data\/v9\.\d/, '');
+      if (String(req.method).toUpperCase() !== 'POST' || where !== `/${set}`) return org.request(req);
+      const body = JSON.parse(String(req.body));
+      attempts.push(String(body[ID_COLUMN[set]] || '<no id>').toLowerCase());
+      if (attempts.length > 1 || held) return org.request(req);
+      if (mode === 'held') held = req;
+      else await org.request(req);
+      throw Object.assign(new Error('socket hang up'), { code: 'ECONNRESET' });
+    } };
+}
+for (const kind of Object.keys(CONFIGURATION_CREATE_KIND_TABLE)) {
+  for (const mode of ['lost', 'held']) {
+    test(`interrupted ${kind} create (${mode === 'lost' ? 'answer lost after commit' : 'request held before commit, released later'}): the next whole build attempts it at no other id and sends no write`, async () => {
+      const set = MATRIX_SET_OF[kind];
+      const base = orgOf();
+      const org = interrupting(base, set, mode);
+      const settings = path.join(makeTempDir('cfg-create-int-settings-'), 'settings.json');
+      fs.writeFileSync(settings, JSON.stringify({ EnvironmentVariables: [{ SchemaName: 'contoso_ApiBase', Value: 'https://api.contoso.com/v2' }] }));
+      const argv = ['--stage', 'data', '--allow-destructive', '--deployment-settings', settings];
+      const first = await runCommand(matrixSpec(), { org, argv });
+      const receiptAfterFirst = receiptsIn(first.appDir);
+      const mark = base.requests.length;
+      const second = await runCommand(matrixSpec(), { org, appDir: first.appDir, argv });
+      // The unsafe second attempt (again, or at a fresh id) is what this proves absent, so it is asserted first.
+      assert.equal(org.attempts.length, 1, `exactly one ${set} create across both builds: ${JSON.stringify(org.attempts)}`);
+      const [id] = org.attempts;
+      assert.match(id, V5, 'at its stable id');
+      assert.notEqual(first.exitCode, 0, 'the interrupted build did not succeed');
+      assert.match(failed(first), /configuration-create-pending/);
+      const units = receiptAfterFirst.flatMap((r) => r.units);
+      assert.equal(units.length, 1, 'one open unit');
+      const row = units[0].rows.find((r) => r.id === id);
+      assert.ok(row, 'the receipt names the exact attempted id');
+      assert.equal(row.kind, kind);
+      assert.equal(row.dispatch, 'dispatched');
+      assert.notEqual(second.exitCode, 0);
+      assert.match(failed(second), /configuration-create-pending/);
+      assert.deepEqual(base.writes(mark), [], 'the next build sends no write of any kind');
+      assert.deepEqual(receiptsIn(first.appDir), receiptAfterFirst, 'the receipt is kept as it was');
+      notEligible(first.appDir, 'either build');
+      if (mode === 'held') {
+        // The held request lands only now (a read in between would have answered 404): one row at the attempted id, and a
+        // third build still sends nothing.
+        await org.release();
+        assert.equal(base.rows(set).filter((r) => String(r[ID_COLUMN[set]]).toLowerCase() === id).length, 1);
+        const after = base.requests.length;
+        const third = await runCommand(matrixSpec(), { org, appDir: first.appDir, argv });
+        assert.notEqual(third.exitCode, 0);
+        assert.deepEqual(base.writes(after), []);
+        assert.equal(org.attempts.length, 1);
+      }
+    });
+  }
+}
