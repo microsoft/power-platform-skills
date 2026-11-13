@@ -244,9 +244,10 @@ test('the spec decides the mode: no createIdentity and no new feature intents is
 // receipt modules only inside the create-unit helpers a step with ctx.createUnits calls; build-model-app.js attaches the writer's bridge
 // through configuration-create-bridge.js, which requires nothing. The configuration create receipt guard (configuration-create-guard.js,
 // which every build entry calls) loads the receipt modules only through lazy accessors, and only after its fast path found evidence in
-// the workspace. Those edges are gated too. Apart
+// the workspace. Verify (verify-spec.js) requires creates-stable-build.js only to derive the stable id of a declared view that shares
+// its name with another under createIdentity (#845). Those edges are gated too. Apart
 // from those gated edges the default build must load none of the new modules, and must still hand the engine the plain pass-through.
-const GATED_EDGES = [['sdk-build.js', 'creates-stable-build.js'], ['sdk-build.js', 'creates-catalog.js'], ['sdk-build.js', 'rule-settlement.js'], ['app-spec.js', 'rule-settlement.js'], ['declared-rule-io.js', 'rule-settlement.js'], ['sdk-build.js', 'bpf-settlement.js'], ['app-spec.js', 'bpf-settlement.js'], ['declared-bpf-io.js', 'bpf-settlement.js'], ['dashboard-reconcile.js', 'creates-identity.js'], ['dashboard-recovery-workspace.js', 'creates-local.js'], ['verify-model-app.js', 'configuration-protected.js'],
+const GATED_EDGES = [['sdk-build.js', 'creates-stable-build.js'], ['verify-spec.js', 'creates-stable-build.js'], ['sdk-build.js', 'creates-catalog.js'], ['sdk-build.js', 'rule-settlement.js'], ['app-spec.js', 'rule-settlement.js'], ['declared-rule-io.js', 'rule-settlement.js'], ['sdk-build.js', 'bpf-settlement.js'], ['app-spec.js', 'bpf-settlement.js'], ['declared-bpf-io.js', 'bpf-settlement.js'], ['dashboard-reconcile.js', 'creates-identity.js'], ['dashboard-recovery-workspace.js', 'creates-local.js'], ['verify-model-app.js', 'configuration-protected.js'],
   ['build-model-app.js', 'managed-create-transport.js'], ['sdk-build.js', 'managed-create-context.js'], ['sdk-build.js', 'configuration-create-bindings.js'], ['sdk-build.js', 'configuration-protected.js'],
   ['configuration-build.js', 'configuration-create-writer.js'], ['configuration-build.js', 'configuration-create-state.js'], ['configuration-build.js', 'configuration-create-plan.js'], ['configuration-build.js', 'configuration-create-recovery.js'],
   ['configuration-artifacts.js', 'configuration-create-plan.js'], ['configuration-artifacts.js', 'configuration-create-state.js'],

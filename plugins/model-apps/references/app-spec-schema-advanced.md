@@ -742,10 +742,15 @@ spec's new columns.
   created and published like any other view. The stock `Active <plural>` and `Inactive <plural>` views
   exist on every table, new ones included, so declaring one of them is an adoption (see Approvals).
   `--verify` finds a declared view as the build does: by the row the workspace's managed bindings record
-  for its key, else by its `viewId`, else by its name on its table. So two declared views with one name on
-  one table, each with its own `key`, are each checked against their own row. With neither a binding nor a
-  `viewId`, the name cannot tell such a pair apart: both are checked as present, and their content is listed
-  as unverified.
+  for its key, else by its `viewId`, else by its name on its table. Two or more declared views with one
+  name on one table, each with its own `key`, each need a row of their own. Each binding, `viewId` and,
+  under `createIdentity: "stable-v1"`, the id the build creates an unbound, unpinned view at names one
+  row, checked by its id; two declarations that name the same row fail before anything is read. The views
+  no id identifies are proven only present: one read of the name has to answer a distinct row for each,
+  rows another declaration owns left out, or the check fails. Each such view passes with a `present only`
+  note and its content is listed as unverified, because no read can say which of the rows is which view.
+  Verify never adopts or pins a row: keep the workspace's bindings, or set a `viewId`, to have the content
+  checked.
 - **`charts[].reconcile: "declared"`** — the chart type, category, series and description follow the
   spec. `title` is written only to a chart whose stored layout already has a title; a new chart cannot
   store one, so a declared `title` on a new chart is refused (`chart-title-not-stored`).

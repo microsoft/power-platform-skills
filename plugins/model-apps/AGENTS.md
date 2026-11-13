@@ -2294,6 +2294,25 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   unusable makes the chart `unverified`. Two charts with the spec's name on its table are present, their content `unverified`. A
   row read without its content columns (the eval's synthesized reader answers so) is checked for presence, and its type, its data
   and a declared title are `unverified`, never passed; a declared description is still checked when the row carries one.
+  A **declared view** its managed binding or `viewId` names is read by that id alone, as a bound chart is. Two or more declared
+  views that share one name on one table under distinct keys (an authored `key`, or the implicit `<table>/<name>`) each need a row
+  of their own, and a read by the name answers one row for all of them, so they are proven as a group (`lib/view-assignment.js`).
+  Ownership comes first: every declaration's binding and pin, the manifest's view roots and, under `createIdentity: "stable-v1"`,
+  the id the build creates an unbound, unpinned view at (`creates-stable-build.js` `stableViewIdentityFor`) each claim one
+  `savedqueryid`, and two owners of one id, whatever their sources, fail the group (`identity conflict: savedquery <id> is claimed
+  by view keys …`) before anything is read. A bound or pinned member is then read by its id; a stable id is read the same way and,
+  when its row answers there, is that view's row, held to its columns, filters and sort like a bound one; an empty, complete
+  answer leaves the view to the rest, and any other answer fails it. The rest are matched, from ONE paginated read of the name,
+  onto distinct rows nobody owns: too few rows fail the group, and content no one-to-one assignment can satisfy fails the
+  declarations that cannot all be served (named by key). A matching that exists is a witness, never an identity: it proves only
+  that distinct rows are available, so each such view passes with the note `present only: a distinct row is available, but view
+  key "<key>" is not attributed to a row` (printed after its ✓ line) and its content is `unverified`. A read that reports more
+  rows, or answers rows it cannot identify, may still show enough distinct rows, never that there are too few: with too few it
+  fails as not proven, and its unverified entries say the read was incomplete. A binding still unsettled, or a stable id that
+  cannot be computed, leaves the group's unattributed members `unverified`, with no read of the name. A wholly bound or pinned
+  group with distinct ids, a view whose name only it uses, a legacy namesake and a spec that repeats a key send the same requests
+  as before. A sub-grid that embeds such a view is compared only with a row its declaration owns, else left out as `unverified`
+  (see **Verify and download** below). Verify never adopts or pins a row: keep the workspace's settled bindings, or correct a pin.
   A **declared form** (`reconcile: "declared"`) is found, and its layout read, by the row its managed binding records
   (`formIdentity`), as the build takes it — before any `formId` pin or name. The bound row is read by that id alone
   (`readBoundFormId`) and must answer as that id, on the form's table and of its form type; its display name is not compared,
@@ -3182,7 +3201,9 @@ charts phases. A spec that uses none of them takes the legacy paths unchanged. W
   last declaration of that name on the child table, the one whose id the build embeds), it is the row its managed
   binding or its `viewId` names (`viewIdentity`, `boundSubgridView`), read by id and never by name: a binding
   that is unsettled or a pin that contradicts it leaves the host out as unverified, and a bound row that is gone
-  or is not a public view of the child table fails. A quick view's target is looked up by
+  or is not a public view of the child table fails. A declared view that shares its name with other declared views is
+  identified as the top-level check proves it (the same-named group above): by its binding, pin or observed stable id, else
+  the host is left out as unverified — a row a distinct-row witness found is no declaration's own and is never compared. A quick view's target is looked up by
   name (ambiguous → unverified), unless the spec declares that Quick View form with a managed binding: then it is
   the bound row (`formIdentity`, `readBoundFormId`), never one of its name, and a binding that is unsettled,
   pinned elsewhere, or a row that does not answer as it leaves that host out as unverified. A host left out is
@@ -4325,6 +4346,7 @@ scripts/
     rename-retry.js            ← the one rename that outlasts a brief Windows file lock (EPERM, EACCES or EBUSY while a scanner or a second process holds the file): on win32 only, the same rename is repeated after growing pauses (25 ms doubling to 1 s), at most 5 s for one rename and 30 s for the whole process (the wait blocks the event loop, so it must stay well inside the teardown heartbeat and the transport's timeouts; once the 30 s are spent every later refused rename is ONE attempt), then the ORIGINAL error is thrown untouched, so every caller keeps its message and code; any other platform or code is one attempt. Used by `apply-snapshot-store.js` for files the plugin owns: those it serialises with a lease and compare-and-set (`writeFileAtomic` — which the managed binding store, the snapshot and the page, dashboard and web-resource records write through) and the distrust markers, which take no lease (they must be recordable while another writer holds it) but are each created under a name unique to the call; each site has a note why repeating is safe there; a target that an unleased writer can also write passes `{ retryLock: false }` and renames once (the deployed baseline, which the download writes without the build lease). Also used by the download's page-tree swap (`writePageTree`) for the move of its own new tree into `pages/` and the move of the previous tree back, both folders under a name only that run knows. NOT used by `safe-fs.js` (a maker's files and the diagnostic status file keep their own 25-400 ms waits), by the folder move-aside of `clearWorkspace` (one attempt: the approval was for the folder as it is now), by the page-tree swap's move of the maker's `pages/` aside (one attempt: a wait would let the checks made on it go stale) or by `temp-workspace.js` (its own shorter waits). A test that keeps a rename failing for good calls `tests/helpers/short-rename-wait.js`, which also restores the process total
     hydrate-spec.js            ← reconstruct an App Spec from a deployed app (edit flow)
     verify-spec.js             ← spec-vs-deployed reconciliation core (checks are ordered tasks on a pool of 4)
+    view-assignment.js         ← pure: which declared views share one table and name (`declaredViewGroups`), who owns which savedqueryid (`createOwnerLedger`: one owner per row, a conflict whatever the sources), which rows of a name a paginated read identified (`viewCandidates`, with why it is incomplete) and whether distinct rows can satisfy the declarations nobody owns (`matchDistinctRows`: a witness or a Hall-deficient set, never an assignment) — verify's proof for same-named declared views
     status-reasons-keys.js     ← a table's status reasons (with their states) and alternate keys (with their columns), one narrow read each (`readStatusReasons`, `readAlternateKeys`: `{ state: 'ok' | 'absent' | 'error' }`, never a throw), and the checks of the declared ones against them (`statusReasonChecks`, held to the build's own `statusReasonTargets`; `alternateKeyChecks`) — verify's `status-reason` and `alternate-key` checks
     build-journal.js           ← durable JSONL build journal (resume diagnostics)
     form-preview.js            ← form wireframe renderer

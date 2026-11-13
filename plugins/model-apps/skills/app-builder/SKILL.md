@@ -828,6 +828,11 @@ was and what settles it — the language of the captions, which `--language-code
 form read does not carry that the translation export could not settle (the line says why), which only Power Apps can show, or a declared
 form (or its Quick View target) whose managed binding is pending or unusable, which only a build that settles it does — a form of
 the same name never does — never report the run as "everything deployed" while one is listed.
+Declared views that share one name on one table are a case of this: a view no managed binding, `viewId` or stable id
+identifies is checked only as present — its `✓` line ends `present only: a distinct row is available, but view key "<key>"
+is not attributed to a row` — and its content is listed as `⊘`. Tell the user to keep the workspace's settled bindings
+(build from the same folder) or set a correct `viewId` to have that content checked; verify never adopts or pins a row
+itself. Two declarations that name one row fail (`identity conflict`): correct the `viewId` that points at the wrong row.
 
 A `WARNING:` line on stderr — each one is repeated in the JSON result's `warnings` list, which is absent when there is
 none — is advice, not a verdict: a spec an earlier release accepted that the build would now refuse (it names the column

@@ -2526,7 +2526,7 @@ test('verify leaves a declared form\'s sub-grid out when its view\'s binding is 
   });
 });
 
-test('verify holds a sub-grid to the last of two keyed views of one name, the one the build embeds, and an unbound view is still read by its name', async () => {
+test('verify holds a sub-grid to the last of two keyed views of one name, the one the build embeds: bound, at its stable id, and never a row a witness found', async () => {
   await withForms(true, async () => {
     const { org, s, manifest, viewId, read, built } = await builtBoundView({ twins: true });
     const last = viewId('last');
@@ -2537,8 +2537,22 @@ test('verify holds a sub-grid to the last of two keyed views of one name, the on
     assert.deepEqual(hostLines(r), []);
     const reads = subgridReadsSince(org, mark);
     assert.ok(reads.length === 1 && reads[0].includes(`savedqueryid eq ${last}`), JSON.stringify(reads));
-    // With no binding for either twin, each is found by its name as before, and two rows answer it: the host is unverified.
-    const unbound = await verifySpec(s, read, { phases: ['forms'], managedManifest: { ...manifest, groups: manifest.groups.filter((g) => g.family !== 'view') } });
-    assert.deepEqual(hostLines(unbound), [`managed:form ${KEY} (${KIDS} could not be identified: more than one view answers its name)`]);
+    // #845: with no binding for either twin, each is the row at the id the build creates it at (createIdentity "stable-v1"), so the
+    // sub-grid is held to the last one's, read by that id; its name is not asked.
+    const unboundManifest = { ...manifest, groups: manifest.groups.filter((g) => g.family !== 'view') };
+    const unboundMark = org.calls.length;
+    const unbound = await verifySpec(s, read, { phases: ['forms'], managedManifest: unboundManifest });
+    assert.deepEqual(managedChecks(unbound).map((c) => [c.present, c.detail]), [[true, '']]);
+    assert.deepEqual(hostLines(unbound), []);
+    const unboundReads = subgridReadsSince(org, unboundMark);
+    assert.ok(unboundReads.length === 1 && unboundReads[0].includes(`savedqueryid eq ${last}`), JSON.stringify(unboundReads));
+    // Without createIdentity nothing identifies either twin's row: a row the name finds is no declaration's own, so the host is left
+    // out as unverified rather than compared with it.
+    const legacy = structuredClone(s);
+    delete legacy.createIdentity;
+    const legacyMark = org.calls.length;
+    const unattributed = await verifySpec(legacy, read, { phases: ['forms'], managedManifest: unboundManifest });
+    assert.deepEqual(hostLines(unattributed), [`managed:form ${KEY} (${KIDS}: no managed binding, viewId or observed stable id identifies its row; the requested host target was not compared)`]);
+    assert.deepEqual(subgridReadsSince(org, legacyMark), [], 'the sub-grid reads no view for it');
   });
 });

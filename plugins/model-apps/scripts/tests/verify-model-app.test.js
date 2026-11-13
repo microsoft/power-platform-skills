@@ -2310,3 +2310,64 @@ test('verify CLI --inspect-components on a spec with no commands inspects nothin
   assert.strictEqual(emitted.payload.components.ok, true);
   assert.match(emitted.payload.components.note, /declares no command controls/);
 });
+// --- #845: what the CLI says and exits with for same-named declared views proven only as distinct rows --------------------------------
+// A passing check with a `note` prints it after the line, so `present only` is never read as an attributed row; the verdict is the
+// one the shared result helper exits with (lib/dataverse-auth.js emitResult: 0 when ok, 1 otherwise), run in a child of its own.
+const TWIN_ROWS = [
+  { savedqueryid: 'aaaaaaaa-0000-4000-8000-000000000001', returnedtypecode: 'new_ticket', name: 'Twin', layoutxml: '<grid><row><cell name="new_name"/></row></grid>' },
+  { savedqueryid: 'aaaaaaaa-0000-4000-8000-000000000002', returnedtypecode: 'new_ticket', name: 'Twin', layoutxml: '<grid><row><cell name="new_name"/></row></grid>' },
+];
+async function verifyTwins(rows) {
+  const specObject = {
+    ...appSpec(),
+    minimumPluginVersion: '2.21.0',
+    views: ['a', 'b'].map((key) => ({ entity: 'new_ticket', name: 'Twin', key, reconcile: 'declared', columns: ['new_name'] })),
+  };
+  const nameReads = [];
+  const harness = loadVerifyCli({
+    parseResult: { positional: [], flags: { env: 'https://contoso.crm.dynamics.com', spec: '@app-spec.json', workspace: 'D:\\Projects\\_temp\\verify-twins' } },
+    realGates: true,
+    specObject,
+    sdkFactory: () => ({
+      initWorkspace: async () => {},
+      findTables: async () => [{ logicalName: 'new_ticket' }],
+      findColumns: async () => [{ logicalName: 'new_name' }],
+      queryRecords: async (set, q) => {
+        if (set === 'appmodule') return [{ appmoduleid: '11111111-2222-3333-4444-555555555555' }];
+        if (set !== 'savedquery' || !/name eq 'Twin'/.test(q.filter)) return [];
+        nameReads.push(q);
+        return Object.defineProperty(rows.slice(), 'hasMore', { value: false, enumerable: false });
+      },
+      fetchEntityMetadata: async () => ({ Relationships: [] }),
+      resolveArtifact: async () => [],
+      retrieveSetting: async () => null,
+    }),
+  });
+  await harness.main();
+  const emitted = harness.events.find((e) => e.type === 'emitResult');
+  const child = spawnSync(process.execPath, ['-e', 'require(process.argv[1]).emitResult(JSON.parse(process.argv[2]), JSON.parse(process.argv[3]))',
+    path.join(__dirname, '..', 'lib', 'dataverse-auth.js'), JSON.stringify(emitted.ok), JSON.stringify(emitted.payload)], { encoding: 'utf8' });
+  return { emitted, stderr: harness.stderr.join(''), nameReads, exit: child.status };
+}
+
+test('verify CLI: two same-named declared views on distinct rows pass, each line saying it is present only, and exit 0', async () => {
+  const { emitted, stderr, nameReads, exit } = await verifyTwins(TWIN_ROWS);
+  assert.strictEqual(emitted.ok, true, JSON.stringify(emitted.payload));
+  assert.strictEqual(exit, 0);
+  for (const key of ['a', 'b']) {
+    assert.ok(stderr.includes(`  ✓ view: new_ticket.Twin — present only: a distinct row is available, but view key "${key}" is not attributed to a row\n`), stderr);
+  }
+  assert.deepStrictEqual(nameReads.map((q) => q.paginate), [true], 'the name is read once, every page');
+  // A passing check without a note prints as it always did.
+  const others = stderr.split('\n').filter((l) => l.startsWith('  ✓ ') && !l.startsWith('  ✓ view: '));
+  assert.ok(others.length > 0 && others.every((l) => !l.includes(' — ')), stderr);
+});
+
+test('verify CLI: two same-named declared views on one row fail, naming both keys, and exit 1', async () => {
+  const { emitted, stderr, exit } = await verifyTwins(TWIN_ROWS.slice(0, 1));
+  assert.strictEqual(emitted.ok, false);
+  assert.strictEqual(exit, 1);
+  const text = 'only 1 distinct unclaimed row(s) named "Twin" on new_ticket were read for 2 declared view(s) (keys: "a", "b"); each declaration needs a row of its own';
+  assert.ok(stderr.includes(`  ✗ view: new_ticket.Twin — ${text}\n`), stderr);
+  assert.ok(!stderr.includes('present only'), stderr);
+});
