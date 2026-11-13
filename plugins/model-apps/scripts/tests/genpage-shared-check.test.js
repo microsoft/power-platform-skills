@@ -207,3 +207,56 @@ test('edit flow, Phase 6: the check runs BEFORE the upload command; a question i
   assert.match(PHASE6, /A confirmation covers only the apps it names/);
   assert.match(PHASE6, /`workflow-log\.md`/);
 });
+
+test('edit flow, Phase 6: it says the check is a point-in-time scan, not a lock, and that the later fix-up repeats it', () => {
+  assert.match(PHASE6, /point-in-time scan, not a lock: an app that starts to show the page between the check and the upload is not covered/);
+  assert.match(PHASE6, /`Confirmed apps: <page-id>: <uniqueName>,<uniqueName>`/);
+  assert.match(PHASE6, /runs again right before every later upload of this page, the verification fix-up included \(Edit Phase 7\)/);
+});
+
+// ── the verification fix-up is another upload of the same page ──────────────────────────────────────────────────
+
+const SKILL_DIR = path.join(__dirname, '..', '..', 'skills', 'genpage');
+const flat = (file) => fs.readFileSync(path.join(SKILL_DIR, file), 'utf8').replace(/\r\n/g, '\n').replace(/\s+/g, ' ');
+const SECTION_75 = (() => {
+  const text = flat('verify-flow.md');
+  const start = text.indexOf('## 7.5 Fix and Re-deploy');
+  return text.slice(start);
+})();
+
+test('verify flow 7.5 (from Edit Phase 7): the shared-page check runs before the upload command and before each retry, with only the confirmed names', () => {
+  const check = SECTION_75.indexOf('scripts/genpage-shared-check.js');
+  const upload = SECTION_75.indexOf('scripts/genpage-upload.js" `');
+  assert.ok(check > 0 && upload > check, 'the check comes before the fix-up upload command');
+  assert.match(SECTION_75, /Edit Phase 7 only — the shared-page check before every fix-up upload\./);
+  assert.match(SECTION_75, /right before the upload command below, and again before each retry of it/);
+  assert.match(SECTION_75, /--confirmed-apps '<uniqueName>,<uniqueName>'/);
+  assert.match(SECTION_75, /only with the unique names recorded in `workflow-log\.md` as the user's confirmation for this page \(the `Confirmed apps:` line\); leave the flag out when none were recorded\. Never add a name the user did not confirm/);
+  assert.match(SECTION_75, /exit 2 names an app that was not confirmed, so ask \(attended\) or STOP and report \(unattended\)/);
+  assert.match(SECTION_75, /exit 1 is a STOP in every mode\. Log each run's result in `workflow-log\.md`/);
+  assert.match(SECTION_75, /A refused or retried upload needs a new check/);
+  assert.match(flat('edit-flow.md').slice(flat('edit-flow.md').indexOf('## Edit Phase 7:')), /7\.5 runs the shared-page check from Edit Phase 6 right before it \(and before each retry\)/);
+});
+
+test('genpage SKILL.md: the existing-page update recipe and the compiler refresh both point at the shared-page check', () => {
+  const skill = flat('SKILL.md');
+  const recipe = skill.slice(skill.indexOf('#### For updating existing pages (subsequent upload):'));
+  assert.match(recipe.slice(0, 700), /compiler refresh — changes every app that shows the page\. Run the shared-page check from Edit Phase 6 \(`edit-flow\.md`.*\) right before the upload and before each retry, and follow its answer; no recipe here skips it/);
+  const refresh = skill.slice(skill.indexOf('**Compiler refresh**'));
+  assert.match(refresh.slice(0, 900), /get approval, then run the shared-page check from Edit Phase 6 \(`edit-flow\.md`\) and upload the proposed file as an ordinary update \(above\) only as that check allows/);
+});
+
+test('a confirmation recorded in the edit does not cover an app that starts to show the page before the fix-up: the check stops and names only that app', async () => {
+  const confirmed = '--confirmed-apps';
+  const edit = await run([...FLAGS, confirmed, 'contoso_ops'], fakeBackend({ apps: [OPS] }));
+  assert.strictEqual(edit.result.ok, true, 'the edit upload was allowed by the confirmation');
+  // Minutes later, before the verification fix-up, another app shows the page.
+  const fixUp = await run([...FLAGS, confirmed, 'contoso_ops'], fakeBackend({ apps: [OPS, HR] }));
+  assert.strictEqual(fixUp.result.ok, false);
+  assert.strictEqual(fixUp.result.options.failureExitCode, UNCONFIRMED_EXIT);
+  assert.deepStrictEqual(fixUp.result.payload.unconfirmed, ['contoso_hr']);
+  assert.doesNotMatch(fixUp.result.payload.error, /Not yet confirmed: [^.]*contoso_ops/);
+  // With no change in the apps, the same recorded confirmation still lets the fix-up through.
+  const same = await run([...FLAGS, confirmed, 'contoso_ops'], fakeBackend({ apps: [OPS] }));
+  assert.strictEqual(same.result.ok, true);
+});

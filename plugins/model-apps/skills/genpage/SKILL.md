@@ -1235,6 +1235,11 @@ deployed page itself.
 
 #### For updating existing pages (subsequent upload):
 
+**An update of a page that existed before this run** — an edit, a verification fix-up of an edited
+page, a compiler refresh — changes every app that shows the page. Run the shared-page check from
+Edit Phase 6 (`edit-flow.md`, **Before anything is uploaded: the other apps that show this page**)
+right before the upload and before each retry, and follow its answer; no recipe here skips it.
+
 Use `--page-id`, omit `--add-to-sitemap`, and **scope the prompt to the delta only**:
 
 ```powershell
@@ -1307,7 +1312,8 @@ Log the marker, the check result (`code`, `lines`, `deployedCopy`) and that `Cho
   build. Download the page, then run `node "${PLUGIN_ROOT}/scripts/genpage.js" prepare-compiler-refresh --env '<org-url>'
   --page-id '<page-id>' --file '<working-dir>/<file>.tsx' --output-file '<working-dir>/<file>.refresh.tsx'`. It writes nothing
   to the environment; it adds one comment line so the SDK compiles the page again. Show the user the one-line `diff`, get
-  approval, then upload the proposed file as an ordinary update (above). Never refresh pages in bulk: nothing proves which
+  approval, then run the shared-page check from Edit Phase 6 (`edit-flow.md`) and upload the proposed file as an
+  ordinary update (above) only as that check allows. Never refresh pages in bulk: nothing proves which
   compiler built a page. `COMPILER_REFRESH_MARKER_UNPROVEN` means the source already has the line — make a reviewed source change
   instead; `COMPILER_REFRESH_BASE_MISMATCH` means download the page and review again.
 
