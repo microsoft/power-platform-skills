@@ -25,7 +25,7 @@ Its native CLI test creates real isolated sessions and invokes a skill against a
 
 The manual workflow runs four pinned models at medium reasoning effort:
 `claude-opus-4.8`, `claude-sonnet-5.5`, `gpt-6-sol`, and `gpt-6.1-sol`.
-All four were listed as enabled in the GitHub Actions Copilot model catalog; the probe completed inference with Opus 4.8, Sonnet 5.5 and GPT-6.1 Sol.
+All four were enabled in the GitHub Actions Copilot model catalog and ran in a one-repeat evaluation of both suites. A completed job does not mean every generated artifact passed.
 GPT-6.1 Sol judges Opus 4.8; Opus 4.8 judges the other three.
 The judge must differ from the evaluated model.
 Manual dispatch can override the comma-separated model list, judge model, agent effort and judge effort.
