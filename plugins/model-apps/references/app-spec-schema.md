@@ -1992,11 +1992,14 @@ custom control), but the spec validator emits a warning.
   `configuration-prerequisite-not-applied` instead of warning and writing a page that cannot reach its data. A
   declared Custom API without an implementation is still built (a scaffold); only the pages that call it wait. A
   reference already there for another connector still stops the build (`pages-binding-reference-conflict`).
-- **Lost answers.** A configuration write is sent once in a build: when its answer is lost the step stops as
-  unknown (`configuration-incomplete`) and the build is not retried. A new configuration row on the default path
-  is created once, at a stable id, and recorded before it is sent: after a lost answer the next build stops
-  (`configuration-create-pending`) and sends nothing until `configuration-recovery.js` settles it (see
-  `docs/configuration-create-recovery.md`), so the row is never created again at a new id.
+- **Lost answers.** A configuration write is sent once in a build, and a lost answer is never retried. Without
+  `configurationIdentity`, a new configuration row, children included, is created once, at a stable id, and
+  recorded before it is sent: when its answer is lost the step stops with `configuration-create-pending`
+  (`configuration-create-publication-pending` for a new rule's publication), and the next build stops the same
+  way and sends no write until `configuration-recovery.js` settles it (see `docs/configuration-create-recovery.md`),
+  so the row is never created again at a new id. A lost answer to a change of an existing row stops the step as
+  unknown (`configuration-incomplete`). Protected rows stop as described under `configurationIdentity` in
+  app-spec-schema-advanced.md.
 - **Not carried by teardown or download.** A teardown never deletes a configuration item (nothing proves this app
   owns it); it names each one as kept, by name only, and says when a Custom API bound to a table the spec makes will
   block that table's delete. A plain download does not bring these items back into the spec. A managed download
