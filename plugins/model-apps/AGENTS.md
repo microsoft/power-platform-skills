@@ -2300,9 +2300,11 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   Ownership comes first: every declaration's binding and pin, the manifest's view roots and, under `createIdentity: "stable-v1"`,
   the id the build creates an unbound, unpinned view at (`creates-stable-build.js` `stableViewIdentityFor`) each claim one
   `savedqueryid`, and two owners of one id, whatever their sources, fail the group (`identity conflict: savedquery <id> is claimed
-  by view keys …`) before anything is read. A bound or pinned member is then read by its id; a stable id is read the same way and,
-  when its row answers there, is that view's row, held to its columns, filters and sort like a bound one; an empty, complete
-  answer leaves the view to the rest, and any other answer fails it. The rest are matched, from ONE paginated read of the name,
+  by view keys …`) before anything is read. The claims are made once for the whole pass, across every group of every name, so two
+  groups that claim one id both fail, and a row another group owns (renamed, say) is never a spare row of this group's name. A
+  bound or pinned member is then read by its id; a stable id is read the same way and, when its row answers there, is that view's
+  row, held to its columns, filters and sort like a bound one; an empty, complete answer leaves the view to the rest, and any
+  other answer fails it. The rest are matched, from ONE paginated read of the name,
   onto distinct rows nobody owns: too few rows fail the group, and content no one-to-one assignment can satisfy fails the
   declarations that cannot all be served (named by key). A matching that exists is a witness, never an identity: it proves only
   that distinct rows are available, so each such view passes with the note `present only: a distinct row is available, but view

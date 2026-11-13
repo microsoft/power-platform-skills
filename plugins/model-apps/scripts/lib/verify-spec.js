@@ -563,9 +563,10 @@ async function verifySpec(spec, read, opts = {}) {
   // declaredViewGroups) each need a row of their own, and a read by the name answers one row for all of them. So a group that is not
   // wholly bound or pinned is proven as a group, once, by its first member's task (a promise every member, and the sub-grid check,
   // awaits — it reads only for itself, so it never waits on a task queued behind it):
-  //   1. who owns which savedqueryid: every declaration's binding and pin, both ids of a binding its pin contradicts, the manifest's
-  //      view roots, and — under createIdentity "stable-v1" — the id the build would create the view at (creates-stable-build.js
-  //      stableViewIdentityFor, loaded only here). Two owners of one id that concern the group fail it before any read; a group
+  //   1. who owns which savedqueryid, settled once for the whole pass before any group reads: every declaration's binding and pin,
+  //      both ids of a binding its pin contradicts, the manifest's view roots, and — under createIdentity "stable-v1" — the id the
+  //      build would create each unidentified member of EVERY such group at (creates-stable-build.js stableViewIdentityFor, loaded
+  //      only here). Two owners of one id that concern the group fail it before any read; a group
   //      whose members are all bound, pinned or unsettled, with no such conflict, keeps the route above, request for request;
   //   2. bound and pinned members are read and checked by their ids, as above; a stable id is read the same way and, when its row
   //      is there, is that member's row — when the read is complete and empty, the member has no row of its own yet;
@@ -598,22 +599,30 @@ async function verifySpec(spec, read, opts = {}) {
     }
     return stableIds.get(ordinal);
   };
-  const viewGroupPlans = new Map();
-  const viewGroupPlan = (group) => {
-    if (viewGroupPlans.has(group)) return viewGroupPlans.get(group);
+  // One owner ledger for the whole pass, frozen before any group reads or matches: a row one group's declaration owns — by its
+  // binding, its pin, or (under createIdentity) the stable id it was assigned, whether or not a row is there yet — is no other
+  // group's witness, and two groups selecting one id are a conflict in both. A ledger per group saw only its own members' stable
+  // ids, so a second group could take the first group's stable row (renamed to the second group's name, which an authoritative row
+  // may be) as an anonymous witness, or select the very same id (an implicit `<table>/<name>` key and an explicit key that derive
+  // one id), and both groups passed on one row (#845). Stable ids are derived only for the members of eligible groups that neither
+  // a binding nor a pin identifies: a unique-name view keeps its old route, and an id a bound or pinned view would only be created
+  // at is not its row.
+  let passLedger = null;
+  const viewPassLedger = () => {
+    if (passLedger) return passLedger;
     const views = spec.views || [];
-    const inGroup = new Set(group.members.map((e) => e.ordinal));
-    const members = group.members.map((e) => {
-      const v = views[e.ordinal];
-      return { ordinal: e.ordinal, key: e.key, v, label: `${String(v.entity).toLowerCase()}.${v.name}`, who: viewIdentity(v) };
-    });
+    const whoOf = new Map();
+    const identityOf = (ordinal) => {
+      if (!whoOf.has(ordinal)) whoOf.set(ordinal, viewIdentity(views[ordinal]));
+      return whoOf.get(ordinal);
+    };
     const ledger = createOwnerLedger();
     const ordinalOfKey = new Map();
     views.forEach((v, ordinal) => {
       if (!isDeclaredView(v)) return;
       const key = declaredViewKey(v);
       if (!ordinalOfKey.has(key)) ordinalOfKey.set(key, ordinal);
-      const who = inGroup.has(ordinal) ? members.find((mem) => mem.ordinal === ordinal).who : viewIdentity(v);
+      const who = identityOf(ordinal);
       if (who && who.id) ledger.claim(who.id, { ordinal, key, source: who.source });
       // A binding its pin contradicts is the declaration's own failure, reported as it always was: its bound row is its claim, and
       // the row its pin names is kept out of every witness without becoming a second claim on whoever else holds it.
@@ -628,14 +637,34 @@ async function verifySpec(spec, read, opts = {}) {
     const ownerOf = (key, source) => (ordinalOfKey.has(key) ? { ordinal: ordinalOfKey.get(key), key, source } : { key, source });
     if (m && Array.isArray(m.groups)) for (const g of m.groups) if (g && g.family === 'view' && g.root) ledger.claim(g.root.id, ownerOf(g.key, 'managed binding'));
     if (m && Array.isArray(m.pending)) for (const p of m.pending) if (p && p.family === 'view' && p.root) ledger.claim(p.root.id, ownerOf(p.key, 'pending managed binding'));
+    // Every eligible group's unidentified members, in spec order, before any group is run: a preferred id stays claimed for the
+    // pass even when its read later answers that no row is there, so no group can match a row onto it.
+    const stable = new Map();
     if (Object.prototype.hasOwnProperty.call(spec, 'createIdentity')) {
-      for (const mem of members) {
-        if (mem.who) continue;
-        const s = stableIdOf(mem.v, mem.ordinal);
-        if (s.error) mem.deriveError = s.error;
-        else if (s.id) { mem.preferred = s.id; ledger.claim(s.id, { ordinal: mem.ordinal, key: mem.key, source: 'stable id' }); }
-      }
+      views.forEach((v, ordinal) => {
+        if (!viewGroupOf.has(ordinal) || identityOf(ordinal)) return;
+        const s = stableIdOf(v, ordinal);
+        stable.set(ordinal, s);
+        if (!s.error && s.id) ledger.claim(s.id, { ordinal, key: declaredViewKey(v), source: 'stable id' });
+      });
     }
+    passLedger = { ledger, identityOf, stable };
+    return passLedger;
+  };
+  const viewGroupPlans = new Map();
+  const viewGroupPlan = (group) => {
+    if (viewGroupPlans.has(group)) return viewGroupPlans.get(group);
+    const views = spec.views || [];
+    const { ledger, identityOf, stable } = viewPassLedger();
+    const inGroup = new Set(group.members.map((e) => e.ordinal));
+    const members = group.members.map((e) => {
+      const v = views[e.ordinal];
+      const mem = { ordinal: e.ordinal, key: e.key, v, label: `${String(v.entity).toLowerCase()}.${v.name}`, who: identityOf(e.ordinal) };
+      const s = stable.get(e.ordinal);
+      if (s && s.error) mem.deriveError = s.error;
+      else if (s && s.id) mem.preferred = s.id;
+      return mem;
+    });
     const conflicts = ledger.conflicts((o) => inGroup.has(o.ordinal));
     const plan = { group, members, ledger, conflicts, fast: conflicts.length === 0 && members.every((mem) => !!mem.who) };
     viewGroupPlans.set(group, plan);

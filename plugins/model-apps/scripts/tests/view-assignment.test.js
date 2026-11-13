@@ -125,19 +125,20 @@ function oracle(edges, fixed) {
   return best;
 }
 
-test('matching: every 3x3 graph under every pair of held rows agrees with the brute-force oracle, with a valid witness or a Hall-deficient set', () => {
+test('matching: every 3x3 graph under every combination of held rows for all three declarations agrees with the brute-force oracle, with a valid witness or a Hall-deficient set', () => {
   const holds = [undefined, 0, 1, 2];
   let cases = 0;
   for (let mask = 0; mask < 512; mask++) {
     const edges = [0, 1, 2].map((l) => [0, 1, 2].filter((r) => mask & (1 << (l * 3 + r))));
     for (const h0 of holds) {
-      for (const h1 of holds) {
-        const fixed = [h0, h1];
+      for (const h1 of holds) for (const h2 of holds) {
+        const fixed = [h0, h1, h2];
         const got = matchDistinctRows(3, edges, { fixed });
         const best = oracle(edges, fixed);
         const label = JSON.stringify({ edges, fixed });
         assert.equal(got.covered, best === 3, label);
-        const valid = fixed.every((r, l) => r === undefined || edges[l].includes(r)) && !(h0 !== undefined && h0 === h1);
+        const heldRows = fixed.filter((r) => r !== undefined);
+        const valid = fixed.every((r, l) => r === undefined || edges[l].includes(r)) && new Set(heldRows).size === heldRows.length;
         const used = got.witness.filter((r) => r !== -1);
         assert.equal(new Set(used).size, used.length, label);
         got.witness.forEach((r, l) => { if (r !== -1) assert.ok(edges[l].includes(r), label); });
@@ -157,7 +158,7 @@ test('matching: every 3x3 graph under every pair of held rows agrees with the br
       }
     }
   }
-  assert.equal(cases, 512 * 16);
+  assert.equal(cases, 512 * 64);
 });
 
 test('matching: a held row that is not its declaration\'s, or that two declarations hold, is reported at once with the holders', () => {

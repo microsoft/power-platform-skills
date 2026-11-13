@@ -745,12 +745,12 @@ spec's new columns.
   for its key, else by its `viewId`, else by its name on its table. Two or more declared views with one
   name on one table, each with its own `key`, each need a row of their own. Each binding, `viewId` and,
   under `createIdentity: "stable-v1"`, the id the build creates an unbound, unpinned view at names one
-  row, checked by its id; two declarations that name the same row fail before anything is read. The views
-  no id identifies are proven only present: one read of the name has to answer a distinct row for each,
-  rows another declaration owns left out, or the check fails. Each such view passes with a `present only`
-  note and its content is listed as unverified, because no read can say which of the rows is which view.
-  Verify never adopts or pins a row: keep the workspace's bindings, or set a `viewId`, to have the content
-  checked.
+  row, checked by its id; two declarations that name the same row fail before anything is read, whatever
+  their names. The views no id identifies are proven only present: one read of the name has to answer a
+  distinct row for each, rows another declaration of any name owns left out, or the check fails. Each
+  such view passes with a `present only` note and its content is listed as unverified, because no read
+  can say which of the rows is which view. Verify never adopts or pins a row: keep the workspace's
+  bindings, or set a `viewId`, to have the content checked.
 - **`charts[].reconcile: "declared"`** — the chart type, category, series and description follow the
   spec. `title` is written only to a chart whose stored layout already has a title; a new chart cannot
   store one, so a declared `title` on a new chart is refused (`chart-title-not-stored`).
