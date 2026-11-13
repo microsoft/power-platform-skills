@@ -2311,9 +2311,11 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   key "<key>" is not attributed to a row` (printed after its ✓ line) and its content is `unverified`. A read that reports more
   rows, or answers rows it cannot identify, may still show enough distinct rows, never that there are too few: with too few it
   fails as not proven, and its unverified entries say the read was incomplete. A binding still unsettled, or a stable id that
-  cannot be computed, leaves the group's unattributed members `unverified`, with no read of the name. A wholly bound or pinned
-  group with distinct ids, a view whose name only it uses, a legacy namesake and a spec that repeats a key send the same requests
-  as before. A sub-grid that embeds such a view is compared only with a row its declaration owns, else left out as `unverified`
+  cannot be computed, leaves the group's unattributed members `unverified`, with no read of the name. A nonconflicting, wholly
+  bound or pinned group (its ids distinct and claimed by no other declaration anywhere in the pass), a view whose name only it
+  uses, a legacy namesake and a spec that repeats a key send the same requests as before. The distinct-row proof covers eligible
+  same-name groups only: a unique-name view keeps its by-name read, so verify is not a distinctness audit of every declared view.
+  A sub-grid that embeds such a view is compared only with a row its declaration owns, else left out as `unverified`
   (see **Verify and download** below). Verify never adopts or pins a row: keep the workspace's settled bindings, or correct a pin.
   A **declared form** (`reconcile: "declared"`) is found, and its layout read, by the row its managed binding records
   (`formIdentity`), as the build takes it — before any `formId` pin or name. The bound row is read by that id alone

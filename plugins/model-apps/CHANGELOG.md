@@ -7,20 +7,21 @@ evidence and trade-offs behind a change live in its PR, in `docs/`, or in the li
 
 ## [2.28.0]
 
-- **Configuration creates are sent once (#807):** each new configuration row, children included, is created by its own request at a stable id and read back. After a lost answer the next build stops and sends nothing; the recovery commands settle it.
+- **Configuration creates are sent once (#807):** each new configuration row, children included, has its own request at a stable id; after a lost answer the next build stops until the recovery commands settle it.
 - A build refuses an unsynced earlier copy of a variable or connection reference in the app's workspace before sending anything.
 - **Protected rule publication (#808):** the stop names the rule and its original id; a possibly sent publication is never replayed, even with `status: "published"`.
 - **Refused secret values (#847):** the stop reports the service code; correct the deployment settings and rebuild to send only the missing value.
-- **Busy customizations (#848):** a refused web-resource publish waits about 30, 60 and 90 seconds, or the service's Retry-After, before it retries.
+- **Busy customizations (#848):** a refused web-resource publish waits about 30, 60 and 90 seconds, or Retry-After, before retrying.
 - **`verify` follows form bindings:** declared forms and their Quick View and sub-grid targets are checked through managed bindings, never through namesakes.
-- **Shared form cells (#797):** caption-related publication stops show the shared cells, the forms that reuse them and both captions, with read-only recovery steps.
-- **`/genpage` asks before editing a shared page (#676):** an edit and its verification fix-up name other apps that show the page and need your confirmation; unattended runs and unreadable scans stop.
+- **Same-named declared views (#845):** `--verify` proves each has its own row and fails when two claim one saved query; nonconflicting bound or pinned groups are unchanged.
+- **Shared form cells (#797):** caption publication stops show the shared cells, the forms reusing them and both captions, with read-only recovery steps.
+- **`/genpage` asks before editing a shared page (#676):** an edit and its verification fix-up name other apps showing the page and need your confirmation; unattended runs and failed scans stop.
 
 ### Limits
 
 - Other programs must not change an app's workspace files while a build, recovery or teardown runs.
-- Generative-page and other publishes refused because another customization is running still stop after the ordinary retries (#848).
-- For two same-named declared views with no managed binding or `viewId`, `verify` lists their content as unverified and does not prove each has its own row.
+- Other publishes refused by a running customization still stop after the ordinary retries (#848).
+- `verify` proves distinct rows only within same-named groups; content of a view no binding, `viewId` or stable id identifies stays unverified.
 - Workspace copies an earlier version left stay until removed by hand (see the app-builder skill).
 ## [2.27.0]
 
