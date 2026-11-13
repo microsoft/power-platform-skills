@@ -4,6 +4,7 @@
 // before any read, a deferral reads nothing, and a completed resolution answers configuration-create-reconciled rather than success.
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const { makeTempDir } = require('./helpers/temp-dirs.js');
@@ -305,12 +306,15 @@ test('the current intent is compiled the way the build compiled the unit: over a
   const grown = receiptOf(P.compileConfigurationCreateUnit(s, { kind: 'custom-api', key: 'contoso_Calc', bindings, solution: SOL, baseline, additions: [added.key] }));
   assert.ok(grown.rows.some((r) => r.role === 'preserved'));
   assert.equal(currentIntentOf(s, grown, { bindings, solution: SOL }), grown.publicIntentSha256);
-  // A data-source variable whose parent was bound to an existing definition: the intent keeps that recorded parent.
+  // A data-source variable whose parent was bound to an existing definition: the intent keeps that recorded parent once it was verified
+  // to be the parent declared today, and is never assumed without that.
   const parentId = '11111111-2222-4333-8444-555555555555';
   const boundIdOf = (k, key) => (k === 'environmentVariable' && key === A.portKeyOf('environmentVariable', 'contoso_V') ? parentId : undefined);
   const child = receiptOf(P.compileConfigurationCreateUnit(s, { kind: 'environmentVariable', key: 'contoso_D', bindings, solution: SOL, boundIdOf }));
   assert.equal(child.rows[0].public.parentDefinitionId, parentId);
-  assert.equal(currentIntentOf(s, child, { bindings, solution: SOL }), child.publicIntentSha256);
+  assert.equal(currentIntentOf(s, child, { bindings, solution: SOL, parentId }), child.publicIntentSha256);
+  assert.equal(currentIntentOf(s, child, { bindings, solution: SOL }), null, 'an unverified parent is no intent');
+  assert.equal(currentIntentOf(s, child, { bindings, solution: SOL, parentId: '22222222-2222-4333-8444-555555555555' }), null);
   // A declaration that is gone has no intent.
   assert.equal(currentIntentOf({ ...s, customApis: [] }, grown, { bindings, solution: SOL }), null);
 });
@@ -420,3 +424,66 @@ for (const [label, kind, key, gone, binding, other] of [
     assert.throws(() => G.assertConfigurationCreatesClear(app.workspaceDir, { spec: calling, env: ENV, languageCode: 1033 }), (e) => e.code === 'configuration-create-pending' && e.retry === 'never');
   });
 }
+// #807: a data-source variable's unit records the id of the parent definition it was bound to. Recovery reads that parent and compares
+// its schema name with the parent the App Spec names today before it reuses the id: a declaration that now names another parent asks
+// for another intent (intent-changed), and so does one whose recorded parent is gone; a parent that cannot be read is refused as
+// unreadable. Only the unchanged declaration over its own parent reconciles. Nothing is ever sent.
+test('accept-current reuses a recorded parent definition only when it is the parent the App Spec names today', async () => {
+  const parents = [
+    { schemaName: 'contoso_First', type: 'dataSource', connectorId: SP, parameterKey: 'dataset' },
+    { schemaName: 'contoso_Second', type: 'dataSource', connectorId: SP, parameterKey: 'dataset' },
+  ];
+  const withChild = (parent) => ({ ...spec({ apis: false }), environmentVariables: [...parents, { schemaName: 'contoso_Child', type: 'dataSource', connectorId: SP, parameterKey: 'table', parentSchemaName: parent }] });
+  const s = withChild('contoso_First');
+  for (const scenario of ['unchanged', 'other-parent', 'parent-gone', 'parent-unreadable']) {
+    let parentAnswer = null;
+    const ids = {};
+    const org = createConfigOrg({
+      childrenJoin: true,
+      solution: { uniqueName: SOL, version: '1.0.0.0', prefix: 'contoso' },
+      intercept: ({ method, path: where }) => (parentAnswer && method === 'GET' && where.includes(ids.contoso_first) ? parentAnswer : undefined),
+    });
+    const bindings = A.readDeploymentBindings({}, s);
+    // The parents already live in the org under ids of their own, as a discovered definition does: not the ids this App Spec would
+    // derive, so a recorded id handed to another name is not caught by an identity collision.
+    Object.assign(ids, { contoso_first: crypto.randomUUID(), contoso_second: crypto.randomUUID() });
+    const boundIdOf = (k, key) => (k === 'environmentVariable' ? ids[key] : undefined);
+    for (const p of parents) {
+      const c = P.compileConfigurationCreateUnit(s, { kind: 'environmentVariable', key: p.schemaName, bindings, solution: SOL, boundIdOf });
+      assert.equal(c.ok, true, JSON.stringify(c));
+      assert.equal(c.unit.rows[0].id, ids[p.schemaName.toLowerCase()]);
+      await sendRows(org, c);
+    }
+    const child = P.compileConfigurationCreateUnit(s, { kind: 'environmentVariable', key: 'contoso_Child', bindings, solution: SOL, boundIdOf });
+    assert.equal(child.ok, true, JSON.stringify(child));
+    assert.equal(child.unit.rows[0].public.parentDefinitionId, ids.contoso_first);
+    const appDir = path.join(makeTempDir('cfg-recovery-cli-'), 'app');
+    fs.mkdirSync(appDir, { recursive: true });
+    const workspaceDir = path.join(appDir, '.maker-workspace');
+    const { solution, ...unit } = child.unit;
+    S.prepareCreateUnit(workspaceDir, { kindTable: RECEIPT_KT, context: S.createStateContext({ environmentUrl: ENV, solutionUniqueName: SOL, appUniqueName: appUniqueName(s), authoringLanguageCode: 1033 }), unit });
+    const unitId = S.readConfigurationCreateState(workspaceDir, { kindTable: RECEIPT_KT }).units[0].unitId;
+    await sendRows(org, child);
+    fs.writeFileSync(path.join(appDir, 'app-spec.json'), JSON.stringify(scenario === 'other-parent' ? withChild('contoso_Second') : s));
+    if (scenario === 'parent-gone') parentAnswer = { statusCode: 404, body: { error: { code: '0x80040217', message: 'Does Not Exist' } } };
+    if (scenario === 'parent-unreadable') parentAnswer = { statusCode: 500, body: { error: { code: '0x80040216', message: 'unexpected' } } };
+    const receipt = path.join(workspaceDir, 'configuration-create-state.v1.json');
+    const bytes = fs.readFileSync(receipt);
+    const writesBefore = org.requests.length;
+    const { httpClient } = clientOver(org);
+    const prepared = await run(['prepare', '--app-dir', appDir, '--env', ENV, '--unit', unitId, '--resolution', 'accept-current'], { httpClient });
+    if (scenario === 'unchanged') {
+      assert.equal(prepared.ok, true, JSON.stringify(prepared.payload));
+      const argv = ['resolve', '--app-dir', appDir, '--env', ENV, '--unit', unitId, '--resolution', 'accept-current', '--approval-token', prepared.payload.approvalToken];
+      if (prepared.payload.privateAcknowledgmentRequired) argv.push('--accept-current-private-state');
+      const done = await run(argv, { httpClient });
+      assert.equal(done.payload.code, 'configuration-create-reconciled', JSON.stringify(done.payload));
+    } else {
+      assert.equal(prepared.ok, false, `${scenario}: ${JSON.stringify(prepared.payload)}`);
+      assert.equal(prepared.payload.code, scenario === 'parent-unreadable' ? 'configuration-create-graph-unreadable' : 'configuration-create-intent-changed', `${scenario}: ${JSON.stringify(prepared.payload)}`);
+      assert.equal(prepared.payload.unitId, unitId);
+      assert.deepEqual(fs.readFileSync(receipt), bytes, `${scenario}: the receipt is unchanged`);
+    }
+    assert.deepEqual(org.writes(writesBefore), [], `${scenario}: nothing is sent`);
+  }
+});

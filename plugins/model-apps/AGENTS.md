@@ -3626,6 +3626,10 @@ membership or publishes, and its completed resolution exits 1 with `configuratio
 build success). `--env` is required to prepare or resolve a unit, and a receipt of another context is refused
 before any read. `prepare` and `resolve` hold the app build lease (a held lease is
 `configuration-create-state-busy`, its reason naming the lock file); `inspect` only reads and takes none.
+`accept-current` compiles today's intent of a data-source variable under its recorded parent definition id
+only after `verifiedParentOf` reads that parent by id and finds the schema name the App Spec names as its
+parent now; a parent that is gone or is not the one named is `configuration-create-intent-changed`, and one
+that cannot be read is `configuration-create-graph-unreadable`.
 The build's `--acknowledge-quarantined-configuration <id>[,<id>...]` is invocation-only:
 validated against the workspace's quarantines (`validateQuarantineAcknowledgment`), handed to the first
 attempt only and spent by the engine (a WeakSet), never persisted and never accepted by teardown. Maker guide

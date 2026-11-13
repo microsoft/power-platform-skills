@@ -149,15 +149,18 @@ function dataverseReaderFor(origin, makeClient) {
 // (configuration-create-plan.js publicIntentSha256: the root's kind and key, each new row's kind, key and public fields, whether a
 // new rule must be published; no ids). It is compiled the way the build compiled the unit: a unit that preserved an existing root
 // is compiled over that root (its recorded projection standing for the baseline) with the slots it created. A data-source variable's
-// parent definition id is the one recorded, so the intent compares the declaration, not where its parent lives. Answers null when
-// the declaration is gone or no longer compiles: recovery then refuses `configuration-create-intent-changed`.
-function currentIntentOf(spec, unit, { bindings, solution }) {
+// parent definition id is the recorded one only when `parentId` says it was read from the environment and found to be the parent the
+// declaration names today (verifiedParentOf); without that it is never assumed, since a declaration that now names another parent asks
+// for another intent. Answers null when the declaration is gone, no longer compiles, or names a parent not so verified: recovery then
+// refuses `configuration-create-intent-changed`.
+function currentIntentOf(spec, unit, { bindings, solution, parentId }) {
   try {
     const rootRow = unit.rows.find((r) => r.id === unit.root.id);
     const bindingKind = KT[unit.root.kind].bindingKind;
     const recordedParent = unit.root.kind === 'env-definition' && rootRow.public.parentDefinitionId ? rootRow.public.parentDefinitionId : null;
     let parentKey = null;
     if (recordedParent) {
+      if (typeof parentId !== 'string' || lower(parentId) !== lower(recordedParent)) return null;
       const entry = A.configurationIntentOf(spec, bindingKind, unit.root.key);
       if (typeof entry.parentSchemaName === 'string' && entry.parentSchemaName) parentKey = A.portKeyOf('environmentVariable', entry.parentSchemaName);
     }
@@ -176,6 +179,33 @@ function currentIntentOf(spec, unit, { bindings, solution }) {
   } catch {
     return null;
   }
+}
+
+// The recorded parent definition of a data-source variable's unit, when the App Spec still names it: the recorded id is read (GET, the
+// build's own exact-id read) and its schema name compared, without regard to case, with the `parentSchemaName` declared today. Answers
+// { parentId } for a unit that records no parent ({ parentId: null }) or whose parent was so verified, and { parentId: null } when the
+// declaration names no parent or another one, or the recorded parent is gone: currentIntentOf then answers null (intent-changed). A
+// parent that cannot be read is no verdict either way and is refused as unreadable. Read only for accept-current, and only once the
+// receipt's context is the one named now, so a receipt of another environment sends no read to this one.
+async function verifiedParentOf(spec, unit, ports) {
+  const rootRow = unit.rows.find((r) => r.id === unit.root.id);
+  const recorded = unit.root.kind === 'env-definition' && rootRow && rootRow.public.parentDefinitionId ? lower(rootRow.public.parentDefinitionId) : null;
+  if (!recorded) return { parentId: null };
+  let named = null;
+  try {
+    const entry = A.configurationIntentOf(spec, KT[unit.root.kind].bindingKind, unit.root.key);
+    named = entry && typeof entry.parentSchemaName === 'string' && entry.parentSchemaName ? entry.parentSchemaName : null;
+  } catch {
+    named = null;
+  }
+  if (!named) return { parentId: null };
+  const got = await ports.readRow('env-definition', recorded);
+  if (!got.ok && got.missing) return { parentId: null };
+  const observed = got.ok ? ports.projectObserved('env-definition', got.row) : null;
+  if (!observed || typeof observed.public.schemaName !== 'string') {
+    throw halt('configuration-create-graph-unreadable', { unitId: unit.unitId, rootId: unit.root.id, rootKind: unit.root.kind, reason: 'the recorded parent environment variable definition could not be read' });
+  }
+  return { parentId: lower(observed.public.schemaName) === lower(named) ? recorded : null };
 }
 
 // ── Arguments ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -455,7 +485,12 @@ async function resolveUnit(args, spec, deps) {
     const unit = saved && saved.units.find((u) => u.unitId === lower(args.flags.unit));
     const bindings = args.resolution === 'accept-current' ? readBindings(args.flags['deployment-settings'], spec) : undefined;
     const reader = dataverseReaderFor(args.origin, deps.httpClient);
-    const ctx = R.createReadOnlyRecoveryContext(readPortsOver(reader, { solutionUniqueName: saved ? saved.solutionUniqueName : '' }));
+    const ports = readPortsOver(reader, { solutionUniqueName: saved ? saved.solutionUniqueName : '' });
+    const ctx = R.createReadOnlyRecoveryContext(ports);
+    // A recorded parent is verified against today's declaration before the intent is computed, and only for a receipt of the context
+    // named now: the recovery module refuses any other before it reads (context-mismatch), and so does this.
+    const acceptCurrent = args.resolution === 'accept-current' && unit;
+    const parent = acceptCurrent && S.sameCreateStateContext(saved, context) ? await verifiedParentOf(spec, unit, ports) : { parentId: null };
     const options = {
       workspaceDir: args.workspaceDir,
       kindTable: RECEIPT_KT,
@@ -463,7 +498,7 @@ async function resolveUnit(args, spec, deps) {
       unitId: lower(args.flags.unit),
       mode: args.resolution,
       // Computed only when a unit is there to compare it with; an unknown unit is refused by the recovery module (approval-stale).
-      currentPublicIntentSha256: args.resolution === 'accept-current' && unit ? currentIntentOf(spec, unit, { bindings, solution: saved.solutionUniqueName }) : undefined,
+      currentPublicIntentSha256: acceptCurrent ? currentIntentOf(spec, unit, { bindings, solution: saved.solutionUniqueName, parentId: parent.parentId }) : undefined,
       declarations: createDeclarationsOf(spec),
       checkLocalDrafts: localDraftCheck(args.workspaceDir, { origin: args.origin, unit }),
       ...(deps.invalidate ? { invalidate: deps.invalidate } : {}),

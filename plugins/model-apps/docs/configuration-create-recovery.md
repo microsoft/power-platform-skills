@@ -96,8 +96,11 @@ the receipt.
   membership is visible. A new duplicate detection rule must be published, unless the App Spec declares it
 `status: "unpublished"`: then it must still be unpublished. An environment variable or a
   connection reference unit also needs `--accept-current-private-state` after you review
-  its private values, which recovery neither compares nor prints. Acceptance records that you accept the
-  current state; it does not prove what an earlier request did.
+  its private values, which recovery neither compares nor prints. For a data-source variable that was
+  bound to a parent definition, recovery reads that parent and checks that it is still the parent the App
+  Spec names: an App Spec that now names another parent, or a parent that no longer exists, is
+  `configuration-create-intent-changed`. Acceptance records that you accept the current state; it does not
+  prove what an earlier request did.
 - **`defer`**: first remove the unit's root (and anything that depends on it) from the App Spec. That
   includes a page binding that names it: an `actionBindings` entry naming a Custom API, or a
   `connectorBindings` entry naming a connection reference (an action binding named exactly `WhoAmI` or
