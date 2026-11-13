@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { cp, mkdir, mkdtemp, readFile, realpath, rm, stat, symlink } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readFile, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -27,8 +27,8 @@ export async function buildSite({ workDir, root, signal, timeout = 120_000 }) {
       recursive: true, dereference: false, verbatimSymlinks: true,
       filter: name => !['node_modules', 'dist'].includes(path.basename(name)),
     });
-    const templatePath = path.join(runtimeDir, '../../plugins/power-pages/skills/create-site/assets/react/package.json');
-    const template = JSON.parse(await readFile(templatePath, 'utf8'));
+    const templateDir = path.join(runtimeDir, '../../plugins/power-pages/skills/create-site/assets/react');
+    const template = JSON.parse(await readFile(path.join(templateDir, 'package.json'), 'utf8'));
     for (const name of Object.keys({ ...template.dependencies, ...template.devDependencies })) {
       const target = path.join(project, 'node_modules', name);
       await mkdir(path.dirname(target), { recursive: true });
@@ -43,9 +43,18 @@ export async function buildSite({ workDir, root, signal, timeout = 120_000 }) {
           .filter(key => process.env[key]).map(key => [key, process.env[key]])),
       },
     };
-    // The React template's build runs tsc before Vite. Call the pinned compiler
-    // directly rather than running scripts from the generated package.json.
-    await execFileAsync(process.execPath, [path.join(runtimeDir, 'node_modules/typescript/bin/tsc'), '-b'], options);
+    // Agent-authored tsconfig files can configure compiler outputs outside scratch
+    // or skip type checking. Use the template's options and disable all emission.
+    const templateConfig = JSON.parse(await readFile(path.join(templateDir, 'tsconfig.json'), 'utf8'));
+    const typecheckConfig = path.join(scratch, 'tsconfig.json');
+    await writeFile(typecheckConfig, JSON.stringify({
+      compilerOptions: {
+        ...templateConfig.compilerOptions, allowJs: true, noEmit: true,
+        incremental: false, composite: false, typeRoots: [path.join(project, 'node_modules', '@types')],
+      },
+      include: [path.join(project, 'src')],
+    }));
+    await execFileAsync(process.execPath, [path.join(runtimeDir, 'node_modules/typescript/bin/tsc'), '--project', typecheckConfig], options);
     await execFileAsync(process.execPath, [path.join(runtimeDir, 'site-build-child.mjs'), project, outDir], options);
     return { ok: true, distDir: outDir, cleanup };
   } catch (error) {

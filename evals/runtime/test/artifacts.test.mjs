@@ -316,3 +316,28 @@ test('generated sites reject evaluator-only imports and TypeScript errors', asyn
     assert.match(result.evidence, diagnostic);
   }
 });
+
+test('generated TypeScript configuration cannot write outside the build', async t => {
+  const root = await workspace(t);
+  await reactSite(root, '<p>Booking</p>');
+  const sentinel = path.join(root, 'outside.js');
+  await writeFile(sentinel, 'unchanged');
+  await writeFile(path.join(root, 'site/src/attack.ts'), 'export const value = 42;');
+  for (const compilerOptions of [
+    { module: 'system', target: 'ES2020', outFile: sentinel },
+    { incremental: true, noEmit: true, tsBuildInfoFile: sentinel },
+  ]) {
+    await writeFile(path.join(root, 'site/tsconfig.json'), JSON.stringify({
+      compilerOptions, files: ['src/attack.ts'],
+    }));
+    const result = await gradeArtifacts({ contract: siteContract, workDir: root, suiteDir: root });
+    assert.equal(result.passed, true, result.evidence);
+    assert.equal(await readFile(sentinel, 'utf8'), 'unchanged');
+  }
+  await writeFile(path.join(root, 'site/src/attack.ts'), 'export const value: number = "invalid";');
+  await writeFile(path.join(root, 'site/tsconfig.json'), JSON.stringify({ files: [], include: ['elsewhere'] }));
+  const invalid = await gradeArtifacts({ contract: siteContract, workDir: root, suiteDir: root });
+  assert.equal(invalid.passed, false);
+  assert.match(invalid.evidence, /TS2322/);
+  assert.equal(await readFile(sentinel, 'utf8'), 'unchanged');
+});

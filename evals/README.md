@@ -86,7 +86,7 @@ Its separate design rubric checks the proposed experience and responsive interac
 
 A contract `site` block grades a generated React code site rather than a document.
 Trials cannot install packages, so the grader copies the site to a scratch folder and builds it with the runtime's pinned create-site template dependencies.
-It runs the pinned TypeScript compiler before Vite, without executing the generated package's scripts.
+It type-checks `src` with the pinned TypeScript compiler and the trusted template's options, without emitting files or using the generated TypeScript configuration.
 Vite runs in a child process with `configFile: false` and an inline PostCSS config, so agent-authored config files are never executed.
 An import outside the template dependencies fails the build, which counts as a site failure.
 Each listed route is served with a single-page-app fallback and rendered at 1440px and 390px.
