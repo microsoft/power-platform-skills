@@ -107,7 +107,7 @@ const TRANSITIONS = Object.freeze(['prepare', 'seal', 'verify', 'publication-sea
 const STOPS = Object.freeze({
   'configuration-create-pending': {
     summary: 'an interrupted configuration create unit in this workspace is not resolved',
-    next: 'Run configuration-recovery.js inspect for this app folder, then explicitly accept the current state, complete the recorded missing work at the recorded ids, or defer the unit. This invocation made no service writes.',
+    next: 'Run configuration-recovery.js inspect for this app folder, then explicitly accept the current state, complete the recorded missing work at the recorded ids, or defer the unit.',
   },
   'configuration-create-publication-pending': {
     summary: 'the publication of a newly created duplicate detection rule was not proved',
@@ -135,7 +135,7 @@ const STOPS = Object.freeze({
   },
   'configuration-create-graph-unreadable': {
     summary: 'the recorded configuration could not be read completely',
-    next: 'Restore read permission or service availability, then inspect again. Nothing was changed and nothing is assumed absent.',
+    next: 'Restore read permission or service availability, then inspect again. Nothing is assumed absent.',
   },
   'configuration-create-identity-conflict': {
     summary: 'a row at a recorded id has another identity or parent than recorded, or a row of the same name exists at another id',

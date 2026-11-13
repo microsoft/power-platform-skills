@@ -842,3 +842,53 @@ test('acknowledgment through the client: a malformed id in a 201, or a malformed
   await ok.writer.executeCreateUnit(compile('duplicateRule', 'email'));
   assert.deepEqual(ok.saved().units, []);
 });
+
+// A stop raised after a create was dispatched must not also say that this invocation changed nothing: the create may have
+// landed (the service committed it and the answer was lost, or a successful POST was followed by a read-back the service
+// refused). The shared next steps of these stops say what to do without an absolute no-write claim; only the dispatch note
+// speaks about what this invocation sent.
+for (const mode of ['lost-after-commit', 'unreadable-after-create']) {
+  test(`a stop after a dispatched create (${mode}) never says this invocation changed nothing`, async () => {
+    const org = createConfigOrg({ solution: { uniqueName: 'ContosoSol', prefix: 'contoso' } });
+    let sent = false;
+    const client = createAzHttpClient(org.origin, {
+      getToken: () => 'test-token-0123456789abcdef',
+      sendOnce: configurationSendOnce,
+      sleep: async () => {},
+      request: async (req) => {
+        const route = new URL(req.url).pathname.replace(/^\/api\/data\/v9\.\d/, '');
+        if (mode === 'unreadable-after-create' && sent && req.method === 'GET' && route.startsWith('/environmentvariabledefinitions(')) {
+          org.requests.push({ method: req.method, path: route, fault: true });
+          return { statusCode: 403, body: JSON.stringify({ error: { code: '0x80040220', message: 'denied' } }) };
+        }
+        const answer = await org.request(req);
+        if (req.method === 'POST' && route === '/environmentvariabledefinitions') {
+          sent = true;
+          if (mode === 'lost-after-commit') throw Object.assign(new Error('socket hang up'), { code: 'ECONNRESET' });
+        }
+        return answer;
+      },
+    });
+    const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(makeTempDir('dispatch-sdk-')), instanceUrl: org.origin, httpClient: client });
+    await sdk.initWorkspace();
+    const spec = { solution: { uniqueName: 'ContosoSol', publisherPrefix: 'contoso' }, environmentVariables: [{ schemaName: 'contoso_Mode', type: 'string' }] };
+    const compiled = P.compileConfigurationCreateUnit(spec, { kind: 'environmentVariable', key: 'contoso_Mode', bindings: A.readDeploymentBindings({}, spec) });
+    assert.equal(compiled.ok, true);
+    const workspaceDir = makeTempDir('dispatch-receipt-');
+    const context = S.createStateContext({ environmentUrl: org.origin, solutionUniqueName: 'ContosoSol', appUniqueName: 'contoso_dispatch', authoringLanguageCode: 1033 });
+    W.attachConfigurationCreateBridge(sdk, { httpClient: client, apiUrl: (p) => sdk.dataverse.apiUrl(p) });
+    const writer = W.createDefaultConfigurationWriter({ bridge: W.configurationCreateBridgeOf(sdk), dataverse: sdk.dataverse, workspaceDir, context });
+    let error;
+    try { await writer.executeCreateUnit(compiled); } catch (e) { error = e; }
+    assert.ok(error);
+    assert.equal(org.rows('environmentvariabledefinitions').length, 1, 'the create really committed');
+    assert.equal(org.requests.filter((r) => r.method === 'POST').length, 1, 'the create is never retried');
+    const saved = S.readConfigurationCreateState(workspaceDir, { kindTable: P.CONFIGURATION_CREATE_RECEIPT_KIND_TABLE });
+    assert.equal(saved.units.length, 1);
+    assert.equal(saved.units[0].rows[0].dispatch, 'dispatched');
+    const mark = org.requests.length;
+    assert.throws(() => R.preflightConfigurationCreates({ workspaceDir, context, kindTable: P.CONFIGURATION_CREATE_RECEIPT_KIND_TABLE, declarations: [], configurationWork: false }), { code: 'configuration-create-pending' });
+    assert.equal(org.requests.length, mark, 'a later preflight sends nothing');
+    assert.doesNotMatch(error.message, /This invocation made no service writes|Nothing was changed|No service write occurred/i, 'post-dispatch guidance must not claim nothing changed');
+  });
+}
