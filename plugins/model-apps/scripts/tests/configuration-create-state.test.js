@@ -1175,7 +1175,7 @@ test('a continuation that dies at any file step is itself finished by the next l
       const original = unreadable(dir);
       await crashAt(dir, original, { stopMatch: { fn: 'linkSync', phase: 'after', last } });
       const [q] = S.discoverConfigurationCreateState(dir, kt).quarantines;
-      assert.equal(q.state, 'archiving');
+      assert.equal(q && q.state, 'archiving', `a crash right after the ${last} link leaves an archiving marker`);
       return { dir, original, id: q.quarantineId };
     };
     const traced = await setUp();
