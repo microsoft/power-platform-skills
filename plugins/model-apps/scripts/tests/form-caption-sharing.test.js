@@ -498,6 +498,56 @@ test('at the default budget a page of repeated large copies is refused whole: it
   assert.equal(seen.filter((x) => x === rootPublished).length, 3, 'no copy on the refused page is hashed');
 });
 
+// `xml` padded with a comment to exactly `bytes` UTF-8 bytes ('<!--' and '-->' are the 7 bytes around the padding).
+const padXml = (xml, bytes) => xml.replace('</form>', `<!--${'x'.repeat(bytes - xmlSize(xml) - 7)}--></form>`);
+async function scanOnce(client, entry, limits) {
+  const cache = {};
+  const { result, seen } = await consumersSee(() => readFormCaptionSharing(client, { scope: ACCOUNT, roots: eligibleRoots([entry], ACCOUNT), limits, cache }));
+  return { result, seen, inv: await cache.inventory };
+}
+
+for (const [layer, cap] of [['saved', 4096], ['published', 4096], ['published', 8 * 1024 * 1024]]) {
+  const limits = cap === 8 * 1024 * 1024 ? undefined : { maxXmlBytes: cap };
+  const at = `${layer} at ${cap} bytes${limits ? '' : ' (the default budget)'}`;
+  test(`a stopped form listed once with a copy that cannot be checked explains nothing (${at}): at the one-document budget its copy is compared, one byte past it the copy is never restored`, async () => {
+    // The stopped form's own XML exactly at the budget: read, listed, compared and explained.
+    {
+      const { wire, client } = await over((w) => { principal(w); w[layer].get(ROOT).formxml = padXml(w[layer].get(ROOT).formxml, cap); });
+      const { result } = await scanOnce(client, await observed(client, ROOT), limits);
+      assert.equal(xmlSize(wire[layer].get(ROOT).formxml), cap);
+      assert.deepEqual([result.scan.status, result.cells.length, result.cells[0].forms[0].formId], ['complete', 1, ROOT], at);
+    }
+    // A copy from another moment exactly at the budget is compared, and contradicts the fresh read.
+    {
+      const { wire, client } = await over(principal);
+      const entry = await observed(client, ROOT);
+      scriptList(wire, layer, { statusCode: 200, body: { value: rowsOf(wire, layer).map((r) => (r.formid === ROOT ? { ...r, name: 'Account main renamed', formxml: padXml(r.formxml, cap) } : r)) } });
+      const { result } = await scanOnce(client, entry, limits);
+      assert.deepEqual([result.scan.status, result.scan.reason, result.cells.length], ['partial', 'observations-changed', 0], at);
+    }
+    // One byte past the budget the reader takes the copy's XML out of its row: whatever its name says, it cannot be checked, so the
+    // stopped form explains nothing (never the fresh read's captions joined to a listing of another moment).
+    for (const name of ['Account main renamed', 'Account main']) {
+      const { wire, client } = await over(principal);
+      const entry = await observed(client, ROOT);
+      const later = padXml(wire[layer].get(ROOT).formxml, cap + 1);
+      scriptList(wire, layer, { statusCode: 200, body: { value: rowsOf(wire, layer).map((r) => (r.formid === ROOT ? { ...r, name, formxml: later } : r)) } });
+      const { result, seen, inv } = await scanOnce(client, entry, limits);
+      assert.deepEqual(inv.layers[layer].get(ROOT), { name, fingerprint: null, cells: null, reason: 'budget' }, `${at}: the copy is kept as unread`);
+      assert.ok(!seen.includes(later), `${at}: the copy past the budget is never parsed or hashed`);
+      assert.deepEqual([result.scan.status, result.scan.reason, result.cells.length], ['partial', 'budget', 0], `${at} ${name}: a copy that cannot be checked explains nothing`);
+    }
+  });
+}
+
+test('a stopped form listed once with no form XML cannot be checked either, and explains nothing', async () => {
+  const { wire, client } = await over(principal);
+  const entry = await observed(client, ROOT);
+  scriptList(wire, 'published', { statusCode: 200, body: { value: rowsOf(wire, 'published').map((r) => (r.formid === ROOT ? { ...r, formxml: undefined } : r)) } });
+  const { result } = await scanOnce(client, entry);
+  assert.deepEqual([result.scan.status, result.scan.reason, result.cells.length], ['partial', 'invalid-row', 0]);
+});
+
 test('a returned form row with no readable name is an unreadable form (invalid-row) that leaves the scan partial, never a form left out', async () => {
   for (const name of [undefined, null, 7]) {
     const { wire, client } = await over(principal);

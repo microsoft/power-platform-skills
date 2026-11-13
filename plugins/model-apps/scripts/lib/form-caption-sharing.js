@@ -359,7 +359,9 @@ async function readFormCaptionSharing(client, { scope, roots, limits, cache } = 
       const listed = inv.layers[layer] && inv.layers[layer].get(root.formId);
       if (!inv.layers[layer]) continue;
       if (!listed) { if (inv.coverage[layer] === 'complete') reasons.push('incomplete-pages'); continue; }
-      if (listed.fingerprint && listed.fingerprint !== outcome.fingerprints[layer]) consistent = false;
+      // A listed copy with no fingerprint (its XML past the one-document budget, or no XML at all) cannot be compared with the fresh
+      // read: like an uncheckable repeat it is treated as a contradiction, never as agreement (its name alone proves nothing).
+      if (!listed.fingerprint || listed.fingerprint !== outcome.fingerprints[layer]) consistent = false;
     }
     for (const { cellId, languageCode } of outcome.pairs) {
       const fresh = { saved: stateOfCells(outcome.saved.cells, cellId, languageCode), published: stateOfCells(outcome.published.cells, cellId, languageCode) };

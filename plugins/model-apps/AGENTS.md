@@ -3137,7 +3137,9 @@ charts phases. A spec that uses none of them takes the legacy paths unchanged. W
   refused page (or whose copy is past the one-document budget) is never hashed or kept and, if it is the stopped
   form, drops its explanation. The deletion guard passes no `xmlBudget`. The root's
   listing row must fingerprint as its fresh read (`systemFormRootLayerSha256` of name, description, form XML, type
-  and table, both layers), else `observations-changed`. The paged reader's optional `progress` channel keeps the
+  and table, both layers), else `observations-changed`; a root listing row with no fingerprint (its XML past the
+  one-document budget, or none) cannot be compared, so the root drops its explanation too. The paged reader's
+  optional `progress` channel keeps the
   rows of the pages it accepted before a later failure (the deletion guard does not pass it, and keeps its
   all-or-nothing refusal), so the scan is partial with `scan.coverage` per listing ('complete' | 'partial' |
   'unread') and a form a partial listing does not hold reads as not read, never as not returned. Every form a
