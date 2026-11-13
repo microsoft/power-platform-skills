@@ -47,6 +47,9 @@ jobs:
               run: npm ci --prefix evals/runtime --registry=https://packagefeedproxy.microsoft.io/npm/ --ignore-scripts --no-audit --no-fund
             - name: install browser
               run: node evals/runtime/node_modules/playwright/cli.js install --with-deps chromium
+            - name: configure Linux Chromium sandbox
+              if: runner.os == 'Linux'
+              run: bash evals/runtime/setup-linux-chromium-sandbox.sh
             - name: validate suites
               run: node evals/runtime/run.mjs validate
             - name: test offline runtime

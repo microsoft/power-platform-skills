@@ -37,6 +37,20 @@ test('browser jobs use a Linux image supported by the pinned Playwright version'
   assert.match(output, /Download url:.*linux64\/chrome-linux64\.zip/);
 });
 
+test('Linux browser jobs configure the sandbox after installing Chromium', async () => {
+  for (const [file, job] of [
+    ['power-pages-eval-validation.yml', 'validate'],
+    ['power-pages-evals.yml', 'evaluate'],
+  ]) {
+    const workflow = parseYaml(await readFile(path.join(repoRoot, '.github/workflows', file), 'utf8'));
+    const steps = workflow.jobs[job].steps;
+    const install = steps.findIndex(step => step.run?.includes('playwright/cli.js install --with-deps chromium'));
+    const sandbox = steps.findIndex(step => step.run === 'bash evals/runtime/setup-linux-chromium-sandbox.sh');
+    assert.ok(install >= 0 && sandbox > install, `${file} must configure the installed browser`);
+    assert.equal(steps[sandbox].if, "runner.os == 'Linux'");
+  }
+});
+
 test('manual workflow selects available suites and rejects skills without one', async t => {
   const root = await mkdtemp(path.join(tmpdir(), 'pp-selection-test-'));
   t.after(() => rm(root, { recursive: true, force: true }));
