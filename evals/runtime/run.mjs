@@ -216,6 +216,9 @@ export async function evaluate(options, dependencies = {}) {
               });
               await writeFile(path.join(evidenceDir, 'error.txt'), error.stack ?? String(error));
               console.error(`${id}: execution/grading error; see private evidence`);
+              if (/^Copilot model (?:is unavailable: [a-z0-9._-]+|[a-z0-9._-]+ does not support [a-z]+ reasoning effort)$/.test(error.message)) {
+                console.error(error.message);
+              }
             } finally {
               await result?.cleanup();
             }
