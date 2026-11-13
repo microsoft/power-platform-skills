@@ -1,0 +1,31 @@
+{
+  "files": [
+    {
+      "path": "docs/external-provider-redirect-review.html",
+      "type": "html",
+      "responsive": false,
+      "requiredText": [
+        "PartnerEntra",
+        "https://contoso.powerappsportals.com",
+        "given_name",
+        "family_name",
+        "emailaddress1"
+      ],
+      "requiredPatterns": [
+        "redirect|callback",
+        "propos|offline"
+      ],
+      "minTextLength": 200,
+      "forbiddenPatterns": [
+        "\\{\\{[A-Z_][A-Z_0-9]*\\}\\}",
+        "__[A-Z][A-Z_]+__"
+      ]
+    }
+  ],
+  "unchanged": [
+    {
+      "path": "inputs/external-provider-redirect-review.json",
+      "source": "fixtures/external-provider-redirect-review.json"
+    }
+  ]
+}

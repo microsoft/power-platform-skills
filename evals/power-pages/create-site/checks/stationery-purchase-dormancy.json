@@ -1,0 +1,30 @@
+{
+  "files": [
+    {
+      "path": "results/purchase.json",
+      "type": "json",
+      "requiredKeys": [
+        "currency",
+        "subtotal",
+        "tax",
+        "total"
+      ],
+      "requiredValues": {
+        "currency": "GBP",
+        "subtotal": 15,
+        "tax": 3,
+        "total": 18
+      }
+    }
+  ],
+  "unchanged": [
+    {
+      "path": "inputs/purchase.json",
+      "source": "fixtures/purchase.json"
+    }
+  ],
+  "absent": [
+    "powerpages.config.json",
+    "docs/alm/last-test-site.json"
+  ]
+}

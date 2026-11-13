@@ -32,6 +32,67 @@ A test fails if a deploy would stop carrying the report.
 - `site/catalog.json` holds the plain-language content that no manifest carries: who a plugin is for, example prompts, what you need, skills to list, notes, and Microsoft Learn links.
 - `site/lib/install-links.js` builds every install command and link. The README's install links come from the same templates, and a test fails if they drift.
 
+## Evaluation dashboard
+
+The `/evaluations/` page lists every marketplace plugin and every local `skills/<name>/SKILL.md`, including skills that are not featured in the catalog.
+External plugins stay visible, but their skill inventory is marked unavailable rather than inferred from the catalog.
+Without supplied results, the page shows an honest "Not evaluated" inventory.
+
+Include offline evaluation summaries when building:
+
+```bash
+node site/build.js --eval-results eval-results/summary.json
+node site/build.js --eval-results results/model-a --eval-results results/model-b
+```
+
+Each input can be a summary JSON file or a directory.
+Directory discovery reads only `summary.json` and `*.summary.json`, including nested directories, so other JSON artifacts are not read.
+An explicitly supplied empty directory, malformed summary, unknown plugin or skill, duplicate role/trial record, or ambiguous same-date model run stops the build before the output folder is cleared.
+For publication before the first run or after artifact expiry, `--allow-empty-eval-results` permits a genuinely empty results directory without accepting malformed summaries.
+Missing trials remain visible as incomplete evidence; they cannot produce a consistent-evidence label or baseline delta.
+The build publishes rendered, allowlisted summary fields only, never the input files or raw model output.
+Run links must be canonical `https://github.com/<owner>/<repo>/actions/runs/<id>` URLs without credentials, queries or fragments.
+
+Summaries use schema version 3; versions 1 and 2 remain readable.
+The CommonJS export `validateSummary(summary)` in `site/lib/evaluations.js` validates all three versions.
+It returns the supplied object unchanged on success and throws an `Error` for invalid schema or record data.
+It does not read files, check current source hashes, or require complete coverage; `loadEvaluations({ repoRoot, catalog, evalResults, now })` checks inventory and freshness and labels incomplete coverage.
+Each includes the plugin, source commit, generation time, actual execution and judge model identifiers, optional run URL, plugin hash, required `runtimeHash`, and suites.
+Each suite identifies a skill, SKILL.md and suite directory hashes, repeat count, expected capability/dormancy cases, and baseline/skilled trial records.
+Every record carries the status, optional score, named boolean grader checks, optional token/duration counts, and a fixed error code rather than an error message.
+Version 2 records add agent input, output and cache counters plus judge call counts and reported input/output counters.
+Version 3 retains those counters and requires agent and judge reasoning efforts plus distinct agent/judge models.
+Earlier summaries display unreported effort and remain separate from explicitly measured effort settings.
+Unknown agent counters stay null, and judge totals are lower bounds because Vally can substitute zero for missing provider fields.
+Version 1 zero-token totals are treated as unknown because they could indicate missing usage events.
+Unrecognized fields are rejected so raw transcripts cannot accidentally enter the page.
+
+`scripts/lib/eval-evidence.js` exports dependency-free CommonJS `hashFile(file)` and `hashTree(root)` helpers shared with the evaluator.
+The tree hash is SHA-256 over lexically sorted relative paths using `/`, then NUL, raw bytes, then NUL for each file.
+It skips `node_modules`, `.git`, `dist`, `__pycache__`, and `.DS_Store`, and rejects symlinks and special files.
+The dashboard checks `suiteHash` with `hashTree(evals/<marketplace-plugin-name>/<skill-directory>)`, including eval.yaml, fixtures and hidden checks.
+It checks the required top-level `runtimeHash` with `hashTree(evals/runtime)`, using the same exclusions.
+Changing plugin files, SKILL.md, suite inputs or runtime files invalidates current evidence; runs older than 30 days are stale.
+
+The page separates capability from routing/dormancy, shows observed passes over expected trials, counts distinct tasks and all-repeats-pass tasks, and compares capability against its matched baseline.
+Repeats do not count as additional independent tasks.
+Only the newest supplied run for each plugin / skill / execution model / judge model / agent effort / judge effort combination is shown.
+Separate summaries from a per-skill Actions matrix can share a timestamp and still contribute coverage.
+Every skill retains its selected run's date, commit and hashes; results from different runs, models or versions are never pooled, and missing trials are never filled from older runs.
+The descriptive "Consistent offline evidence" category requires current, complete results, all skilled trials passing, at least two capability tasks, one dormancy task, and two repeats.
+These minimums check task breadth, routing, and repeatability; they do not establish calibrated confidence or production readiness.
+The page explains every category and keeps stale runs inspectable.
+The token view aggregates all supplied summaries rather than only the newest evidence.
+It shows reported agent and judge usage by each skill evaluation's UTC start date and by plugin, along with missing counts and incomplete trial records.
+The usage totals include all models and are not changed by the skill filters.
+On the public site, history is limited to retained artifacts from the latest 20 default-branch manual workflow runs, for up to 90 days.
+
+Power Pages evaluations assess generated documentation, HTML, and semantic/quality properties of ER diagrams offline.
+They do not provision resources, contact a tenant, or verify deployed behavior.
+The dashboard uses the showcase site's shared layout, colors, fonts, and system/light/dark theme controls.
+Native details elements keep the full inventory and case results readable without JavaScript.
+JavaScript adds combined name, plugin, model and evidence filters.
+
 ## Design
 
 The design follows the Power Pages plugin's design references (`plugins/power-pages/references/design-aesthetics.md`, `page-blueprints.md`, and `design-critique.md`).

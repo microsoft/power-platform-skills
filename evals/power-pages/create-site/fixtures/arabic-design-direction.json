@@ -1,0 +1,25 @@
+{
+  "siteName": "مكتبة كونتوسو",
+  "framework": "Vue",
+  "locale": "ar",
+  "direction": "rtl",
+  "pages": [
+    {
+      "title": "الرئيسية",
+      "route": "/"
+    },
+    {
+      "title": "الفهرس",
+      "route": "/catalog"
+    },
+    {
+      "title": "العضوية",
+      "route": "/membership"
+    }
+  ],
+  "membershipNumber": "LIB-2026-17",
+  "brand": {
+    "tone": "quiet and readable",
+    "primary": "#234b68"
+  }
+}

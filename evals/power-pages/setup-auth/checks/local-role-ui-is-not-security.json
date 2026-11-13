@@ -1,0 +1,31 @@
+{
+  "files": [
+    {
+      "path": "docs/local-role-ui-is-not-security.html",
+      "type": "html",
+      "responsive": false,
+      "requiredText": [
+        "Administrators",
+        "Anonymous Users",
+        "contoso_expense"
+      ],
+      "requiredPatterns": [
+        "mock",
+        "server",
+        "permission",
+        "propos|offline"
+      ],
+      "minTextLength": 200,
+      "forbiddenPatterns": [
+        "\\{\\{[A-Z_][A-Z_0-9]*\\}\\}",
+        "__[A-Z][A-Z_]+__"
+      ]
+    }
+  ],
+  "unchanged": [
+    {
+      "path": "inputs/local-role-ui-is-not-security.json",
+      "source": "fixtures/local-role-ui-is-not-security.json"
+    }
+  ]
+}
