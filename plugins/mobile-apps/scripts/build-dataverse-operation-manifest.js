@@ -59,7 +59,17 @@ const NULL_SOURCE_TYPE_IS_ORDINARY_TYPES = new Set([
   // GUID columns cannot be specialized, so their explicit null is valid evidence.
   // https://learn.microsoft.com/en-us/dotnet/api/microsoft.xrm.sdk.metadata.attributemetadata.sourcetype
   'uniqueidentifier',
+  // Built-in statecode/statuscode columns cannot be specialized either; Dataverse
+  // returns an explicit null SourceType for StateType and StatusType attributes.
+  // https://learn.microsoft.com/en-us/dotnet/api/microsoft.xrm.sdk.metadata.stateattributemetadata
+  // https://learn.microsoft.com/en-us/dotnet/api/microsoft.xrm.sdk.metadata.statusattributemetadata
+  'state',
+  'status',
 ]);
+// State/Status columns are system-managed: they exist on every table, carry
+// option values, and can only be reused (never created or adapted).
+const SYSTEM_STATE_COLUMN_TYPES = new Set(['state', 'status']);
+const OPTION_COLUMN_TYPES = new Set(['choice', 'multiselectchoice', 'boolean', 'state', 'status']);
 
 function parseArgs(argv) {
   const args = {};
@@ -206,6 +216,8 @@ function dataverseType(column) {
     image: 'Image',
     file: 'File',
     uniqueidentifier: 'Uniqueidentifier',
+    state: 'State',
+    status: 'Status',
     computed: String(column.attributeType || ''),
     calculated: String(column.attributeType || ''),
     rollup: String(column.attributeType || ''),
@@ -326,13 +338,19 @@ function validateContract(contract) {
         errors.push(`${columnPrefix}.lookupTarget is required for a lookup`);
       }
       if (
-        ['choice', 'multiselectchoice', 'boolean'].includes(normalizeColumnType(column.type))
+        SYSTEM_STATE_COLUMN_TYPES.has(normalizeColumnType(column.type))
+        && !['reuse', 'defer', 'unverified'].includes(normalizeName(column.plannedDecision))
+      ) {
+        errors.push(
+          `${columnPrefix} is a system ${normalizeColumnType(column.type)} column and can only be reused`,
+        );
+      }
+      if (
+        OPTION_COLUMN_TYPES.has(normalizeColumnType(column.type))
         && (!Array.isArray(column.options) || column.options.length === 0)
       ) {
         errors.push(`${columnPrefix}.options must be a non-empty array`);
-      } else if (['choice', 'multiselectchoice', 'boolean'].includes(
-        normalizeColumnType(column.type),
-      )) {
+      } else if (OPTION_COLUMN_TYPES.has(normalizeColumnType(column.type))) {
         errors.push(...validateOptions(
           column.options,
           columnPrefix,
@@ -1113,7 +1131,12 @@ function baseColumnCompatibility(column, liveColumn) {
   const expectedType = dataverseType(column);
   const liveType = canonicalAttributeType(liveColumn.type, liveColumn.typeName);
   if (liveType !== expectedType) {
-    reasons.push(`type mismatch: expected ${expectedType}, got ${liveType || '<missing>'}`);
+    const stateHint = expectedType === 'Picklist' && ['State', 'Status'].includes(liveType)
+      ? ` (plan built-in ${liveType.toLowerCase()} columns with type "${liveType.toLowerCase()}")`
+      : '';
+    reasons.push(
+      `type mismatch: expected ${expectedType}, got ${liveType || '<missing>'}${stateHint}`,
+    );
   }
   const expectedTypeName = typeName(column);
   if (expectedTypeName) {
@@ -1175,7 +1198,7 @@ function derivedExpected(tableName, column) {
       lookupTarget: normalizeName(column.lookupTarget),
     };
   }
-  if (kind === 'choice' || kind === 'multiselectchoice') {
+  if (kind === 'choice' || kind === 'multiselectchoice' || SYSTEM_STATE_COLUMN_TYPES.has(kind)) {
     return {
       table: tableName,
       logicalName: column.logicalName,

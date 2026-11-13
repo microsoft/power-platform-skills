@@ -16,6 +16,7 @@ const {
   rollForwardPublishCheckpoint,
   sha256,
   stableJson,
+  validateContract,
   validateManifest,
 } = require('../build-dataverse-operation-manifest');
 const { operationFingerprint } = require('../dataverse-request');
@@ -1530,6 +1531,276 @@ test('GUID reuse still rejects specialized source types and incompatible column 
       .every((decision) => decision.verificationStatus !== 'verified' && reason.test(decision.reason)));
     assert.equal(manifest.summary.metadataOperationCount, 0);
   }
+});
+
+const STATE_OPTIONS = [{ value: 0, label: 'Active' }, { value: 1, label: 'Inactive' }];
+const STATUS_OPTIONS = [{ value: 1, label: 'Active' }, { value: 2, label: 'Inactive' }];
+
+function rawOptionSet(options) {
+  return {
+    Options: options.map((option) => ({
+      Value: option.value,
+      Label: { UserLocalizedLabel: { Label: option.label } },
+    })),
+  };
+}
+
+async function stateStatusDetail(sourceEvidence = { SourceType: null }, {
+  attributeOverrides = {},
+  stateOptions = STATE_OPTIONS,
+  statusOptions = STATUS_OPTIONS,
+} = {}) {
+  const attributes = [
+    {
+      LogicalName: 'cr1_formid',
+      SchemaName: 'cr1_FormId',
+      AttributeType: 'Uniqueidentifier',
+      AttributeTypeName: { Value: 'UniqueidentifierType' },
+      RequiredLevel: { Value: 'SystemRequired' },
+      IsPrimaryId: true,
+      SourceType: null,
+    },
+    {
+      LogicalName: 'cr1_name',
+      SchemaName: 'cr1_Name',
+      AttributeType: 'String',
+      AttributeTypeName: { Value: 'StringType' },
+      RequiredLevel: { Value: 'None' },
+      IsPrimaryName: true,
+      SourceType: 0,
+    },
+    ...[
+      ['statecode', 'State', 'SystemRequired'],
+      ['statuscode', 'Status', 'None'],
+    ].map(([logicalName, type, requiredLevel]) => ({
+      LogicalName: logicalName,
+      SchemaName: logicalName,
+      AttributeType: type,
+      AttributeTypeName: { Value: `${type}Type` },
+      RequiredLevel: { Value: requiredLevel },
+      ...sourceEvidence,
+      ...attributeOverrides,
+    })),
+  ];
+  return loadDetailedEntity(async (method, apiPath) => {
+    assert.equal(method, 'GET');
+    if (apiPath.includes('/Attributes?$select=')) return { status: 200, data: { value: attributes } };
+    if (apiPath.includes('Microsoft.Dynamics.CRM.StateAttributeMetadata')) {
+      return {
+        status: 200,
+        data: { value: [{ LogicalName: 'statecode', OptionSet: rawOptionSet(stateOptions) }] },
+      };
+    }
+    if (apiPath.includes('Microsoft.Dynamics.CRM.StatusAttributeMetadata')) {
+      return {
+        status: 200,
+        data: { value: [{ LogicalName: 'statuscode', OptionSet: rawOptionSet(statusOptions) }] },
+      };
+    }
+    return { status: 200, data: { value: [] } };
+  }, {
+    LogicalName: 'cr1_form',
+    SchemaName: 'cr1_Form',
+    EntitySetName: 'cr1_forms',
+    PrimaryIdAttribute: 'cr1_formid',
+    PrimaryNameAttribute: 'cr1_name',
+    OwnershipType: 'UserOwned',
+    IsCustomEntity: true,
+    IsCustomizable: { Value: true },
+    CanCreateAttributes: { Value: true },
+    CanBePrimaryEntityInRelationship: { Value: true },
+    CanBeRelatedEntityInRelationship: { Value: true },
+  });
+}
+
+function stateStatusContract({
+  stateType = 'state',
+  statusType = 'status',
+  stateOptions = STATE_OPTIONS,
+  statusOptions = STATUS_OPTIONS,
+} = {}) {
+  return {
+    schemaVersion: 1,
+    publisherPrefix: 'cr1',
+    tables: [
+      contractTable('cr1_form', 'reuse', 0, [
+        contractColumn('statecode', stateType, 'reuse', {
+          requiredLevel: 'SystemRequired',
+          options: stateOptions,
+        }),
+        contractColumn('statuscode', statusType, 'reuse', { options: statusOptions }),
+      ]),
+    ],
+  };
+}
+
+function stateColumnDecisions(manifest) {
+  return manifest.decisions.filter((decision) => (
+    decision.itemType === 'column' && /statecode|statuscode/.test(decision.itemKey || decision.key || JSON.stringify(decision))
+  ));
+}
+
+test('built-in State/Status columns verify reuse with explicit null SourceType from raw metadata', async () => {
+  const contract = stateStatusContract();
+  const relationships = Array.from({ length: 3 }, (_, index) => ({
+    kind: 'many-to-one',
+    schemaName: `cr1_item_form${index}`,
+    plannedDecision: 'reuse',
+    parentTable: 'cr1_form',
+    childTable: 'cr1_item',
+    lookup: {
+      logicalName: `cr1_form${index}id`,
+      schemaName: `cr1_form${index}id`,
+      displayName: `Form ${index}`,
+      requiredLevel: 'None',
+    },
+  }));
+  contract.tables.push(contractTable('cr1_item', 'reuse', 1, [
+    contractColumn('cr1_name', 'string', 'reuse', { primaryName: true }),
+    ...relationships.map((relationship) => contractColumn(
+      relationship.lookup.logicalName,
+      'lookup',
+      'reuse',
+      { lookupTarget: 'cr1_form' },
+    )),
+  ], { relationships }));
+  const item = table('cr1_item', [
+    column('cr1_name', 'String', { primaryName: true }),
+    ...relationships.map((relationship) => column(relationship.lookup.logicalName, 'Lookup', {
+      lookupTargets: ['cr1_form'],
+    })),
+  ], {
+    manyToOneRelationships: relationships.map((relationship) => ({
+      schemaName: relationship.schemaName,
+      lookupColumn: relationship.lookup.logicalName,
+      targetTable: 'cr1_form',
+      targetColumn: 'cr1_formid',
+      cascadeConfiguration: {
+        Assign: 'NoCascade',
+        Delete: 'RemoveLink',
+        Merge: 'NoCascade',
+        Reparent: 'NoCascade',
+        Share: 'NoCascade',
+        Unshare: 'NoCascade',
+        RollupView: 'NoCascade',
+      },
+    })),
+  });
+  const inputs = buildInputs(contract, snapshot({
+    tables: [await stateStatusDetail(), item],
+  }));
+  const manifest = buildManifest(inputs);
+
+  assert.equal(manifest.executable, true, JSON.stringify(
+    manifest.decisions.filter((decision) => decision.verificationStatus !== 'verified'),
+  ));
+  assert.equal(manifest.decisions.filter((decision) => decision.itemType === 'relationship').length, 3);
+  assert.ok(manifest.decisions.every((decision) => (
+    decision.decision === 'reuse'
+    && decision.verificationStatus === 'verified'
+    && decision.operation === 'none'
+  )));
+  assert.equal(manifest.summary.metadataOperationCount, 0);
+  const validation = validateManifest(manifest, { ...inputs, requireExecutable: true });
+  assert.equal(validation.valid, true, validation.errors.join('; '));
+});
+
+test('State/Status plan spellings accept explicit null or zero SourceType', async () => {
+  for (const sourceType of [null, 0]) {
+    const form = await stateStatusDetail({ SourceType: sourceType });
+    for (const [stateType, statusType] of [['state', 'status'], ['State', 'Status'], ['STATE', 'STATUS']]) {
+      const manifest = buildManifest(buildInputs(
+        stateStatusContract({ stateType, statusType }),
+        snapshot({ tables: [form] }),
+      ));
+      assert.equal(manifest.executable, true, `${stateType}/${statusType}, SourceType=${sourceType}`);
+      assert.equal(manifest.summary.metadataOperationCount, 0);
+    }
+  }
+});
+
+test('State/Status reuse blocks missing or malformed raw SourceType instead of treating it as null', async () => {
+  const sourceEvidence = [
+    {},
+    ...[undefined, '', '0', 'invalid', false, true, {}, [], 0.5]
+      .map((SourceType) => ({ SourceType })),
+  ];
+  for (const evidence of sourceEvidence) {
+    const manifest = buildManifest(buildInputs(stateStatusContract(), snapshot({
+      tables: [await stateStatusDetail(evidence)],
+    })));
+    assert.equal(manifest.executable, false, JSON.stringify(evidence));
+    const decisions = stateColumnDecisions(manifest);
+    assert.equal(decisions.length, 2, JSON.stringify(evidence));
+    for (const decision of decisions) {
+      assert.equal(decision.verificationStatus, 'unverified');
+      assert.match(decision.reason, /SourceType evidence is missing/);
+    }
+    assert.equal(manifest.summary.metadataOperationCount, 0);
+  }
+});
+
+test('State/Status reuse still rejects specialized SourceType, wrong types and option drift', async () => {
+  const cases = [
+    ...[1, 2, 3, 4].map((SourceType) => ({
+      sourceEvidence: { SourceType },
+      reason: /ordinary column has SourceType/,
+    })),
+    { attributeOverrides: { AttributeType: 'Picklist' }, reason: /type mismatch/ },
+    { attributeOverrides: { AttributeTypeName: { Value: 'PicklistType' } }, reason: /type-name mismatch/ },
+    { attributeOverrides: { AttributeTypeName: undefined }, reason: /type-name evidence is missing/ },
+    { attributeOverrides: { RequiredLevel: undefined }, reason: /RequiredLevel evidence is missing/ },
+    {
+      detail: { stateOptions: [{ value: 0, label: 'Active' }] },
+      reason: /missing choice value 1/,
+    },
+    {
+      detail: { statusOptions: [{ value: 1, label: 'Open' }, { value: 2, label: 'Inactive' }] },
+      reason: /label mismatch/,
+    },
+  ];
+  for (const { sourceEvidence, attributeOverrides, detail, reason } of cases) {
+    const form = await stateStatusDetail(sourceEvidence, { attributeOverrides, ...detail });
+    const manifest = buildManifest(buildInputs(stateStatusContract(), snapshot({ tables: [form] })));
+    assert.equal(manifest.executable, false, String(reason));
+    assert.ok(
+      stateColumnDecisions(manifest)
+        .some((decision) => decision.verificationStatus !== 'verified' && reason.test(decision.reason)),
+      `${reason}: ${JSON.stringify(stateColumnDecisions(manifest).map((decision) => decision.reason))}`,
+    );
+    assert.equal(manifest.summary.metadataOperationCount, 0);
+  }
+});
+
+test('State/Status planned as choice stays blocked with a corrective hint', async () => {
+  const manifest = buildManifest(buildInputs(
+    stateStatusContract({ stateType: 'choice', statusType: 'choice' }),
+    snapshot({ tables: [await stateStatusDetail()] }),
+  ));
+  assert.equal(manifest.executable, false);
+  const reasons = stateColumnDecisions(manifest).map((decision) => decision.reason);
+  assert.equal(reasons.length, 2);
+  assert.ok(reasons.some((reason) => /got State \(plan built-in state columns with type "state"\)/.test(reason)));
+  assert.ok(reasons.some((reason) => /got Status \(plan built-in status columns with type "status"\)/.test(reason)));
+  assert.equal(manifest.summary.metadataOperationCount, 0);
+});
+
+test('contract validation keeps State/Status columns reuse-only and option-backed', () => {
+  for (const plannedDecision of ['create', 'extend', 'adapt']) {
+    const contract = stateStatusContract();
+    contract.tables[0].columns[0].plannedDecision = plannedDecision;
+    const result = validateContract(contract);
+    assert.equal(result.valid, false, plannedDecision);
+    assert.ok(
+      result.errors.some((error) => /system state column and can only be reused/.test(error)),
+      result.errors.join('; '),
+    );
+  }
+  const missingOptions = stateStatusContract();
+  delete missingOptions.tables[0].columns[1].options;
+  const result = validateContract(missingOptions);
+  assert.equal(result.valid, false);
+  assert.ok(result.errors.some((error) => /options must be a non-empty array/.test(error)));
 });
 
 test('ordinary Memo and Lookup columns accept nullable Dataverse SourceType', () => {
