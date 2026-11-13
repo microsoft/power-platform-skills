@@ -5,6 +5,24 @@ All notable changes to the **model-apps** plugin.
 Entries are deliberately short: what changed and why it matters to you. The reasoning,
 evidence and trade-offs behind a change live in its PR, in `docs/`, or in the linked issue.
 
+## [2.27.0]
+
+- **Same-named declared views (#845):** `--verify` checks each declared view against its own row (managed binding, then `viewId`, then name), so two same-named views on one table, each with its own `key`, no longer fail verification.
+- `--changed-only` sees an edit to the earlier of two same-named declared views and runs the full build that applies it.
+- Both views of such a pair join the app's components and declared pins, not only the later one.
+- **Sensitive configuration stays off disk (#846):** the SDK workspace keeps environment-variable and connection-reference copies in memory, so the values, secret references and connection ids that deployment settings supply are never written to its files.
+- A protected environment-variable create left pending, by this version or a 2.26 build, now prints the steps and the exact approval that retire it (#847).
+- Copies an earlier version left in a workspace are never used as configuration, hidden or deleted: the build names their folders and refuses one it cannot prove clean.
+
+### Limits
+
+- Without `configurationIdentity`, a whole-build retry after a lost configuration create answer can still create a second row (#807).
+- A protected secret variable is created in two requests: if its value is refused, the build stops with the outcome unknown and the definition left; retire it and delete that row before declaring it again (#847).
+- For two same-named declared views with no managed binding or `viewId`, `verify` lists their content as unverified and does not prove each has its own row.
+- Workspace copies an earlier version left stay until removed by hand (see the app-builder skill).
+- A publish refused because another customization is running still stops after the ordinary retries (#848).
+- `/genpage` does not yet ask before editing a page other apps use (#676).
+
 ## [2.26.0]
 
 - **Managed downloads restore more of an app:** declared views and charts, environment variables, connection references and Custom API scaffolds the binding store proves unchanged; values, defaults, secrets and connection ids are never written (#811).

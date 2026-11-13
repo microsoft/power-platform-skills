@@ -726,6 +726,59 @@ test('rendered Jest setup suppresses only the pinned jsdom punycode deprecation'
   assert.match(config, /test\/pcf-jest-environment\.cjs/);
 });
 
+test('rendered Jest config finds only the project __tests__ tests, wherever the project is (#849)', () => {
+  const source = findFile(renderFieldPlan(), 'jest.config.cjs');
+  const loaded = { exports: {} };
+  new Function('module', 'exports', source)(loaded, loaded.exports);
+  const config = loaded.exports;
+
+  // This suite installs nothing, so it replays Jest 29's own discovery steps on the rendered config:
+  //   1. jest-config resolves each `roots` entry with `<rootDir>` replaced by the project path, and
+  //      the haste map crawls only those directories;
+  //   2. SearchSource drops a path any testPathIgnorePatterns RegExp matches (default
+  //      ["/node_modules/"]; on Windows jest-config rewrites "/" in it to "\\");
+  //   3. SearchSource keeps a path a testRegex RegExp matches, tested against the absolute path.
+  // A testMatch glob would need Jest's glob engine to replay, and it is what broke #849: Jest pastes
+  // the absolute path into a glob that starts with <rootDir>, and on Windows a backslash before a
+  // dot survives as a glob escape, so "C:\work\.repo" matched nothing.
+  assert.equal(config.testMatch, undefined, 'Jest rejects a config that sets both testMatch and testRegex');
+  assert.equal(typeof config.testRegex, 'string', 'the test pattern must be a RegExp, which never contains the project path');
+  assert.doesNotMatch(config.testRegex, /<rootDir>/);
+  const files = [
+    '__tests__/Source.test.ts',
+    '__tests__/helpers/Nested.test.ts',
+    '__tests__/helpers/fixture.ts',
+    'Source/index.test.ts',
+    'out/__tests__/Output.test.ts',
+    'obj/__tests__/Object.test.ts',
+    'generated/__tests__/Generated.test.ts',
+    'node_modules/sample/__tests__/Dependency.test.ts',
+    '__tests__/node_modules/sample/Dependency.test.ts',
+  ];
+  const shapes = [
+    { pathApi: path.posix, rootDir: '/work/project' },
+    { pathApi: path.posix, rootDir: '/home/runner/.cache/work/project' },
+    { pathApi: path.win32, rootDir: 'D:\\work\\project' },
+    { pathApi: path.win32, rootDir: 'D:\\work\\.repo\\project' },
+  ];
+  for (const { pathApi, rootDir } of shapes) {
+    const roots = (config.roots || ['<rootDir>']).map((root) => pathApi.resolve(rootDir, pathApi.normalize(`./${root.replace(/^<rootDir>/, '')}`)));
+    const ignore = (config.testPathIgnorePatterns || ['/node_modules/']).map((pattern) => new RegExp(pathApi === path.win32 ? pattern.replace(/\//g, '\\\\') : pattern));
+    const testRegex = new RegExp(config.testRegex);
+    const found = files
+      .map((rel) => pathApi.join(rootDir, ...rel.split('/')))
+      .filter((file) => roots.some((root) => file.startsWith(root + pathApi.sep)))
+      .filter((file) => !ignore.some((pattern) => pattern.test(file)))
+      .filter((file) => testRegex.test(file))
+      .map((file) => pathApi.relative(rootDir, file).split(pathApi.sep).join('/'));
+    assert.deepEqual(found, ['__tests__/Source.test.ts', '__tests__/helpers/Nested.test.ts'], rootDir);
+  }
+
+  assert.equal(config.testEnvironment, '<rootDir>/test/pcf-jest-environment.cjs');
+  assert.deepEqual(config.setupFiles, ['<rootDir>/test/jest-setup.js']);
+  assert.deepEqual(config.transform, { '^.+\\.tsx?$': ['ts-jest', { tsconfig: 'tsconfig.test.json' }] });
+});
+
 test('mockDataSet renders first-class loading, error and paging options', () => {
   const kit = findFile(renderFieldPlan(), path.join('test', 'pcf-context.ts'));
 

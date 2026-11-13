@@ -81,6 +81,15 @@ snapshot with `render-dataverse-architect-evidence.js --validate-only` as the
 recipe requires. Never dispatch on failed/stale output. Agents read only the
 compact sidecar; the full snapshot is an opaque validator input.
 
+For existing GUID columns, use `uniqueidentifier` in the approved contract.
+The verifier maps it to Dataverse's `Uniqueidentifier` / `UniqueidentifierType`;
+standard `systemuser` GUID columns can remain `reuse`, without aliases or schema
+writes. An explicitly present `SourceType: null` is valid for these columns
+because they cannot be specialized ([SourceType metadata](https://learn.microsoft.com/en-us/dotnet/api/microsoft.xrm.sdk.metadata.attributemetadata.sourcetype)).
+Missing or malformed `SourceType` is not that evidence and must remain unverified.
+After updating a verifier, regenerate the bounded execution-reconciliation
+snapshot; do not repair cached metadata by inserting nulls or changing types.
+
 ## 3. Produce a proposal on every path
 
 Use this handoff for the architect, including retries:

@@ -631,7 +631,16 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   which reads each page again — as each rebuild does — and a page that already holds its content is not written (and is published only if this workspace did not record that this very content was published), so its history does not record the prompt again.
   **All of the build's Dataverse access is via the SDK** (see "Dataverse Access From Scripts" for the
   sanctioned exceptions elsewhere), so metadata is persisted under
-  `<app-folder>/.maker-workspace/` for reuse/edits. The 16 phases
+  `<app-folder>/.maker-workspace/` for reuse/edits. Environment variables and connection references are the
+  exception: the SDK's copies of them (values, defaults, value schemas, secret references, connection ids) stay in
+  that SDK instance's memory and are never written to any workspace, the build's throwaway one included
+  (`lib/workspace-configuration-memory.js`, applied by `lib/maker-sdk.js` to every SDK it makes). Copies an earlier
+  version wrote there are never deleted or hidden by the plugin: a pair the SDK's own metadata proves clean (the copy
+  equals its last-synced `snapshot`) is left on disk and never used as configuration (it is read only to prove it clean); anything else (a draft, a lone file, a file that cannot be
+  read) is refused with `WORKSPACE_LEGACY_CONFIGURATION_COPY` at the SDK's first touch of that artifact, naming its two
+  files and quoting none of their content, and checked again on the next touch; every SDK made over a folder that still
+  holds such files warns once per process, naming the folders. The maker removes them by hand (app-builder skill,
+  "Sensitive configuration in the workspace"). The 16 phases
   (`solution·data-model·sample-data·web-resources·views·charts·forms·business-rules·business-process-flows·commands·dashboards·app-shell·pages·ai-features·security·publish`)
   are unchanged; independent ops run with bounded parallelism.
   **Business rules are environment-gated, and the gate has two forms** (`sdk-build.js`, the `business-rules` loop; `skipIf` is the whole decision). An environment that does not declare the
@@ -1789,7 +1798,7 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   **It restores protected configuration** (`configurationIdentity: "stable-v1"`; `lib/declared-configuration-io.js`,
   `restoreManagedConfiguration`). A configuration group keeps no declaration, so each one is rebuilt from the bound
   rows as they are now, read IN MEMORY at their exact ids (`readConfigurationRow`), never through the SDK's cached
-  `fetchArtifact` (which writes current values, defaults and connection ids into workspace files). It is accepted
+  `fetchArtifact` (whose copy holds current values, defaults and connection ids, kept in the SDK's memory). It is accepted
   only when `restoreProofOf` (`lib/configuration-protected.js`) proves a rebuild of it changes nothing: the build's
   own exact location, plan and judgment, every planned row matching a committed consumer row, and each such row's
   current projection equal to the one the build committed (that comparison is what catches a row edited by hand,
@@ -3572,12 +3581,29 @@ run's own epoch, `attemptProvenUnsent`, the group still at the attempt's base ge
 found made): an operation the SDK refused before its first request (`CUSTOM_API_LABELS_UNSUPPORTED` on an
 environment with more than one language) must not hold the group, or every later declaration — the earlier
 one, another edit, the same one — stops on a pending attempt prepared for another declaration. Anything that
-may have been sent keeps the attempt, and the run's own stop stands either way. Environment variable and connection reference updates (definition, first
+may have been sent keeps the attempt, and the run's own stop stands either way. A create REQUEST the service refused
+before carrying it out (#847: `managed-feature-contract.js` `notStartedAnswer`, a 400/403/404/412 with a Dataverse
+error code, never a `$batch`; only a POST whose every row is a create — a refused PATCH of an existing row keeps its
+owed recovery) is un-sealed by the transport while its scope is open (`managed-create-transport.js`
+`refusedUnstarted` -> `store.noteRowsNotStarted`: those rows back to undispatched, one count from `possible` to
+`notStarted`). One Dataverse operation is rolled back whole, so if it was the attempt's only send the port's
+`ctx.release` succeeds and the item stops as `create-refused` (`refusedStop`, `nothingCreated`, the service
+code), routed to the refused bucket so later items still run: nothing is pending, and the next build creates it
+again from what the App Spec then declares (a secret variable's value from the settings), or drops it. Measured live, a
+secret variable's protected create is two sends (the definition, then its value): a refused value therefore keeps the
+attempt (`create-outcome-unknown`, the definition row left), and the maker retires it as the reference describes. Environment variable and connection reference updates (definition, first
 value, own value replacement) go through the protected port as one checked set over the item's plan; a value
 row the binding does not hold is `create-identity-conflict`. Before any service change, every build runs the
 store-driven `pendingSweep` (the hookup's `sweep`, run by `configuration-build.js` `sweepPendingConfiguration`
 regardless of the opt-in, the declarations or the phases): an undeclared pending or unusable protected record
-stops it with `managed-settlement-pending`. Before an overwriting fetch of a protected item (preflight, port and
+stops it with `managed-settlement-pending`, except an attempt the store lets go by its own checked write (#847):
+one still `prepared` (`retireUnsentAttempt`), one `attemptProvenUnsent` (`retireProvenUnsentAttempt`), and
+one that may have been sent only under the maker's exact `--authorize retire:<kind>:<port key>@<attempt token>`
+(printed by the stop; read by `configurationAuthorizationKeys` into `opts.configurationRetirements`, refused for a
+declared item with `CONFIGURATION_RETIRE_DECLARED`; `store.abandonAttempt`). Abandoning deletes and sends
+nothing: rows the attempt may have created stay unmanaged, and a later declaration is an unbound create whose
+derived-id read stops on them (`create-identity-conflict`), so nothing is created twice. Each retired attempt is
+named through `opts.warn`. Before an overwriting fetch of a protected item (preflight, port and
 verify), a workspace copy with unsynced edits (`hasUnsyncedEdits`) stops it. The build never resets or deletes
 that copy on its own, a failed or uncertain send included: the copy is shared with the maker, the SDK diff is not
 locked and there is no conditional overwrite, so no check can prove a reset discards only the build's own change
@@ -4149,6 +4175,7 @@ scripts/
     apply-snapshot-store.js    ← changed-only: atomic snapshot write (writeFileAtomic, also the baseline's and the page ownership and publish records', with the access tokens the process obtained taken out of what it writes — a text, or bytes masked with as many `*` — `lib/output-redaction.js` `redactFileData`) + workspace lease + invalidate/claim/tombstone/delete + distrust marker. `acquireLease` is the one exclusive-create-and-reclaim protocol for a lock file in a workspace: the snapshot lease (`apply-snapshot.lock`) and the build's pages lock (`pages-<app>.lock`, `sdk-build.js` `acquireAppPagesLease`) both use it, the pages lock with the owner record of `process-owner.js` and a stricter rule for "stale" — a lock left by a build that was killed is released by the next build, which says so (`released the pages lock for '<app>': the build that held it (pid …) is no longer running`), but only when that build is provably gone; a lock whose pid runs, another machine's, one with no readable record, is refused in the words it always had, and none is ever taken by age
     apply-snapshot-index.js    ← changed-only: build result.created → snapshot artifact map
     workspace-paths.js         ← the `.maker-workspace` name + the guard that gates destructive --clear-workspace cleanup
+    workspace-configuration-memory.js ← keeps the SDK's environment-variable and connection-reference copies (values, defaults, value schemas, secret references, connection ids) in memory, never in a workspace file; never deletes or hides copies an earlier version left (a clean pair is left in place and never used as configuration, anything else is refused with WORKSPACE_LEGACY_CONFIGURATION_COPY; maker-sdk.js warns naming their folders)
     workspace-binding.js       ← a persistent `.maker-workspace` belongs to the environment it was first opened for (only `--apply` opens it; a dry run uses a temporary workspace): turns the SDK's `WORKSPACE_ORG_MISMATCH`, and a manifest the JSON parser rejects, into the build's halt (both environments as origins, the safe remedies — the teardown one only for another environment that was built in, with the folder printed on its own line; a folder that was only opened gets no build-there/teardown advice; a folder with no usable environment is moved aside, not deleted; never clears or re-binds) and into the dry run's warning
     changed-only-flow.js       ← changed-only: --changed-only orchestration (decide fast/full, live identity, snapshot lifecycle)
     projection.js              ← changed-only: pure post-apply verifiers (form placement / sitemap / page dual-hash)
@@ -7094,7 +7121,11 @@ cases are graded as a pass rate over N trials, on the first plugin skill the age
 asks for at any turn. The decision of its **first turn** is reported beside that
 grade and never in place of it: a skill it reaches for only after a first turn that
 chose none (a stand-in, perhaps, when its read-only menu has no way to do the work)
-still fails a negative case, and the case line says the first turn chose none. **Run it when you edit a skill
+still fails a negative case, and the case line says the first turn chose none. Because
+that menu cannot do any work, every prompt is sent after a short note (`TRIAL_NOTE` in
+`lib/agents.js`) that says so and tells the agent to answer in one sentence and stop when
+no skill fits; saved transcripts show an agent that had already chosen none later calling
+`report-issue` while checking its tooling. The note names no skill and no product. **Run it when you edit a skill
 `description:`.** It is not a per-PR gate (cost, non-determinism):
 `model-apps-agent-evals.yml` runs it on a same-repo PR labelled
 `run-agent-evals`, weekly, and on demand, using Copilot CLI authenticated by the

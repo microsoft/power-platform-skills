@@ -226,6 +226,21 @@ test('lock package.json files pin exact versions only', () => {
   }
 });
 
+test('lockfiles resolve no minimatch release affected by GHSA-g3hv-75wg-m249', () => {
+  // The advisory covers minimatch >= 7.0.0 < 11.0.1 (the fix exists only in 11), while
+  // @typescript-eslint/typescript-estree still asks for ^9 or ^10, so the lock package.json pins its
+  // copy with an override. minimatch 3.x, used by eslint and jest, is outside the affected range.
+  for (const set of ['standard', 'virtual']) {
+    const lock = JSON.parse(fs.readFileSync(path.join(ROOT, 'lock', set, 'package-lock.json'), 'utf8'));
+    const copies = Object.entries(lock.packages).filter(([key]) => /(^|\/)node_modules\/minimatch$/.test(key));
+    assert.ok(copies.length > 0, `${set}: no minimatch in the lockfile`);
+    for (const [key, entry] of copies) {
+      const affected = m.compareVersions(entry.version, '7.0.0') >= 0 && m.compareVersions(entry.version, '11.0.1') < 0;
+      assert.equal(affected, false, `${set}: ${key} is ${entry.version}`);
+    }
+  }
+});
+
 test('no file outside the matrix hard-codes a pcf-scripts version', () => {
   const offenders = [];
   const walk = (d) => {

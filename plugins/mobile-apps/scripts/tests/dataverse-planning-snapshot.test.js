@@ -1204,6 +1204,38 @@ test('exact-name expansion propagates terminal authentication failures', async (
   );
 });
 
+test('snapshot preserves explicit null or integer SourceType without inventing absent evidence', async () => {
+  const cases = [
+    ...[null, 0, 1, 2, 3, 4].map((value) => ({ evidence: { SourceType: value }, expected: value })),
+    { evidence: {} },
+    ...[undefined, '', '0', 'invalid', false, true, {}, [], 0.5]
+      .map((value) => ({ evidence: { SourceType: value } })),
+  ];
+  const table = await loadDetailedEntity(async (_method, apiPath) => ({
+    status: 200,
+    data: {
+      value: apiPath.includes('/Attributes?$select=')
+        ? cases.map(({ evidence }, index) => ({
+          LogicalName: `new_guid${index}`,
+          SchemaName: `new_Guid${index}`,
+          AttributeType: 'Uniqueidentifier',
+          AttributeTypeName: { Value: 'UniqueidentifierType' },
+          ...evidence,
+        }))
+        : [],
+    },
+  }), entity('new_item', 'Item'));
+
+  assert.equal(table.columns.length, cases.length);
+  for (const [index, { expected }] of cases.entries()) {
+    const column = table.columns[index];
+    assert.equal(Object.hasOwn(column, 'sourceType'), expected !== undefined, `case ${index}`);
+    assert.equal(column.sourceType, expected, `case ${index}`);
+    assert.equal(column.type, 'Uniqueidentifier');
+    assert.equal(column.typeName, 'UniqueidentifierType');
+  }
+});
+
 test('computed metadata is explicitly unavailable when SourceTypeMask cannot be proven', async () => {
   const table = await loadDetailedEntity(async (_method, apiPath) => {
     if (apiPath.includes('/Attributes?$select=')) {
