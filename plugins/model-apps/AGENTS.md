@@ -3138,7 +3138,10 @@ charts phases. A spec that uses none of them takes the legacy paths unchanged. W
   `readSystemFormLayers` (`lib/systemform-published.js`) also offers both form XMLs to `cellCaptionDifferences`,
   AFTER computing the two hashes and inside its own guard. A cell is compared only when its id, tab, section and
   direct controls match on both sides, and a language only when it has exactly one label on each side; anything
-  ambiguous or unread answers nothing. A usable answer (at most 8 cell/language pairs, copied field by field) is
+  ambiguous or unread answers nothing. Measured with languages 1033 and 3082 provisioned: the published form XML
+  that `GET systemforms` returns (also with an `Accept-Language: es-ES` header) holds only a cell's 1033 label,
+  although a solution export shows its published 3082 label too, so a caption difference in the second language was
+  not reported there. A usable answer (at most 8 cell/language pairs, copied field by field) is
   appended to the unconfirmed-publication stop (`publishManagedScope`, `confirmUncertainPublication`) as cell ids
   and language codes, never caption text. It is a diagnostic, not a proof: it changes no hash, no decision and no
   store record, and a helper that throws, is missing or answers anything else leaves the stop exactly as before.
@@ -3627,8 +3630,9 @@ legacy copy in the real workspace with the existing `WORKSPACE_LEGACY_CONFIGURAT
 receipt. The build command (`build-model-app.js` runBuildCommand) runs the same check over every pair in the
 app's durable workspace under its lease, before it makes the SDK: its configuration step works in the
 solution-scoped SDK's throwaway workspace, so the in-memory wrapper alone never meets a draft left there. A dirty,
-malformed or orphaned pair stops an apply with `WORKSPACE_LEGACY_CONFIGURATION_COPY` before any write (only the
-sign-in check and the organization language read come first; a dry run warns); a clean pair changes nothing.
+malformed or orphaned pair stops an apply with `WORKSPACE_LEGACY_CONFIGURATION_COPY` before any write (the preceding
+Dataverse requests are the sign-in check and either the organization language read or, for a valid CLI or App Spec
+language override, the provisioned-languages read; a dry run warns); a clean pair changes nothing.
 Recovery also compares a Custom API's or duplicate rule's workspace copy with its snapshot (the SDK's `diffArtifact`,
 over a storage that refuses writes and a client that refuses requests) in `prepare` and `resolve`, and an unsent
 edit stops both with `create-completion-required`, the code the build's `refuseLocalDraft` uses.
