@@ -16,10 +16,12 @@ Steps it names, by build order:
 
 <!-- The step starts here; everything above is about the file. -->
 
-**Print before starting:**
-> "→ [Step <n>/<total>] Adding <N> connectors: <list>. Each runs sequentially (parallel writes would race)."
+Read the `## Connectors` section from `native-app-plan.md`.
+If it says "None", print `↷ [Step <n>/<total>] No connectors in this plan.`, skip only the connector invocations below, and continue at **Close the capabilities phase**.
+That part still runs for an app without connectors: the native capabilities step opened the phase, and the architecture gate's first-pass trust report has no `handles[]` or `notCollected[]` yet.
 
-Read the `## Connectors` section from `native-app-plan.md`. If it says "None", skip this step entirely.
+Otherwise, print before starting:
+> "→ [Step <n>/<total>] Adding <N> connectors: <list>. Each runs sequentially (parallel writes would race)."
 
 For each row in the table, route to the correct skill based on the API name:
 
@@ -37,7 +39,7 @@ Run sequentially — each generates files under `src/generated/`. Parallel write
 
 **Mutation-heavy steps stay sequential.** Dataverse table creation (the Apply data model step), connector adds (this step), and generated-service writes are all sequential by design. The fast path in this skill is **parallel screen generation** (the screen-building steps) plus **fewer prompts** (token cache, auto-proceed) — NOT parallelizing the data-source/service mutations. Do not attempt to parallel-batch `pa app add data-source` or `/add-connector` invocations; they share `src/generated/` and `power.config.json` and will race or corrupt state.
 
-Device capabilities and connectors are both wired, so close the phase:
+**Close the capabilities phase.** Device capabilities and connectors are both wired, or there were none to add:
 
 ```bash
 node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' step --id capabilities --status done

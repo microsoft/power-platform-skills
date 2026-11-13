@@ -126,3 +126,21 @@ test('each build order spawns its own planner', () => {
   assert.match(dataModelFirst, /native-app-planner/);
   assert.doesNotMatch(dataModelFirst, /architecture-planner|preview-screen-builder/);
 });
+
+test('an app without connectors still closes the capabilities phase and finalises the trust report', () => {
+  // Both orders run the shared connectors step, and most Dataverse-only apps have no connectors. The
+  // native capabilities step opens the phase this step closes, and the architecture gate's first-pass
+  // trust report lacks handles[] and notCollected[], so "None" may skip only the connector calls.
+  const { createSkillDataModelFirst, createSkillWorkflow } = require('./helpers/create-skill');
+  for (const [order, flow] of [['screens first', createSkillWorkflow()], ['data model first', createSkillDataModelFirst()]]) {
+    const none = flow.indexOf('If it says "None"');
+    const step = flow.slice(none, flow.indexOf('`trust.json` has four keys', none));
+    assert.ok(none > 0, `${order} reads the connectors section`);
+    assert.doesNotMatch(step, /skip this step entirely/, order);
+    assert.match(step, /skip only the connector invocations below, and continue at \*\*Close the capabilities phase\*\*/, order);
+    const close = step.indexOf('**Close the capabilities phase.**');
+    assert.ok(close > step.indexOf('| `sharepointonline` |'), `${order} closes the phase after the invocations`);
+    assert.ok(step.indexOf('step --id capabilities --status done', close) > close, order);
+    assert.ok(step.indexOf('--section trust', close) > close, `${order} finalises the trust report`);
+  }
+});

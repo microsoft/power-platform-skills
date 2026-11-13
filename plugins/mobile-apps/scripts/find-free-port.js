@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 
 /**
- * find-free-port.js - report the first loopback TCP port, from `--start` upward, that nothing is
- * listening on.
+ * find-free-port.js - report the first TCP port, from `--start` upward, that nothing is listening
+ * on, on any interface.
  *
  * Why this exists: `/create-mobile-app` starts its preview with the template's
  * `npm run dev -- --port <port>` from a background terminal. Given an explicit port, the template's
@@ -10,9 +10,15 @@
  * and without a TTY Expo itself exits with `EADDRINUSE`. Picking a free port first keeps the
  * preview from failing on a machine that already runs Metro or another dev server.
  *
- * `localhost` may resolve to 127.0.0.1 or ::1 depending on the platform and Node's DNS ordering
- * (Expo bound ::1 on macOS with Node 22), so a port is free only when it can be bound on both.
- * A host without IPv6 reports EADDRNOTAVAIL or EAFNOSUPPORT for ::1, which counts as free there.
+ * The probes match where the server binds. `power-apps-dev` serves the phone on the LAN, so Metro
+ * listens on every interface, and `power-apps-dev` checks the port with a host-less bind. A
+ * loopback-only probe called a port free while another dev server held it on every interface, so
+ * the skill's retry kept choosing the port `power-apps-dev` refused. So a port is free only when
+ * it binds on the IPv4 and IPv6 wildcards and on both loopback addresses. The loopback probes stay
+ * because macOS lets a wildcard bind succeed beside a specific-address listener, and `localhost`
+ * may resolve to 127.0.0.1 or ::1 (Expo bound ::1 on macOS with Node 22) for the `--localhost`
+ * fallback. A host without IPv6 reports EADDRNOTAVAIL or EAFNOSUPPORT for `::` and ::1, which
+ * counts as free there.
  *
  * There is an unavoidable window between this probe and Expo binding the port. The skill treats
  * either refusal as a cue to run this again rather than as a failure.
@@ -26,7 +32,7 @@
 
 const net = require('node:net');
 
-const LOOPBACK_HOSTS = ['127.0.0.1', '::1'];
+const PROBE_HOSTS = ['0.0.0.0', '::', '127.0.0.1', '::1'];
 const UNSUPPORTED_ADDRESS_CODES = new Set(['EADDRNOTAVAIL', 'EAFNOSUPPORT']);
 
 function canBind(port, host) {
@@ -43,7 +49,7 @@ function canBind(port, host) {
 }
 
 async function isPortFree(port) {
-  for (const host of LOOPBACK_HOSTS) {
+  for (const host of PROBE_HOSTS) {
     if (!(await canBind(port, host))) return false;
   }
   return true;
@@ -60,7 +66,7 @@ async function findFreePort({ start = 19006, attempts = 50 } = {}) {
   for (let port = start; port <= last; port += 1) {
     if (await isPortFree(port)) return port;
   }
-  throw new Error(`No free loopback port between ${start} and ${last}`);
+  throw new Error(`No free port between ${start} and ${last}`);
 }
 
 function parseArgs(argv) {

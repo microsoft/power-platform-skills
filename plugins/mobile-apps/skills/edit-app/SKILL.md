@@ -581,7 +581,7 @@ Step numbers below are `/create-mobile-app`'s screens-first build order: Steps 1
 | Navigation | [navigation-and-skeletons.md](../create-mobile-app/references/navigation-and-skeletons.md) section 1 | Changed tabs, stacks, route groups, modal/formSheet presentation |
 | Service snapshot | `/create-mobile-app` Step 14.1 | Refresh after any data source/schema change before builders run |
 | Data layer | [`preview-data-layer.md`](../../shared/references/preview-data-layer.md) **Wiring** | Apps with `src/hooks/data/`: new entities, fields, queries, or device actions, wired straight to their real source |
-| Shared code + skeletons | [navigation-and-skeletons.md](../create-mobile-app/references/navigation-and-skeletons.md) section 2 | New screens, changed data imports, new shared row/card components |
+| Shared code + skeletons | Apps with `src/hooks/data/`: [navigation-and-skeletons.md](../create-mobile-app/references/navigation-and-skeletons.md) section 2. Apps without it: [data-model-first.md](../create-mobile-app/references/data-model-first.md) Step 10.8 | New screens, changed data imports, new shared row/card/hooks |
 | Screen implementation | Step 6.1 below | Only affected screens, via `mobile-app:screen-builder` waves |
 | Quality sweep | `/create-mobile-app` Step 15 | Changed screen files and route layouts |
 
@@ -962,8 +962,8 @@ Before spawning builders:
 - Create missing route folders for new screens.
 - Refresh the `## Generated Services` table using `/create-mobile-app` Step 14.1 rules if any data source/schema changed.
 - **Apps with `src/hooks/data/`** (created by the preview-first flow): screens reach data and device features only through `@/hooks/data`. `screen-planner` marks each Data Contract addition `(new)`; add each one to the data layer first (entity module, hook, field, query, or device action), wired directly to its real source by the **Wiring** rules in [`preview-data-layer.md`](../../shared/references/preview-data-layer.md) (no sample-data stage), then run `node "${PLUGIN_ROOT}/scripts/check-data-layer.js" --project-root '<working_dir>' --require-wired`. Apps without that folder keep importing generated services in screens.
-- Generate or refresh app-specific shared code per [navigation-and-skeletons.md](../create-mobile-app/references/navigation-and-skeletons.md) section 2.1 when two or more affected screens share an entity row/card, choice map, cursor hook, or save helper.
-- For brand-new screens, write typed skeleton files using the [navigation-and-skeletons.md](../create-mobile-app/references/navigation-and-skeletons.md) section 2.2 patterns before calling builders.
+- Generate or refresh app-specific shared code when two or more affected screens share an entity row/card, choice map, cursor hook, or save helper: per [navigation-and-skeletons.md](../create-mobile-app/references/navigation-and-skeletons.md) section 2.1 for apps with `src/hooks/data/`, or per [data-model-first.md](../create-mobile-app/references/data-model-first.md) Step 10.8a for apps without it. Section 2.1 types shared components with the domain types from `@/hooks/data`, and an app without that folder has nothing to import them from; Step 10.8a builds them on its generated services and models instead.
+- For brand-new screens, write typed skeleton files before calling builders: [navigation-and-skeletons.md](../create-mobile-app/references/navigation-and-skeletons.md) section 2.2 for apps with `src/hooks/data/`, [data-model-first.md](../create-mobile-app/references/data-model-first.md) Step 10.8b for apps without it.
 - For existing screens, do not overwrite with skeletons. Pass the current file content and the change request to the builder in edit mode. If imports/data hooks changed, update them surgically before the builder fills or revises JSX.
 - For removed screens, delete route files and remove layout entries only when the user approved deletion in Step 3.
 
@@ -981,7 +981,7 @@ Shared scaffold algorithm:
 
 - If `src/components/index.tsx`, `src/hooks/index.ts`, `src/utils/index.ts`, or `src/tokens/index.ts` is missing, copy the missing file from `shared/samples/src/`. Never overwrite an existing shared file.
 - If affected screens share an entity card/row, choice map, cursor hook, detail hook, or save helper, create or update a focused app-specific shared file before spawning builders.
-- For brand-new screens, write a typed skeleton at the `target_file` using the relevant [navigation-and-skeletons.md](../create-mobile-app/references/navigation-and-skeletons.md) section 2.2 template (data-layer apps), or the generated-service form shown in `shared/samples/screen-list.tsx` (apps without `src/hooks/data/`). The skeleton must compile with `return null` before screen-builder runs.
+- For brand-new screens, write a typed skeleton at the `target_file` using the relevant [navigation-and-skeletons.md](../create-mobile-app/references/navigation-and-skeletons.md) section 2.2 template (apps with `src/hooks/data/`) or [data-model-first.md](../create-mobile-app/references/data-model-first.md) Step 10.8b template (apps without it). The skeleton must compile with `return null` before screen-builder runs.
 - For existing screens, never replace the whole file with a skeleton. Patch imports/hooks only when the approved edit changes the data/native surface, then ask the builder to preserve existing behavior.
 
 Run the navigation/skeleton gate before screen-builder work:

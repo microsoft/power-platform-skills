@@ -49,6 +49,26 @@ test('a port bound only on IPv6 loopback is also treated as taken', async (t) =>
   }
 });
 
+test('a port another dev server holds on every interface is treated as taken', async (t) => {
+  // `npm run dev` serves the phone on the LAN, so Metro and power-apps-dev bind without a host. A
+  // loopback-only probe called such a port free on macOS while power-apps-dev refused it, so the
+  // skill's "find another port and restart" recovery kept choosing the same port.
+  for (const host of [undefined, '0.0.0.0', '::']) {
+    let busy;
+    try {
+      busy = await listen(host);
+    } catch {
+      t.diagnostic(`cannot listen on ${host} here`);
+      continue;
+    }
+    try {
+      assert.equal(await isPortFree(busy.address().port), false, `held on ${host ?? 'every interface'}`);
+    } finally {
+      await close(busy);
+    }
+  }
+});
+
 test('the CLI prints the port and a localhost URL as JSON', () => {
   const output = JSON.parse(execFileSync(process.execPath, [SCRIPT, '--start', '19006'], { encoding: 'utf8' }));
   assert.ok(Number.isInteger(output.port) && output.port >= 19006);
