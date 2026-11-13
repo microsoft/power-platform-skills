@@ -222,7 +222,7 @@ Rules:
 3. Memoize list items if they have any non-trivial render.
 4. Use `getItemLayout` when row height is fixed.
 5. Pull-to-refresh via `refreshing` + `onRefresh` props on FlatList.
-6. Pagination rule: if the list queries a Dataverse table with no natural record ceiling, always paginate with a cursor/next-page path. In the Power Apps data SDK this is `maxPageSize` + returned `skipToken`; `top: 50` by itself is only a capped first page. Use deterministic `orderBy` with a unique key, include `select`, and push search into the service `filter`.
+6. Pagination rule: unbounded Dataverse lists need a cursor/next-page path. Ordinary OData uses `maxPageSize` + returned `skipToken`, deterministic `orderBy` with a unique key, `select`, and server-side `filter`. Saved system views use `getSavedQuery` with `maxPageSize` + unchanged `nextLink`; the shared hook uses `cursorMode: 'nextLink'`, and selection/order belong to the view rather than caller options. Do not add unsupported search or filter only loaded rows. `top: 50` alone is not pagination. Follow [data-performance.md](data-performance.md).
 7. Search rule: never filter a large list client-side. Push `$filter` to Dataverse.
 
 ## References

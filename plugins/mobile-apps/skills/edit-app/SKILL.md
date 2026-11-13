@@ -936,6 +936,14 @@ done
 
 Replace or create the `## Generated Services (snapshot at <ISO timestamp>)` section in `native-app-plan.md` immediately after `## Screens`. If there are no services, write an empty table and a note. Screen-builders must treat this table as authoritative.
 
+For a new Dataverse query in the approved edit, include the per-service report
+from `check-dataverse-query-support.js --project-root '<working_dir>'` and gate
+the required features as specified in `shared/references/data-performance.md`.
+Do not reinterpret this as a migration: preserve unrelated existing queries,
+computed columns, and refresh owners. A stale service or SDK is a prerequisite
+to report through the manual guidance in `data-performance.md`, not permission
+to invoke updates/refreshes, hand-edit generated files, or rewrite the whole app.
+
 Mark still-present services in the approved removal set as retiring: builders
 must not introduce or retain dependencies on them. Refresh this snapshot again
 after Step 6.5 so it describes the actual remaining output.

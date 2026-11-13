@@ -727,14 +727,20 @@ Reject loop = re-spawn `screen-planner` with the user's feedback (layout, screen
 
 **Run condition:** execute this step ONLY in `required` mode, after Gate 4 has
 been approved, and when the screen-planner specs include at least one
-`related_entity_fields` block. In `connector-only`, skip this step and never
-dispatch `data-model-architect`. Skip silently when no related fields exist.
+`related_entity_fields` block **or an `apply`/`getSavedQuery` Data contract**.
+In `connector-only`, skip this step and never dispatch `data-model-architect`.
+Primary-table aggregates and saved views need this audit even with no related fields.
 
-**Detection (cheap):** before spawning, `Grep` the locked plan for `related_entity_fields:` in `<working_dir>/native-app-plan.md`. Zero matches → skip Step 5c entirely, mark `[x]` and proceed to Step 6. One or more matches → spawn the audit pass below.
+**Detection (cheap):** inspect the locked `## Screens` specs in
+`<working_dir>/native-app-plan.md` for `related_entity_fields:`, `apply:` query
+options, or `getSavedQuery` Data methods. Skip Step 5c only when all three are
+absent. Otherwise spawn the audit below; an empty related-field list does not
+skip the independent Data-contract audit.
 
-This step exists because the SDK has no `$expand`. It verifies that every
-cross-entity field uses a formatted lookup or bounded chained fetch, and flags
-hot-path fields that require an externally supplied projection. It never
+This step verifies that every cross-entity field has metadata-grounded navigation
+and a supported read contract: formatted lookup, expand, grouped apply, bounded
+chained fetch, or an existing projection. Follow `data-performance.md` for the
+installed SDK/generator check and separate online/offline capabilities. It never
 synthesizes calculated/formula metadata and must preserve the already approved
 `.tmp/dataverse-schema-contract.json` unchanged.
 
@@ -751,13 +757,13 @@ Working directory: [absolute path]
 Plugin root: ${PLUGIN_ROOT}
 Publisher prefix: [paste prefix from Round 1 prompt — must match the original]
 
-Follow your agent file's Step 6a algorithm verbatim. Append a `### Cross-entity Reads (auto-derived from screen plan)` subsection to `_dm_section.md` (and mirror into `## Data Model` of `native-app-plan.md`). If no `related_entity_fields` blocks exist, return `DONE` with a one-line note "no cross-entity reads required" — do NOT write an empty subsection.
+Follow your agent file's Step 6a algorithm verbatim. Independently validate every apply/getSavedQuery Data contract, including primary-table queries with no related fields. Append a `### Cross-entity Reads (auto-derived from screen plan)` subsection to `_dm_section.md` (and mirror into `## Data Model` of `native-app-plan.md`); it also records specialized query rows. Return `DONE` with "no related or specialized query reads required" only when neither related fields nor specialized Data contracts exist. Do not write an empty subsection.
 
 Return per AGENTS.md rule #10.
 ```
 
 Wait for return; apply the Step 3.0 status switch:
-- `DONE` (no cross-entity reads) → mark Step 5c done, proceed to Step 6.
+- `DONE` (no related fields or specialized query contracts) → mark Step 5c done, proceed to Step 6.
 - `DONE` with addendum written → re-mirror the updated `## Data Model` section into `native-app-plan.md` (architect writes `_dm_section.md`; you embed it). Continue to Gate 2 addendum below.
 - `DONE_WITH_CONCERNS: <list>` → embed addendum, propagate concerns into your own final `DONE_WITH_CONCERNS:`.
 - `NEEDS_CONTEXT:` / `BLOCKED:` — propagate up per the standard switch.
@@ -769,9 +775,9 @@ If 5c.1 wrote a `### Cross-entity Reads` addendum, present it to the user as a G
 ```
 ## Gate 2 — Addendum: Cross-entity Reads
 
-The screen plan reads N fields from related entities. The generated SDK has no
-$expand, so each field must use a formatted lookup, a bounded chained fetch, or
-an external server-owned projection.
+The screen plan contains N related fields and M aggregate/saved-view queries.
+Each needs a verified read path supported by the installed SDK, generated
+services, and execution target; no calculated column is created solely for a display join.
 
 Proposed read paths:
 
@@ -783,8 +789,9 @@ blocker until the user supplies that projection outside this workflow.
 
 Reject loop = re-spawn data-model-architect in `mode: cross-entity-audit` with the user's feedback (e.g. "drop cr3e9_tailnumber_calc, the list doesn't actually show it"). Approve = mark `[x]` Gate 2 addendum approved, proceed to Step 6.
 
-**Auto-skip rule:** if Step 5c.1 returned "no cross-entity reads required" (zero `related_entity_fields` blocks across all screens), skip Gate 2 addendum entirely. Print:
-> "→ Gate 2 addendum auto-skipped — no cross-entity reads in the screen plan."
+**Auto-skip rule:** skip the addendum only if Step 5c.1 verified no related fields
+and no apply/saved-view Data contracts. Print:
+> "→ Gate 2 addendum auto-skipped — no related or specialized query reads in the screen plan."
 
 ## Step 6 — Validate written artifacts
 

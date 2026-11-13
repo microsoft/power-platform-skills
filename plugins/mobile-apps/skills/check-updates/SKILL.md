@@ -164,6 +164,13 @@ Do not update transitive packages directly, add overrides, move packages between
 
 ## Finish
 
+If an approved update changed the Power Apps SDK or CLI, remind the user that
+existing generated data sources and app queries were not migrated. Give the
+[manual Dataverse prerequisites](../../shared/references/data-performance.md#existing-apps-manual-prerequisites)
+for any requested feature that remains unavailable. Do not execute data-source
+refreshes, rewrite existing queries, or remove calculated columns here.
+This reminder does not bypass the coordinated release/approval rules above.
+
 After all four steps finish, run `npm audit --json`; exits 0 and 1 can contain valid results. Treat other exits or malformed output as audit unavailable.
 
 Report a security finding only when all are true:

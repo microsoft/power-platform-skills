@@ -1236,6 +1236,53 @@ test('computed metadata is explicitly unavailable when SourceTypeMask cannot be 
   assert.match(computed.unavailableReason, /SourceTypeMask unavailable or malformed/);
 });
 
+test('relationship snapshots retain exact navigation names for expansion in both directions', async () => {
+  const calls = [];
+  const table = await loadDetailedEntity(async (_method, apiPath) => {
+    calls.push(apiPath);
+    if (apiPath.includes('/ManyToOneRelationships?')) {
+      return { status: 200, data: { value: [{
+        SchemaName: 'new_parent_children',
+        ReferencingAttribute: 'new_parentid',
+        ReferencedEntity: 'account',
+        ReferencedAttribute: 'accountid',
+        ReferencingEntityNavigationPropertyName: 'new_ParentAccount',
+        ReferencedEntityNavigationPropertyName: 'new_account_children',
+      }] } };
+    }
+    if (apiPath.includes('/OneToManyRelationships?')) {
+      return { status: 200, data: { value: [{
+        SchemaName: 'new_issue_tasks',
+        ReferencingEntity: 'task',
+        ReferencingAttribute: 'regardingobjectid',
+        ReferencingEntityNavigationPropertyName: 'regardingobjectid_new_issue',
+        ReferencedEntityNavigationPropertyName: 'new_issue_Tasks',
+      }] } };
+    }
+    if (apiPath.includes('/ManyToManyRelationships?')) {
+      return { status: 200, data: { value: [{
+        SchemaName: 'new_issue_contacts',
+        Entity1LogicalName: 'new_issue',
+        Entity1NavigationPropertyName: 'new_issue_contact',
+        Entity2LogicalName: 'contact',
+        Entity2NavigationPropertyName: 'contact_new_issue',
+        IntersectEntityName: 'new_issue_contact_intersect',
+      }] } };
+    }
+    return { status: 200, data: { value: [] } };
+  }, entity('new_issue', 'Issue'));
+
+  assert.equal(table.manyToOneRelationships[0].navigationProperty, 'new_ParentAccount');
+  assert.equal(table.oneToManyRelationships[0].navigationProperty, 'new_issue_Tasks');
+  assert.equal(table.oneToManyRelationships[0].partnerNavigationProperty, 'regardingobjectid_new_issue');
+  assert.equal(table.manyToManyRelationships[0].entity1NavigationProperty, 'new_issue_contact');
+  assert.equal(table.manyToManyRelationships[0].entity2NavigationProperty, 'contact_new_issue');
+  for (const property of ['ManyToOneRelationships', 'OneToManyRelationships']) {
+    assert.match(calls.find((value) => value.includes(`/${property}?`)), /ReferencingEntityNavigationPropertyName,ReferencedEntityNavigationPropertyName/);
+  }
+  assert.match(calls.find((value) => value.includes('/ManyToManyRelationships?')), /Entity1NavigationPropertyName/);
+});
+
 test('image metadata preserves full-image settings and its complete update definition', async () => {
   const imageDefinition = {
     MetadataId: 'image-id',

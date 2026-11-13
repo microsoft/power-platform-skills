@@ -66,6 +66,12 @@ Do not add preparation rewrites for `scheme`, `package`, `bundleIdentifier`, `sr
 1. **Connector-first for data** — All Power Platform data access goes through connectors and generated services in `src/generated/`. No direct Graph / Azure REST calls.
 2. **Native code is version-bounded; pure JavaScript is app-scoped.** Use `scripts/resolve-mobile-release.js` to resolve the app's reviewed native inventory, including installed versions and transitive native code. The newest plugin template's names are not an old app's baseline. Adding packages cannot add native code to a fixed player/base; native changes require a coordinated reviewed release. Pure-JS additions retain explicit planning/approval and installed-closure validation. Follow [JavaScript dependency planning](shared/references/javascript-dependency-planning.md) and [the native boundary](skills/add-native/SKILL.md). Verify haptics/controls support in the resolved release before generating wrappers. Native binary changes require matching rebuilt Android/iOS bases and available players before policy promotion.
 3. **Fresh-template mode** — acquire only an immutable verified package into a new/empty folder, or validate an existing fresh installed template. Never overwrite a customer project, use a mutable branch, or silently copy the bundled snapshot.
+   New Dataverse queries follow `shared/references/data-performance.md`:
+   supported generated services use typed expand/apply/saved-query reads, not
+   calculated/copied columns for display joins. `check-dataverse-query-support.js`
+   verifies installed SDK and generated contracts; offline needs separate
+   runtime evidence. Older SDKs or stale services receive manual upgrade/refresh
+   guidance; query workflows never migrate existing apps or install dependencies.
 4. **Safety guardrails** — Confirm before deploys, before global installs, before edits outside the project root.
 5. **Memory bank** — Persist `memory-bank.md` in the project root.
 6. **Plan mode** — Confirm requirements first. Gate 1 then presents native

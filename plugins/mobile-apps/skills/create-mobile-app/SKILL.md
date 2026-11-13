@@ -352,6 +352,16 @@ git --version                                       # optional
 
 Template-only rule: this skill no longer provisions npm feed tokens, PAT fallbacks, vendor fallbacks, or registry rewrites. The user must run `npm install` in the fresh template folder before invoking `/create-mobile-app`.
 
+Once Gate 1 selects Dataverse, before screen/data planning, run the read-only
+`node "${PLUGIN_ROOT}/scripts/check-dataverse-query-support.js" --project-root
+'<working_dir>'`. Pass its installed SDK/generator facts to the planner and
+architect. An empty service list is expected before generation; do not confuse
+that with SDK availability. The later generated-services gate verifies each
+planned query. If a requested query is unavailable, show the manual prerequisite
+message from `data-performance.md` and block only that unsupported feature.
+Do not invoke `/check-updates`, install packages, refresh sources, or invent a
+calculated-column workaround during query planning.
+
 Capture target Power Platform environment for the remaining flow.
 
 **Source of truth for env selection: the generated `power.config.json` first, explicit environment ID second.** In the normal template-folder flow, `pa app init` runs first and writes the selected environment ID into `power.config.json`; read that ID and pass it to `scripts/resolve-environment.js` to resolve the Dataverse URL and tenant. If `power.config.json` is missing or has an empty placeholder `environmentId`, ask for an environment ID. A Dataverse URL is useful as a resolver fallback for existing apps, but it is not enough for `pa app init` because init needs `--environment-id`.
@@ -2352,6 +2362,14 @@ npm run generate-schemas
 npx --no-install tsc --noEmit
 ```
 
+For each service used by a planned expand/apply/saved-query read, also run
+`check-dataverse-query-support.js --project-root '<working_dir>' --table
+'<logical-name>' --require '<planned-features>'` from `${PLUGIN_ROOT}/scripts/`.
+Follow [data-performance.md](../../shared/references/data-performance.md) for
+the feature names, exact relationship metadata, column types, and offline
+boundary. Do not hide unsupported options with casts or create calculated
+columns to make a display join work.
+
 If this fails, do not continue to native capabilities, connectors, navigation, or screens. Capture the full error list once, batch-fix generated-service/model or alias-map issues, then rerun the gate. If the failure is a hidden Dataverse collision already recovered via an alias (for example `aircraft` → `aircraftv2`), make sure the alias is reflected in `native-app-plan.md`, `memory-bank.md`, and the Generated Services snapshot before rerunning.
 
 ### Step 8.5 — Seed sample data (approved scope)
@@ -2893,6 +2911,13 @@ Write the result into `native-app-plan.md` as a new section **immediately after 
 
 If the directory is empty (no data sources added yet), still write the section with an empty table and a one-line note: "No generated services yet — builders will emit TODO stubs for any service their spec references."
 
+For Dataverse services, append the read-only capability report from
+`scripts/check-dataverse-query-support.js --project-root '<working_dir>'`
+under this snapshot: installed SDK/CLI versions and per-service
+`expand`, `apply`, and `saved-query` support. Methods alone do not prove option
+support. Mark this as online support, not offline evidence. Gate every planned
+new query against its actual service before generating the skeleton.
+
 ### Step 10.8 — Generate app-specific shared code + screen skeletons
 
 **Telemetry checkpoint: `generate_shared_code_and_screen_skeletons`**
@@ -2938,6 +2963,15 @@ If no cross-screen patterns are found (e.g. only 2 screens total with no overlap
 
 #### 10.8b — Generate screen skeletons
 
+Choose the fetch contract from the approved Data spec before applying a
+skeleton. The cursor skeleton below is for **ordinary OData**. A saved system
+view instead uses the `getSavedQuery` example in `data-performance.md`,
+`cursorMode: 'nextLink'`, complete-link callbacks, and no unsupported search,
+select, or orderBy arguments. An expanded query uses its app-owned generic
+projection type and exact expand/select options on every page. An aggregate
+uses the approved aliases and grouping keys, not a base-model row type or an
+invented primary ID. Never overwrite these contracts with a generic skeleton.
+
 For each screen in the plan's Screen Map that will be built by a screen-builder, write a **typed skeleton** file at its `target_file` path. The skeleton contains:
 
 1. All imports (components, hooks, utils, services, types) pre-resolved
@@ -2972,7 +3006,7 @@ export default function <ScreenName>() {
       select: [<renderedColumns>],
       ...(search ? { filter: containsFilter('<searchColumn>', search) } : {}),
       ...(skipToken ? { skipToken } : {}),
-    } as any),
+    }),
   });
 
   // TODO: screen-builder fills JSX here. FlatList MUST wire:
