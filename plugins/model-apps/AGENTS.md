@@ -3607,7 +3607,9 @@ the GET-only `configuration-recovery.js inspect`, never a rebuild, a workspace d
 over a read-only Dataverse client (`readonly-operations.js`); it never creates, updates, deletes, adds
 membership or publishes, and its completed resolution exits 1 with `configuration-create-reconciled` (never a
 build success). `--env` is required to prepare or resolve a unit, and a receipt of another context is refused
-before any read. The build's `--acknowledge-quarantined-configuration <id>[,<id>...]` is invocation-only:
+before any read. `prepare` and `resolve` hold the app build lease (a held lease is
+`configuration-create-state-busy`, its reason naming the lock file); `inspect` only reads and takes none.
+The build's `--acknowledge-quarantined-configuration <id>[,<id>...]` is invocation-only:
 validated against the workspace's quarantines (`validateQuarantineAcknowledgment`), handed to the first
 attempt only and spent by the engine (a WeakSet), never persisted and never accepted by teardown. Maker guide
 and stop-code table: [`docs/configuration-create-recovery.md`](docs/configuration-create-recovery.md). Tests:
