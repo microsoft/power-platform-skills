@@ -7,6 +7,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { makeTempDir } = require('./helpers/temp-dirs.js');
+const { skipWithoutDowngrade, requireDowngrade } = require('./helpers/downgrade-release.js');
 const { createConfigOrg } = require('./helpers/fake-config-org.js');
 const { validateAppSpec, CONFIGURATION_IDENTITY_MIN_VERSION } = require('../lib/app-spec.js');
 const { lintAppSpec } = require('../lib/spec-lint.js');
@@ -18,12 +19,14 @@ const { createManagedCreateContext } = require('../lib/managed-create-context.js
 const { openManagedBindings, managedManifestView, storeFileName } = require('../lib/managed-bindings.js');
 const { readerFor } = require('../verify-model-app.js');
 const { createConfigurationRuntime } = require('../lib/configuration-build.js');
-const { readDeploymentBindings, configurationAuthorizationKeys } = require('../lib/configuration-artifacts.js');
+const { readDeploymentBindings, configurationAuthorizationKeys, authorizeFlags, configurationHaltMessage } = require('../lib/configuration-artifacts.js');
+const C = require('../lib/configuration-artifacts.js');
 const { runSdkBuild } = require('../lib/sdk-build.js');
 const { STAGES } = require('../lib/stages.js');
 const { RETRY } = require('../lib/retry-policy.js');
 const B = require('../lib/configuration-create-bindings.js');
 const P = require('../lib/configuration-protected.js');
+const { attachConfigurationCreateBridge } = require('../lib/configuration-create-writer.js');
 
 const SOL = 'ContosoSol';
 function baseSpec(extra = {}) {
@@ -87,6 +90,9 @@ async function harness({ hookup = true, intercept, storeSeed } = {}) {
   const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(makeTempDir('cfg-protected-sdk-')), instanceUrl: org.origin, httpClient, solutionUniqueName: SOL });
   await sdk.initWorkspace();
   const storeDir = makeTempDir('cfg-protected-store-');
+  // The default (not opted-in) path creates through the build's create bridge, as makeSdk attaches it; its receipts live
+  // beside the binding store, so a later process over the same harness reads them.
+  attachConfigurationCreateBridge(sdk, { httpClient, apiUrl: (p) => sdk.dataverse.apiUrl(p), workspaceDir: storeDir });
   if (storeSeed) fs.writeFileSync(path.join(storeDir, storeFileName(storeSeed.environmentFingerprint, 'contoso_configured', SOL)), JSON.stringify(storeSeed, null, 2));
   const store = openManagedBindings({ workspaceDir: storeDir, environment: org.origin, appUniqueName: 'contoso_configured', solutionUniqueName: SOL });
   gate.bind(store);
@@ -108,10 +114,12 @@ function reopen(h, approvals = [], typedAs = configSpec()) {
   const ctx = createManagedCreateContext({ store: h.store, approvals: typed, notFoundCode: B.NOT_FOUND_CODE });
   return { ...h, ctx, protectedConfiguration: P.createProtectedConfiguration({ store: h.store, gate: h.gate, ctx, apiBase: `${h.org.origin}/api/data/v9.0` }) };
 }
-// One configuration pass as the build runs it: the preflight, then the data-model step. Answers what it sent.
+// One configuration pass as the build runs it: the preflight, then the data-model step. Answers what it sent. A harness
+// made by laterProcess over another plugin runtime (`h.runtime`) runs that runtime's build.
 async function pass(h, spec, opts = {}) {
   const mark = h.org.requests.length;
-  const runtime = createConfigurationRuntime({ spec, sdk: h.sdk, opts: { protectedConfiguration: h.protectedConfiguration, ...opts }, appUniqueName: 'contoso_configured' });
+  const make = h.runtime ? h.runtime.createConfigurationRuntime : createConfigurationRuntime;
+  const runtime = make({ spec, sdk: h.sdk, opts: { protectedConfiguration: h.protectedConfiguration, ...opts }, appUniqueName: 'contoso_configured' });
   let halt = null;
   let step = null;
   try {
@@ -1124,6 +1132,39 @@ async function savedUnpublishedRule(h, { settle }) {
   return { ruleId: planned.rows[0].id, token: attempt.token };
 }
 
+// #808: the guidance a stopped protected rule create carries when its first publication is not confirmed. `name` and `key`
+// are given as the sentence quotes them (JSON string text).
+const hintOf = (name, key, id) => `The first publication of duplicate detection rule ${name} (App Spec key ${key}, original id ${id}) has not been confirmed. `
+  + 'The build does not send this publication again. Check that exact rule: if it reads Publishing, wait and rebuild; otherwise check its definition '
+  + 'and conditions and, if they are what you intend, publish it in the environment\'s duplicate detection rules settings, then rebuild. '
+  + 'Setting "status": "published" in the App Spec does not bypass this pending attempt.';
+// Today's stops, which the guidance is appended to and never changes.
+const stepStop = (code, key = 'email') => `1 configuration item not completed: duplicateRule ${key} (${code})`;
+const completionStop = (h, key = 'email') => `duplicateRule ${key}: the managed duplicateRule "${key}" is not complete (missing rows, solution membership, rule state or a private input); `
+  + 'complete it under the same ids, then run again. If it cannot be completed that way (a create an earlier plugin version left pending after the service refused it, say), '
+  + 'stop tracking it instead: remove this item (and its deployment-settings entry) from the App Spec and run the build again with '
+  + `${authorizeFlags([`retire:duplicateRule:${key}@${h.store.readGroup('duplicateRule', key).pending.token}`])} `
+  + '(nothing is deleted or sent), then restore them and run again. If the attempt made a row at its derived id, that build stops with create-identity-conflict naming the row';
+const unverifiedStop = (key = 'email') => `duplicateRule ${key}: the managed duplicateRule "${key}" could not be read completely; nothing is created or bound`;
+const refusedPublish = { statusCode: 400, body: { error: { code: '0x80040216', message: 'publish failed' } } };
+// A harness whose service refuses every publication; `before(row)` changes the rule's row first (its state, say), as the
+// service's own publish job would have.
+async function refusingPublish({ before } = {}) {
+  let h = null;
+  h = await harness({
+    intercept: ({ method, path }) => {
+      const m = method === 'POST' && /\/duplicaterules\(([^)]+)\)\/Microsoft\.Dynamics\.CRM\.PublishDuplicateRule$/.exec(path);
+      if (!m) return undefined;
+      if (before) before(h.org.sets.get('duplicaterules').get(m[1].replace(/^\{|\}$/g, '').toLowerCase()));
+      return refusedPublish;
+    },
+  });
+  return h;
+}
+const ruleRow = (h, id) => h.org.sets.get('duplicaterules').get(id);
+const publishing = (row) => { row.statecode = 0; row.statuscode = 1; };
+const unreadable = (row) => { delete row.statecode; delete row.statuscode; };
+
 test('a saved rule create whose initial publication never left is published once by the rerun, then bound; nothing is sent again', async () => {
   const h = await harness();
   const { ruleId } = await savedUnpublishedRule(h, { settle: true });
@@ -1163,12 +1204,17 @@ test('the one send of an unsent rule publication is fenced: a refused publish st
   const first = await pass(reopen(h), ruleOnly());
   assert.equal(first.halt && first.halt.code, 'configuration-incomplete', first.halt && first.halt.message);
   assert.match(first.halt.message, /duplicateRule email \(create-completion-required\)/);
+  // The publication this build sent is not confirmed: the stop says which rule, at which id, and how to finish it (#808).
+  assert.equal(first.halt.message, `${stepStop('create-completion-required')} (${hintOf('"Same email"', '"email"', ruleId)})`);
+  assert.deepEqual(first.step.halt.items.map((p) => Object.keys(p)), [['kind', 'key', 'code']], 'the public halt item is unchanged');
+  assert.deepEqual(first.step.outcome.unknown.map((f) => [f.code, f.id]), [['create-completion-required', ruleId]], 'the stop now carries the rule\'s original id');
   assert.equal(publishes(first.sent).length, 1, 'sent once');
   assert.deepEqual(h.store.readGroup('duplicateRule', 'email').pending.rowProtocol.effects.filter((e) => e.kind === 'rule-state').map((e) => e.dispatched), [true]);
   refuse = false;
   const again = await pass(reopen(h), ruleOnly());
   assert.equal(again.halt && again.halt.code, 'create-completion-required');
   assert.equal(again.halt.phase, 'preflight');
+  assert.equal(again.halt.message, `${completionStop(h)} (${hintOf('"Same email"', '"email"', ruleId)})`);
   assert.deepEqual(again.sent, [], 'a publish that was sent is never replayed');
   // The maker publishes it under the same id; the next build binds it with nothing sent.
   await h.org.request({ url: `${h.org.origin}/api/data/v9.2/duplicaterules(${ruleId})/Microsoft.Dynamics.CRM.PublishDuplicateRule`, method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
@@ -1190,6 +1236,266 @@ test('only one claim may send an unsent rule publication: an older claim is refu
   const out = await pass(reopen(h), ruleOnly());
   assert.equal(out.halt && out.halt.code, 'create-completion-required');
   assert.deepEqual(out.sent, []);
+});
+
+// ---------------------------------------------------------------------------------------------
+// #808: a protected rule create whose first publication is not confirmed names the rule and its original id, and says how
+// to finish it. Wording only: the same requests, the same codes, the same store; a stop the build cannot prove is that
+// case keeps today's text.
+
+test('a first publication that is not confirmed names the rule and its original id, in the step stop and in every later preflight', async () => {
+  const h = await refusingPublish();
+  const first = await pass(h, configSpec());
+  const pending = h.store.readGroup('duplicateRule', 'email').pending;
+  const ruleId = pending.root.id;
+  const hint = hintOf('"Same email"', '"email"', ruleId);
+  assert.equal(first.halt && first.halt.message, `${stepStop('create-completion-required')} (${hint})`);
+  assert.deepEqual(first.step.halt.items.map((p) => Object.keys(p)), [['kind', 'key', 'code']]);
+  const sentPublishes = publishes(h.org.requests).length;
+
+  // Unpublished: today's preflight stop, then the guidance.
+  const again = await pass(h, configSpec(), overwriteCopy('duplicateRule', 'email'));
+  assert.equal(again.halt && again.halt.message, `${completionStop(h)} (${hint})`);
+  assert.deepEqual(again.sent, []);
+  // Publishing (statecode 0, statuscode 1) and a status that cannot be read: the identity is unverified, and the same advice holds.
+  publishing(ruleRow(h, ruleId));
+  const busy = await pass(reopen(h), configSpec(), overwriteCopy('duplicateRule', 'email'));
+  assert.equal(busy.halt && busy.halt.code, 'create-identity-unverified');
+  assert.equal(busy.halt.message, `${unverifiedStop()} (${hint})`);
+  unreadable(ruleRow(h, ruleId));
+  const blind = await pass(reopen(h), configSpec(), overwriteCopy('duplicateRule', 'email'));
+  assert.equal(blind.halt && blind.halt.message, `${unverifiedStop()} (${hint})`);
+  assert.deepEqual([...busy.sent, ...blind.sent], []);
+  // Writing "status": "published" does not send it: that declaration is not the one the pending attempt was prepared for.
+  const asked = await pass(reopen(h), configSpec(rule({ status: 'published' })), overwriteCopy('duplicateRule', 'email'));
+  assert.match(asked.halt && asked.halt.message, /has a pending attempt prepared for another declaration/);
+  assert.equal(publishes(h.org.requests).length, sentPublishes, 'the publication is never sent again');
+
+  // Published by the maker: the build binds it, with nothing sent and nothing to explain.
+  ruleRow(h, ruleId).statecode = 1;
+  ruleRow(h, ruleId).statuscode = 2;
+  const done = await pass(reopen(h), configSpec(), overwriteCopy('duplicateRule', 'email'));
+  assert.equal(done.halt, null, done.halt && `${done.halt.code}: ${done.halt.message}`);
+  assert.deepEqual(done.sent, []);
+});
+
+test('a first publication left Publishing, or whose status cannot be read, names the rule in the step stop', async () => {
+  for (const [label, before] of [['publishing', publishing], ['unreadable', unreadable]]) {
+    // eslint-disable-next-line no-await-in-loop
+    const h = await refusingPublish({ before });
+    // eslint-disable-next-line no-await-in-loop
+    const out = await pass(h, configSpec());
+    const ruleId = h.store.readGroup('duplicateRule', 'email').pending.root.id;
+    assert.equal(out.halt && out.halt.message, `${stepStop('create-identity-unverified')} (${hintOf('"Same email"', '"email"', ruleId)})`, label);
+  }
+});
+
+test('the guidance follows a rule stopped behind another item, and a step stop rebuilt for an unrecorded binding carries it once', async () => {
+  const h = await refusingPublish();
+  const failing = { lookup: async () => null, recordApplied: async () => { throw new Error('the manifest could not be written'); }, planAdoption: async () => ({ allowed: false, code: 'ADOPTION_REFUSED' }) };
+  const first = await pass(h, configSpec(), { managed: failing });
+  const ruleId = h.store.readGroup('duplicateRule', 'email').pending.root.id;
+  const hint = hintOf('"Same email"', '"email"', ruleId);
+  assert.match(first.halt.message, /CONFIGURATION_RECORD_UNCONFIRMED/);
+  assert.ok(first.halt.message.includes(`duplicateRule email (create-completion-required) (${hint})`), first.halt.message);
+  assert.equal(first.halt.message.split('The first publication').length, 2, 'once');
+  // An unsupported edit leads the preflight stop; the rule follows it, with its guidance.
+  const out = await pass(h, configSpec(api({ requestParameters: [{ ...API.requestParameters[0], type: 'string' }] })), overwriteCopy('duplicateRule', 'email'));
+  assert.equal(out.halt && out.halt.code, 'configuration-edit-unsupported', out.halt && out.halt.message);
+  assert.ok(out.halt.message.includes(` Also stopped: duplicateRule email (create-completion-required) (${hint}).`), out.halt.message);
+});
+
+test('a rule key and name are quoted losslessly in the guidance, however long or unusual', async () => {
+  const key = `k"\\\u007f${'x'.repeat(400)}`;
+  const name = 'Same "email"\t\u2028';
+  const h = await refusingPublish();
+  const spec = configSpec({ environmentVariables: [], customApis: [], duplicateDetectionRules: [{ ...RULE, key, name }] });
+  const out = await pass(h, spec);
+  const ruleId = h.store.readGroup('duplicateRule', key).pending.root.id;
+  assert.equal(out.halt && out.halt.message, `${stepStop('create-completion-required', key)} (${hintOf('"Same \\"email\\"\\t\\u2028"', `"k\\"\\\\\\u007f${'x'.repeat(400)}"`, ruleId)})`);
+});
+
+test('the halt formatter is unchanged without guidance, and guidance that fails or is not text adds nothing', () => {
+  const items = [{ kind: 'duplicateRule', key: 'email', code: 'create-completion-required' }, { kind: 'customApi', key: 'contoso_Calc', code: 'create-refused', serviceCode: '0x80040216' }];
+  const today = configurationHaltMessage(items);
+  for (const extra of [undefined, null, () => '', () => null, () => 42, () => { throw new Error('no'); }]) assert.equal(configurationHaltMessage(items, extra), today);
+  assert.equal(configurationHaltMessage(items, (p) => (p.kind === 'duplicateRule' ? 'advice' : null)),
+    today.replace('duplicateRule email (create-completion-required)', 'duplicateRule email (create-completion-required) (advice)'));
+});
+
+test('the guidance is given only for the hookup\'s own port, unchanged and in place: a replaced or wrapped port, another hookup or a raw helper keeps today\'s text', async () => {
+  const h = await refusingPublish();
+  await pass(h, configSpec());
+  const ruleId = h.store.readGroup('duplicateRule', 'email').pending.root.id;
+  const hint = hintOf('"Same email"', '"email"', ruleId);
+  const today = stepStop('create-completion-required');
+  // The step of a later build meets the pending create in resolve; a build runs it, so a step alone is enough here.
+  const step = async (hookup, before) => {
+    const runtime = createConfigurationRuntime({ spec: configSpec(), sdk: h.sdk, opts: { protectedConfiguration: hookup }, appUniqueName: 'contoso_configured' });
+    if (before) before(runtime);
+    const mark = h.org.requests.length;
+    const out = await runtime.apply('data-model');
+    assert.deepEqual(h.org.requests.slice(mark).filter((r) => r.method !== 'GET'), [], 'nothing is sent');
+    assert.deepEqual(out.outcome.unknown.map((f) => [f.code, f.id]), [['create-completion-required', ruleId]]);
+    return out.halt.message;
+  };
+  const own = reopen(h).protectedConfiguration;
+  assert.equal(await step(own), `${today} (${hint})`, 'the hookup\'s own port');
+  // ctx.creates replaced, by a copy or by a wrapper that throws its own error after the port's stop.
+  assert.equal(await step(own, (rt) => { rt.ctx.creates = { ...rt.ctx.creates }; }), today);
+  assert.equal(await step(own, (rt) => {
+    const port = rt.ctx.creates;
+    rt.ctx.creates = { ...port, resolve: async (q) => { try { return await port.resolve(q); } catch (e) { throw Object.assign(new Error('forged'), { code: e.code, kind: e.kind, key: e.key, id: ruleId }); } } };
+  }), today);
+  // The hookup's port with a method replaced in place.
+  const inPlace = { ...own, port: (args) => { const port = own.port(args); const { resolve } = port; port.resolve = (q) => resolve(q); return port; } };
+  assert.equal(await step(inPlace), today);
+  // Another hookup's reader over the same store, and a reader answering for a port no hookup issued.
+  assert.equal(await step({ ...own, publicationHint: reopen(h).protectedConfiguration.publicationHint }), today);
+  assert.equal(await step({ ...own, port: (args) => P.protectedConfigurationPort({ ...args, store: h.store, ctx: own.ctx }) }), today);
+  // A raw preflight's answer is no source either, even with the stop's own id.
+  const args = { spec: configSpec(), dataverse: h.sdk.dataverse, solution: SOL, ctx: own.ctx, store: h.store };
+  const raw = await P.preflightProtectedConfiguration(args);
+  assert.equal(raw.halts.length, 1);
+  assert.equal(own.publicationHint({ spec: args.spec, source: raw, kind: 'duplicateRule', key: 'email', code: raw.halts[0].code, guardId: raw.halts[0].id }), null);
+});
+
+test('a stand-in that puts the protected port or its resolver back before calling it, then throws its own stop, keeps today\'s text', async () => {
+  // As refusingPublish, plus `tap`: run once at the next request the service sees, so during a step that has started.
+  let tap = null;
+  const h = await harness({
+    intercept: ({ method, path }) => {
+      if (tap) { const once = tap; tap = null; once(); }
+      return method === 'POST' && /PublishDuplicateRule$/.test(path) ? refusedPublish : undefined;
+    },
+  });
+  await pass(h, configSpec());
+  const ruleId = h.store.readGroup('duplicateRule', 'email').pending.root.id;
+  const hint = hintOf('"Same email"', '"email"', ruleId);
+  const today = stepStop('create-completion-required');
+  const canary = 'canary-0f3b9a-private-text';
+  let forgedCount = 0;
+  const forged = () => { forgedCount += 1; return Object.assign(new Error(canary), { code: 'create-completion-required', id: ruleId, key: 'another-key' }); };
+  // `before` changes the runtime before the step; `during` changes it at the step's first request, after it has started.
+  const step = async (before, { during } = {}) => {
+    const runtime = createConfigurationRuntime({ spec: configSpec(), sdk: h.sdk, opts: { protectedConfiguration: reopen(h).protectedConfiguration }, appUniqueName: 'contoso_configured' });
+    if (before) before(runtime);
+    const mark = h.org.requests.length;
+    if (during) tap = () => during(runtime);
+    const out = await runtime.apply('data-model');
+    assert.equal(tap, null, 'a change meant for the step was made during it');
+    assert.deepEqual(h.org.requests.slice(mark).filter((r) => r.method !== 'GET'), [], 'nothing is sent');
+    assert.ok(!JSON.stringify(out).includes(canary), 'the stand-in\'s text never reaches the result');
+    assert.equal(out.halt && out.halt.code, 'configuration-incomplete');
+    return out.halt.message;
+  };
+  // The resolver replaced in place by one that restores the original, calls it, and replaces its genuine stop.
+  const selfRestoringResolver = (rt) => {
+    const port = rt.ctx.creates;
+    const original = port.resolve;
+    port.resolve = async (q) => {
+      if (q.kind !== 'duplicateRule') return original(q);
+      port.resolve = original;
+      try { await original(q); } catch { /* the genuine stop, replaced below */ }
+      throw forged();
+    };
+  };
+  // The same with the whole port: a stand-in that puts the protected port back in ctx.creates before calling it.
+  const selfRestoringPort = (rt) => {
+    const port = rt.ctx.creates;
+    rt.ctx.creates = {
+      ...port,
+      resolve: async (q) => {
+        if (q.kind !== 'duplicateRule') return port.resolve(q);
+        rt.ctx.creates = port;
+        try { await port.resolve(q); } catch { /* the genuine stop, replaced below */ }
+        throw forged();
+      },
+    };
+  };
+  for (const change of [selfRestoringResolver, selfRestoringPort]) {
+    const before = forgedCount;
+    assert.equal(await step(change), today, `${change.name} before the step`);
+    assert.equal(await step(null, { during: change }), today, `${change.name} during the step`);
+    assert.equal(forgedCount, before + 2, `${change.name} threw its own stop each time`);
+  }
+  // The port's own path still explains its stop: untouched, and with its own port and resolver written back unchanged.
+  assert.equal(await step(), `${today} (${hint})`);
+  assert.equal(await step((rt) => {
+    const port = rt.ctx.creates;
+    rt.ctx.creates = port;
+    port.resolve = port.resolve; // eslint-disable-line no-self-assign
+  }), `${today} (${hint})`);
+});
+
+test('the guidance reader answers only for the stop it observed and the store record that proves it, and reads nothing from the service', async () => {
+  const h = await refusingPublish();
+  await pass(h, configSpec());
+  const ruleId = h.store.readGroup('duplicateRule', 'email').pending.root.id;
+  const hint = hintOf('"Same email"', '"email"', ruleId);
+  // The reader sees the store through this proxy, so one record can be changed under it without touching the store.
+  let tamper = null;
+  const store = new Proxy(h.store, {
+    get(target, prop) {
+      if (prop === 'readGroup' && tamper) return (kind, key) => { const g = structuredClone(target.readGroup(kind, key)); tamper(g); return g; };
+      const value = target[prop];
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
+  const ctx = createManagedCreateContext({ store: h.store, notFoundCode: B.NOT_FOUND_CODE });
+  const hookup = P.createProtectedConfiguration({ store, gate: h.gate, ctx, apiBase: `${h.org.origin}/api/data/v9.0` });
+  const spec = configSpec();
+  const result = await hookup.preflight({ spec, dataverse: h.sdk.dataverse, solution: SOL });
+  const halt = result.halts.find((x) => x.kind === 'duplicateRule');
+  assert.deepEqual([halt.code, halt.id], ['create-completion-required', ruleId], 'the qualified stop carries the original id');
+  const ask = (over = {}) => hookup.publicationHint({ spec, source: result, kind: 'duplicateRule', key: 'email', code: halt.code, guardId: halt.id, ...over });
+  const mark = h.org.requests.length;
+  assert.equal(ask(), hint);
+  for (const [label, over] of [
+    ['no id', { guardId: undefined }], ['an id not normalized', { guardId: ruleId.toUpperCase() }], ['another id', { guardId: '00000000-0000-0000-0000-000000000001' }],
+    ['another key', { key: 'other' }], ['another code', { code: 'create-ownership-required' }], ['another kind', { kind: 'customApi' }],
+    ['another spec', { spec: configSpec() }], ['another source', { source: { halts: result.halts } }],
+  ]) assert.equal(ask(over), null, label);
+  const rs = (g) => g.pending.rowProtocol.effects.find((e) => e.kind === 'rule-state');
+  for (const [label, change] of [
+    ['a publication not dispatched', (g) => { rs(g).dispatched = false; }],
+    ['no publication effect', (g) => { g.pending.rowProtocol.effects = g.pending.rowProtocol.effects.filter((e) => e.kind !== 'rule-state'); }],
+    ['a committed group', (g) => { g.committed = { records: [] }; }],
+    ['another attempt', (g) => { g.pending.token = '00000000-0000-4000-8000-000000000000'; }],
+    ['another declaration', (g) => { g.pending.declarationSha256 = '0'.repeat(64); }],
+    ['an edit', (g) => { g.pending.expected.baseObservation = {}; }],
+    ['another root', (g) => { g.pending.root.id = '00000000-0000-0000-0000-000000000001'; }],
+    ['no initial publication owed', (g) => { g.pending.rowProtocol.completion.ruleState = 'unpublished'; }],
+  ]) {
+    tamper = change;
+    assert.equal(ask(), null, label);
+    tamper = null;
+  }
+  // The declaration changed in place since the stop was observed.
+  spec.duplicateDetectionRules[0].conditions[0].column = 'lastname';
+  assert.equal(ask(), null, 'a changed declaration');
+  spec.duplicateDetectionRules[0].conditions[0].column = 'emailaddress1';
+  assert.equal(ask(), hint);
+  assert.equal(h.org.requests.length, mark, 'the reader sends and reads nothing');
+});
+
+test('a pending rule whose row is gone, or whose conditions changed, keeps today\'s stop with no guidance', async () => {
+  const h = await refusingPublish();
+  await pass(h, configSpec());
+  const ruleId = h.store.readGroup('duplicateRule', 'email').pending.root.id;
+  const conditions = h.org.sets.get('duplicateruleconditions');
+  const condition = [...conditions.values()].find((c) => String(c._regardingobjectid_value || '').toLowerCase() === ruleId);
+  assert.ok(condition && condition.baseattributename === 'emailaddress1', 'the rule\'s condition row');
+  condition.baseattributename = 'lastname';
+  const changed = await pass(reopen(h), configSpec(), overwriteCopy('duplicateRule', 'email'));
+  assert.ok(changed.halt, 'it stops');
+  assert.ok(!changed.halt.message.includes('The first publication'), changed.halt.message);
+  condition.baseattributename = 'emailaddress1';
+  h.org.sets.get('duplicaterules').delete(ruleId);
+  const gone = await pass(reopen(h), configSpec(), overwriteCopy('duplicateRule', 'email'));
+  assert.equal(gone.halt && gone.halt.code, 'create-completion-required', gone.halt && gone.halt.message);
+  assert.equal(gone.halt.message, completionStop(h), 'today\'s text');
+  assert.deepEqual([...changed.sent, ...gone.sent], []);
 });
 
 test('removing the opt-in does not move protected items back to name lookup: the build stops before any request', async () => {
@@ -1421,11 +1727,17 @@ const ADOPT_KINDS = [
   { kind: 'customApi', key: 'contoso_calc', set: 'customapis', spec: () => apiOnly(), children: 2 },
 ];
 const withoutOptIn = (spec) => { const { configurationIdentity, ...plain } = spec; return plain; };
-// The maker's rows, made by a build without the opt-in: the plain path creates them by name.
+// The maker's rows, made as a build without the opt-in made them before default creates took stable ids: the plain
+// pass-through (the configuration step with no create capability, as a standalone caller still runs it) creates them by
+// name at ids the service picked. A default build of this version makes them at the derived id instead; that case is
+// pinned separately below.
 async function madeBeforeOptIn(h, spec, opts = {}) {
-  const out = await pass(h, withoutOptIn(spec), opts);
-  assert.equal(out.halt, null, out.halt && `${out.halt.code}: ${out.halt.message}`);
-  return out;
+  const plain = withoutOptIn(spec);
+  const mark = h.org.requests.length;
+  const ctx = C.configurationContext({ sdk: h.sdk, bindings: opts.configurationBindings, solutionUniqueName: SOL, authorizedDestructive: opts.authorizedDestructive, connections: opts.connections });
+  const step = await C.runConfigurationStep(plain, ctx, 'data-model');
+  assert.equal(step.halt, null, step.halt && `${step.halt.code}: ${step.halt.message}`);
+  return { halt: null, step, sent: h.org.requests.slice(mark).filter((r) => r.method !== 'GET') };
 }
 const idIn = (h, set) => h.org.rows(set)[0][PK[set]];
 // The approvals a stop printed, of every item it names: configuration-build.js quotes each one.
@@ -2270,6 +2582,499 @@ test('a secret variable whose create the service refused no longer holds a build
   assert.equal(out.halt, null, out.halt && `${out.halt.code}: ${out.halt.message}`);
   assert.deepEqual(out.sent, []);
   assert.deepEqual(variableRows(h), [0, 0]);
+});
+
+// #847: the real SDK sends a variable with a value as two requests — the definition, then the value on its own — so the
+// service can take the definition and refuse only the value (a Key Vault reference this environment cannot read). The
+// value is then the one thing still owed: a corrected rebuild sends only it, once, and never the definition again.
+const VALUE_REFUSAL = { statusCode: 400, body: { error: { code: '0x80072040', message: 'the Key Vault reference was refused' } } };
+const isValuePost = (r) => r.method === 'POST' && r.path.split('?')[0] === '/environmentvariablevalues';
+const isDefinitionPost = (r) => r.method === 'POST' && r.path.split('?')[0] === '/environmentvariabledefinitions';
+async function valueRefusedSecret({ spec = secretSpec(), settings = secretValue() } = {}) {
+  let refuse = true;
+  const h = await harness({ intercept: (req) => (refuse && isValuePost(req) ? VALUE_REFUSAL : undefined) });
+  const first = await pass(h, spec, settings);
+  return { h, first, allow: () => { refuse = false; }, refuseAgain: () => { refuse = true; } };
+}
+const valueRefusedLine = (token, code = '0x80072040') => `1 configuration item not completed: environmentVariable contoso_Key (create-value-refused) (the service refused the value request (${code}) before it started; `
+  + 'the variable is still pending and its definition may remain at the original id. This build does not recreate or delete the definition. '
+  + 'Correct its value in the deployment settings (for a secret, use a Key Vault secret reference this environment can read), keep its App Spec definition unchanged, and build again. '
+  + 'After fresh checks and any required ownership approval, only the missing value can be sent. To stop tracking this attempt instead, remove the variable from the App Spec and its entry '
+  + `from deployment settings, then run the build with --apply --authorize 'retire:environmentVariable:contoso_key@${token}'. No row is deleted by retirement; restoring the declaration `
+  + 'while its derived id is occupied stops with create-identity-conflict)';
+
+test('a secret variable whose value request alone the service refused stops with create-value-refused; the corrected rebuild sends only the value, once', async () => {
+  const { h, first, allow } = await valueRefusedSecret();
+  const pending = h.store.readGroup('environmentVariable', 'contoso_key').pending;
+  assert.ok(pending, 'the definition was sent: the attempt stays pending');
+  assert.equal(first.halt && first.halt.code, 'configuration-incomplete', first.halt && first.halt.message);
+  assert.equal(first.halt.message, valueRefusedLine(pending.token));
+  assert.deepEqual(first.step.outcome.refused, []);
+  assert.deepEqual(variableRows(h), [1, 0], 'the definition landed, the value did not');
+  assert.ok(!fs.readFileSync(h.store.file, 'utf8').includes('vault-sample'), 'the store holds no Key Vault reference');
+  assert.ok(!JSON.stringify(first.step.outcome).includes('vault-sample'));
+
+  allow();
+  // The failed push left the workspace copy as the SDK wrote it: replacing it stays the maker's approval.
+  const done = await pass(reopen(h), secretSpec(), { ...secretValue(), ...overwriteCopy('environmentVariable', 'contoso_key') });
+  assert.equal(done.halt, null, done.halt && `${done.halt.code}: ${done.halt.message}`);
+  assert.deepEqual(done.sent.filter(isDefinitionPost), [], 'the definition is never sent again');
+  assert.equal(done.sent.filter(isValuePost).length, 1, 'only the value, once');
+  assert.deepEqual(variableRows(h), [1, 1]);
+  const bound = committed(h, 'environmentVariable', 'contoso_key');
+  assert.ok(bound);
+  assert.equal(bound.records[0].id, pending.root.id, 'at the original definition id');
+  const rerun = await pass(reopen(h), secretSpec(), secretValue());
+  assert.equal(rerun.halt, null);
+  assert.deepEqual(rerun.sent, []);
+});
+
+const valueBuild = (h, approvals = [], settings = secretValue()) => pass(reopen(h, approvals), secretSpec(), { ...settings, ...overwriteCopy('environmentVariable', 'contoso_key') });
+const epochOf = (h) => h.store.readGroup('environmentVariable', 'contoso_key').pending.sendWindow.epoch;
+
+test('a variable value the service refuses again is sent once per build under a new claim, the definition never; the corrected build completes it', async () => {
+  const { h, first, allow } = await valueRefusedSecret();
+  const { token } = h.store.readGroup('environmentVariable', 'contoso_key').pending;
+  assert.equal(first.halt.message, valueRefusedLine(token));
+  const before = epochOf(h);
+  const again = await valueBuild(h);
+  assert.equal(again.halt && again.halt.message, valueRefusedLine(token), again.halt && again.halt.message);
+  assert.deepEqual(again.sent.filter(isDefinitionPost), []);
+  assert.equal(again.sent.filter(isValuePost).length, 1, 'one value request, no loop');
+  assert.ok(epochOf(h) > before, 'the value was claimed under a new epoch');
+  assert.equal(h.store.readGroup('environmentVariable', 'contoso_key').pending.token, token, 'the same attempt');
+  assert.deepEqual(variableRows(h), [1, 0]);
+
+  allow();
+  const done = await valueBuild(h);
+  assert.equal(done.halt, null, done.halt && `${done.halt.code}: ${done.halt.message}`);
+  assert.deepEqual(done.sent.filter(isVariableCreate).map((r) => r.path.split('?')[0]), ['/environmentvariablevalues']);
+  assert.deepEqual(variableRows(h), [1, 1]);
+  assert.ok(committed(h, 'environmentVariable', 'contoso_key'));
+});
+
+test('a refused variable value is not sent while its deployment-settings value is missing; the attempt and its definition stay', async () => {
+  const { h } = await valueRefusedSecret();
+  const { token } = h.store.readGroup('environmentVariable', 'contoso_key').pending;
+  const out = await pass(reopen(h), secretSpec(), overwriteCopy('environmentVariable', 'contoso_key'));
+  assert.ok(out.halt);
+  assert.ok(out.halt.message.includes('still owes its original value row. Supply its value in deployment settings, keep its App Spec definition unchanged, and build again. No value request was sent for this item'), out.halt.message);
+  assert.deepEqual(out.sent.filter(isVariableCreate), []);
+  assert.equal(h.store.readGroup('environmentVariable', 'contoso_key').pending.token, token);
+  assert.deepEqual(variableRows(h), [1, 0]);
+});
+
+test('a refused variable value retires under the token its stop prints: nothing deleted or sent, and the restored declaration stops on the definition', async () => {
+  const { h, first } = await valueRefusedSecret();
+  const flag = retireFlagOf(first.halt);
+  const { token } = h.store.readGroup('environmentVariable', 'contoso_key').pending;
+  assert.equal(flag, `retire:environmentVariable:contoso_key@${token}`);
+  const other = await pass(retiring(h, [flag.replace(/@.*$/, '@00000000-0000-4000-8000-000000000009')], noConfig()), noConfig());
+  assert.equal(other.halt && other.halt.code, 'managed-settlement-pending', other.halt && other.halt.message);
+  const out = await pass(retiring(h, [flag], noConfig()), noConfig());
+  assert.equal(out.halt, null, out.halt && `${out.halt.code}: ${out.halt.message}`);
+  assert.deepEqual(out.sent, [], 'nothing is deleted or sent');
+  assert.equal(h.store.readGroup('environmentVariable', 'contoso_key').pending, null);
+  assert.deepEqual(variableRows(h), [1, 0]);
+  const back = await pass(reopen(h), secretSpec(), secretValue());
+  assert.equal(back.halt && back.halt.code, 'create-identity-conflict', back.halt && back.halt.message);
+  assert.deepEqual(back.sent, []);
+});
+
+// A definition whose answer was lost: its value was never sent, but no answer proves this attempt made the definition, so
+// the value waits for the maker's ordinary approval of that definition (the namesake @<id> form does not stand in for it).
+async function lostDefinition({ land = true } = {}) {
+  let org = null;
+  let lose = true;
+  const h = await harness({ intercept: async (req) => {
+    if (!lose || !isDefinitionPost(req)) return undefined;
+    lose = false;
+    if (land) await org.request({ url: `${org.origin}/api/data/v9.0${req.path}`, method: 'POST', headers: req.headers, body: JSON.stringify(req.body) });
+    return { statusCode: 503, body: { error: { code: '0x80040216', message: 'the answer was lost' } } };
+  } });
+  org = h.org;
+  const first = await pass(h, secretSpec(), secretValue());
+  assert.ok(first.halt);
+  assert.equal(first.sent.filter(isValuePost).length, 0, 'the value was never reached');
+  return h;
+}
+
+test('a variable whose definition answer was lost sends its never-sent value only after the maker approves the landed definition', async () => {
+  const h = await lostDefinition();
+  assert.deepEqual(variableRows(h), [1, 0]);
+  const { root } = h.store.readGroup('environmentVariable', 'contoso_key').pending;
+  const held = await valueBuild(h);
+  assert.equal(held.halt && held.halt.code, 'create-ownership-required', held.halt && held.halt.message);
+  assert.ok(held.halt.message.includes(`the saved definition of environmentVariable "contoso_key" at ${root.id} matches the pending create, but no recorded answer proves this attempt created it.`), held.halt.message);
+  assert.ok(held.halt.message.includes('adopt:environmentVariable:contoso_key'), held.halt.message);
+  assert.deepEqual(held.sent.filter(isVariableCreate), []);
+  const namesake = await valueBuild(h, [`adopt:environmentVariable:contoso_key@${root.id}`]);
+  assert.ok(namesake.halt, 'the namesake approval does not stand in');
+  assert.deepEqual(namesake.sent.filter(isVariableCreate), []);
+
+  const done = await valueBuild(h, ['adopt:environmentVariable:contoso_key']);
+  assert.equal(done.halt, null, done.halt && `${done.halt.code}: ${done.halt.message}`);
+  assert.deepEqual(done.sent.filter(isVariableCreate).map((r) => r.path.split('?')[0]), ['/environmentvariablevalues']);
+  assert.deepEqual(variableRows(h), [1, 1]);
+  assert.equal(committed(h, 'environmentVariable', 'contoso_key').records[0].id, root.id);
+});
+
+test('a variable whose definition answer was lost and did not land sends nothing', async () => {
+  const h = await lostDefinition({ land: false });
+  assert.deepEqual(variableRows(h), [0, 0]);
+  const out = await valueBuild(h, ['adopt:environmentVariable:contoso_key']);
+  assert.ok(out.halt);
+  assert.deepEqual(out.sent.filter(isVariableCreate), []);
+  assert.ok(h.store.readGroup('environmentVariable', 'contoso_key').pending);
+});
+
+test('a variable value whose answer was lost may have been sent: it is never claimed or sent again, landed or not', async () => {
+  for (const land of [true, false]) {
+    let org = null;
+    let lose = true;
+    const h = await harness({ intercept: async (req) => {
+      if (!lose || !isValuePost(req)) return undefined;
+      lose = false;
+      if (land) await org.request({ url: `${org.origin}/api/data/v9.0${req.path}`, method: 'POST', headers: req.headers, body: JSON.stringify(req.body) });
+      return { statusCode: 503, body: { error: { code: '0x80040216', message: 'the answer was lost' } } };
+    } });
+    org = h.org;
+    const first = await pass(h, secretSpec(), secretValue());
+    assert.ok(first.halt);
+    assert.ok(!first.halt.message.includes('create-value-refused'), first.halt.message);
+    const pending = h.store.readGroup('environmentVariable', 'contoso_key').pending;
+    const value = pending.rowProtocol.rows.find((r) => r.parentId !== null);
+    assert.equal(value.dispatched, true, `land=${land}: the value stays possibly sent`);
+    const again = await valueBuild(h, ['adopt:environmentVariable:contoso_key']);
+    assert.ok(again.halt, `land=${land}`);
+    assert.deepEqual(again.sent.filter(isVariableCreate), [], `land=${land}: nothing is sent again`);
+    assert.deepEqual(variableRows(h), [1, land ? 1 : 0]);
+  }
+});
+
+// The store's claim of the one unsent value, over the record a real refused value request left: it re-checks the record
+// under its lease and moves only the epoch; the context claims an attempt once per process.
+function valueClaimOf(h, ctx = reopen(h).ctx) {
+  const pending = h.store.readGroup('environmentVariable', 'contoso_key').pending;
+  const value = pending.rowProtocol.rows.find((r) => r.parentId !== null);
+  const [capture] = ctx.captureReadOnly([pending.token]);
+  return { ctx, pending, args: { token: pending.token, id: value.id, parentId: value.parentId, capture, declarationSha256: pending.declarationSha256 } };
+}
+const storeCode = (fn) => { try { fn(); } catch (e) { return e.code; } return null; };
+
+test('the store claims a refused variable value only as recorded, and the claim moves only the epoch', async () => {
+  const { h } = await valueRefusedSecret();
+  const { pending, args } = valueClaimOf(h);
+  assert.equal(pending.acknowledgedRoot, true, 'the run that saw the definition acknowledged receipted it');
+  assert.equal(storeCode(() => h.store.claimUnsentValueRow({ ...args, declarationSha256: 'f'.repeat(64) })), 'managed-binding-generation-conflict');
+  assert.equal(storeCode(() => h.store.claimUnsentValueRow({ ...args, id: pending.root.id })), 'managed-create-request-mismatch');
+  assert.equal(storeCode(() => h.store.claimUnsentValueRow({ ...args, parentId: '00000000-0000-4000-8000-000000000009' })), 'managed-create-request-mismatch');
+  assert.equal(storeCode(() => h.store.claimUnsentValueRow({ ...args, capture: { ...args.capture, digest: 'x' } })), 'managed-binding-generation-conflict');
+  assert.equal(epochOf(h), pending.sendWindow.epoch, 'a refused claim writes nothing');
+
+  const { epoch } = h.store.claimUnsentValueRow(args);
+  assert.equal(epoch, pending.sendWindow.epoch + 1);
+  const after = h.store.readGroup('environmentVariable', 'contoso_key').pending;
+  assert.deepEqual(after.rowProtocol.rows, pending.rowProtocol.rows, 'no row flag changes');
+  assert.equal(after.acknowledgedRoot, true);
+  assert.equal(after.token, pending.token);
+  assert.equal(storeCode(() => h.store.claimUnsentValueRow(args)), 'managed-binding-generation-conflict', 'the old capture is stale after the claim');
+});
+
+test('the store refuses a value claim over a definition its own answer never acknowledged unless the maker approved it', async () => {
+  const h = await lostDefinition();
+  const { pending, args } = valueClaimOf(h);
+  assert.notEqual(pending.acknowledgedRoot, true, 'a matching read never receipts the definition');
+  assert.equal(storeCode(() => h.store.claimUnsentValueRow(args)), 'managed-settlement-pending');
+  assert.equal(epochOf(h), pending.sendWindow.epoch);
+  assert.equal(h.store.claimUnsentValueRow({ ...args, rootApproved: true }).epoch, pending.sendWindow.epoch + 1);
+  // A context without the approval refuses; one with it claims, once.
+  assert.equal(storeCode(() => valueClaimOf(h).ctx.claimValue(pending.token, valueClaimOf(h).args)), 'managed-settlement-pending');
+  const approvedCtx = reopen(h, ['adopt:environmentVariable:contoso_key']).ctx;
+  const claim = valueClaimOf(h, approvedCtx);
+  assert.equal(approvedCtx.claimValue(pending.token, claim.args).epoch, pending.sendWindow.epoch + 2);
+  const second = valueClaimOf(h, approvedCtx);
+  assert.equal(storeCode(() => approvedCtx.claimValue(pending.token, second.args)), 'managed-settlement-pending', 'one claim per attempt per process');
+  assert.equal(epochOf(h), pending.sendWindow.epoch + 2);
+});
+
+test('a later process never receipts a variable definition from a matching read alone', async () => {
+  const h = await lostDefinition();
+  const { pending } = valueClaimOf(h);
+  const ctx = reopen(h).ctx;
+  assert.equal(ctx.receiptPartialVariableRoot({ token: pending.token, epoch: pending.sendWindow.epoch, observation: { rows: [{ kind: 'environmentVariable', key: 'contoso_key', id: pending.root.id, state: 'present', parentId: null, projectionSha256: pending.rowProtocol.rows.find((r) => r.parentId === null).expectedSha256 }] }, declarationSha256: pending.declarationSha256 }), false);
+  assert.notEqual(h.store.readGroup('environmentVariable', 'contoso_key').pending.acknowledgedRoot, true);
+});
+
+// A later build in a process of its own: a fresh binding store over the same file, a fresh send-once gate and SDK (so no
+// workspace copy and no answer carry over), and a fresh context with the maker's exact approvals. `M` is the plugin runtime
+// it runs: this release's, or the release before it (helpers/downgrade-release.js) for the downgrade cases.
+const CURRENT = { openManagedBindings, createDeferredManagedCreateGate, createAzHttpClient, configurationSendOnce, createMakerSdk, createNodeWorkspaceStorage, createManagedCreateContext, B, P, readDeploymentBindings, createConfigurationRuntime };
+async function laterProcess(h, approvals = [], M = CURRENT) {
+  const store = M.openManagedBindings({ workspaceDir: path.dirname(h.store.file), environment: h.org.origin, appUniqueName: 'contoso_configured', solutionUniqueName: SOL });
+  const gate = M.createDeferredManagedCreateGate();
+  gate.bind(store);
+  const httpClient = M.createAzHttpClient(h.org.origin, { getToken: () => 'test-token-0123456789abcdef', request: h.org.request, sleep: async () => {}, sendOnce: M.configurationSendOnce, workflowEffectGate: gate });
+  const sdk = M.createMakerSdk({ workspaceStorage: M.createNodeWorkspaceStorage(makeTempDir('cfg-protected-sdk-')), instanceUrl: h.org.origin, httpClient, solutionUniqueName: SOL });
+  await sdk.initWorkspace();
+  const ctx = M.createManagedCreateContext({ store, approvals, notFoundCode: M.B.NOT_FOUND_CODE });
+  return { org: h.org, sdk, store, gate, ctx, runtime: M === CURRENT ? null : M, protectedConfiguration: M.P.createProtectedConfiguration({ store, gate, ctx, apiBase: `${h.org.origin}/api/data/v9.0` }) };
+}
+const variableGroup = (h) => {
+  h.store.refresh();
+  return h.store.readGroup('environmentVariable', 'contoso_key');
+};
+const valueRowOf = (pending) => pending.rowProtocol.rows.find((r) => r.parentId !== null);
+const variableSettings = (spec, value, M = CURRENT) => ({ configurationBindings: M.readDeploymentBindings({ EnvironmentVariables: [{ SchemaName: 'contoso_Key', Value: value }] }, spec) });
+const variablePosts = (out) => out.sent.filter(isVariableCreate).map((r) => r.path.split('?')[0]);
+const LOST_ANSWER = { statusCode: 503, body: { error: { code: '0x80040216', message: 'the answer was lost' } } };
+const VALUE_APPROVAL = 'adopt:environmentVariableValue:contoso_key/value';
+const said = (out) => `${out.halt ? `${out.halt.code}: ${out.halt.message}` : ''} ${JSON.stringify(out.step && out.step.outcome)}`;
+
+// #847: the definition this run's own answer acknowledged is proved by a fresh exact read and receipted whenever its value
+// request did not complete — not only when the service refused it. A value whose answer was lost may have been sent, so
+// it is still never sent again, and adopting it is the maker's approval of the value alone.
+test('a variable value whose answer was lost after its definition was acknowledged: a later build needs only the value approval, and sends nothing', async () => {
+  let org = null;
+  let lose = true;
+  const h = await harness({ intercept: async (req) => {
+    if (!lose || !isValuePost(req)) return undefined;
+    lose = false;
+    await org.request({ url: `${org.origin}/api/data/v9.0${req.path}`, method: 'POST', headers: req.headers, body: JSON.stringify(req.body) });
+    return LOST_ANSWER;
+  } });
+  org = h.org;
+  const first = await pass(h, secretSpec(), secretValue());
+  assert.ok(first.halt);
+  assert.ok(!said(first).includes('create-value-refused'), said(first));
+  const pending = variableGroup(h).pending;
+  assert.equal(pending.acknowledgedRoot, true, 'the definition its own answer acknowledged is receipted');
+  assert.equal(valueRowOf(pending).dispatched, true, 'the value stays possibly sent');
+  assert.deepEqual(variableRows(h), [1, 1]);
+
+  const held = await pass(await laterProcess(h), secretSpec(), secretValue());
+  assert.ok(held.halt);
+  assert.ok(said(held).includes(VALUE_APPROVAL), said(held));
+  assert.ok(!said(held).includes('adopt:environmentVariable:contoso_key\''), 'no approval of the definition is asked for');
+  assert.deepEqual(variablePosts(held), []);
+
+  const done = await pass(await laterProcess(h, [VALUE_APPROVAL]), secretSpec(), secretValue());
+  assert.equal(done.halt, null, said(done));
+  assert.deepEqual(variablePosts(done), [], 'nothing is sent again');
+  assert.equal(variableGroup(h).committed.records[0].id, pending.root.id, 'bound at the original definition id');
+  assert.deepEqual(variableRows(h), [1, 1]);
+});
+
+// #847: a definition changed between its acknowledged create and the read after its value was refused is a positive
+// contradiction: the build stops create-identity-conflict, never with the hint that corrected settings complete it, and
+// nothing is receipted. A read that cannot be completed is neither: the refusal stands, unproved.
+test('a variable definition changed before its refused value was read back stops create-identity-conflict; an unreadable read keeps the refusal, unreceipted', async () => {
+  let h = null;
+  h = await harness({ intercept: (req) => {
+    if (!isValuePost(req)) return undefined;
+    h.org.rows('environmentvariabledefinitions')[0].description = 'Changed by another maker';
+    return VALUE_REFUSAL;
+  } });
+  const first = await pass(h, secretSpec(), secretValue());
+  assert.ok(first.halt);
+  assert.ok(said(first).includes('(create-identity-conflict)'), said(first));
+  assert.ok(!said(first).includes('create-value-refused'), said(first));
+  assert.notEqual(variableGroup(h).pending.acknowledgedRoot, true, 'a contradicted definition is never receipted');
+  const later = await pass(await laterProcess(h), secretSpec(), secretValue());
+  assert.equal(later.halt && later.halt.code, 'create-identity-conflict', said(later));
+  assert.deepEqual(variablePosts(later), []);
+
+  let unreadable = false;
+  const u = await harness({ intercept: (req) => {
+    if (isValuePost(req)) {
+      unreadable = true;
+      return VALUE_REFUSAL;
+    }
+    return unreadable && req.method === 'GET' && req.path.startsWith('/environmentvariablevalues?')
+      ? { statusCode: 403, body: { error: { code: '0x80040220', message: 'the caller cannot read the value rows' } } } : undefined;
+  } });
+  const refused = await pass(u, secretSpec(), secretValue());
+  const { token, acknowledgedRoot } = variableGroup(u).pending;
+  assert.equal(refused.halt && refused.halt.message, valueRefusedLine(token), said(refused));
+  assert.notEqual(acknowledgedRoot, true, 'an unreadable read receipts nothing');
+});
+
+// A value request the value-only writer sent whose answer proves nothing: it may have been sent, so it is marked so before
+// the request leaves, never re-sent by the transport, and never sent again by a later build — whatever the maker approves.
+test('a value-only completion whose answer is ambiguous is sent once and never again', async () => {
+  const raw = (statusCode, body, headers = {}) => ({ raw: { statusCode, headers: { 'content-type': 'application/json; odata.metadata=minimal', ...headers }, body } });
+  const answers = [
+    ['lost answer, the value landed', LOST_ANSWER, true],
+    ['5xx', LOST_ANSWER, false],
+    ['429', raw(429, JSON.stringify({ error: { code: '0x80072322', message: 'busy' } }), { 'retry-after': '1' }), false],
+    ['timeout', { raw: { error: 'write ETIMEDOUT 10.0.0.1:443', code: 'ETIMEDOUT' } }, false],
+    ['malformed 2xx', raw(201, '{"environmentvariablevalueid":'), false],
+    ['2xx with another id', { statusCode: 201, body: { environmentvariablevalueid: '11111111-2222-4333-8444-555555555555' } }, false],
+  ];
+  for (const [label, answer, land] of answers) {
+    let mode = 'refuse';
+    let landing = false;
+    let sends = 0;
+    let org = null;
+    const h = await harness({ intercept: async (req) => {
+      if (landing || !isValuePost(req)) return undefined;
+      sends += 1;
+      if (mode === 'pass') return undefined;
+      if (mode === 'refuse') return VALUE_REFUSAL;
+      mode = 'pass';
+      if (land) {
+        // The fake service applies the request it is about to lose the answer to; that is not a send of the client's.
+        landing = true;
+        await org.request({ url: `${org.origin}/api/data/v9.0${req.path}`, method: 'POST', headers: req.headers, body: JSON.stringify(req.body) });
+        landing = false;
+      }
+      return answer;
+    } });
+    org = h.org;
+    await pass(h, secretSpec(), secretValue());
+    mode = 'ambiguous';
+    sends = 0;
+    const out = await pass(await laterProcess(h), secretSpec(), secretValue());
+    assert.ok(out.halt, label);
+    assert.ok(!said(out).includes('create-value-refused'), `${label}: ${said(out)}`);
+    assert.equal(sends, 1, `${label}: once, never re-sent by the transport`);
+    assert.deepEqual(variableRows(h), [1, land ? 1 : 0], label);
+    assert.equal(valueRowOf(variableGroup(h).pending).dispatched, true, `${label}: possibly sent`);
+    for (const approvals of [[], ['adopt:environmentVariable:contoso_key', VALUE_APPROVAL]]) {
+      const again = await pass(await laterProcess(h, approvals), secretSpec(), secretValue());
+      assert.deepEqual(variablePosts(again), [], `${label}: never sent again (${approvals})`);
+      // Only a value that landed as sent can be adopted, and only under the value's own approval.
+      assert.equal(!again.halt, land && approvals.length > 0, `${label} (${approvals}): ${said(again)}`);
+    }
+  }
+});
+
+// Two later processes complete the same refused value at once: the store's claim admits one, so one request leaves.
+test('two later builds completing one refused variable value send it once', async () => {
+  const { h, allow } = await valueRefusedSecret();
+  allow();
+  const [a, b] = [await laterProcess(h), await laterProcess(h)];
+  const mark = h.org.requests.length;
+  const outs = await Promise.all([pass(a, secretSpec(), secretValue()), pass(b, secretSpec(), secretValue())]);
+  assert.equal(h.org.requests.slice(mark).filter(isValuePost).length, 1, outs.map(said).join(' | '));
+  assert.equal(outs.filter((o) => o.halt === null).length >= 1, true, outs.map(said).join(' | '));
+  assert.deepEqual(variableRows(h), [1, 1]);
+  assert.ok(variableGroup(h).committed);
+
+  // The same race cut deterministically at the store: a claim on a capture taken before another claim is refused; a claim
+  // on a fresh capture replaces the first claim's epoch, so the first claimant's seal is refused before anything leaves;
+  // and once one claimant sealed the value, no later claim is admitted.
+  const cut = await valueRefusedSecret();
+  cut.allow();
+  const [c1, c2, c3] = [await laterProcess(cut.h), await laterProcess(cut.h), await laterProcess(cut.h)];
+  const p = variableGroup(cut.h).pending;
+  const v = valueRowOf(p);
+  const claim = (n) => ({ id: v.id, parentId: v.parentId, capture: n.ctx.captureReadOnly([p.token])[0], declarationSha256: p.declarationSha256 });
+  const early = claim(c2);
+  const first = c1.ctx.claimValue(p.token, claim(c1));
+  assert.throws(() => c2.ctx.claimValue(p.token, early), /changed since its value was checked/);
+  const second = c3.ctx.claimValue(p.token, claim(c3));
+  assert.ok(second.epoch > first.epoch);
+  const seal = (n, epoch) => n.store.sealRowDispatch({ token: p.token, epoch, rows: [{ kind: v.kind, key: v.key, id: v.id, sentFields: ['value'], sentSha256: '0'.repeat(64) }] });
+  assert.throws(() => seal(c1, first.epoch));
+  assert.equal(valueRowOf(variableGroup(cut.h).pending).dispatched, false, 'the replaced claim sealed nothing');
+  seal(c3, second.epoch);
+  const late = await laterProcess(cut.h);
+  assert.throws(() => late.ctx.claimValue(p.token, claim(late)), /was, or may have been, sent/);
+  assert.deepEqual(variableRows(cut.h), [1, 0], 'nothing was sent at the store cuts');
+});
+
+// A process that stops at the durable seal (the value's possibly-sent mark): before it, nothing left and a later build
+// sends the value; after it, nothing left either, but the mark holds and the value is never sent.
+test('a value-only completion stopped at its seal: before it the value is sent later, after it never', async () => {
+  for (const after of [false, true]) {
+    const { h, allow } = await valueRefusedSecret();
+    allow();
+    const n = await laterProcess(h);
+    const seal = n.store.sealRowDispatch;
+    n.store.sealRowDispatch = (args) => {
+      if (after) seal(args);
+      throw Object.assign(new Error('the process stopped at the seal'), { code: 'managed-binding-write-failed' });
+    };
+    const out = await pass(n, secretSpec(), secretValue());
+    assert.ok(out.halt, `after=${after}`);
+    assert.deepEqual(variablePosts(out), [], `after=${after}: nothing left`);
+    assert.equal(valueRowOf(variableGroup(h).pending).dispatched, after);
+    const again = await pass(await laterProcess(h), secretSpec(), secretValue());
+    assert.deepEqual(variablePosts(again), after ? [] : ['/environmentvariablevalues'], `after=${after}: ${said(again)}`);
+    assert.equal(again.halt === null, !after, `after=${after}: ${said(again)}`);
+  }
+});
+
+// The same completion for a plain (non-secret) variable whose value the service refused.
+test('a string variable whose value alone the service refused completes in a later build with only its value, then sends nothing', async () => {
+  const spec = configSpec({ customApis: [], duplicateDetectionRules: [], environmentVariables: [{ schemaName: 'contoso_Key', type: 'string' }] });
+  let refuse = true;
+  const h = await harness({ intercept: (req) => (refuse && isValuePost(req) ? VALUE_REFUSAL : undefined) });
+  const first = await pass(h, spec, variableSettings(spec, 'first-value'));
+  const { token, root } = variableGroup(h).pending;
+  assert.equal(first.halt && first.halt.message, valueRefusedLine(token), said(first));
+  refuse = false;
+  const done = await pass(await laterProcess(h), spec, variableSettings(spec, 'corrected-value'));
+  assert.equal(done.halt, null, said(done));
+  assert.deepEqual(variablePosts(done), ['/environmentvariablevalues']);
+  assert.equal(h.org.rows('environmentvariablevalues')[0].value, 'corrected-value');
+  assert.equal(variableGroup(h).committed.records[0].id, root.id);
+  const rerun = await pass(await laterProcess(h), spec, variableSettings(spec, 'corrected-value'));
+  assert.equal(rerun.halt, null, said(rerun));
+  assert.deepEqual(rerun.sent, []);
+});
+
+// The release before this one, run unchanged over each record this release's #847 path writes (a value refused, claimed,
+// sealed, sent and acknowledged but not settled, and completed): it sends nothing it should not — it never sends the value
+// or the definition again — and only the completed record builds.
+const DOWNGRADE_SKIP = skipWithoutDowngrade();
+test('the release before this one reads every variable value record this one writes and sends nothing again', { skip: DOWNGRADE_SKIP }, async () => {
+  const OLD = {};
+  for (const [file, names] of [
+    ['lib/managed-bindings.js', ['openManagedBindings']], ['lib/managed-create-transport.js', ['createDeferredManagedCreateGate']],
+    ['lib/sdk-http-client.js', ['createAzHttpClient']], ['lib/configuration-transport.js', ['configurationSendOnce']],
+    ['lib/maker-sdk.js', ['createMakerSdk', 'createNodeWorkspaceStorage']], ['lib/managed-create-context.js', ['createManagedCreateContext']],
+    ['lib/configuration-artifacts.js', ['readDeploymentBindings']], ['lib/configuration-build.js', ['createConfigurationRuntime']],
+  ]) {
+    const m = requireDowngrade(file);
+    for (const name of names) OLD[name] = m[name];
+  }
+  OLD.B = requireDowngrade('lib/configuration-create-bindings.js');
+  OLD.P = requireDowngrade('lib/configuration-protected.js');
+  assert.notEqual(OLD.P, P, 'the release runs its own modules');
+  for (const cut of ['refused', 'claimed', 'sealed', 'acknowledged-pending', 'committed']) {
+    const { h, allow } = await valueRefusedSecret();
+    allow();
+    if (cut !== 'refused') {
+      const n = await laterProcess(h);
+      if (cut === 'claimed') {
+        const p = variableGroup(h).pending;
+        const v = valueRowOf(p);
+        n.ctx.claimValue(p.token, { id: v.id, parentId: v.parentId, capture: n.ctx.captureReadOnly([p.token])[0], declarationSha256: p.declarationSha256 });
+      } else {
+        if (cut === 'sealed') {
+          const seal = n.store.sealRowDispatch;
+          n.store.sealRowDispatch = (args) => {
+            seal(args);
+            throw Object.assign(new Error('the process stopped after the seal'), { code: 'managed-binding-write-failed' });
+          };
+        }
+        if (cut === 'acknowledged-pending') n.ctx.settle = () => { throw Object.assign(new Error('the process stopped before settling'), { code: 'managed-binding-write-failed' }); };
+        await pass(n, secretSpec(), secretValue());
+      }
+    }
+    const rows = variableRows(h);
+    const out = await pass(await laterProcess(h, [], OLD), secretSpec(), variableSettings(secretSpec(), KV, OLD));
+    assert.deepEqual(variablePosts(out), [], `${cut}: ${said(out)}`);
+    assert.deepEqual(variableRows(h), rows, cut);
+    // The release's own reading of each record, pinned by code: an unsent value is a completion it does not make, a
+    // possibly-sent one is adopted only under the value's own approval (the definition is receipted), and only a completed
+    // record builds. A reader that took any of them for a create to make again would stop on another code, or send.
+    const expected = { refused: 'create-completion-required', claimed: 'create-completion-required', sealed: 'create-completion-required', 'acknowledged-pending': 'create-ownership-required', committed: null };
+    assert.equal(out.halt && out.halt.code, expected[cut], `${cut}: ${said(out)}`);
+    if (cut === 'acknowledged-pending') assert.match(out.halt.message, /yours: "adopt:environmentVariableValue:contoso_key\/value"\.$/, said(out));
+  }
 });
 
 test('a secret variable whose create answer was lost stays pending: never sent again, and dropped only under its exact retire approval', async () => {

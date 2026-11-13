@@ -1894,10 +1894,36 @@ function makeGenpageSdk(env, deps = {}) {
     // Only the row whose id is the one asked for is read, so an answer that ignored the filter cannot name another app's lease.
     async appUniqueName(appId) {
       const id = guidOf(appId, 'app');
-      const { collectionRows } = require('./app-components.js');
-      const rows = await collectionRows((await getSdk()).dataverse, `/appmodules/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()?$select=appmoduleid,uniquename&$filter=appmoduleid eq ${id}`, `app ${id}`);
-      const row = (rows || []).find((r) => r && String(r.appmoduleid || '').replace(/[{}]/g, '').toLowerCase() === id && r.uniquename);
-      return row ? String(row.uniquename) : null;
+      return readAppUniqueName(await getSdk(), id);
+    },
+
+    // The OTHER apps whose navigation names a page, read before an edit of the page is uploaded: an upload replaces the page record itself, so the change reaches every app that shows it.
+    // It is the scan the build makes for a page shared across apps (sitemap-pages.js `rescanWhileUnreadable`: every app's published AND saved navigation, apps never published included),
+    // taken over every app but the one the edit was made from — which is `appId`, named by its unique name, because that is what the scan skips an app by. Fails closed, as `appsNaming` does:
+    //   -> { pageId, appId, appUniqueName, apps: [{ uniqueName, savedOnly, appId?, name? }] }   `apps` is empty when no other app names the page
+    // It throws `GENPAGE_APPS_UNREADABLE` (`outcome: 'nothing'`: this reads and writes nothing) when the app is not found, when the scan could not run, and when an app's navigation could not be read
+    // after the scan was taken again — whether or not another app was found to name the page, since an app that could not be read may hold it too, so no answer can say the page is not shared
+    // (`apps` and `unreadableApps` say what was found). `options.waits` is the scan's waits between its tries (default sitemap-pages.js UNREADABLE_RESCAN_WAITS_MS), a seam for tests.
+    async sharedWith(pageId, appId, options = {}) {
+      const id = guidOf(pageId, 'page');
+      const app = guidOf(appId, 'app');
+      const sdk = await getSdk();
+      const selfUnique = await readAppUniqueName(sdk, app);
+      if (!selfUnique) {
+        throw genpageError(`could not look for the other apps whose navigation names page ${id}: app ${app} was not found, so it is not known which app is the one the edit is made from. Nothing was changed.`, { code: 'GENPAGE_APPS_UNREADABLE', outcome: 'nothing', pageId: id, appId: app });
+      }
+      const { rescanWhileUnreadable } = require('./sitemap-pages.js');
+      const scan = await rescanWhileUnreadable(sdk, [id], { excludeAppUnique: selfUnique }, options.waits ? { waits: options.waits } : undefined);
+      if (!scan.ok) {
+        throw genpageError(`could not look for the other apps whose navigation names page ${id} (${scan.error}). Nothing was changed: an app that names it would be changed by the edit too. Run it again.`, { code: 'GENPAGE_APPS_UNREADABLE', outcome: 'nothing', pageId: id, appId: app });
+      }
+      const named = (scan.byId.get(id) || []).filter((unique) => String(unique).toLowerCase() !== selfUnique.toLowerCase());
+      const apps = named.length ? await appDetails(sdk, named, new Set((scan.savedOnly && scan.savedOnly.get(id)) || [])) : [];
+      if (scan.unreadable.length) {
+        const who = scan.unreadable.length === 1 ? 'this app' : 'these apps';
+        throw genpageError(`could not tell which other apps name page ${id}: the navigation of ${who} could not be read — ${scan.unreadable.join(', ')} — and an app that names it would be changed by the edit too. Nothing was changed. Fix or remove ${scan.unreadable.length === 1 ? 'it' : 'them'}, then run it again.`, { code: 'GENPAGE_APPS_UNREADABLE', outcome: 'nothing', pageId: id, appId: app, unreadableApps: scan.unreadable, apps });
+      }
+      return { pageId: id, appId: app, appUniqueName: selfUnique, apps };
     },
 
     // The solution a page is to join (`genpage-upload.js --solution`), read BEFORE the page is written, so a name that is no unmanaged solution — or a page table whose
@@ -2202,7 +2228,20 @@ async function appsNaming(sdk, pageId) {
     }
     return [];
   }
-  const savedOnly = new Set((scan.savedOnly && scan.savedOnly.get(pageId)) || []);
+  return appDetails(sdk, named, new Set((scan.savedOnly && scan.savedOnly.get(pageId)) || []));
+}
+
+// The unique name of the app with this id, from its saved layer, or null when no app has it (see `appUniqueName`).
+async function readAppUniqueName(sdk, id) {
+  const { collectionRows } = require('./app-components.js');
+  const rows = await collectionRows(sdk.dataverse, `/appmodules/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()?$select=appmoduleid,uniquename&$filter=appmoduleid eq ${id}`, `app ${id}`);
+  const row = (rows || []).find((r) => r && String(r.appmoduleid || '').replace(/[{}]/g, '').toLowerCase() === id && r.uniquename);
+  return row ? String(row.uniquename) : null;
+}
+
+// The apps a scan found by unique name, with the id and display name each is acted on by (best effort: the unique names are the answer, and an id and a name are added when they can be read):
+// [{ uniqueName, savedOnly, appId?, name? }]. `savedOnly` is the set of unique names that hold the page only in the saved layer.
+async function appDetails(sdk, named, savedOnly) {
   const known = new Map();
   try {
     const { odataLit } = require('./odata.js');

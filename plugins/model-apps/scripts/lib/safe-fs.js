@@ -586,4 +586,5 @@ module.exports = {
   appendFileSafe,
   removeFileSafe,
   removeTreeWithRetry,
+  unlinkWithRetry,
 };

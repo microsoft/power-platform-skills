@@ -3,17 +3,18 @@
 // every sitemap subarea (+ icon), check whether it actually exists server-side. Catches silent
 // partial builds. Pure/testable: `read` provides the server lookups; `verifySpec` returns
 // { ok, checks:[{kind,name,present,detail}], missing:[…] } and, only when a check could not be decided
-// (neither a pass nor a failure), `unverified: ["<kind>:<name> (<reason>)"]`.
+// (neither a pass nor a failure), `unverified: ["<kind>:<name> (<reason>)"]`. A passing check may also carry a `note` that
+// qualifies what it proves (a same-named declared view present only as a distinct row, not attributed to its key: #845).
 
 const { odataLit } = require('./odata.js');
-const { distinctRows } = require('./query-completeness.js');
+const { distinctRows, hasMoreOf } = require('./query-completeness.js');
 const { matchContainer, isEngineOwnedSection, isEngineHostSection, claimedByAuthoredName } = require('./form-container-match.js');
 const { authoredSectionNames, authoredTabNames } = require('./app-spec.js');
 const { sitemapEntityTables } = require('./app-spec.js');
 // XML_TAG / XML_ATTR are the one tag and attribute grammar for FormXML and SiteMap XML; they live with
 // liveNavEntries in sitemap-pages.js so the form-identity scan and the navigation reader cannot drift.
 const { decodeXmlEntities, liveNavEntries, XML_TAG, XML_ATTR } = require('./sitemap-pages.js');
-const { normalizePageSource, relationshipSchemaName, manyToManySchemaName, SDK_ROLE_MARKER, canonicalPersonaName, bpfUniqueName, BPF_ROLE_ACCESS, generatedTabName, generatedSectionName, formColumnsOf, formLayoutNames, subgridRelationshipName, normalizeLanguageCode, isLocalizedLabelMap } = require('./app-spec.js');
+const { normalizePageSource, relationshipSchemaName, manyToManySchemaName, SDK_ROLE_MARKER, canonicalPersonaName, bpfUniqueName, BPF_ROLE_ACCESS, generatedTabName, generatedSectionName, formColumnsOf, formLayoutNames, subgridRelationshipName, normalizeLanguageCode, isLocalizedLabelMap, FORM_TYPE_CODE } = require('./app-spec.js');
 const { sameRelationship, compareRelationship, describeRelationship, describeIncomplete } = require('./relationship-metadata.js');
 const { resolveExistingFormId, resolveRoleBusinessUnit, roleBuClause, appUniqueName, businessRuleFilter, bpfFilter, viewDef, dashboardsInSolution, findDashboardsByName, findPinnedDashboard, webResourceContentState } = require('./sdk-build.js');
 const { DASHBOARD_LAUNCHER_URL, isDashboardLauncherUrl, subAreaTargetKey, specSubAreaTargetKey, specSubAreas, chromeByTargetKey, keepsLiveValue } = require('./sitemap-merge.js');
@@ -49,6 +50,8 @@ const { answerOf, statusReasonChecks, alternateKeyChecks } = require('./status-r
 const { columnTypeChecks, declaredTableFlags, verifyTableFlags } = require('./schema-feature-contract.js');
 const { verifyDateBehaviors } = require('./date-behavior.js');
 const { isDeclaredView, declaredViewKey, compileViewIntent } = require('./view-reconcile.js');
+const { normalizeGuid } = require('./reconcile-common.js');
+const { declaredViewGroups, createOwnerLedger, viewCandidates, matchDistinctRows } = require('./view-assignment.js');
 const { expectedQuickFindProjection } = require('./quick-find.js');
 const { readXmlElements, XML_PREDEFINED } = require('./strict-xml.js');
 const { usesCommandStates, normalizeCommandStates } = require('./command-state-contract.js');
@@ -340,9 +343,11 @@ async function verifySpec(spec, read, opts = {}) {
   // table; when it is not there the view is missing, and a view of the same name is not taken in its place. A binding with an attempt
   // still pending, a group record that is not usable, or a binding store that cannot be read at all (openBindingIn) proves nothing
   // yet: the view is unverified (its managed listing says why), never read by its name in place of the row the store may bind.
-  // A keyed view that shares its table and name with another view of the spec, and has neither binding nor pin, is found by its name
-  // as before, but which of the rows of that name it is cannot be told, so its content is unverified rather than held to a row that
-  // may be the other view's; a check that fails on such a view names its key. Every other view is read by its name, as it always was.
+  // Two or more declared views sharing one name on one table under distinct keys are proven as a group (below). A keyed view that
+  // shares its table and name with a view outside such a group (a legacy view, or a key the spec repeats), and has neither binding
+  // nor pin, is found by its name as before, but which of the rows of that name it is cannot be told, so its content is unverified
+  // rather than held to a row that may be the other view's; a check that fails on such a view names its key. Every other view is
+  // read by its name, as it always was.
   const viewGuid = (g) => {
     const s = String(g || '').trim().toLowerCase().replace(/^\{|\}$/g, '');
     return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(s) ? s : '';
@@ -363,21 +368,171 @@ async function verifySpec(spec, read, opts = {}) {
       if (g) {
         const id = viewGuid(g.root && g.root.id);
         if (!id) return { key, open: `its managed binding (${key}) records no view id — unverified, not proven correct` };
-        if (pin && pin !== id) return { key, conflict: `its viewId ${String(v.viewId)} is not the view its managed binding (${key}) is bound to (${id}); correct or remove the viewId` };
-        return { key, id, by: `the view its managed binding (${key}) is bound to (${id})` };
+        if (pin && pin !== id) return { key, conflict: `its viewId ${String(v.viewId)} is not the view its managed binding (${key}) is bound to (${id}); correct or remove the viewId`, ids: [pin, id] };
+        return { key, id, by: `the view its managed binding (${key}) is bound to (${id})`, source: 'managed binding' };
       }
     }
-    return pin ? { key, id: pin, by: `the view its viewId pins (${pin})` } : null;
+    return pin ? { key, id: pin, by: `the view its viewId pins (${pin})`, source: 'viewId' } : null;
   };
-  plan.each(spec.views || [], async ({ add: addCheck, unverified }, views) => {
-  for (const v of views) {
-    const viewName = `${String(v.entity).toLowerCase()}.${v.name}`;
-    // Two views of one name on one table are told apart in what fails by their keys; every other view reports as before.
+  // Which row is a DECLARED form (forms[].reconcile "declared", while the declared form build is on). The build takes the row its
+  // managed binding records before any pin or name (lib/form-layout-reconcile.js), so verify must too: a name read cannot tell the
+  // bound row from a namesake made since, and a binding that is pending, not usable, or in a store that cannot be read at all
+  // (openBindingIn) proves nothing about which row is the form. Answers, without any request:
+  //   null                 not declared, or nothing in the store for it: the caller's own route (pin, then name) stands, as it always did;
+  //   { key, open }        unsettled, or a committed group that names no usable id: unverified, and never looked up by id, pin or name;
+  //   { key, conflict }    a formId pin that is not the bound row: a failure, and no other row is read in its place;
+  //   { key, id, by }      the bound row: only this id may be read (readBoundFormId).
+  // A pending form has no root here even when its attempt reserved one (lib/declared-form-io.js readVerifyManifest attaches roots to
+  // rules and flows only), and one given anyway is not used: an attempt not yet proved does not identify the form.
+  const formIdentity = (f) => {
+    if (!isDeclaredFormOn(f)) return null;
+    const key = formLayoutKey(f);
+    const m = opts.managedManifest;
+    if (!m || !Array.isArray(m.groups)) return null;
+    const open = openBindingIn(m.pending, 'form', key) || openBindingIn(m.invalid, 'form', key);
+    if (open) return { key, open: notSettledDetail(key, open) };
+    const g = m.groups.find((x) => x && x.family === 'form' && x.key === key);
+    if (!g) return null;
+    const id = viewGuid(g.root && g.root.id);
+    if (!id) return { key, open: `its managed binding (${key}) records no form id — unverified, not proven correct` };
+    if (f.formId && viewGuid(f.formId) !== id) return { key, conflict: `its formId ${String(f.formId)} is not the form its managed binding (${key}) is bound to (${id}); correct or remove the formId` };
+    return { key, id, by: `the form its managed binding (${key}) is bound to (${id})` };
+  };
+  // The bound row of a declared form (formIdentity `who` with an id), read by that id alone. Answers the id when the row answered IS
+  // that id, on the form's table, of the form's type; null when nothing answers (the form is not there); and throws, with the reason
+  // as its message, when the read fails or its answer cannot identify the row. Its display name is not compared: a bound form a maker
+  // renamed is still the form (the build's own oracle checks root, table and type, not the name), which is why this is not
+  // resolveExistingFormId with the bound id as a pin — that holds a pin to its name too. Never followed by a read by name.
+  // The answer, e.g. [{ formid: '<guid>', objecttypecode: 'contoso_item', type: 2 }]; `type` is the systemform type code
+  // (https://learn.microsoft.com/power-apps/developer/data-platform/reference/entities/systemform#type-choicesoptions), which a
+  // reader may give as a number or a numeric string.
+  const readBoundFormId = async (f, who) => {
+    let rows;
+    try {
+      rows = await read.queryRecords('systemform', { select: ['formid', 'objecttypecode', 'type'], filter: `formid eq ${who.id}`, top: 1 });
+    } catch (e) {
+      throw new Error(`its bound form ${who.id} could not be read: ${String((e && e.message) || e)}`);
+    }
+    if (Array.isArray(rows) && rows.length === 0) return null;
+    const row = Array.isArray(rows) && rows.length === 1 ? rows[0] : null;
+    if (!row || typeof row !== 'object') throw new Error(`its bound form ${who.id} could not be identified: the read did not return one form row`);
+    if (viewGuid(row.formid) !== who.id) throw new Error(`the read of its bound form ${who.id} answered another row; a form of the same name is not taken in its place`);
+    if (row.objecttypecode == null || row.objecttypecode === '' || row.type == null || row.type === '') throw new Error(`its bound form ${who.id} was read without its table or type`);
+    const table = String(f.entity).toLowerCase();
+    if (String(row.objecttypecode).toLowerCase() !== table) throw new Error(`its bound form ${who.id} belongs to table '${row.objecttypecode}', not '${table}'`);
+    const formType = f.formType || 'Main';
+    const want = FORM_TYPE_CODE[formType];
+    if (Number(row.type) !== want) throw new Error(`its bound form ${who.id} is a type-${row.type} form, not the declared ${formType} form (type ${want})`);
+    return who.id;
+  };
+  // The content checks of one view against one savedquery row: the column, filter and sort checks the ordinary route reports, in
+  // that order, as { kind, present, detail, unknown }. `unknown` marks a failure that is only that the content could not be read,
+  // or that a label's options could not be (the deployed value may be the one the failed read would have named) — no contradiction
+  // of the declaration. The distinct-row proof of a same-named group (below) takes a row as possible for a declaration when no check
+  // fails other than unknowingly. A declaration's labels and expectations are prepared once a pass (by its position in views[]), and
+  // a row's fetchxml is parsed once, so a group's graph costs no request per edge and choice metadata stays one read per table.
+  const viewExpectations = new Map();
+  const expectationsOf = (v, ordinal) => {
+    if (!viewExpectations.has(ordinal)) {
+      viewExpectations.set(ordinal, (async () => {
+        const labels = readChoices && hasLabelUses(spec, v) ? await resolveViewFilterLabels(spec, [v], { read: readChoices }) : null;
+        return { labels, expected: expectedViewFetchParts(spec, v, labels) };
+      })());
+    }
+    return viewExpectations.get(ordinal);
+  };
+  const parsedFetch = new WeakMap();
+  const fetchOf = (row) => {
+    if (!parsedFetch.has(row)) parsedFetch.set(row, parseFetchXml(row.fetchxml));
+    return parsedFetch.get(row);
+  };
+  const viewContentChecks = async (v, ordinal, row) => {
+    const out = [];
+    const push = (kind, present, detail, unknown = false) => out.push({ kind, present: !!present, detail, unknown });
+    const specCols = specViewColumnNames(v);
+    if (row.layoutxml && specCols.length) {
+      // Deployed column set from the saved view's layoutxml (<cell name="…"/> per column). We require
+      // spec columns ⊆ deployed columns (NOT set-equality): a deployed EXTRA column (default-view
+      // enrichment, or a maker's manual add) is fine; a MISSING spec column is the divergence we flag.
+      const deployed = new Set(layoutColumnNames(row.layoutxml));
+      const missingCols = specCols.filter((c) => !deployed.has(c));
+      push('view-columns', missingCols.length === 0, missingCols.length ? `missing column(s): ${missingCols.join(', ')}` : '');
+    }
+    if (!Object.prototype.hasOwnProperty.call(row, 'fetchxml')) return out;
+    const { labels, expected } = await expectationsOf(v, ordinal);
+    // A label no option answers to cannot be proven deployed — and a deployed value equal to the label's own
+    // text is the very defect — so it is reported by name, with the labels that are valid, instead.
+    const unresolved = labels ? labels.problems : [];
+    // A label whose option metadata could not be READ is not resolved either: what the expectation below holds
+    // for it is only the build's fallback (the spec's numbering, or the label as written), which a deployed
+    // value from the environment may rightly differ from. Where a different value is deployed, that is reported
+    // as UNRESOLVED, with the reason — never as a missing filter, which would call a correct view wrong because
+    // a read failed. Where the fallback IS deployed, it was right, and it verifies; and where the view carries
+    // no condition on the attribute at all, the filter is missing, and is reported as missing.
+    // Keyed `<attribute>|<value>` — the identity a deployed condition is compared by.
+    const guesses = new Map((labels ? labels.inconclusive : []).map((p) => [`${p.attr}|${p.assumed}`, p]));
+    // Dataverse stores savedquery.fetchxml as the authoritative query content for a system view, so
+    // the verifier proves the DEPLOYED predicates/orders rather than trusting the build's intended
+    // view definition. Subset semantics are deliberate: Dataverse may add platform-owned predicates
+    // that the App Spec never authored, and those must not block a good app.
+    // See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/savedquery
+    if (!row.fetchxml && (expected.conditions.length || expected.orders.length || unresolved.length)) {
+      if (expected.conditions.length || unresolved.length) push('view-filters', false, [...unresolved.map(describeProblem), ...(expected.conditions.length ? ['could not read deployed savedquery.fetchxml to prove authored filters'] : [])].join(' | '), unresolved.length === 0);
+      if (expected.orders.length) push('view-sort', false, 'could not read deployed savedquery.fetchxml to prove authored sort', true);
+      return out;
+    }
+    const actual = fetchOf(row);
+    if (expected.conditions.length || unresolved.length) {
+      const absent = expected.conditions.filter((want) => !actual.conditions.some((got) => conditionMatches(want, got)));
+      // An absent condition is only UNRESOLVED where the view carries SOME condition on that attribute with that
+      // operator — a value that may be the one the failed read would have named. A view with no such condition
+      // at all is missing the filter, whatever the options are, and says so.
+      const unresolvable = (c) => guesses.has(`${c.attribute}|${c.value}`)
+        && actual.conditions.some((got) => got.attribute === c.attribute && got.operator === c.operator);
+      const guessed = absent.filter(unresolvable);
+      const missing = absent.filter((c) => !unresolvable(c));
+      const notes = [
+        ...unresolved.map(describeProblem),
+        ...[...new Set(guessed.map((c) => guesses.get(`${c.attribute}|${c.value}`)))].map(describeProblem),
+        ...(missing.length ? [`missing filter(s): ${missing.map(formatCondition).join('; ')}`] : []),
+      ];
+      push('view-filters', notes.length === 0, notes.join(' | '), unresolved.length === 0 && missing.length === 0);
+    }
+    if (expected.orders.length) {
+      // Sort PRECEDENCE is the whole point of a sort, so membership is not enough: a deployed
+      // `[name asc, createdon desc]` would satisfy an authored `[createdon desc, name asc]` under a
+      // per-order `some(...)`, even though the two views return rows in different orders.
+      //
+      // Authored orders must therefore appear as an ordered SUBSEQUENCE of the deployed ones.
+      // Extra platform-owned orders are still tolerated (same subset rule as the filters above),
+      // but the authored ones may not be reordered relative to each other.
+      let ei = 0;
+      for (const got of actual.orders) {
+        if (ei < expected.orders.length && orderMatches(expected.orders[ei], got)) ei++;
+      }
+      const satisfied = ei === expected.orders.length;
+      const absent = expected.orders.filter((want) => !actual.orders.some((got) => orderMatches(want, got)));
+      push('view-sort', satisfied, satisfied ? ''
+        : absent.length
+          ? `missing sort(s): ${absent.map(formatOrder).join('; ')}`
+          : `deployed sort order does not match the authored precedence ${expected.orders.map(formatOrder).join(', ')} (deployed: ${actual.orders.map(formatOrder).join(', ')})`);
+    }
+    return out;
+  };
+  // Two views of one name on one table are told apart in what fails by their keys; every other view reports as before.
+  const keyedDetail = (v, present, detail) => {
     const namesakeKey = keyedNamesake(v) ? declaredViewKey(v) : '';
-    const add = (kind, name, present, detail) => addCheck(kind, name, present, namesakeKey && !present ? `${detail ? `${detail} ` : ''}(view key ${namesakeKey})` : detail);
+    return namesakeKey && !present ? `${detail ? `${detail} ` : ''}(view key ${namesakeKey})` : detail;
+  };
+  // One view, found by its binding, its pin, or its name, as above, and held to its declaration. The route of every view outside a
+  // same-named declared group, and of a group's bound and pinned members.
+  const verifyViewByRoute = async ({ add: addCheck, unverified }, v, ordinal) => {
+    const viewName = `${String(v.entity).toLowerCase()}.${v.name}`;
+    const namesakeKey = keyedNamesake(v) ? declaredViewKey(v) : '';
+    const add = (kind, name, present, detail) => addCheck(kind, name, present, keyedDetail(v, present, detail));
     const who = viewIdentity(v);
-    if (who && who.open) { unverified.push(`view:${viewName} (${who.open})`); continue; }
-    if (who && who.conflict) { add('view', viewName, false, who.conflict); continue; }
+    if (who && who.open) { unverified.push(`view:${viewName} (${who.open})`); return; }
+    if (who && who.conflict) { add('view', viewName, false, who.conflict); return; }
     // Also select layoutxml so a CONTENT check can catch a spec column the view does not carry (an
     // added or renamed column that never landed would otherwise pass an existence-only verify). It
     // cannot catch a column REMOVED from the spec: reconcileView is additive-union, so the column stays
@@ -399,80 +554,286 @@ async function verifySpec(spec, read, opts = {}) {
     add('view', viewName, row, readError ? String(readError.message || readError) : who && !row ? `${who.by} was not found on its table; a view of the same name is not taken in its place` : '');
     if (row && !who && namesakeKey) {
       unverified.push(`view-content:${viewName} (several views on ${String(v.entity).toLowerCase()} have this name, and this one (${namesakeKey}) has neither a managed binding nor a viewId, so which of the rows it is cannot be told)`);
-      continue;
+      return;
     }
-    const specCols = specViewColumnNames(v);
-    if (row && row.layoutxml && specCols.length) {
-      // Deployed column set from the saved view's layoutxml (<cell name="…"/> per column). We require
-      // spec columns ⊆ deployed columns (NOT set-equality): a deployed EXTRA column (default-view
-      // enrichment, or a maker's manual add) is fine; a MISSING spec column is the divergence we flag.
-      const deployed = new Set(layoutColumnNames(row.layoutxml));
-      const missingCols = specCols.filter((c) => !deployed.has(c));
-      add('view-columns', viewName, missingCols.length === 0, missingCols.length ? `missing column(s): ${missingCols.join(', ')}` : '');
+    if (row) for (const c of await viewContentChecks(v, ordinal, row)) add(c.kind, viewName, c.present, c.detail);
+  };
+
+  // #845: two or more DECLARED views that share one name on one table under distinct keys (lib/view-assignment.js
+  // declaredViewGroups) each need a row of their own, and a read by the name answers one row for all of them. So a group that is not
+  // wholly bound or pinned is proven as a group, once, by its first member's task (a promise every member, and the sub-grid check,
+  // awaits — it reads only for itself, so it never waits on a task queued behind it):
+  //   1. who owns which savedqueryid, settled once for the whole pass before any group reads: every declaration's binding and pin,
+  //      both ids of a binding its pin contradicts, the manifest's view roots, and — under createIdentity "stable-v1" — the id the
+  //      build would create each unidentified member of EVERY such group at (creates-stable-build.js stableViewIdentityFor, loaded
+  //      only here). Two owners of one id that concern the group fail it before any read; a group
+  //      whose members are all bound, pinned or unsettled, with no such conflict, keeps the route above, request for request;
+  //   2. bound and pinned members are read and checked by their ids, as above; a stable id is read the same way and, when its row
+  //      is there, is that member's row — when the read is complete and empty, the member has no row of its own yet;
+  //   3. the rest are matched, all in one paginated read of the name, onto distinct rows nobody owns (matchDistinctRows). A matching
+  //      proves that distinct rows exist and could hold those declarations — never which row is whose — so each is reported present
+  //      with a `note` saying so, and its content as unverified; too few rows, or content no one-to-one assignment can satisfy,
+  //      fails the group. An unsettled binding or a stable id that cannot be computed in the group leaves the rest unverified.
+  // Every member reports into its own buffer, in spec order; what concerns the group is reported once, after its first member's own.
+  const viewEntries = (spec.views || []).map((v, ordinal) => (v && v.entity != null && v.name != null
+    ? { ordinal, declared: isDeclaredView(v), table: String(v.entity), name: String(v.name), key: isDeclaredView(v) ? declaredViewKey(v) : '' }
+    : null));
+  const viewGroupOf = declaredViewGroups(viewEntries);
+  const quoted = (s) => JSON.stringify(String(s));
+  const notAttributed = 'no managed binding, viewId or observed stable id identifies its row';
+  // The stable id is derived from the spec alone, once per declaration a pass, and only for one no binding or pin identifies. A
+  // derivation that throws is reported as unverified with its reason, never answered by a name read.
+  let stableViewIdentityFor = null;
+  const stableIds = new Map();
+  const stableIdOf = (v, ordinal) => {
+    if (!stableIds.has(ordinal)) {
+      let answer;
+      try {
+        if (!stableViewIdentityFor) ({ stableViewIdentityFor } = require('./creates-stable-build.js'));
+        const found = stableViewIdentityFor(spec, v);
+        answer = { id: found ? found.id : '' };
+      } catch (error) {
+        answer = { error: String((error && error.message) || error) };
+      }
+      stableIds.set(ordinal, answer);
     }
-    if (row && Object.prototype.hasOwnProperty.call(row, 'fetchxml')) {
-      const labels = readChoices && hasLabelUses(spec, v) ? await resolveViewFilterLabels(spec, [v], { read: readChoices }) : null;
-      // A label no option answers to cannot be proven deployed — and a deployed value equal to the label's own
-      // text is the very defect — so it is reported by name, with the labels that are valid, instead.
-      const unresolved = labels ? labels.problems : [];
-      // A label whose option metadata could not be READ is not resolved either: what the expectation below holds
-      // for it is only the build's fallback (the spec's numbering, or the label as written), which a deployed
-      // value from the environment may rightly differ from. Where a different value is deployed, that is reported
-      // as UNRESOLVED, with the reason — never as a missing filter, which would call a correct view wrong because
-      // a read failed. Where the fallback IS deployed, it was right, and it verifies; and where the view carries
-      // no condition on the attribute at all, the filter is missing, and is reported as missing.
-      // Keyed `<attribute>|<value>` — the identity a deployed condition is compared by.
-      const guesses = new Map((labels ? labels.inconclusive : []).map((p) => [`${p.attr}|${p.assumed}`, p]));
-      const expected = expectedViewFetchParts(spec, v, labels);
-      // Dataverse stores savedquery.fetchxml as the authoritative query content for a system view, so
-      // the verifier proves the DEPLOYED predicates/orders rather than trusting the build's intended
-      // view definition. Subset semantics are deliberate: Dataverse may add platform-owned predicates
-      // that the App Spec never authored, and those must not block a good app.
-      // See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/savedquery
-      if (!row.fetchxml && (expected.conditions.length || expected.orders.length || unresolved.length)) {
-        if (expected.conditions.length || unresolved.length) add('view-filters', viewName, false, [...unresolved.map(describeProblem), ...(expected.conditions.length ? ['could not read deployed savedquery.fetchxml to prove authored filters'] : [])].join(' | '));
-        if (expected.orders.length) add('view-sort', viewName, false, 'could not read deployed savedquery.fetchxml to prove authored sort');
+    return stableIds.get(ordinal);
+  };
+  // One owner ledger for the whole pass, frozen before any group reads or matches: a row one group's declaration owns — by its
+  // binding, its pin, or (under createIdentity) the stable id it was assigned, whether or not a row is there yet — is no other
+  // group's witness, and two groups selecting one id are a conflict in both. A ledger per group saw only its own members' stable
+  // ids, so a second group could take the first group's stable row (renamed to the second group's name, which an authoritative row
+  // may be) as an anonymous witness, or select the very same id (an implicit `<table>/<name>` key and an explicit key that derive
+  // one id), and both groups passed on one row (#845). Stable ids are derived only for the members of eligible groups that neither
+  // a binding nor a pin identifies: a unique-name view keeps its old route, and an id a bound or pinned view would only be created
+  // at is not its row.
+  let passLedger = null;
+  const viewPassLedger = () => {
+    if (passLedger) return passLedger;
+    const views = spec.views || [];
+    const whoOf = new Map();
+    const identityOf = (ordinal) => {
+      if (!whoOf.has(ordinal)) whoOf.set(ordinal, viewIdentity(views[ordinal]));
+      return whoOf.get(ordinal);
+    };
+    const ledger = createOwnerLedger();
+    const ordinalOfKey = new Map();
+    views.forEach((v, ordinal) => {
+      if (!isDeclaredView(v)) return;
+      const key = declaredViewKey(v);
+      if (!ordinalOfKey.has(key)) ordinalOfKey.set(key, ordinal);
+      const who = identityOf(ordinal);
+      if (who && who.id) ledger.claim(who.id, { ordinal, key, source: who.source });
+      // A binding its pin contradicts is the declaration's own failure, reported as it always was: its bound row is its claim, and
+      // the row its pin names is kept out of every witness without becoming a second claim on whoever else holds it.
+      if (who && who.conflict && who.ids) {
+        ledger.reserve(who.ids[0]);
+        ledger.claim(who.ids[1], { ordinal, key, source: 'managed binding' });
+      }
+    });
+    // The manifest's view roots: the same owner as the declaration of that key, else a row bound to a key the spec no longer
+    // declares — still not a namesake's to be matched onto. A pending entry carries a root only when its reader attached one.
+    const m = opts.managedManifest;
+    const ownerOf = (key, source) => (ordinalOfKey.has(key) ? { ordinal: ordinalOfKey.get(key), key, source } : { key, source });
+    if (m && Array.isArray(m.groups)) for (const g of m.groups) if (g && g.family === 'view' && g.root) ledger.claim(g.root.id, ownerOf(g.key, 'managed binding'));
+    if (m && Array.isArray(m.pending)) for (const p of m.pending) if (p && p.family === 'view' && p.root) ledger.claim(p.root.id, ownerOf(p.key, 'pending managed binding'));
+    // Every eligible group's unidentified members, in spec order, before any group is run: a preferred id stays claimed for the
+    // pass even when its read later answers that no row is there, so no group can match a row onto it.
+    const stable = new Map();
+    if (Object.prototype.hasOwnProperty.call(spec, 'createIdentity')) {
+      views.forEach((v, ordinal) => {
+        if (!viewGroupOf.has(ordinal) || identityOf(ordinal)) return;
+        const s = stableIdOf(v, ordinal);
+        stable.set(ordinal, s);
+        if (!s.error && s.id) ledger.claim(s.id, { ordinal, key: declaredViewKey(v), source: 'stable id' });
+      });
+    }
+    passLedger = { ledger, identityOf, stable };
+    return passLedger;
+  };
+  const viewGroupPlans = new Map();
+  const viewGroupPlan = (group) => {
+    if (viewGroupPlans.has(group)) return viewGroupPlans.get(group);
+    const views = spec.views || [];
+    const { ledger, identityOf, stable } = viewPassLedger();
+    const inGroup = new Set(group.members.map((e) => e.ordinal));
+    const members = group.members.map((e) => {
+      const v = views[e.ordinal];
+      const mem = { ordinal: e.ordinal, key: e.key, v, label: `${String(v.entity).toLowerCase()}.${v.name}`, who: identityOf(e.ordinal) };
+      const s = stable.get(e.ordinal);
+      if (s && s.error) mem.deriveError = s.error;
+      else if (s && s.id) mem.preferred = s.id;
+      return mem;
+    });
+    const conflicts = ledger.conflicts((o) => inGroup.has(o.ordinal));
+    const plan = { group, members, ledger, conflicts, fast: conflicts.length === 0 && members.every((mem) => !!mem.who) };
+    viewGroupPlans.set(group, plan);
+    return plan;
+  };
+  const viewGroupRuns = new Map();
+  const viewGroupResult = (group) => {
+    if (!viewGroupRuns.has(group)) viewGroupRuns.set(group, runViewGroup(viewGroupPlan(group)));
+    return viewGroupRuns.get(group);
+  };
+  const newViewSink = () => {
+    const sink = { checks: [], unverified: [] };
+    sink.add = (kind, name, present, detail, note) => sink.checks.push({ kind, name, present: !!present, detail: detail || '', ...(note ? { note } : {}) });
+    return sink;
+  };
+  // Answers { sinks: ordinal -> what that member reports, groupSink: what the group reports, first, identity: ordinal -> the
+  // identity a sub-grid may take (viewIdentity's shape: { key, id, by } or { key, open }) }.
+  const runViewGroup = async ({ group, members, ledger, conflicts }) => {
+    const sinks = new Map(members.map((mem) => [mem.ordinal, newViewSink()]));
+    const sinkOf = (mem) => sinks.get(mem.ordinal);
+    const groupSink = newViewSink();
+    const identity = new Map();
+    const first = members[0];
+    const done = () => ({ sinks, groupSink, identity, first: first.ordinal });
+    const table = group.table;
+    const name = first.v.name;
+    for (const mem of members) {
+      if (mem.who && mem.who.open) {
+        sinkOf(mem).unverified.push(`view:${mem.label} (${mem.who.open})`);
+        identity.set(mem.ordinal, mem.who);
+      } else if (mem.who && mem.who.conflict) {
+        sinkOf(mem).add('view', mem.label, false, keyedDetail(mem.v, false, mem.who.conflict));
+        identity.set(mem.ordinal, mem.who);
+      } else if (mem.deriveError) {
+        const why = `its stable id could not be computed: ${mem.deriveError}`;
+        sinkOf(mem).unverified.push(`view:${mem.label} (view key ${quoted(mem.key)}: ${why} — unverified, not proven correct)`);
+        identity.set(mem.ordinal, { key: mem.key, open: why });
+      }
+    }
+    if (conflicts.length) {
+      const text = conflicts.map((c) => `identity conflict: savedquery ${c.id} is claimed by view keys ${c.owners.map((o) => `${quoted(o.key)} (${o.source})`).join(', ')}; each declaration needs a row of its own`).join(' | ');
+      groupSink.add('view', first.label, false, text);
+      for (const mem of members) identity.set(mem.ordinal, { key: mem.key, open: text });
+      return done();
+    }
+    for (const mem of members) {
+      if (!mem.who || !mem.who.id) continue;
+      await verifyViewByRoute(sinkOf(mem), mem.v, mem.ordinal);
+      identity.set(mem.ordinal, mem.who);
+    }
+    const residual = [];
+    for (const mem of members) {
+      if (mem.who || mem.deriveError) continue;
+      if (!mem.preferred) { residual.push(mem); continue; }
+      // The row at the stable id, read as a bound row is. Only a complete, empty answer says it is not there; anything else that
+      // does not answer as that id on the view's table is a read that failed, never a reason to take a row of the name instead.
+      let rows;
+      let failure = '';
+      try {
+        rows = await read.queryRecords('savedquery', { select: ['savedqueryid', 'returnedtypecode', 'layoutxml', 'fetchxml'], filter: `savedqueryid eq ${mem.preferred}`, top: 1 });
+      } catch (error) {
+        failure = String((error && error.message) || error);
+      }
+      let row = null;
+      if (!failure) {
+        if (!Array.isArray(rows)) failure = 'the read did not return a list of rows';
+        else if (rows.length === 0) {
+          if (hasMoreOf(rows) !== true) { residual.push(mem); continue; }
+          failure = 'the read answered no row but reported more';
+        } else if (!rows[0] || typeof rows[0] !== 'object') failure = 'the read did not return a view row';
+        else if (normalizeGuid(rows[0].savedqueryid) !== mem.preferred) failure = `the read answered another row (${String(rows[0].savedqueryid)})`;
+        else if (typeof rows[0].returnedtypecode !== 'string' || !rows[0].returnedtypecode) failure = 'the row was read without its table';
+        else if (rows[0].returnedtypecode.toLowerCase() !== table) failure = `the row belongs to table '${rows[0].returnedtypecode}', not '${table}'`;
+        else row = rows[0];
+      }
+      if (!row) {
+        const text = `the view at its stable id ${mem.preferred} could not be read: ${failure}; a view of the same name is not taken in its place`;
+        sinkOf(mem).add('view', mem.label, false, keyedDetail(mem.v, false, text));
+        identity.set(mem.ordinal, { key: mem.key, open: `the view at its stable id ${mem.preferred} could not be read: ${failure}` });
         continue;
       }
-      const actual = parseFetchXml(row.fetchxml);
-      if (expected.conditions.length || unresolved.length) {
-        const absent = expected.conditions.filter((want) => !actual.conditions.some((got) => conditionMatches(want, got)));
-        // An absent condition is only UNRESOLVED where the view carries SOME condition on that attribute with that
-        // operator — a value that may be the one the failed read would have named. A view with no such condition
-        // at all is missing the filter, whatever the options are, and says so.
-        const unresolvable = (c) => guesses.has(`${c.attribute}|${c.value}`)
-          && actual.conditions.some((got) => got.attribute === c.attribute && got.operator === c.operator);
-        const guessed = absent.filter(unresolvable);
-        const missing = absent.filter((c) => !unresolvable(c));
-        const notes = [
-          ...unresolved.map(describeProblem),
-          ...[...new Set(guessed.map((c) => guesses.get(`${c.attribute}|${c.value}`)))].map(describeProblem),
-          ...(missing.length ? [`missing filter(s): ${missing.map(formatCondition).join('; ')}`] : []),
-        ];
-        add('view-filters', viewName, notes.length === 0, notes.join(' | '));
+      sinkOf(mem).add('view', mem.label, true, '');
+      for (const c of await viewContentChecks(mem.v, mem.ordinal, row)) sinkOf(mem).add(c.kind, mem.label, c.present, keyedDetail(mem.v, c.present, c.detail));
+      identity.set(mem.ordinal, { key: mem.key, id: mem.preferred, by: `the view at its stable id (${mem.preferred})`, source: 'stable id' });
+    }
+    if (!residual.length) return done();
+    const keysOf = (list) => list.map((mem) => quoted(mem.key)).join(', ');
+    const blocker = members.some((mem) => mem.who && mem.who.open) ? 'another declaration\'s managed binding is unsettled'
+      : members.some((mem) => mem.deriveError) ? 'another declaration\'s stable identity is unresolved' : '';
+    if (blocker) {
+      for (const mem of residual) {
+        sinkOf(mem).unverified.push(`view:${mem.label} (view key ${quoted(mem.key)}: ${blocker}, so a distinct-row assignment is not proven)`);
+        identity.set(mem.ordinal, { key: mem.key, open: `${blocker}, so a distinct-row assignment is not proven` });
       }
-      if (expected.orders.length) {
-        // Sort PRECEDENCE is the whole point of a sort, so membership is not enough: a deployed
-        // `[name asc, createdon desc]` would satisfy an authored `[createdon desc, name asc]` under a
-        // per-order `some(...)`, even though the two views return rows in different orders.
-        //
-        // Authored orders must therefore appear as an ordered SUBSEQUENCE of the deployed ones.
-        // Extra platform-owned orders are still tolerated (same subset rule as the filters above),
-        // but the authored ones may not be reordered relative to each other.
-        let ei = 0;
-        for (const got of actual.orders) {
-          if (ei < expected.orders.length && orderMatches(expected.orders[ei], got)) ei++;
-        }
-        const satisfied = ei === expected.orders.length;
-        const absent = expected.orders.filter((want) => !actual.orders.some((got) => orderMatches(want, got)));
-        add('view-sort', viewName, satisfied, satisfied ? ''
-          : absent.length
-            ? `missing sort(s): ${absent.map(formatOrder).join('; ')}`
-            : `deployed sort order does not match the authored precedence ${expected.orders.map(formatOrder).join(', ')} (deployed: ${actual.orders.map(formatOrder).join(', ')})`);
+      return done();
+    }
+    // Every row of the name, not the first: `hasMore` is read from the array the SDK returned, before anything copies it.
+    let answer;
+    let readFailure = '';
+    try {
+      answer = await read.queryRecords('savedquery', { select: ['savedqueryid', 'returnedtypecode', 'name', 'layoutxml', 'fetchxml'], filter: `returnedtypecode eq '${odataLit(table)}' and name eq '${odataLit(name)}'`, paginate: true });
+      if (!Array.isArray(answer)) readFailure = 'the read did not return a list of rows';
+    } catch (error) {
+      readFailure = String((error && error.message) || error);
+    }
+    const failGroup = (kind, text) => {
+      groupSink.add(kind, first.label, false, text);
+      for (const mem of residual) identity.set(mem.ordinal, { key: mem.key, open: text });
+    };
+    if (readFailure) {
+      failGroup('view', `the rows named ${quoted(name)} on ${table} could not be read: ${readFailure}; a distinct row for each declaration is not proven`);
+      return done();
+    }
+    const inventory = viewCandidates(answer, { table, name, hasMore: hasMoreOf(answer) });
+    const free = inventory.candidates.filter((c) => !ledger.has(c.id));
+    if (free.length < residual.length) {
+      failGroup('view', inventory.complete
+        ? `only ${free.length} distinct unclaimed row(s) named ${quoted(name)} on ${table} were read for ${residual.length} declared view(s) (keys: ${keysOf(residual)}); each declaration needs a row of its own`
+        : `a distinct row for each of the ${residual.length} declarations (keys: ${keysOf(residual)}) is not proven: the read identified only ${free.length} unclaimed row(s); ${inventory.reasons.join('; ')}`);
+      return done();
+    }
+    for (const mem of residual) {
+      sinkOf(mem).add('view', mem.label, true, '', `present only: a distinct row is available, but view key ${quoted(mem.key)} is not attributed to a row`);
+      identity.set(mem.ordinal, { key: mem.key, open: notAttributed });
+    }
+    const edges = [];
+    for (const mem of residual) {
+      const ok = [];
+      for (let r = 0; r < free.length; r++) {
+        const checks = await viewContentChecks(mem.v, mem.ordinal, free[r].row);
+        if (!checks.some((c) => !c.present && !c.unknown)) ok.push(r);
+      }
+      edges.push(ok);
+    }
+    const matched = matchDistinctRows(residual.length, edges);
+    const incomplete = inventory.complete ? '' : '; the candidate read was incomplete; additional rows may exist';
+    const undecided = !matched.covered && !inventory.complete ? '; a content assignment cannot be decided from this incomplete read' : '';
+    const deficient = !matched.covered && inventory.complete ? new Set(matched.deficient.left) : new Set();
+    if (deficient.size) {
+      const short = matched.deficient.left.map((l) => residual[l]);
+      groupSink.add('view-content', first.label, false, `only ${matched.deficient.right.length} distinct unclaimed row(s) can satisfy the ${short.length} declarations with keys ${keysOf(short)}; no one-to-one content assignment exists`);
+    }
+    residual.forEach((mem, l) => {
+      if (deficient.has(l)) return;
+      sinkOf(mem).unverified.push(`view-content:${mem.label} (view key ${quoted(mem.key)}: ${notAttributed}; content is not proven for this key${incomplete}${undecided})`);
+    });
+    return done();
+  };
+  plan.each(spec.views || [], async (buffers, views, index) => {
+    for (const v of views) {
+      const group = viewGroupOf.get(index);
+      if (!group || viewGroupPlan(group).fast) { await verifyViewByRoute(buffers, v, index); continue; }
+      const result = await viewGroupResult(group);
+      for (const sink of index === result.first ? [result.sinks.get(index), result.groupSink] : [result.sinks.get(index)]) {
+        buffers.checks.push(...sink.checks);
+        buffers.unverified.push(...sink.unverified);
       }
     }
-  }
   });
+  // The identity a sub-grid's view is taken by (resolveSubgridView): viewIdentity's, except for a member of a group proven as a
+  // group, whose identity is what that proof found — its binding, pin or observed stable id, else the reason it has none. A
+  // witnessed row is never one: a sub-grid's target is compared only with a row its declaration owns.
+  const subgridViewIdentity = async (target) => {
+    const ordinal = (spec.views || []).indexOf(target);
+    const group = viewGroupOf.get(ordinal);
+    if (!group || viewGroupPlan(group).fast) return viewIdentity(target);
+    const found = (await viewGroupResult(group)).identity.get(ordinal);
+    return found || { key: declaredViewKey(target), open: notAttributed };
+  };
   // CHARTS — presence, then content. A chart is found, then held to what the spec says it is (lib/chart-verify.js chartContentChecks):
   // its type, the query it draws (table, group-by column, measure), and the description and title the build owns. A chart that exists
   // with another type, grouping, measure or an added filter used to pass on its name alone.
@@ -709,9 +1070,22 @@ async function verifySpec(spec, read, opts = {}) {
   };
   const canReadDefault = useCombinedFormRead || typeof read.formDefaultState === 'function';
   const resolvedMainFormsByIndex = [];
-  const formsResolved = plan.each(spec.forms || [], async ({ add }, forms, formIndex) => {
+  const formsResolved = plan.each(spec.forms || [], async ({ add, unverified }, forms, formIndex) => {
   for (const f of forms) {
     const name = f.name || `${f.entity} form`;
+    // A declared form is identified by its managed binding first (formIdentity): an unsettled one is unverified and read not at all,
+    // a contradicting pin fails, and a bound one is read by its id alone. A declared form is never a default or ordered form
+    // (formOrderSpecOf), so nothing below this concerns it.
+    const who = formIdentity(f);
+    if (who && who.open) { unverified.push(`form:${name} (${who.open})`); continue; }
+    if (who && who.conflict) { add('form', name, false, who.conflict); continue; }
+    if (who) {
+      let bound = null;
+      let detail = '';
+      try { bound = await readBoundFormId(f, who); } catch (e) { detail = e.message; }
+      add('form', name, !!bound, bound ? '' : detail || boundFormAbsent(who));
+      continue;
+    }
     // Resolve with the SAME identity the build reconcile uses — (entity, name, TYPE) or a validated pinned
     // formId (which checks the row's table/type/name) — so verify can't be fooled by a same-named sibling
     // of another type, a mismatched pin, or a residual (entity,type,name) collision. resolveExistingFormId
@@ -1028,6 +1402,11 @@ async function verifySpec(spec, read, opts = {}) {
           `could not compile the layout to tell which fields the build places (${autoCompileError}) — the field state is unverified, not proven correct`);
         continue;
       }
+      // A declared form's layout is read from the row its binding identifies (formIdentity), as its presence is: one that is unsettled
+      // is unverified before anything is read, and a contradicting pin has already failed the form, so no other row's layout is held up.
+      const who = formIdentity(f);
+      if (who && who.open) { unverified.push(`${kind}:${entity}.${name} (${who.open})`); continue; }
+      if (who && who.conflict) continue;
       if (!canReadTopology) {
         add(kind, `${entity}.${name}`, false,
           'this reader exposes no deployed-layout source, so the layout is UNVERIFIED — not proven correct');
@@ -1036,7 +1415,9 @@ async function verifySpec(spec, read, opts = {}) {
       let id = null;
       let idError = null;
       try {
-        id = await resolveExistingFormId(read, { entityLogicalName: entity, name, formType: f.formType, formId: f.formId });
+        id = who
+          ? await readBoundFormId(f, who)
+          : await resolveExistingFormId(read, { entityLogicalName: entity, name, formType: f.formType, formId: f.formId });
       } catch (e) { idError = (e && e.message) || String(e); }
       if (!id) {
         // A form that genuinely does not exist was already reported by the existence check above, so
@@ -1964,24 +2345,36 @@ async function verifySpec(spec, read, opts = {}) {
   });
   // Why a page placed on a form is not shown as the spec declares it ('' when every form that embeds it shows it): each form is resolved by the
   // identity the build uses and read as deployed, then held to its embed (form-page-embeds.js verifyFormPageEmbed). Fail closed: a page no
-  // form embeds, a form that cannot be resolved or read, or an embed that is not as declared is a miss.
+  // form embeds, a form that cannot be resolved or read, or an embed that is not as declared is a miss. Answers { problem, unknown }:
+  // `unknown` lists the embeds of a declared form whose managed binding is not settled (formIdentity) — which row is that form is not
+  // known, so its embed is not compared, and the forms after it still are (a known-bad embed is never hidden behind an unknown one).
+  // Validation and the build refuse a page on a declared form today; this only keeps such a spec from being passed on a namesake.
   const formEmbedProblem = async (p, id) => {
     const embeds = formEmbedsOfPage(spec, p);
-    if (!embeds.length) return 'no form embeds it';
+    const unknown = [];
+    if (!embeds.length) return { problem: 'no form embeds it', unknown };
     for (const { form, embed } of embeds) {
       const name = form.name || `${form.entity} form`;
       const entity = String(form.entity || '').toLowerCase();
+      const who = formIdentity(form);
+      if (who && who.open) { unknown.push(`form '${name}': ${who.open}; the declared embed was not compared`); continue; }
+      if (who && who.conflict) return { problem: `form '${name}': ${who.conflict}`, unknown };
       let formId = null;
-      try { formId = await resolveExistingFormId(read, { entityLogicalName: entity, name, formType: form.formType, formId: form.formId }); } catch { formId = null; }
-      if (!formId) return `form '${name}' is not found`;
+      if (who) {
+        try { formId = await readBoundFormId(form, who); } catch (e) { return { problem: `form '${name}': ${e.message}`, unknown }; }
+        if (!formId) return { problem: `form '${name}': ${boundFormAbsent(who)}`, unknown };
+      } else {
+        try { formId = await resolveExistingFormId(read, { entityLogicalName: entity, name, formType: form.formType, formId: form.formId }); } catch { formId = null; }
+        if (!formId) return { problem: `form '${name}' is not found`, unknown };
+      }
       let xml = null;
       try { xml = await readFormXml(entity, formId); } catch { xml = null; }
       const verdict = verifyFormPageEmbed(xml, embed, id);
-      if (!verdict.ok) return `form '${name}' does not show it as declared (${verdict.reason})`;
+      if (!verdict.ok) return { problem: `form '${name}' does not show it as declared (${verdict.reason})`, unknown };
     }
-    return '';
+    return { problem: '', unknown };
   };
-  const pagesCheck = plan.section(async ({ add }) => {
+  const pagesCheck = plan.section(async ({ add, unverified }) => {
   const xml = await sitemapXml();
   if (implementedPages.length) {
     if (unableToRun) {
@@ -2035,13 +2428,20 @@ async function verifySpec(spec, read, opts = {}) {
           const exists = existenceIds.has(lid);
           const inSitemap = sitemapIds.has(lid);
           let problem = '';
+          let unknown = [];
           if (p.placement === 'form') {
-            if (exists) problem = inSitemap ? 'it is in the app\'s navigation, but the spec places it on a form only' : await formEmbedProblem(p, id);
+            if (exists) {
+              if (inSitemap) problem = 'it is in the app\'s navigation, but the spec places it on a form only';
+              else ({ problem, unknown } = await formEmbedProblem(p, id));
+            }
           } else if (exists && inSitemap && formEmbedsOfPage(spec, p).length) {
-            problem = await formEmbedProblem(p, id);
+            ({ problem, unknown } = await formEmbedProblem(p, id));
           }
           const present = exists && (p.placement === 'form' || inSitemap) && !problem;
-          add('page', p.name, present, problem);
+          // An embed whose form cannot be identified leaves the page neither passed nor failed: no `page` check, the reason listed instead.
+          // What does not depend on that form (its navigation entry, its code) is still checked.
+          for (const u of unknown) unverified.push(`page:${p.name} (${u})`);
+          if (!(present && unknown.length)) add('page', p.name, present, problem);
           if (!present) continue;
           // page-subarea: verify the sitemap XML specifically carries a GenPageId="<id>" binding.
           // Only emitted when the appShell references this page key (headless pages have no subarea to verify).
@@ -2587,7 +2987,7 @@ async function verifySpec(spec, read, opts = {}) {
         const t = tables[g.family];
         if (!t) continue;
         if (g.family === 'form' && declaredForms.has(g.key)) {
-          await verifyManagedForm(spec, declaredForms.get(g.key), g, read, { add, unverified });
+          await verifyManagedForm(spec, declaredForms.get(g.key), g, read, { add, unverified, formIdentity, readBoundFormId, viewIdentity: subgridViewIdentity });
           continue;
         }
         if (g.family === 'dashboard' && declaredDashboards.has(g.key)) {
@@ -2710,6 +3110,11 @@ function openBindingIn(list, family, key) {
 // What an artifact openBindingIn found unsettled reports: why, by the entry's code or reason, and that nothing about it is proven.
 function notSettledDetail(key, open) {
   return `its managed binding (${key}) is not settled (${open.code || open.reason || 'managed-binding-group-invalid'}) — unverified, not proven correct`;
+}
+
+// What a declared form's bound row (formIdentity) that no longer answers on its table reports: it is missing, and a namesake is not it.
+function boundFormAbsent(who) {
+  return `${who.by} was not found on its table; a form of the same name is not taken in its place`;
 }
 
 // The row a declared workflow (a business rule, family 'rule', or a process flow, 'bpf') is bound to in this workspace's store,
@@ -3135,12 +3540,25 @@ function declaredFormsByKey(spec) {
 // view as the build finds it (the `isdefault` row of the table's public views, else the first). Answers { id }, or
 // { missing } when a view the spec declares is not in the environment (the grid the build would embed cannot be there),
 // or { unverified } when the answer is ambiguous, unreadable or empty: never an unconstrained target.
-async function resolveSubgridView(spec, sg, child, read) {
+// A DECLARED spec view (views[].reconcile "declared") with a managed binding or a viewId pin is identified as the top-level view check
+// identifies it (viewIdentity), never by its name: the build embeds the id it holds for that (table, name), which is the LAST
+// declaration of that name (sdk-build.js records created views by table and name, so a later twin overwrites an earlier one) — so
+// that declaration's identity is the one asked. One unsettled, or contradicted by its pin, leaves the host out as unverified; a
+// bound or pinned row is read by its id alone and must be a public view (querytype 0) of the child table, its name not compared,
+// so a view a maker renamed is still the view and a namesake made beside it is never taken in its place. A view with neither a
+// binding nor a pin keeps the name read below — except one of several declared views sharing its name (#845), whose identity the
+// group's proof gives (`viewIdentity` may answer a promise): the row at its observed stable id, read the same way, or none, and
+// then the host is left out as unverified. A row a distinct-row witness found is never compared: it is no declaration's own.
+async function resolveSubgridView(spec, sg, child, read, viewIdentity) {
   if (!read || typeof read.queryRecords !== 'function') return { unverified: 'this reader cannot read views' };
   const own = (spec.views || []).filter((v) => v && v.entity && String(v.entity).toLowerCase() === child);
   const named = (sg.view && own.find((v) => v.name === sg.view)) || own[0];
   if (named) {
     const label = `the view '${named.name}' of '${child}' that the sub-grid shows`;
+    const target = own.filter((v) => v.name === named.name).pop();
+    const who = typeof viewIdentity === 'function' ? await viewIdentity(target) : null;
+    if (who && (who.open || who.conflict)) return { unverified: `${label}: ${who.open || who.conflict}; the requested host target was not compared` };
+    if (who) return boundSubgridView(read, child, label, who);
     let rows;
     try {
       rows = await read.queryRecords('savedquery', { select: ['savedqueryid'], filter: `returnedtypecode eq '${odataLit(child)}' and name eq '${odataLit(named.name)}' and querytype eq 0`, top: 2 });
@@ -3162,15 +3580,44 @@ async function resolveSubgridView(spec, sg, child, read) {
   return def && def.savedqueryid ? { id: def.savedqueryid } : { unverified: `'${child}' has no public view the sub-grid could show` };
 }
 
+// A sub-grid's declared view, read by the id its binding or pin gives (`who` from viewIdentity: { id, by }). The answer, e.g.
+// [{ savedqueryid: '<guid>', returnedtypecode: 'contoso_child', querytype: 0 }], must be that one row, on the child table, a public
+// view: savedquery querytype 0 (https://learn.microsoft.com/power-apps/developer/data-platform/reference/entities/savedquery#querytype-choicesoptions),
+// which a reader may give as a number or a numeric string. Anything else is a host the build's grid cannot show ({ missing }); only
+// a read that throws is { unverified }. Never followed by a read by name or of the default view.
+async function boundSubgridView(read, child, label, who) {
+  let rows;
+  try {
+    rows = await read.queryRecords('savedquery', { select: ['savedqueryid', 'returnedtypecode', 'querytype'], filter: `savedqueryid eq ${who.id}`, top: 1 });
+  } catch (error) {
+    return { unverified: `${label} could not be read: ${String((error && error.message) || error)}` };
+  }
+  if (Array.isArray(rows) && rows.length === 0) return { missing: `${label}: ${who.by} was not found on its table; a view of the same name is not taken in its place` };
+  const row = Array.isArray(rows) && rows.length === 1 ? rows[0] : null;
+  if (!row || typeof row !== 'object') return { missing: `${label}: ${who.by} could not be identified: the read did not return one view row` };
+  const id = String(row.savedqueryid || '').trim().toLowerCase().replace(/^\{|\}$/g, '');
+  if (id !== who.id) return { missing: `${label}: the read of ${who.by} answered another row; a view of the same name is not taken in its place` };
+  if (row.returnedtypecode == null || row.returnedtypecode === '' || row.querytype == null || row.querytype === '') return { missing: `${label}: ${who.by} was read without its table or query type` };
+  if (String(row.returnedtypecode).toLowerCase() !== child || Number(row.querytype) !== 0) {
+    return { missing: `${label}: ${who.by} is not a public view of '${child}' (table '${row.returnedtypecode}', query type ${row.querytype})` };
+  }
+  return { id: who.id };
+}
+
 // One committed form group the spec still declares, held to its declaration by the helper's oracle (verifyDeclaredForm) over a
 // fresh read of the bound form. What verify cannot rebuild exactly as the build did is checked as far as it can be, and said so:
 //   - a sub-grid's view is resolved as the build resolves it (resolveSubgridView) and matched exactly; a declared view the
-//     environment does not hold fails the form, and one that cannot be identified leaves the host out, listed as unverified;
+//     environment does not hold fails the form, and one that cannot be identified leaves the host out, listed as unverified. A view the
+//     spec DECLARES with a managed binding or a pin is the row that identity names (viewIdentity), never one of its name: one that is
+//     unsettled or contradicted by its pin leaves the host out the same way, and a bound row that is gone or is not a public view of
+//     the child table fails the form;
 //   - a quick view's form is found by its (table, name) as a QuickView form; none or several answering cannot be judged, so the
-//     host is left out and listed as unverified rather than failed.
+//     host is left out and listed as unverified rather than failed. A quick view form the spec DECLARES (forms[].reconcile
+//     "declared") with a managed binding is found by that binding instead (formIdentity, readBoundFormId), never by its name: one
+//     unsettled, pinned elsewhere, or not answering as its bound row is left out and listed as unverified the same way.
 // A group whose publication is still in flight (dispatching or unconfirmed) is checked on its saved form like any other, and listed
 // as unverified too: the published layer it will show is not known yet.
-async function verifyManagedForm(spec, f, g, read, { add, unverified }) {
+async function verifyManagedForm(spec, f, g, read, { add, unverified, formIdentity, readBoundFormId, viewIdentity }) {
   const name = `${g.key} (${g.root.id})`;
   if (!read || typeof read.declaredForm !== 'function') { unverified.push(`managed:form ${g.key} (this reader cannot read a form by id)`); return; }
   if (!g.consumerState || !g.consumerState.children) { unverified.push(`managed:form ${g.key} (the managed group carries no child state to check)`); return; }
@@ -3194,7 +3641,7 @@ async function verifyManagedForm(spec, f, g, read, { add, unverified }) {
     const rel = sg && sg.childEntity ? subgridRelationshipName(spec, f.entity, sg.childEntity) : null;
     if (!rel) { unverified.push(`managed:form ${g.key} (the sub-grid for '${sg && sg.childEntity}' names no relationship the spec declares)`); continue; }
     const child = String(sg.childEntity).toLowerCase();
-    const view = await resolveSubgridView(spec, sg, child, read);
+    const view = await resolveSubgridView(spec, sg, child, read, viewIdentity);
     if (view.missing) { missingViews.push(`form-host: ${view.missing}`); continue; }
     if (view.unverified) { unverified.push(`managed:form ${g.key} (${view.unverified})`); continue; }
     subgrids.push({ targetEntity: child, relationshipName: rel, viewId: view.id });
@@ -3203,6 +3650,19 @@ async function verifyManagedForm(spec, f, g, read, { add, unverified }) {
   for (const qv of f.quickViews || []) {
     if (!qv || !qv.lookup || !qv.targetEntity || !qv.form) continue;
     const target = String(qv.targetEntity).toLowerCase();
+    // The QuickView the spec declares for this lookup, as validation picks it (app-spec.js: its name on the target table, of type
+    // QuickView — a same-named Main form is not it). Its binding decides which row it is; with none, the name query below stands.
+    const declaredTarget = (spec.forms || []).find((x) => x && x.name === qv.form && String(x.entity).toLowerCase() === target && (x.formType || 'Main') === 'QuickView');
+    const who = declaredTarget && typeof formIdentity === 'function' ? formIdentity(declaredTarget) : null;
+    if (who) {
+      const leftOut = (reason) => unverified.push(`managed:form ${g.key} (the quick view form '${qv.form}' of '${target}' for lookup '${qv.lookup}': ${reason}; the requested host target was not compared)`);
+      if (who.open || who.conflict) { leftOut(who.open || who.conflict); continue; }
+      let id = null;
+      try { id = await readBoundFormId(declaredTarget, who); } catch (e) { leftOut(e.message); continue; }
+      if (!id) { leftOut(boundFormAbsent(who)); continue; }
+      quickViews.push({ lookupFieldName: String(qv.lookup).toLowerCase(), targetEntity: target, quickViewFormId: id });
+      continue;
+    }
     let rows = [];
     try {
       rows = typeof read.queryRecords === 'function'

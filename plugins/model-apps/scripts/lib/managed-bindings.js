@@ -2562,6 +2562,60 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
       return { epoch };
     },
     /**
+     * Claim the ONE value row of an unfinished environment-variable create that its own record proves was never
+     * dispatched (#847): the definition POST was sent (and acknowledged, or its saved row is approved by the maker),
+     * and the value POST was refused before it started (noteRowsNotStarted reset it) or was never reached. Checked
+     * against the record reread under the lease, never against what the caller read before:
+     *   - `capture` (readOnlyCapture, taken before the caller's fresh read) still describes the attempt exactly, so no
+     *     other run wrote it between that read and this claim;
+     *   - the attempt is a sending create of a new root (no base generation, no base observation, no saved observation),
+     *     prepared for `declarationSha256`, with exactly two rows: the dispatched definition create and its value create
+     *     at `id` under `parentId`, a sensitive input still `dispatched: false` with no sealed fields and no child receipt;
+     *   - nothing preserved, no rule state and no rule-state effect (the variable family has neither);
+     *   - its root was acknowledged by its own answer (`acknowledgedRoot`), or `rootApproved` (the maker's adoption approval
+     *     of the saved definition: a record without that receipt).
+     * Anything else refuses typed and writes nothing. The claim only moves the window to a new epoch (a run still holding
+     * the old one is refused) — it sets no flag — so the one value request goes through the same fenced transport as the
+     * original: sealRowDispatch marks it dispatched before it leaves, and a value that was, or may have been, dispatched is
+     * never claimed again. Answers { epoch }.
+     */
+    claimUnsentValueRow({ token, id, parentId, capture, declarationSha256, rootApproved = false } = {}) {
+      let epoch = null;
+      mutate((env, disk, spend) => {
+        const now = readOnlyCapture(disk.envelope, token);
+        const was = capture || {};
+        if (!now || now.digest !== was.digest || now.generation !== was.generation || now.epoch !== was.epoch) {
+          throw storeError(CODES.conflict, 'a managed variable changed since its value was checked; nothing is sent for it');
+        }
+        const a = requireAttempt(env, disk, token);
+        const name = `the managed ${a.family} "${a.key}"`;
+        const p = a.rowProtocol;
+        if (a.family !== 'environmentVariable' || !p || a.phase !== 'sending' || a.baseGeneration !== null || !a.expected
+          || a.expected.baseObservation !== null || a.savedObservation !== null || !a.sendWindow) {
+          throw storeError(CODES.pending, `${name} attempt is not an unfinished variable create whose value alone is owed; nothing is sent under it`);
+        }
+        if (a.declarationSha256 !== declarationSha256) throw storeError(CODES.conflict, `${name} attempt was prepared for another declaration; nothing is sent under it`);
+        const root = p.rows.find((r) => r.parentId === null);
+        const value = p.rows.find((r) => r.parentId !== null);
+        if (p.rows.length !== 2 || !root || !value || root.mode !== 'create' || rowIdKey(root.id) !== rowIdKey(a.root.id) || !root.dispatched
+          || value.kind !== 'environmentVariableValue' || value.mode !== 'create' || value.sensitiveInput !== true
+          || value.id !== normalizeGuid(id) || value.parentId !== normalizeGuid(parentId) || value.parentId !== root.id) {
+          throw storeError(CODES.requestMismatch, `${name} attempt does not hold a sent definition and its value at ${id}; nothing is sent under it`);
+        }
+        if (value.dispatched || value.sentFields !== null || value.sentSha256 !== null || (a.acknowledgedChildCreates || []).some((c) => c.kind === value.kind && c.key === value.key)) {
+          throw storeError(CODES.pending, `the value of ${name} was, or may have been, sent; it is not sent again`);
+        }
+        if (p.preserved.length || p.completion.ruleState !== null || p.effects.some((e) => e.kind === 'rule-state')) {
+          throw storeError(CODES.requestMismatch, `${name} attempt owes more than its value; nothing is sent under it`);
+        }
+        if (a.acknowledgedRoot !== true && rootApproved !== true) throw storeError(CODES.pending, `${name} definition is neither acknowledged as this attempt's create nor approved; nothing is sent under it`);
+        spend(token);
+        a.sendWindow.epoch += 1;
+        epoch = a.sendWindow.epoch;
+      });
+      return { epoch };
+    },
+    /**
      * Mark, in one write immediately before the one send of `scope` under `token`:
      *   groups   [{ family, key }] the owed, unsent publication each of them pays: owed -> dispatching. The caller read
      *            each of them not yet live at its desired hash (publishManagedScope `due`), so a later read that shows it

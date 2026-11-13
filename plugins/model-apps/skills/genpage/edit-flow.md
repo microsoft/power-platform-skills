@@ -610,6 +610,47 @@ This is an **update** (existing page-id), so the prompt must describe the
 It is written to a file and passed as `--prompt-file`; see SKILL.md Phase 6
 "Prompt semantics".
 
+**Before anything is uploaded: the other apps that show this page.** A page belongs to the
+environment, not to the app picked in Phase 1: any app's navigation can name it, and the upload
+replaces the page itself, so the edit reaches every app that shows it — apps never opened here,
+possibly another team's. Right before the upload command below (and again before a retry of it), run:
+
+```powershell
+node "${PLUGIN_ROOT}/scripts/genpage-shared-check.js" `
+  --env '<org-url>' `
+  --app-id '<app-id>' `
+  --page-id '<page-id>'
+```
+
+It reads the environment and writes nothing. Branch on its exit status:
+
+- **Exit 0, `"shared": false`** — no other app's navigation, published or saved, names the page.
+  Say nothing to the user and go on to the upload.
+- **Exit 2, `"code": "GENPAGE_SHARED_PAGE_UNCONFIRMED"`** — `apps` lists the other apps (`name`,
+  `uniqueName`, `savedOnly`). **Attended:** tell the user "This change also affects <App B> and
+  <App C>" using each app's `name` (its `uniqueName` when no name is given), and ask exactly: "Apply the
+  edit to every app that shows this page" or "Stop". Record the answer as its own line in
+  `workflow-log.md`, before the upload command, exactly
+  `Choice: Apply the edit to every app that shows this page` or `Choice: Stop`. Only the first
+  answer may be followed by running the check again with
+  `--confirmed-apps '<uniqueName>,<uniqueName>'` — the `uniqueName` of every app in `apps`, no
+  more and no fewer; exit 0 with `"shared": true, "confirmed": true` then permits the upload.
+  **Unattended:** STOP and report the apps. Never pass `--confirmed-apps` without the user's
+  answer — suppressing a prompt never authorizes changing other apps' content.
+- **Exit 1** — the check could not tell (an app's navigation could not be read, or the scan could not
+  run; `code` is usually `GENPAGE_APPS_UNREADABLE`). STOP and report the `error`, whichever mode the run
+  is in. Do not take the page to be unshared, and do not pass `--confirmed-apps` to get past it.
+
+A confirmation covers only the apps it names. If the check stops again and names an app that was not
+confirmed (an app began to show the page since), ask again for the apps now named. Log the result of
+every run in `workflow-log.md` — `Shared page check: <page-id> not shared`, or the unique names it
+found and whether they were confirmed — whichever way it came out. When the user confirmed, also log
+`Confirmed apps: <page-id>: <uniqueName>,<uniqueName>`: Edit Phase 7's fix-up reads that line.
+
+The check is a point-in-time scan, not a lock: an app that starts to show the page between the check
+and the upload is not covered. That is why the check runs again right before every later upload of
+this page, the verification fix-up included (Edit Phase 7).
+
 Connector binding rules for edit deploy:
 - **Add / replace / discover / remove one connector:** the `genpage-connector-builder`
   agent (Mode: `edit`) has already written the full desired
@@ -712,7 +753,9 @@ Log the marker, the check result (`code`, `lines`, `deployedCopy`) and that `Cho
 
 Offer browser verification via `AskUserQuestion` (same flow as Phase 7 in the create flow — see SKILL.md).
 The page is still an existing one: if 7.5 in `verify-flow.md` fixes it, check the fix with the
-`--existing` command that 7.5 gives for the edit flow, not the command for a generated page.
+`--existing` command that 7.5 gives for the edit flow, not the command for a generated page. The fix-up
+upload is an edit of a shared page like Phase 6's: 7.5 runs the shared-page check from Edit Phase 6
+right before it (and before each retry), with only the apps the user confirmed for this page.
 
 ## Edit Phase 8: Summary
 

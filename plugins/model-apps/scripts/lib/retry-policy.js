@@ -41,7 +41,7 @@
 //     tests/halt-retry-policy.test.js enumerates every halt in the sources and holds each to a table, so a halt added without a policy fails there.
 // An error that carries none of this — an SDK or transport error that reaches the build as it is — is read by the rule above, as it always was.
 // The platform's signature of a SQL deadlock victim, the one the HTTP client already sends requests again on (lib/sdk-http-client.js): `Sql Number: 1205`.
-const { SQL_DEADLOCK_VICTIM } = require('./sdk-http-client.js');
+const { SQL_DEADLOCK_VICTIM, HTTP_RETRY_AFTER, isPublishRequest } = require('./sdk-http-client.js');
 const RETRY = Object.freeze({ NEVER: 'never', SERVICE: 'service' });
 
 // The statuses a run again can ride out. 429 is the service's throttle; 502, 503 and 504 are the answers of a gateway or a service that is down or overloaded, never a verdict on the request.
@@ -459,8 +459,65 @@ function throttleAskOf(error) {
   return { throttled, askedMs, notBefore };
 }
 
+// The codes of TRANSIENT_SERVICE_CODES that say the CUSTOMIZATION LOCK is held — another solution import or removal, another publish, another entity customization —
+// and not that SQL or a single record was busy. The lock is held for as long as that other operation runs, a minute and more for an import, so a publish it refused
+// whose target the next run proves first (reconciledPublish, below) waits longer before the build runs again than the ordinary 3/6/12 s backoff (build-model-app.js, LOCK_WAITS_MS: #848). Each is documented at
+//   https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/web-service-error-codes
+const CUSTOMIZATION_LOCK_CODES = Object.freeze(new Set([
+  '0x80071151', // SolutionConcurrencyFailure — measured live as the answer to a publish the lock refused (lib/sdk-http-client.js, publishOnce)
+  '0x80090412', // EntityCustomizationLockException
+  '0x8004f061', '0x8004f062', '0x8004f063', '0x8004f064', '0x8004f067', // CustomizationLockEx_*
+  '0x8004f077', // RACCannotAcquireCustomizationLock
+]));
+
+// The answer to a publish one error of a chain carries, as { status, code, askedMs, notBefore }, or null when it carries none: an SDK ConnectionError for an answer to a
+// request whose url is a publish (lib/sdk-http-client.js isPublishRequest: `…/PublishXml`, `…/PublishAllXml`, bare or namespaced — never a custom action such as
+// `contoso_PublishXml`). Its `cause` is the body, with the Retry-After the HTTP client recorded on it (HTTP_RETRY_AFTER).
+function publishAnswerOf(error) {
+  if (!isConnectionError(error) || !(error.statusCode > 0) || typeof error.url !== 'string') return null;
+  let publish = false;
+  try { publish = isPublishRequest('POST', error.url); } catch { publish = false; }
+  if (!publish) return null;
+  const ask = isObject(error.cause) && isObject(error.cause[HTTP_RETRY_AFTER]) ? error.cause[HTTP_RETRY_AFTER] : {};
+  const positive = (value) => (Number.isFinite(value) && value > 0 ? value : 0);
+  return { status: error.statusCode, code: serviceCodeOf(error), askedMs: positive(ask.askedMs), notBefore: positive(ask.notBefore) };
+}
+
+// The publishes the longer wait is for: those whose target the build's next run proves by id before it is published again. A publish the lock refused is not shown to
+// have changed nothing (lib/sdk-http-client.js, publishOnce), and an import that held the lock may have replaced the target's saved layer, so a publish may follow the
+// wait only when the next run has, by then, written the target again by id or read it by id and found it holding the content it is to publish. Only one kind is:
+//   - a web resource written and not confirmed — `WEB_RESOURCE_UNVERIFIED` with the resource's id (lib/sdk-build.js): the next run writes a spec web resource or the
+//     app icon again by id whatever was published, and only then publishes it (writeOwnedWebResource); it reads the page manifest's published copy (the recorded row,
+//     assertUnconfirmedWebResourceIdentity), compares it whole, and writes it again by id where it differs — where it does not, it is not published again
+//     (persistPageManifest).
+// A generative page saved and not published (the halt `pages-publish-failed`) is NOT one: its next run reads the page by id and compares the source, name, data
+// sources, model and bindings (lib/genpage-sdk.js, planEdits), but not the compiled runtime the service publishes, so a page whose compiled row an import replaced
+// while the build waited would be published as it is. It keeps the ordinary wait, as in 2.27.0.
+// Every other publish — a table's, a form's, a view's, a site map's, an app's, the bulk publish, the plugin's own app publish — keeps the ordinary wait too: its next
+// run is not proven to have rewritten or read back the target first, so a longer wait would only make a blind re-publish of it likelier to land.
+const reconciledPublish = (error) => error.code === 'WEB_RESOURCE_UNVERIFIED' && typeof error.id === 'string' && error.id.length > 0;
+
+// A publish the customization lock refused, found along the failure's chain, as { code, askedMs, notBefore } — or null. All four must hold: the publish was one of
+// those above (the refusal is found under the error that says so), the service answered 429 (a 500 or a 503 that carries a lock code is a failure of another kind, and
+// keeps the ordinary wait), the code of its answer is a lock's (CUSTOMIZATION_LOCK_CODES; a service-protection 429 is waited out by the HTTP client, and words alone are
+// not a code), and the request was a publish. Only the wait before the build's next run reads it; whether the failure is run again at all is judgeFailure's, as for any other.
+function publishLockRefusalOf(failure) {
+  if (!isObject(failure)) return null;
+  let reconciled = false;
+  for (const e of causeChain(failure)) {
+    if (reconciledPublish(e)) { reconciled = true; continue; }
+    const answer = reconciled ? publishAnswerOf(e) : null;
+    if (answer && answer.status === 429 && answer.code && CUSTOMIZATION_LOCK_CODES.has(answer.code)) {
+      return { code: answer.code, askedMs: answer.askedMs, notBefore: answer.notBefore };
+    }
+  }
+  return null;
+}
+
 module.exports = {
   RETRY, TRANSIENT_STATUSES, TRANSIENT_SERVICE_CODES, TRANSPORT_CODES, isTransientStatus, refusal, neverRetry, serviceFailure, withCause, judgeFailure, retryPolicyFor, retryFrom, throttleAskOf, markFreshTable, isFreshTableReadLag, freshTableLagAnswer,
+  // A publish the customization lock refused: the codes, and the reader the build's wait is chosen by (#848).
+  CUSTOMIZATION_LOCK_CODES, publishLockRefusalOf,
   // The code of the build's stop before a default view whose copy names no table, and the error it stops with (sdk-build.js, guardDefaultViewCopies).
   DEFAULT_VIEW_NO_TABLE_CODE, unsentDefaultView,
   // Also the reader of an answer's code for lib/entity-provision.js, which recognises an "already exists" refusal by it (isAlreadyExists).

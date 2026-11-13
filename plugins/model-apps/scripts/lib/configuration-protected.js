@@ -28,6 +28,7 @@ const { normalizeGuid, isAuthorized, approvalKey, canonicalJson } = require('./r
 const { hasUnsyncedEdits } = require('./unsynced-edits.js');
 const { defaultApprovalToken } = require('./managed-create-context.js');
 const { attemptProvenUnsent } = require('./managed-bindings.js');
+const { withConfigurationWrite } = require('./configuration-transport.js');
 
 const IDENTITY = 'stable-v1';
 const EDIT_CODE = 'configuration-edit-unsupported';
@@ -38,6 +39,9 @@ const OWNERSHIP_CODE = 'create-ownership-required';
 const OPT_IN_CODE = 'create-identity-opt-in-required';
 // A create or edit the service refused unstarted and the run released (#847, refusedStop): nothing pending is left.
 const REFUSED_CODE = 'create-refused';
+// A variable whose definition was sent and whose value request the service refused before it started (#847,
+// valueRefusedStop): the attempt stays pending, and only its value may be sent later (completeValueOnce).
+const VALUE_REFUSED_CODE = 'create-value-refused';
 // A local workspace copy that differs from the server's: the declared views' and charts' stop (sdk-build.js
 // refuseUnsentCopy), with the same way on — keep what you want in the App Spec, then approve replacing the copy.
 const DRAFT_CODE = 'workspace-copy-unsent-edits';
@@ -764,7 +768,7 @@ const PUBLISH_READ_INTERVAL_MS = 3000;
  * dispatched before it leaves; then the attempt is observed and settled. Answers the settled verdict.
  * See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/reference/publishduplicaterule
  */
-async function publishOnce(env, ctx, item) {
+async function publishOnce(env, ctx, item, scope = null) {
   const { planned } = item;
   const id = planned.plan.rows[0].id;
   const attempt = ctx.claimEffect(item.token, { kind: 'rule-state', id });
@@ -784,7 +788,172 @@ async function publishOnce(env, ctx, item) {
     observation = await B.observe(env.dataverse, planned);
   }
   const [settled] = ctx.settle([{ token: item.token, observation, declarationSha256: planned.plan.declarationSha256 }]);
+  // The publish was sent now, so a stop that follows is a publication not confirmed: noted for its guidance (#808).
+  noteStop(scope, item, observation, settled.verdict);
   return settled.verdict;
+}
+
+// #847: the value row of a protected variable create, sent after its definition. The real SDK sends a variable with a
+// value as TWO requests — the definition's POST, then the value's own POST outside the solution — so the service can
+// accept the first and refuse the second (a Key Vault reference this environment cannot read, say). The attempt then
+// holds a definition that may have been made and a value that its own record proves never left (the transport reset it
+// to `dispatched: false` from a definite unstarted refusal). That one value is the only thing such a build may still send.
+const VALUE_ROW_KIND = 'environmentVariableValue';
+const VALUE_MESSAGES = {
+  input: (key) => `the pending create of environmentVariable "${key}" still owes its original value row. Supply its value in deployment settings, keep its App Spec definition unchanged, and build again. No value request was sent for this item`,
+  ownership: (key, id) => `the saved definition of environmentVariable "${key}" at ${id} matches the pending create, but no recorded answer proves this attempt created it. `
+    + 'Its original value is absent and was never dispatched. Check that the definition is yours before giving the printed approval; after approval and fresh checks, only that value can be sent. '
+    + 'No value request was sent for this item',
+  unverified: (key) => `the original definition and value rows for environmentVariable "${key}" could not be read completely; no value request was sent for this item`,
+  conflict: (key) => `environmentVariable "${key}" has a row that differs from its pending create; no definition or value was replaced and no value request was sent for this item`,
+  membership: (key) => `the pending create of environmentVariable "${key}" is missing required solution membership. Restore that membership under the original ids, then build again. No value request was sent for this item`,
+  contradicted: (key, id) => `the definition of environmentVariable "${key}" at ${id} differs from the one this build's own request created: its id, parent, content or child rows were changed after it was made. `
+    + 'Nothing was replaced and nothing more is sent for it; check who changed it before deciding how to recover',
+};
+
+// The definition and value rows of an attempt that is an original variable create of exactly those two rows, or null.
+function variableRowsOf(attempt) {
+  const p = attempt && attempt.rowProtocol;
+  if (!p || !Array.isArray(p.rows) || p.rows.length !== 2) return null;
+  const root = p.rows.find((r) => r.parentId === null);
+  const value = p.rows.find((r) => r.parentId !== null);
+  return root && value && value.kind === VALUE_ROW_KIND ? { root, value } : null;
+}
+
+// How a fresh read (B.observe) finds the prepared root `root` (#847): 'exact' (present at its id, no parent, its planned
+// projection over a complete child graph), 'contradicted' (present, but at another id, under a parent, or with other
+// public content or an unexpected child — observe folds the graph into the root's projection), 'absent', or 'unread'
+// (missing from the read, unknown, or a graph observe could not read completely). Only 'contradicted' is a positive fact
+// against the root; an unreadable or absent root is no proof either way.
+function rootReadOf(root, observation) {
+  const d = ((observation && observation.rows) || []).find((x) => x.kind === root.kind && x.key === root.key);
+  if (!d || (d.state !== 'present' && d.state !== 'absent')) return 'unread';
+  if (d.state === 'absent') return 'absent';
+  return normalizeGuid(d.id) !== root.id || (d.parentId ? normalizeGuid(d.parentId) : null) !== null || d.projectionSha256 !== root.expectedSha256
+    ? 'contradicted' : 'exact';
+}
+
+/**
+ * Whether a pending variable create owes ONLY its value row, and may send it (#847). Read only and synchronous over what
+ * the caller read: `item` (locateItem's pending item, its attempt as the store holds it now) and `observation` (B.observe
+ * of today's plan, read after the attempt). Answers:
+ *   null                       not this case: the generic recovery halt stands (another family, an edit, a value that was
+ *                              or may have been sent, a changed declaration — managed-pending-intent-changed —, a
+ *                              definition read absent, a value already there: its ordinary recovery judges it);
+ *   { halt: verdict }          this case, but the value cannot be sent yet: its input is missing, a row or membership is
+ *                              unreadable, differs or is missing, or the definition's ownership needs the maker's approval;
+ *   { ready: { declarationSha256 } }   the value is owed and everything it needs was proved: resolve sends it once.
+ * Every condition is one the store re-checks under its lease when the value is claimed (claimUnsentValueRow), except the
+ * service reads, which completeValueOnce repeats after the claim.
+ */
+function valueOwed(env, ctx, item, observation) {
+  const a = item.attempt;
+  const { planned } = item;
+  if (!ctx || item.edit || item.adoption || planned.kind !== 'environmentVariable' || !a || !a.rowProtocol) return null;
+  if (a.phase !== 'sending' || a.baseGeneration !== null || !a.expected || a.expected.baseObservation !== null || a.savedObservation !== null) return null;
+  const p = a.rowProtocol;
+  const pair = variableRowsOf(a);
+  if (!pair || p.preserved.length || p.completion.ruleState !== null || p.effects.some((e) => e.kind === 'rule-state')) return null;
+  const { root, value } = pair;
+  if (root.mode !== 'create' || root.dispatched !== true || root.id !== normalizeGuid(a.root.id)) return null;
+  if (value.mode !== 'create' || value.sensitiveInput !== true || value.parentId !== root.id || value.dispatched
+    || value.sentFields !== null || value.sentSha256 !== null || (a.acknowledgedChildCreates || []).some((c) => c.kind === value.kind && c.key === value.key)) return null;
+  // The declaration is judged over the attempt's OWN rows (not today's plan, which drops a value the settings no longer
+  // supply), so a missing value is not mistaken for a changed declaration and a changed one keeps its own halt.
+  const declarationSha256 = B.declarationSha256Of(env.spec, { kind: planned.kind, key: item.declaredKey, solution: planned.solution, rows: p.rows, ruleState: p.completion.ruleState });
+  if (declarationSha256 !== a.declarationSha256) return null;
+  const { key } = planned;
+  const halt = (code, message, extra = {}) => ({ halt: { action: 'halt', code, message, ...extra } });
+  // Deployment settings name a value to send: neither "" (leave alone), null (clear) nor no entry at all.
+  const input = env.bindings && env.bindings.environmentVariables instanceof Map ? env.bindings.environmentVariables.get(key) : undefined;
+  if (!input || typeof input.value !== 'string' || input.value === '') return halt(COMPLETION_CODE, VALUE_MESSAGES.input(key));
+  if (!sameRows(planned.plan.rows, p.rows)) return null;
+  const seen = (r) => ((observation && observation.rows) || []).find((x) => x.kind === r.kind && x.key === r.key);
+  const v = seen(value);
+  const rootRead = rootReadOf(root, observation);
+  if (!v || rootRead === 'unread' || v.state === 'unknown') return halt(UNVERIFIED_CODE, VALUE_MESSAGES.unverified(key));
+  if (rootRead === 'absent') return null;
+  if (rootRead === 'contradicted') return halt(CONFLICT_CODE, VALUE_MESSAGES.conflict(key), { rows: [{ id: root.id }] });
+  if (v.state === 'present') return null;
+  if (v.state !== 'absent') return halt(UNVERIFIED_CODE, VALUE_MESSAGES.unverified(key));
+  const members = new Map(((observation && observation.members) || []).map((m) => [normalizeGuid(m.id), m.state]));
+  const states = p.completion.members.map((m) => members.get(normalizeGuid(m.id)));
+  if (states.some((s) => s !== 'present' && s !== 'absent')) return halt(UNVERIFIED_CODE, VALUE_MESSAGES.unverified(key));
+  if (states.some((s) => s !== 'present')) return halt(COMPLETION_CODE, VALUE_MESSAGES.membership(key));
+  // The definition is this attempt's own creation only by its own receipted answer; otherwise the maker approves it by
+  // its ordinary root token (adopt:environmentVariable:<key>), never by the namesake adoption's @<id> form.
+  const approval = defaultApprovalToken(planned.kind, a.root.key, root);
+  if (a.acknowledgedRoot !== true && !ctx.approvals().includes(approval)) {
+    return halt(OWNERSHIP_CODE, VALUE_MESSAGES.ownership(key, root.id), { rows: [{ id: root.id }], approvals: [approval] });
+  }
+  return { ready: { declarationSha256 } };
+}
+
+/**
+ * Send the value valueOwed proved owed, once, and settle the attempt (#847):
+ *   1. capture the attempt (captureReadOnly) BEFORE a fresh read, and judge that read (valueOwed) again;
+ *   2. claim the value under a new epoch (ctx.claimValue → store.claimUnsentValueRow): the store re-checks the capture
+ *      and the attempt under its lease, and the context refuses a second claim in this process;
+ *   3. read again and judge again after the claim, so a row changed meanwhile stops the send;
+ *   4. send the ONE value POST (B.postPlannedVariableValue) in the send-once scope and the attempt's fenced create set,
+ *      classified so that only that value row's create passes; the transport seals it dispatched before it leaves;
+ *   5. a definite unstarted refusal stops create-value-refused (the attempt stays pending; the next build may try again
+ *      while its record still proves the value never left); any other unchecked answer is create-outcome-unknown and
+ *      the value is never sent again;
+ *   6. an acknowledged value is observed and settled; the item is present only when the attempt commits.
+ * Answers { state: 'present', id } for resolve; anything else throws, typed.
+ */
+async function completeValueOnce(env, ctx, item) {
+  const { planned } = item;
+  const { kind, key } = planned;
+  const rootId = planned.plan.rows[0].id;
+  const fail = (verdict) => { const h = withWayOut(item, haltOf(kind, key, verdict)); throw stop(h.code, h.message, h); };
+  const judge = async () => {
+    const group = env.store.readGroup(kind, key);
+    const attempt = group.pending && group.pending.token === item.token ? group.pending : null;
+    if (!attempt) fail({ code: UNVERIFIED_CODE, message: VALUE_MESSAGES.unverified(key) });
+    const observation = await B.observe(env.dataverse, planned);
+    const owed = valueOwed(env, ctx, { ...item, attempt }, observation);
+    if (owed && owed.ready) return { attempt, ready: owed.ready };
+    return fail(owed ? owed.halt : ctx.classify(item.token, observation, { declarationSha256: planned.plan.declarationSha256 }));
+  };
+  const [capture] = ctx.captureReadOnly([item.token]);
+  const first = await judge();
+  const { value } = variableRowsOf(first.attempt);
+  const claimed = ctx.claimValue(item.token, { id: value.id, parentId: value.parentId, capture, declarationSha256: first.ready.declarationSha256 });
+  await judge();
+  const base = B.createSetClassifier([{ token: claimed.token, planned }]);
+  // Only the value row's own create: the definition, a PATCH, a $batch, a membership or any other row is refused unsent.
+  const classify = (req) => {
+    const d = base(req);
+    return d && d.type === 'rows' && d.token === claimed.token && d.rows.length === 1 && d.rows[0].kind === VALUE_ROW_KIND
+      && d.rows[0].key === value.key && normalizeGuid(d.rows[0].id) === value.id ? d : null;
+  };
+  // The service answers the created row (Prefer: return=representation); a body naming another row is not this create.
+  const acceptResult = (res) => res === undefined || res === null || res === ''
+    || (typeof res === 'object' && !Array.isArray(res) && !res.error && (res.environmentvariablevalueid === undefined || normalizeGuid(res.environmentvariablevalueid) === value.id));
+  const pushed = await withConfigurationWrite(() => ctx.run({ attempts: [claimed], classify, deleteCode: B.DELETE_CODE, label: `configuration value ${kind} ${key}`, acceptResult },
+    () => B.postPlannedVariableValue(env.dataverse, planned)));
+  const mine = ctx.facts(item.token).filter((f) => f.type === 'row' && f.kind === VALUE_ROW_KIND && f.key === value.key);
+  const refused = !pushed.checked && !pushed.localError ? mine.find((f) => f.notStarted === true) : null;
+  if (refused) throw valueRefusedStop(kind, key, rootId, refused, item.token);
+  if (pushed.localError) throw stop(pushed.localError.code || UNVERIFIED_CODE, String(pushed.localError.message || pushed.localError), { kind, key, id: rootId });
+  if (!pushed.checked || mine.length !== 1 || mine[0].outcome !== 'acknowledged') {
+    throw stop('create-outcome-unknown', `the value of ${kind} "${key}" was not acknowledged; it is not sent again`, { kind, key, id: rootId });
+  }
+  const [settled] = ctx.settle([{ token: item.token, observation: await B.observe(env.dataverse, planned), declarationSha256: first.ready.declarationSha256 }]);
+  if (settled.verdict.action !== 'commit') fail(settled.verdict);
+  return { state: 'present', id: rootId };
+}
+
+// The stop for a variable whose value request the service refused before it started, the definition sent before it
+// (#847). Unlike refusedStop, the attempt is NOT released — its definition may be there — so it routes as unknown
+// (configuration-artifacts.js UNKNOWN_PORT_CODES). It carries only the answer's validated Dataverse code and the attempt's
+// own token (never service text), which the halt line spells into the retire approval (A.valueRefusedHint).
+function valueRefusedStop(kind, key, id, fact, token) {
+  const serviceCode = typeof fact.serviceCode === 'string' ? fact.serviceCode : null;
+  return stop(VALUE_REFUSED_CODE, `the ${kind} "${key}": ${A.valueRefusedHint({ kind, key, serviceCode, pendingAttemptToken: token })}`,
+    { kind, key, id, serviceCode, pendingAttemptToken: token });
 }
 
 // The way out of a pending create that only its own ids can complete (#847). A create the service refused under an earlier
@@ -812,6 +981,114 @@ const haltOf = (kind, key, verdict) => ({
   kind, key, ...(verdict.rows && verdict.rows[0] ? { id: verdict.rows[0].id } : {}), code: verdict.code || UNVERIFIED_CODE, message: verdict.message || `the ${kind} "${key}" could not be recovered`,
   ...(Array.isArray(verdict.approvals) && verdict.approvals.length ? { approvals: verdict.approvals.slice() } : {}),
 });
+
+// ---------------------------------------------------------------------------------------------
+// Guidance for a protected rule create whose first publication is not confirmed (#808).
+//
+// A rule create that saved its content but whose initial publication was not confirmed stops as
+// create-completion-required (the rule read Unpublished) or create-identity-unverified (its status read neither
+// Published nor Unpublished: a publish job in flight, statecode 0 / statuscode 1, or an unreadable status). The build
+// never sends that publication again, so the maker has to finish it, and the bare code does not say how. The runtime
+// that formats the stop (configuration-build.js) asks this module's hookup for one advisory sentence
+// (createProtectedConfiguration publicationHint), built only from trusted state this module holds:
+//   - a note this invocation recorded from an observation it made itself (recoverPending, publishOnce, run's
+//     settlement), kept private in SCOPES against the exact port or preflight result that made it;
+//   - the checked declaration (its name) and the binding store's current in-memory record (the original id, and that
+//     the publication's request was dispatched).
+// Nothing travels on an exception, a finding or a halt item: a resolver or error can carry any text, so none of it is
+// ever a source of the sentence, and a failure that does not match a note and the record exactly gets today's text.
+// Wording only: no request, read, persisted field, approval or code is added, and no recovery decision changes.
+
+// Port or preflight result -> { spec, store, notes: Map(<kind>\0<key> -> note), resolve?, run? }. Module-private:
+// neither the map nor a writer is exported, so a caller cannot seed a note.
+const SCOPES = new WeakMap();
+const noteKey = (kind, key) => `${kind}\u0000${key}`;
+const scopeOf = (source, spec, store) => {
+  const scope = { spec, store, notes: new Map() };
+  SCOPES.set(source, scope);
+  return scope;
+};
+// Pending phases a sent create can be in; `prepared` never sent anything (managed-bindings.js PHASES).
+const SENT_PHASES = new Set(['sending', 'saved', 'state-pending', 'membership-pending']);
+
+/**
+ * Record (or clear) the note for one stopped pending rule create, from an observation this invocation already made and
+ * the verdict judged from it. Eligible only when the rows and members read back exactly as planned (asIsReason, used only
+ * as a yes/no predicate: a phase alone does not prove that only the publication is missing, since state-pending is also
+ * chosen when a row is absent) and either the rule read Unpublished (create-completion-required, state-pending) or its
+ * status read neither Published nor Unpublished (create-identity-unverified). Answers true when a note was recorded.
+ */
+function noteStop(scope, { planned, token, edit, adoption }, observation, verdict) {
+  if (!scope || !planned) return false;
+  scope.notes.delete(noteKey(planned.kind, planned.key));
+  if (edit || adoption || planned.kind !== 'duplicateRule' || typeof token !== 'string' || !observation || !verdict || verdict.action !== 'halt') return false;
+  const state = observation.ruleState;
+  const unpublished = verdict.code === COMPLETION_CODE && verdict.phase === 'state-pending' && state === 'unpublished';
+  const unknownState = verdict.code === UNVERIFIED_CODE && state !== 'published' && state !== 'unpublished';
+  if (!unpublished && !unknownState) return false;
+  try {
+    if (asIsReason(planned, observation) !== null) return false;
+  } catch {
+    return false;
+  }
+  scope.notes.set(noteKey(planned.kind, planned.key), Object.freeze({
+    kind: planned.kind, key: planned.key, token, rootId: normalizeGuid(planned.plan.rows[0].id), declarationSha256: planned.plan.declarationSha256,
+    solution: planned.solution, code: verdict.code, phase: verdict.phase || null, ruleState: unpublished ? 'unpublished' : 'unknown',
+  }));
+  return true;
+}
+
+// A name or key shown inside the sentence, lossless and on one line: JSON string escaping (quotes, backslashes and
+// control characters), plus DEL and the Unicode line and paragraph separators, which JSON.stringify leaves as they are.
+const quoted = (s) => JSON.stringify(s).replace(/[\u007f\u2028\u2029]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`);
+const publicationHintText = (name, key, id) => `The first publication of duplicate detection rule ${quoted(name)} (App Spec key ${quoted(key)}, original id ${id}) has not been confirmed. `
+  + 'The build does not send this publication again. Check that exact rule: if it reads Publishing, wait and rebuild; otherwise check its definition '
+  + 'and conditions and, if they are what you intend, publish it in the environment\'s duplicate detection rules settings, then rebuild. '
+  + 'Setting "status": "published" in the App Spec does not bypass this pending attempt.';
+
+/**
+ * The hookup's read-only reader (createProtectedConfiguration publicationHint): the sentence for one stopped duplicate
+ * rule, or null for today's text. `source` must be a port or preflight result this hookup issued, over this same spec
+ * and store, with its original methods; `guardId` is the stopped item's own normalized id, compared only (the id shown
+ * is the store's). Reads the in-memory store record only: no request, no disk refresh. Every failure answers null.
+ */
+function publicationHintOf({ store, owned }, { spec, source, kind, key, code, guardId } = {}) {
+  try {
+    if (!configurationIdentityOf(spec) || kind !== 'duplicateRule' || typeof key !== 'string' || !key) return null;
+    if (code !== COMPLETION_CODE && code !== UNVERIFIED_CODE) return null;
+    if (!source || typeof source !== 'object' || !owned.has(source)) return null;
+    const scope = SCOPES.get(source);
+    if (!scope || scope.spec !== spec || scope.store !== store || scope.replaced) return null;
+    if ((scope.resolve || scope.run) && (source.resolve !== scope.resolve || source.run !== scope.run)) return null;
+    const note = scope.notes.get(noteKey(kind, key));
+    if (!note || note.kind !== kind || note.key !== key || note.code !== code) return null;
+    const entry = A.configurationIntentOf(spec, kind, key);
+    if (!entry || entry.key !== key || typeof entry.name !== 'string' || entry.name.trim() === '' || entry.name.length > 100) return null;
+    const guard = typeof guardId === 'string' ? normalizeGuid(guardId) : '';
+    if (!guard || guard !== guardId) return null;
+    const group = store.readGroup(kind, key);
+    const a = group && group.pending;
+    if (!a || group.committed || a.family !== kind || a.key !== key || a.token !== note.token || !SENT_PHASES.has(a.phase)) return null;
+    if (a.acknowledgedRoot !== true || !a.expected || a.expected.baseObservation !== null) return null;
+    const p = a.rowProtocol;
+    if (!p || !Array.isArray(p.rows) || !p.completion || p.completion.ruleState !== 'published' || !Array.isArray(p.effects)) return null;
+    const roots = p.rows.filter((r) => r.parentId === null);
+    if (roots.length !== 1 || roots[0].kind !== kind || roots[0].key !== key || roots[0].mode !== 'create') return null;
+    const rootId = normalizeGuid(roots[0].id);
+    if (!rootId || rootId !== normalizeGuid(a.root && a.root.id) || rootId !== note.rootId || rootId !== guard) return null;
+    if (a.declarationSha256 !== note.declarationSha256) return null;
+    // The declaration as it is now, over the rows the attempt persisted: a declaration changed since the stop was observed
+    // is not the one this sentence would describe.
+    if (B.declarationSha256Of(spec, { kind, key, solution: note.solution, rows: p.rows, ruleState: p.completion.ruleState }) !== a.declarationSha256) return null;
+    // Only a publication whose request was dispatched is "not sent again". One still `dispatched: false` is sent once by
+    // the next build (unsentPublication), and a record without the effect proves nothing either way: today's text.
+    const effects = p.effects.filter((e) => e && e.kind === 'rule-state');
+    if (effects.length !== 1 || normalizeGuid(effects[0].id) !== rootId || effects[0].dispatched !== true) return null;
+    return publicationHintText(entry.name, key, rootId);
+  } catch {
+    return null;
+  }
+}
 
 // What every protected read needs, read once per build: the solution's component types (membership is planned only
 // outside the restricted solutions, but the read is cheap and fail-closed).
@@ -861,6 +1138,9 @@ async function replaceLocalCopy(dataverse, sdk, kind, id) {
 async function preflightProtectedConfiguration({ spec, store, ctx, dataverse, solution, bindings, sdk = null, authorizedOverwrite = null }) {
   if (!configurationIdentityOf(spec)) return { halts: [] };
   const halts = [];
+  // The answer, registered with this preflight's own notes before any is recorded (publicationHintOf reads them).
+  const result = { halts };
+  const scope = scopeOf(result, spec, store);
   // The maker's approvals as given (exact spellings): an adoption is forecast as made only when every one it needs is here.
   const given = new Set(ctx && typeof ctx.approvals === 'function' ? ctx.approvals() : []);
   let env;
@@ -870,6 +1150,7 @@ async function preflightProtectedConfiguration({ spec, store, ctx, dataverse, so
     return { halts: [{ kind: 'configuration', key: '*', code: error.code || UNVERIFIED_CODE, message: error.message }] };
   }
   for (const { kind, key } of parentsFirst(spec, declaredItems(spec))) {
+    scope.notes.delete(noteKey(kind, A.portKeyOf(kind, key)));
     try {
       const item = await locateItem(env, kind, key);
       // Every later step of a bound or pending item reads its row into the workspace over the local copy (locate's
@@ -909,10 +1190,18 @@ async function preflightProtectedConfiguration({ spec, store, ctx, dataverse, so
       if (item.state === 'pending') {
         const rec = await recoverPending(env, ctx, item);
         if (rec.verdict.action === 'halt') {
+          // A variable create whose value alone is owed and provably never left: resolve sends it once (valueOwed);
+          // one that cannot be sent yet names exactly why, before anything is sent.
+          const value = valueOwed(env, ctx, item, rec.observation);
+          if (value && value.ready) continue;
+          if (value) { halts.push(withWayOut(item, haltOf(kind, item.planned.key, value.halt))); continue; }
           // A saved rule create whose initial publication provably never left: resolve sends it once (unsentPublication).
           const owed = unsentPublication(ctx, item, rec);
           if (owed && owed.would.action === 'commit') continue;
-          halts.push(withWayOut(item, haltOf(kind, item.planned.key, owed ? owed.would : rec.verdict)));
+          // Only the stop judged from this preflight's own read is explained (#808); a hypothetical one (owed.would) is not.
+          const h = haltOf(kind, item.planned.key, owed ? owed.would : rec.verdict);
+          const noted = !owed && noteStop(scope, item, rec.observation, rec.verdict);
+          halts.push(withWayOut(item, noted && !h.id ? { ...h, id: scope.notes.get(noteKey(kind, item.planned.key)).rootId } : h));
           continue;
         }
         // A complete edit settles read-only (resolve): nothing more is written for it, so it is not judged as an edit.
@@ -961,10 +1250,11 @@ async function preflightProtectedConfiguration({ spec, store, ctx, dataverse, so
           : await childVerdict(env, item.planned, shape);
       if (verdict) halts.push({ kind, key: item.planned.key, ...verdict });
     } catch (error) {
+      scope.notes.delete(noteKey(kind, A.portKeyOf(kind, key)));
       halts.push({ kind, key, ...(error.id ? { id: error.id } : {}), code: error.code || UNVERIFIED_CODE, message: error.message });
     }
   }
-  return { halts };
+  return result;
 }
 
 // The members a planned create still owes the solution, added in the create set's own scope (the classifier admits only
@@ -1021,11 +1311,12 @@ function protectedConfigurationPort({ spec, store, ctx, dataverse, solution, bin
   // attempt is still recovered read-only from what it persisted (recoverPending), and the next build's preflight stops on
   // the copy (DRAFT_CODE) until the maker keeps what they want and approves replacing it with the server's
   // (--authorize overwrite:<kind>:<key>, overwriteKey).
-  return {
+  const port = {
     // The binding store is the authority on these kinds: locate asks this port before any other record (configuration-artifacts.js).
     exact: true,
     protects: (kind) => KINDS.has(kind),
     async resolve({ kind, key }) {
+      hintScope.notes.delete(noteKey(kind, A.portKeyOf(kind, key)));
       const item = await locateItem(await env(), kind, key);
       const rootId = item.planned.plan.rows[0].id;
       if (item.state === 'bound') return { state: 'present', id: rootId };
@@ -1058,11 +1349,20 @@ function protectedConfigurationPort({ spec, store, ctx, dataverse, solution, bin
         }
         // Nothing the attempt sent can have been applied: it is created again, under the same ids (run resumes it).
         if (verdict.action === 'resume') return { state: 'absent', id: rootId };
+        // A variable create whose value alone is owed and provably never left: sent once, fenced, then settled (#847).
+        const value = verdict.action === 'halt' ? valueOwed(await env(), ctx, item, observation) : null;
+        if (value && value.ready) return completeValueOnce(await env(), ctx, item);
+        if (value) verdict = value.halt;
         // A saved rule create whose initial publication provably never left: sent once, fenced, then settled.
         const owed = unsentPublication(ctx, item, rec);
-        if (owed) verdict = owed.would.action === 'commit' ? await publishOnce(await env(), ctx, item) : owed.would;
+        if (owed) verdict = owed.would.action === 'commit' ? await publishOnce(await env(), ctx, item, hintScope) : owed.would;
+        // A stop judged from this resolve's own read, with no publication owed, is explained too (#808): its note, and the
+        // original id on the stop, which the haltOf of an empty verdict does not carry.
+        else noteStop(hintScope, item, observation, verdict);
         if (verdict.action === 'commit') return { state: 'present', id: rootId };
-        const h = withWayOut(item, haltOf(kind, item.planned.key, verdict));
+        const halt = haltOf(kind, item.planned.key, verdict);
+        const note = hintScope.notes.get(noteKey(kind, item.planned.key));
+        const h = withWayOut(item, note && !halt.id ? { ...halt, id: note.rootId } : halt);
         throw stop(h.code, h.message, h);
       } else if (adoptionAsked(ctx, kind, item.planned.key)) {
         const answer = adopted(kind, await adoptNamesake(await env(), ctx, item, key));
@@ -1074,6 +1374,7 @@ function protectedConfigurationPort({ spec, store, ctx, dataverse, solution, bin
       throw stop(read.state === 'present' ? CONFLICT_CODE : UNVERIFIED_CODE, `the ${kind} "${item.planned.key}" derived id is ${read.state === 'present' ? 'taken by a row no binding holds' : 'unreadable'}`, { kind, key: item.planned.key, id: rootId });
     },
     async run({ kind, key }, fn) {
+      hintScope.notes.delete(noteKey(kind, A.portKeyOf(kind, key)));
       const item = await locateItem(await env(), kind, key);
       let resumed = null;
       // An adoption attempt is never sent as a create: its rows are a maker's, at ids no create derives.
@@ -1101,13 +1402,41 @@ function protectedConfigurationPort({ spec, store, ctx, dataverse, solution, bin
       const refused = refusedUnsent(ctx, attempt, pushed);
       const released = !pushed.checked && ctx.release(attempt);
       if (refused && released) throw refusedStop(kind, planned.key, id, refused, 'create');
+      // #847: an original variable create whose run was not checked — its value request was refused unstarted, its answer
+      // was lost, or anything after the definition's own acknowledged answer failed — is proved by a fresh exact read when
+      // this process holds that genuine answer (ctx.hasPartialRoot: the context kept the candidate only for a current-scope
+      // acknowledgement with no conflicting fact and no local failure). An exact root is receipted, so a later build needs
+      // no ownership approval for the definition; the value's possibly-sent flag is never touched, so a value that may
+      // have left is still never sent again. A root the read positively contradicts stops create-identity-conflict here,
+      // before any hint that settings could correct it; an absent or unreadable one proves nothing either way.
+      if (!pushed.checked && !released && !pushed.localError && kind === 'environmentVariable' && ctx.hasPartialRoot(attempt.token, attempt.epoch)) {
+        const observation = await B.observe(dataverse, planned);
+        const rootRead = rootReadOf(planned.plan.rows[0], observation);
+        if (rootRead === 'contradicted') throw stop(CONFLICT_CODE, VALUE_MESSAGES.contradicted(planned.key, id), { kind, key: planned.key, id });
+        if (rootRead === 'exact') ctx.receiptPartialVariableRoot({ token: attempt.token, epoch: attempt.epoch, observation, declarationSha256: planned.plan.declarationSha256 });
+      }
+      // A variable whose definition this run sent and whose value request the service refused unstarted (#847): the
+      // attempt stays pending (the definition may be there, so it is never released) and the stop says so.
+      if (refused && !released && !pushed.localError && kind === 'environmentVariable') {
+        const mine = ctx.facts(attempt.token).filter((f) => f.type === 'row');
+        const root = planned.plan.rows[0];
+        // This run's own answer for the definition (kept `unchecked`, since the run as a whole was not), and the value's
+        // durable unstarted reset; a conflict anywhere, or a definition answer that never came, is not this case.
+        const rootAnswered = mine.some((f) => f.kind === root.kind && f.key === root.key && (f.outcome === 'unchecked' || f.outcome === 'acknowledged'));
+        const valueFact = mine.find((f) => f.kind === VALUE_ROW_KIND && f.notStarted === true);
+        if (rootAnswered && valueFact && !mine.some((f) => f.outcome === 'conflict')) throw valueRefusedStop(kind, planned.key, id, valueFact, attempt.token);
+      }
       if (pushed.error) throw pushed.error;
       if (pushed.localError) throw stop(pushed.localError.code || UNVERIFIED_CODE, String(pushed.localError.message || pushed.localError), { kind, key: planned.key, id });
       if (!pushed.checked) throw stop('create-outcome-unknown', `the ${kind} "${planned.key}" create was not acknowledged`, { kind, key: planned.key, id });
       const added = await addMissingMembers(dataverse, planned, scope);
       if (added.error || added.localError) throw stop('create-outcome-unknown', `the ${kind} "${planned.key}" solution membership was not acknowledged`, { kind, key: planned.key, id });
-      const [settled] = ctx.settle([{ token: attempt.token, observation: await B.observe(dataverse, planned) }]);
-      if (settled.verdict.action !== 'commit') throw stop(settled.verdict.code || UNVERIFIED_CODE, settled.verdict.message || `the ${kind} "${planned.key}" create was not proved`, { kind, key: planned.key, id });
+      const observation = await B.observe(dataverse, planned);
+      const [settled] = ctx.settle([{ token: attempt.token, observation }]);
+      if (settled.verdict.action !== 'commit') {
+        noteStop(hintScope, { planned, token: attempt.token }, observation, settled.verdict);
+        throw stop(settled.verdict.code || UNVERIFIED_CODE, settled.verdict.message || `the ${kind} "${planned.key}" create was not proved`, { kind, key: planned.key, id });
+      }
       return { outcome: 'created', id, childIds, result: pushed.value };
     },
     /**
@@ -1176,6 +1505,31 @@ function protectedConfigurationPort({ spec, store, ctx, dataverse, solution, bin
       return { outcome: 'updated', id: rootId, childIds, result: pushed.value };
     },
   };
+  // This port's own notes (#808), kept with its original methods: a port whose methods were replaced is not the one that
+  // observed the stop, so publicationHintOf answers nothing for it.
+  const hintScope = scopeOf(port, spec, store);
+  hintScope.resolve = port.resolve;
+  hintScope.run = port.run;
+  // Provenance is fixed when a method is replaced, never inferred from the methods found afterwards: a wrapper that puts
+  // the original back before it calls it and then throws a stop of its own would otherwise look like the original when
+  // the stop is formatted. So each method is an accessor that reads and writes exactly as a plain property does (the
+  // build calls whatever is there, so execution is unchanged), but whose first write of any other function marks this
+  // port's notes unusable for good. Not configurable, so a saved descriptor cannot be put back round the marker.
+  for (const name of Object.keys(port)) {
+    if (typeof port[name] !== 'function') continue;
+    const original = port[name];
+    let current = original;
+    Object.defineProperty(port, name, {
+      enumerable: true,
+      configurable: false,
+      get: () => current,
+      set: (value) => {
+        if (value !== original) hintScope.replaced = true;
+        current = value;
+      },
+    });
+  }
+  return port;
 }
 
 /**
@@ -1258,16 +1612,26 @@ function retireUndeclared(store, unit, a, how) {
 function createProtectedConfiguration({ store, gate, ctx, apiBase = null, retirements = [] } = {}) {
   if (!store || typeof store.readGroup !== 'function') throw new TypeError('createProtectedConfiguration needs the managed binding store');
   if (!ctx || typeof ctx.begin !== 'function' || typeof ctx.run !== 'function' || typeof ctx.settle !== 'function') throw new TypeError('createProtectedConfiguration needs the managed create context');
+  // The ports and preflight results this hookup issued: publicationHint answers only for one of them (a source made by
+  // another hookup, or by calling the module's functions directly, is not this hookup's to explain).
+  const owned = new WeakSet();
+  const own = (source) => {
+    if (source && typeof source === 'object') owned.add(source);
+    return source;
+  };
   return {
     store,
     gate,
     ctx,
-    preflight: ({ spec, dataverse, solution, bindings, sdk, authorizedOverwrite }) => preflightProtectedConfiguration({ spec, store, ctx, dataverse, solution, bindings, sdk, authorizedOverwrite }),
-    port: ({ spec, dataverse, solution, bindings, sdk }) => protectedConfigurationPort({ spec, store, ctx, dataverse, solution, bindings, apiBase, sdk }),
+    preflight: async ({ spec, dataverse, solution, bindings, sdk, authorizedOverwrite }) => own(await preflightProtectedConfiguration({ spec, store, ctx, dataverse, solution, bindings, sdk, authorizedOverwrite })),
+    port: ({ spec, dataverse, solution, bindings, sdk }) => own(protectedConfigurationPort({ spec, store, ctx, dataverse, solution, bindings, apiBase, sdk })),
     // A build without the opt-in: what the store still holds for its declared items (optInObligations), read locally.
     obligations: ({ spec }) => optInObligations({ spec, store }),
     // Every build, before its first service change: what the store still owes for items the App Spec no longer declares.
     sweep: ({ spec }) => pendingSweep({ spec, store, retirements }),
+    // Read-only advice for one stopped duplicate rule whose first publication is not confirmed (#808), or null:
+    // publicationHintOf. No request is made.
+    publicationHint: (query) => publicationHintOf({ store, owned }, query),
   };
 }
 

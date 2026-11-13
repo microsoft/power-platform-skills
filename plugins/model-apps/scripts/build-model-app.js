@@ -49,7 +49,7 @@ const { createPublicationBarrier, describeWithheld } = require('./lib/publicatio
 const { usesCommandStates, commandStateAuthorizationKeys } = require('./lib/command-state-contract.js');
 const { commandStateMode, createCommandStatePublicationObserver } = require('./lib/command-state-run.js');
 const { commandStateSendOnce } = require('./lib/command-state-transport.js');
-const { RETRY, judgeFailure, retryPolicyFor, throttleAskOf } = require('./lib/retry-policy.js');
+const { RETRY, judgeFailure, retryPolicyFor, throttleAskOf, publishLockRefusalOf } = require('./lib/retry-policy.js');
 const { makeThrottleBudget, waitDoesNotFit } = require('./lib/throttle-budget.js');
 const { workspaceBindingError, workspaceBindingNote } = require('./lib/workspace-binding.js');
 const { parseArgs, validateFlags, readAliasedFlag, readJsonArg, emitResult, dataverseRequest, readProvisionedLanguages, preflightAuth, dataverseOrigin } = require('./lib/dataverse-auth.js');
@@ -87,12 +87,15 @@ const { isDeclaredView, compileViewIntent } = require('./lib/view-reconcile.js')
 const { approvalKey } = require('./lib/reconcile-common.js');
 const { isDeclaredChart, compileChartIntent } = require('./lib/chart-reconcile.js');
 const { isDeclaredForm, formLayoutKey } = require('./lib/form-layout-reconcile.js');
+const { captionSharingNoteOf } = require('./lib/form-caption-sharing.js');
 const { isDeclaredDashboard, dashboardKey } = require('./lib/dashboard-reconcile.js');
 const { declaredFeatureOn } = require('./lib/declared-features.js');
 const { isDeclaredWebResource } = require('./lib/web-resource-reconcile.js');
 const { makeWritesBlocking } = require('./lib/output-redaction.js');
 // The lease one apply of an app holds for the whole of its work in the workspace (lib/app-operation-lease.js).
 const { withAppBuildLease, applyWorkspaceOf } = require('./lib/app-operation-lease.js');
+const { assertConfigurationCreatesClear, acknowledgeQuarantines } = require('./lib/configuration-create-guard.js');
+const { legacyConfigurationArtifacts, checkLegacyConfigurationPair } = require('./lib/workspace-configuration-memory.js');
 const { publicationRiskApproval } = require('./lib/managed-bindings.js');
 const { readVerifyManifest } = require('./lib/declared-form-io.js');
 const { createAttemptSendObserver } = require('./lib/managed-feature-contract.js');
@@ -108,6 +111,17 @@ function assertWorkspaceDir(workspaceDir, { create }) {
   } catch (err) {
     if (create || !(err && err.reason === 'uninspectable')) throw err;
   }
+}
+
+// #807: every environment-variable and connection-reference pair (copy + last-synced snapshot) an earlier plugin version left in
+// `workspaceDir`, orphans included, must be absent or proven clean (lib/workspace-configuration-memory.js
+// checkLegacyConfigurationPair); the first that is not is refused as the SDK refuses it (SdkError WORKSPACE_LEGACY_CONFIGURATION_COPY).
+// Reads only: a folder that is absent holds nothing, one that cannot be listed throws.
+async function assertLegacyConfigurationCopiesClean(workspaceDir) {
+  const { createNodeWorkspaceStorage, SdkError } = require('./lib/maker-sdk.js');
+  const storage = createNodeWorkspaceStorage(workspaceDir);
+  const refuse = (code, message) => new SdkError(code, message);
+  for (const { folder, id } of legacyConfigurationArtifacts(storage)) await checkLegacyConfigurationPair(storage, folder, id, { refuse });
 }
 
 // Construct the SDK against the vendored bundle + an az-token HttpClient. Two clients:
@@ -229,6 +243,17 @@ async function makeSdk(env, spec, workspaceDir, languageCode, { persistent = tru
     // their runtime), so every other spec keeps the client it had. Preparing sends no request: it reads and writes this throwaway folder only
     // (manifest.json and the kind folders), which is removed with the rest of the run's temporary files.
     if (usesConfiguration(spec)) await sdk.initWorkspace();
+    // The default build's new configuration rows (lib/configuration-create-writer.js) are sent through this one authenticated
+    // client, never through `sdk`'s solution-scoped writes, so that the writer alone decides each request's headers (a value row
+    // and a rule's publication carry no solution header). Held for `sdk` by lib/configuration-create-bridge.js (no requires, so the writer and its
+    // stable-identity modules load only when the configuration runtime compiles a create), with the durable app
+    // workspace its receipt lives in and the header-less provision SDK its proof reads use, both handed over apart from this
+    // temporary solution SDK. An apply only: a preview never writes a receipt.
+    if (persistent && usesConfiguration(spec)) {
+      require('./lib/configuration-create-bridge.js').attachConfigurationCreateBridge(sdk, {
+        httpClient, apiUrl: (p) => sdk.dataverse.apiUrl(p), workspaceDir, reader: provisionSdk, environmentUrl: env, authoringLanguageCode: languageCode,
+      });
+    }
     if (!persistent) {
       // The preview did not open the app folder's workspace, so it cannot be refused by it — but an --apply
       // would be, and the operator is better told now than after the plan has been read and approved.
@@ -962,6 +987,9 @@ async function buildModelAppHeld(spec, opts, deps, v, buildLease) {
   // made. Each wait takes one retry from the same count, with the same backoff, so a lag never earns retries of its own; once the count
   // is spent the read fails as it did, and the build stops with the service's answer.
   let retriesUsed = 0;
+  // The runs that ended on a publish the customization lock refused, and what the loop waited for it: said when the build stops on one (#848).
+  let lockRefusals = 0;
+  let lockWaitedMs = 0;
   const retryFreshRead = async (err, table) => {
     if (retriesUsed >= maxRetries) return false;
     retriesUsed += 1;
@@ -1014,6 +1042,9 @@ async function buildModelAppHeld(spec, opts, deps, v, buildLease) {
         ...(deps.managedCreateGate ? { managedCreateGate: deps.managedCreateGate } : {}),
         ...(opts.configurationApprovals ? { configurationApprovals: opts.configurationApprovals } : {}),
     ...(opts.configurationRetirements ? { configurationRetirements: opts.configurationRetirements } : {}),
+        // #807: the in-process quarantine acknowledgment the command validated, for the FIRST attempt only: it lets one attempt do
+        // configuration work beside the acknowledged quarantines, and an automatic re-run asks again (the engine spends it as well).
+        ...(attempt === 1 && opts.configurationQuarantineAcknowledgment ? { configurationQuarantineAcknowledgment: opts.configurationQuarantineAcknowledgment } : {}),
         // commandStates: the exact --authorize tokens of the feature, the raw client its rows are read and written through, and the invocation's observer.
         ...(opts.commandStateApprovals ? { commandStateApprovals: opts.commandStateApprovals } : {}),
         ...(deps.commandStateClient ? { commandStateClient: deps.commandStateClient } : {}),
@@ -1091,26 +1122,47 @@ async function buildModelAppHeld(spec, opts, deps, v, buildLease) {
       // asked (the SDK's error holds no headers), and the client tells the budget instead (`declined`, lib/throttle-budget.js). The service said it was not ready for longer than the run may wait, so running the phases again would meet the
       // same answer: stop here, as for a wait of the build's own that does not fit — and so on the last run as on the first.
       const refused = transient && ask.throttled && declinedCount() > declinedBefore ? throttle.declined() : null;
+      // A publish the customization lock refused (lib/retry-policy.js, publishLockRefusalOf: a 429 with a lock's code, to the publish of a web resource the build
+      // could not confirm): the next run waits for the lock, longer than the ordinary backoff (LOCK_WAITS_MS), and for what the answer's Retry-After asked when that is
+      // longer still. It is the same run again, and no run is added. Before that run publishes the web resource again it writes it again by id, or reads the page
+      // manifest's copy and writes it again by id where it differs — the only publishes the classifier admits, so no publish follows the wait unproven. A generative
+      // page's publish, and every other, keeps the ordinary backoff.
+      const lock = transient ? publishLockRefusalOf(err) : null;
+      if (lock) lockRefusals += 1;
       if (refused) {
         halted = budgetHalt(Math.max(ask.askedMs, refused.askedMs), refused.waitMs);
       } else if (retriesUsed < maxRetries && transient) {
         retriesUsed += 1;
-        const backoff = opts.retryDelayMs != null ? opts.retryDelayMs : backoffMs(retriesUsed);
+        const ordinary = backoffMs(retriesUsed);
+        // The lock's own wait takes no more than what is left of the budget, and never less than the ordinary backoff: a lock that outlasts the budget then stops the
+        // run as any throttle does. A wait the caller set (`retryDelayMs`) is the wait, for the lock as for anything else.
+        const left = typeof throttle.remainingMs === 'function' ? throttle.remainingMs() : Infinity;
+        const backoff = opts.retryDelayMs != null ? opts.retryDelayMs : lock ? Math.max(ordinary, Math.min(lockWaitMs(retriesUsed), left)) : ordinary;
         // What the service asked of the next send, carried across the layers (retry-policy.js, throttleAskOf): when the page backend's sends ran out it handed over the moment before which nothing may be
         // sent. The wait is what is LEFT of it — the layers between did work — in whole seconds, the unit `Retry-After` counts in, and never less than the build's own backoff.
-        const asked = ask.notBefore > 0 ? Math.ceil(Math.min(ask.askedMs || Infinity, Math.max(0, ask.notBefore - now())) / 1000) * 1000 : 0;
-        const delay = Math.max(backoff, asked);
+        const leftOf = (askedMs, notBefore) => (notBefore > 0 ? Math.ceil(Math.min(askedMs || Infinity, Math.max(0, notBefore - now())) / 1000) * 1000 : 0);
+        const asked = leftOf(ask.askedMs, ask.notBefore);
+        // The Retry-After of the lock's answer (lib/sdk-http-client.js records the ask and the moment it was read) is honoured whole, never clamped: what is left of it.
+        const lockAsked = lock ? leftOf(lock.askedMs, lock.notBefore) : 0;
+        const delay = Math.max(backoff, asked, lockAsked);
         if (ask.throttled && !throttle.fits(delay)) {
           // The wait does not fit what is left of the run's budget.
-          halted = budgetHalt(ask.askedMs || asked, delay);
+          halted = budgetHalt(ask.askedMs || (lock && lock.askedMs) || asked, delay);
         } else {
           if (ask.throttled) throttle.spend(delay);
-          if (journal) journal.record({ phase: err && err.phase, status: 'retry', label: `transient error (attempt ${retriesUsed}/${maxRetries}) — retrying in ${delay}ms`, detail: String((err && err.message) || err) });
-          const askNote = asked > 0 ? ` (the service asked to wait ${Math.ceil((ask.askedMs || asked) / 1000)} s)` : '';
-          log(`\n⟳ transient error in ${err && err.phase} — retrying (attempt ${retriesUsed}/${maxRetries}) after ${delay}ms${askNote}…`);
+          if (lock) lockWaitedMs += delay;
+          const why = lock ? 'a publish was refused because another customization is running' : 'transient error';
+          if (journal) journal.record({ phase: err && err.phase, status: 'retry', label: `${why} (attempt ${retriesUsed}/${maxRetries}) — retrying in ${delay}ms`, detail: String((err && err.message) || err) });
+          const askedOf = lockAsked > asked ? lock.askedMs || lockAsked : ask.askedMs || asked;
+          const askNote = Math.max(asked, lockAsked) > 0 ? ` (the service asked to wait ${Math.ceil(askedOf / 1000)} s)` : '';
+          log(`\n⟳ ${why} in ${err && err.phase} — retrying (attempt ${retriesUsed}/${maxRetries}) after ${delay}ms${askNote}…`);
           await sleep(delay);
           continue;
         }
+      }
+      // The build stops on a publish the lock refused: the halt is what it always was, and this says what it was and what to do.
+      if (lock) {
+        log(`\n✖ a publish was refused ${lockRefusals} time${lockRefusals === 1 ? '' : 's'} because another customization (a solution import or another publish) was running; the build waited ${Math.round(lockWaitedMs / 1000)} s for it. Run the same command again once that operation has finished.`);
       }
       // A non-transient (or retries-exhausted, or out-of-budget) halt — journal where/why it stopped, then propagate.
       // Resume by re-running the same command (idempotent): a partial range (--from and the like) is
@@ -1447,6 +1499,15 @@ function isTransientHalt(err, { spec } = {}) {
 // Exponential backoff with jitter: ~3s, 6s, 12s (capped at 30s).
 function backoffMs(attempt) {
   return Math.min(30000, 3000 * Math.pow(2, attempt - 1)) + Math.floor(Math.random() * 1000);
+}
+
+// The wait before the next run after a web-resource publish the customization lock refused (lib/retry-policy.js, publishLockRefusalOf): ~30 s, 60 s, 90 s, with the same jitter. The
+// lock is held for as long as the operation that holds it runs — a solution import, another publish — which is a minute and more, so the ordinary backoff spent all
+// three runs while it was still held (#848). The runs are the same three: only the wait before each is longer. 180 s in all, inside the five-minute budget a run
+// allows itself for waiting out a throttle (lib/throttle-budget.js), which a 429 draws from.
+const LOCK_WAITS_MS = Object.freeze([30000, 60000, 90000]);
+function lockWaitMs(attempt) {
+  return LOCK_WAITS_MS[Math.min(attempt, LOCK_WAITS_MS.length) - 1] + Math.floor(Math.random() * 1000);
 }
 
 function list(v) {
@@ -1881,7 +1942,7 @@ async function main() {
   const argv = process.argv.slice(2);
   const { positional, flags } = parseArgs(argv);
   const USAGE =
-    'Usage: node scripts/build-model-app.js --env <url> --spec @<app-folder>/app-spec.json [--apply] [--sample-data] [--publish] [--verify] [--changed-only] [--no-live-plan] [--preview-push] [--stage <data|ui|app|publish>] [--only|--skip <phases>] [--from|--to <phase>] [--language-code|--languageCode <lcid>] [--non-interactive] [--allow-destructive] [--authorize <key>]... [--deployment-settings <file>] [--workspace <dir>]';
+    'Usage: node scripts/build-model-app.js --env <url> --spec @<app-folder>/app-spec.json [--apply] [--sample-data] [--publish] [--verify] [--changed-only] [--no-live-plan] [--preview-push] [--stage <data|ui|app|publish>] [--only|--skip <phases>] [--from|--to <phase>] [--language-code|--languageCode <lcid>] [--non-interactive] [--allow-destructive] [--authorize <key>]... [--deployment-settings <file>] [--workspace <dir>] [--acknowledge-quarantined-configuration <id>[,<id>...]]';
   // The declared flag contract, enforced before anything else runs.
   //
   // `needValue` lists every flag whose MISSING value would be read as a default rather than an
@@ -1896,8 +1957,8 @@ async function main() {
   const flagError = validateFlags(argv, {
     known: ['env', 'spec', 'apply', 'sample-data', 'publish', 'verify', 'changed-only', 'no-live-plan', 'preview-push',
       'stage', 'only', 'skip', 'from', 'to', 'language-code', 'languageCode', 'non-interactive',
-      'allow-destructive', 'authorize', 'deployment-settings', 'workspace'],
-    needValue: ['env', 'spec', 'stage', 'only', 'skip', 'from', 'to', 'language-code', 'languageCode', 'authorize', 'deployment-settings', 'workspace'],
+      'allow-destructive', 'authorize', 'deployment-settings', 'workspace', 'acknowledge-quarantined-configuration'],
+    needValue: ['env', 'spec', 'stage', 'only', 'skip', 'from', 'to', 'language-code', 'languageCode', 'authorize', 'deployment-settings', 'workspace', 'acknowledge-quarantined-configuration'],
   });
   if (flagError) {
     makeWritesBlocking(process.stdout, process.stderr);
@@ -2047,7 +2108,10 @@ async function main() {
   // verify, the SDK's cleanup and the baseline written last, and it is let go — in the `finally` of withAppBuildLease — before the result is
   // printed: emitResult ends the process, and a `finally` around it would never run. So the command's body ANSWERS its result, and it is printed
   // here, after the release; an error it throws goes on to main().catch the same way. A dry run reads only, and takes no lease.
-  const command = { env, spec, languageCode, changedOnly, workspaceDir };
+  // --acknowledge-quarantined-configuration: the raw quarantine ids, validated against the workspace inside runBuildCommand (under the
+  // lease) and never saved: an acknowledgment is good for this invocation only.
+  const acknowledgeQuarantined = typeof flags['acknowledge-quarantined-configuration'] === 'string' ? flags['acknowledge-quarantined-configuration'] : undefined;
+  const command = { env, spec, languageCode, changedOnly, workspaceDir, ...(acknowledgeQuarantined !== undefined ? { acknowledgeQuarantined } : {}) };
   // skill_completed telemetry, for an APPLY only: a dry run changes nothing in the environment. Set before the run so a halt thrown out of
   // it (main().catch) is reported too; reportCompletion awaits at most a short WhoAmI and never throws.
   if (opts.apply) {
@@ -2102,6 +2166,21 @@ function completionFor(run, { ok, payload, error }) {
   return { outcome: 'failure', errorClass: 'halted', eventInfo: { ...eventInfo, haltPhase: 'preflight' } };
 }
 
+// What the CLI prints for a failure: the error's message and then, for a halt that carries one, the display-only caption-sharing note
+// (lib/form-caption-sharing.js; a non-enumerable property on the halt or an error it wraps). The note may quote maker form names and
+// captions, so it is never part of the message — the message is what buildModelApp's journal persists (build-log.jsonl and
+// build-status.json) — and is joined to it here, for the console only, after everything the message says.
+function haltDisplay(err) {
+  const note = captionSharingNoteOf(err);
+  return note && err instanceof Error ? new Error(`${err.message}\n${note}`) : err;
+}
+
+// main()'s failure: skill_completed telemetry for an apply that ran, then the error printed (haltDisplay) and exit 1 (emitResult).
+async function reportMainFailure(err, { emit = emitResult } = {}) {
+  await reportCompletion(completionRun, { ok: false, error: err });
+  emit(false, haltDisplay(err));
+}
+
 async function reportCompletion(run, result, emit = emitSkillCompleted) {
   if (!run) return;
   try {
@@ -2113,7 +2192,7 @@ async function reportCompletion(run, result, emit = emitSkillCompleted) {
 // Everything main() does once the command line has been checked: auth, the authoring language, the SDK, the journal, the build and the baseline.
 // Answers { ok, payload } for main() to print: a refusal of the identity as the `{ ok: false, error }` it has always printed, and otherwise the
 // build's result, `ok` only when the build and its verify succeeded.
-async function runBuildCommand({ env, spec, languageCode, changedOnly, workspaceDir, opts, stepTally }) {
+async function runBuildCommand({ env, spec, languageCode, changedOnly, workspaceDir, acknowledgeQuarantined, opts, stepTally }) {
   // #455: the App, Form and Dashboard adapters bake the authoring LCID in at CONSTRUCTION, so it
   // has to be resolved before the SDK exists — which is why this reads over the transport hatch
   // rather than through `provision.queryRecords`. Resolving here also means the provisioned-language
@@ -2150,6 +2229,34 @@ async function runBuildCommand({ env, spec, languageCode, changedOnly, workspace
   // provisioned-languages probe. A disagreement between the two would label columns in one language
   // and FormXML/sitemap titles in another — assigned after resolution because `opts` is built above.
   opts.preResolvedLanguageCode = authoringLanguageCode;
+  // #807: the configuration create receipt guard, a local read that sends nothing, run before the SDK is made, the journal opened or any
+  // shortcut taken (changed-only, the protected path, a phase-only apply): an open create unit, an unreadable receipt, a receipt of
+  // another environment, solution, app or language, a deferred unit's root brought back, or an unacknowledged quarantine stops an apply
+  // with a retry-never halt naming configuration-recovery.js. The acknowledgment is validated here, under the lease, once; it is handed
+  // on in-process only. A dry run sends no write, so the same finding is a warning and a `configurationCreate` note on its result.
+  let configurationCreateNote = null;
+  try {
+    if (acknowledgeQuarantined !== undefined) opts.configurationQuarantineAcknowledgment = acknowledgeQuarantines(workspaceDir, acknowledgeQuarantined);
+    assertConfigurationCreatesClear(workspaceDir, { spec, env, languageCode: authoringLanguageCode, phases: opts.phases, quarantineAcknowledgment: opts.configurationQuarantineAcknowledgment });
+  } catch (err) {
+    if (opts.apply || !err || typeof err.code !== 'string' || !err.code.startsWith('configuration-create-')) throw err;
+    configurationCreateNote = { code: err.code, ...(err.unitId ? { unitId: err.unitId } : {}), ...(err.nextStep ? { nextStep: err.nextStep } : {}) };
+    process.stderr.write(`⚠ ${err.message} An --apply of this App Spec stops here until the receipt is resolved.\n`);
+  }
+  // #807: copies of environment variables and connection references an earlier plugin version left in this app's DURABLE workspace.
+  // The build's configuration step works in the solution-scoped SDK's own throwaway workspace (makeSdk), so the in-memory overlay
+  // (lib/workspace-configuration-memory.js), which checks such a pair only when the SDK touches it, never meets one here: a draft the
+  // maker edited and never sent would be passed over while the build PATCHes the same item from the App Spec. So every pair on disk
+  // is checked here, under the lease and before the SDK, the journal or any shortcut: a dirty, malformed or orphaned pair stops an
+  // apply with WORKSPACE_LEGACY_CONFIGURATION_COPY (nothing sent, the files kept as they are); a proven-clean pair changes nothing.
+  // Only file names and those two files are read, through the SDK's own file storage (its path checks refuse a link inside the
+  // workspace); main() has already refused a link at the workspace root. A dry run sends no write: the same finding is a warning.
+  try {
+    await assertLegacyConfigurationCopiesClean(workspaceDir);
+  } catch (err) {
+    if (opts.apply) throw err;
+    process.stderr.write(`⚠ ${err && err.message ? err.message : String(err)} An --apply of this App Spec stops here until the files are dealt with.\n`);
+  }
   // Construct for both dry-run and apply: proves the vendored bundle + adapter wire up
   // (offline), and apply needs it. A spec validation error short-circuits before any write.
   // Only an apply opens (and so binds) the app folder's workspace; a dry run works in a throwaway one and
@@ -2308,13 +2415,10 @@ async function runBuildCommand({ env, spec, languageCode, changedOnly, workspace
   // main() prints this once the lease is let go (emitResult calls process.exit). A build that applied cleanly but whose auto-verify found missing
   // artifacts exits NON-ZERO (the silent-partial signal auto-verify exists to raise), while r still carries the full build + verify detail.
   const ok = r.ok && (!r.verify || r.verify.ok);
-  return { ok, payload: r };
+  return { ok, payload: configurationCreateNote && r && typeof r === 'object' ? { ...r, configurationCreate: configurationCreateNote } : r };
 }
 
 if (require.main === module) {
-  main().catch(async (err) => {
-    await reportCompletion(completionRun, { ok: false, error: err });
-    emitResult(false, err);
-  });
+  main().catch(reportMainFailure);
 }
-module.exports = { buildModelApp, inlineVerifyReader, authorizationKeys, planFor, isTransientHalt, checkCollisions, discoverOpDiffState, envTruthy, parseLanguageCode, assertSnapshotInvalidated, persistAppliedBaseline, completionFor, reportCompletion };
+module.exports = { buildModelApp, inlineVerifyReader, authorizationKeys, planFor, isTransientHalt, checkCollisions, discoverOpDiffState, envTruthy, parseLanguageCode, assertSnapshotInvalidated, persistAppliedBaseline, completionFor, reportCompletion, haltDisplay, reportMainFailure };

@@ -184,8 +184,11 @@ prod-ready** app; don't under-build (a bare table list) or over-build (surfaces 
   `deactivateOtherMainForms`, `securityRoles` or a `mainFormOrder` place on a declared form (refused).
   An existing form is bound only with `--authorize "adopt:form:<table>/<formtype>/<name>"` (lower case;
   `overwrite:form:` for changes made elsewhere): explain it and let the maker choose. `--verify` checks a
-  declared form against the spec, sub-grid views included (a form whose publish is unconfirmed is unverified,
-  not passed). A download brings declared forms back only with `--include-managed --managed-manifest <store
+  declared form against the spec, sub-grid views included. It reads the form its binding records, never one
+  of the same name: a form whose binding is pending or unusable is listed unverified, and a bound form that is
+  gone fails. A sub-grid's declared view and a declared Quick View form are held to their bindings the same way.
+  A form whose publish is unconfirmed is checked on its saved form, and its publish is listed
+  unverified beside that check. A download brings declared forms back only with `--include-managed --managed-manifest <store
   file>` (one with an event handler comes back with its handler library as an `external` web resource when
   that library is this publisher's own unmanaged script; otherwise it is left out and named in
   `managedForms.stale`, and its declaration is written ready to paste in the new file `managedFragments.file` names (`.maker-workspace/managed-fragments-<time>-<random>.json`)
@@ -292,8 +295,17 @@ prod-ready** app; don't under-build (a bare table list) or over-build (surfaces 
   Custom API alone is a scaffold; clearing a value, unbinding a reference or removing a parameter or condition
   needs `--authorize <kind>:<key>:<field>` (the refusal names it); a teardown keeps these items and names them;
   a plain download does not bring them back into the spec (a managed download of a `configurationIdentity:
-  "stable-v1"` app brings back the ones its store proves, never a value, default, connection, implementation or duplicate rule); and a whole-build retry after a lost answer can create
-  a second row, so check the environment before running a failed build again. See
+  "stable-v1"` app brings back the ones its store proves, never a value, default, connection, implementation or duplicate rule). A default
+  build creates these rows at ids fixed in advance and records them in the workspace; when it is interrupted, the next build, `--changed-only`
+  run and teardown stop with a `configuration-create-*` code and `retry: "never"`. Never rerun the build blindly, delete or copy the
+  workspace, or recreate a row to get past it: run `node "${PLUGIN_ROOT}/scripts/configuration-recovery.js" inspect --app-dir
+  "<app-folder>" --env "<envUrl>"` (GET-only), relay its `nextSteps`, and let the maker choose `prepare`/`resolve` (accept-current,
+  defer after removing the root from the spec, or cancel-unsent); a missing row is completed by hand at its recorded id, never resent.
+  Pass `--acknowledge-quarantined-configuration <id>` to a build only when the maker accepts, for that one build, that rows may be sent
+  again. See [`docs/configuration-create-recovery.md`](../../docs/configuration-create-recovery.md). Under `"stable-v1"`, a stop
+  that says a duplicate rule's first publication has not been confirmed names the rule and its original id:
+  relay its advice (wait if that rule reads Publishing, otherwise the maker checks and publishes it in the
+  environment, then rebuilds); never retry the build to resend it or add `"status": "published"` to force it. See
   [`references/app-spec-schema.md`](../../references/app-spec-schema.md) → *Configuration items*.
 - **AI-first features** (admin-gated) — form-fill assist, natural-language grid/view search, NL chart
   / AI data visualization, M365 Copilot (opt-in); per-table Copilot row summaries (Insight Cards)
@@ -713,7 +725,15 @@ guard or a SQL timeout the service names by its error code, a timeout or reset o
 **auto-retried** with backoff on `--apply` (the build is idempotent, so a retry reuses what's already created).
 A throttled service is waited for as long as it asks (`Retry-After`) — by the HTTP client's re-sends of a throttled read or service-protection-limited publish, by the page writes and by the build's own re-runs of a phase — inside one budget of five minutes per run for all the waiting
 a throttle costs: when the next wait does not fit, the build stops with a `throttle-budget-exhausted`
-halt that says what the service asked — run it again later and it continues. (A 5xx, a reset connection or a deadlock is not a throttle: those keep their own, shorter schedule and are not counted in it.) If the build still **halts** (`BuildHalt`) on an
+halt that says what the service asked — run it again later and it continues. (A 5xx, a reset connection or a deadlock is not a throttle: those keep their own, shorter schedule and are not counted in it.)
+A publish of a web resource that the service refuses with a 429 because another customization (a solution import or
+another publish) holds the lock waits longer before the build's next run — about 30 s, 60 s and 90 s, or its
+`Retry-After` when that is longer — inside the same five-minute budget. The build still runs at most three more times,
+and before it publishes that web resource again it either writes it again by id, or reads it back after the wait and
+writes it again when it no longer holds what the spec asks for. Every other publish — generative pages (whose next run
+does not compare the compiled page the service publishes), tables, forms, views, site maps, the app — keeps the
+ordinary short waits. When the build stops it says how often the publish was refused and how long it waited: run the
+same command again once that operation has finished. If the build still **halts** (`BuildHalt`) on an
 unrecoverable error, surface it and ask the user how to proceed via `AskUserQuestion` (adjust the
 spec / cancel), then re-run. Everything is scoped to a dedicated unmanaged solution; **`--publish`
 gates the final *bulk* publish**, which also carries the edits made to existing views and forms.
@@ -726,7 +746,8 @@ the workspace's `environment-variables` and `connection-references` folders and 
 version never deletes them for you. While such files remain, every command that opens that workspace prints one
 `WARNING:` naming the folders (never their content). A copy the plugin cannot prove is what the environment last
 held (an edit never sent, a file with no partner, a locked file) stops the step that needs it with
-`WORKSPACE_LEGACY_CONFIGURATION_COPY`, naming its two files. To clear either: when no build is running, move any
+`WORKSPACE_LEGACY_CONFIGURATION_COPY`, naming its two files; in the app's own workspace it stops an `--apply` before
+any write, whichever item the copy belongs to (a dry run only warns). To clear either: when no build is running, move any
 change you still want into the App Spec or the deployment settings file (the build sends configuration only from
 those), close any program holding the files, delete the `.json` files in those folders, and run again. Tell the user
 what the warning or the stop names before deleting anything.
@@ -804,8 +825,14 @@ node "${PLUGIN_ROOT}/scripts/verify-model-app.js" --env <envUrl> --spec @<workin
 Pass `--language-code` only if the build was run with it. A line starting `⊘` under the verdict is a check verify
 could **not decide** (it is in the JSON result's `unverified` list): it is neither a pass nor a failure, so say what it
 was and what settles it — the language of the captions, which `--language-code` gives, or captions in a language the environment's
-form read does not carry that the translation export could not settle (the line says why), which only Power Apps can show — never report the run as "everything deployed" while
-one is listed.
+form read does not carry that the translation export could not settle (the line says why), which only Power Apps can show, or a declared
+form (or its Quick View target) whose managed binding is pending or unusable, which only a build that settles it does — a form of
+the same name never does — never report the run as "everything deployed" while one is listed.
+Declared views that share one name on one table are a case of this: a view no managed binding, `viewId` or stable id
+identifies is checked only as present — its `✓` line ends `present only: a distinct row is available, but view key "<key>"
+is not attributed to a row` — and its content is listed as `⊘`. Tell the user to keep the workspace's settled bindings
+(build from the same folder) or set a correct `viewId` to have that content checked; verify never adopts or pins a row
+itself. Two declarations that name one row fail (`identity conflict`): correct the `viewId` that points at the wrong row.
 
 A `WARNING:` line on stderr — each one is repeated in the JSON result's `warnings` list, which is absent when there is
 none — is advice, not a verdict: a spec an earlier release accepted that the build would now refuse (it names the column

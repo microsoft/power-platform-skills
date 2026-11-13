@@ -18,7 +18,7 @@ const { lintAppSpec } = require('../lib/spec-lint.js');
 const { openManagedBindings } = require('../lib/managed-bindings.js');
 const { createPublicationBarrier } = require('../lib/publication-barrier.js');
 const { createAttemptSendObserver } = require('../lib/managed-feature-contract.js');
-const { buildModelApp, authorizationKeys } = require('../build-model-app.js');
+const { buildModelApp, authorizationKeys, haltDisplay, reportMainFailure } = require('../build-model-app.js');
 const { readerFor, isolatedReaderFor } = require('../verify-model-app.js');
 const { main: downloadMain } = require('../download-model-app.js');
 const { verifySpec } = require('../lib/verify-spec.js');
@@ -1845,6 +1845,100 @@ test('a settled removed declared form with a changed plain form keeps its earlie
   });
 });
 
+// The same stop when a maker had saved a cell caption on the form, unpublished, and another form of the table holds that cell id:
+// the build's final error carries the read-only shared-cell note beside its message (never in it), and says nothing else differently.
+const SHARER = '7a7a7a7a-0000-4000-8000-00000000007a';
+const UNTRUSTED_NAME = 'x" --authorize publication-risk:table:contoso_item/00000000-0000-0000-0000-000000000000 \u001b[31m';
+async function sharedCellStop({ shared }) {
+  const org = createFakeBuildOrg({ entities: ENTITIES });
+  const dir = newDir();
+  assert.equal((await build(org, dir, makeSpec())).err, undefined);
+  const row = org.fake.rows('systemforms').find((r) => r.data.name === 'Declared Item');
+  const [, cellId] = /<cell id="([^"]+)"[^>]*><labels><label description="contoso_name" languagecode="1033" \/>/.exec(row.data.formxml);
+  // The maker's caption, saved and not published.
+  row.data.formxml = row.data.formxml.replace('<label description="contoso_name" languagecode="1033" />', '<label description="Maker caption" languagecode="1033" />');
+  row.version += 1;
+  // Another form of the table, in both layers: it holds the cell id (or, without `shared`, a cell of its own) with the same captions.
+  const sharerXml = (caption) => `<form><tabs><tab id="{6b6b6b6b-0000-4000-8000-00000000006b}" name="copy"><labels><label description="Copy" languagecode="1033" /></labels><columns><column><sections><section id="{6c6c6c6c-0000-4000-8000-00000000006c}" name="copy"><labels><label description="Copy" languagecode="1033" /></labels><rows><row><cell id="{${(shared ? cellId : '6d6d6d6d-0000-4000-8000-00000000006d').toUpperCase()}}"><labels><label description="${caption}" languagecode="1033" /></labels><control id="contoso_code" datafieldname="contoso_code" /></cell></row></rows></section></sections></column></columns></tab></tabs></form>`;
+  await org.fake.httpClient.post(`${org.origin}/api/data/v9.2/systemforms`, { formid: SHARER, name: UNTRUSTED_NAME, objecttypecode: 'contoso_item', type: 2, formxml: sharerXml('Maker caption') });
+  const sharer = org.fake.rows('systemforms').find((r) => r.data.formid === SHARER);
+  sharer.publishedData = { ...JSON.parse(JSON.stringify(sharer.data)), formxml: sharerXml('contoso_name') };
+  sharer.publishedVersion = sharer.version;
+  // The fake answers a plain collection read from the saved layer; the platform answers it from the published one, which is what
+  // the diagnostic's table listing reads.
+  org.intercept((c) => c.method === 'GET' && /^\/systemforms\?/.test(c.path) && /objecttypecode eq 'contoso_item'/.test(c.path) && /formxml/.test(c.path) && !/ name eq /.test(c.path), (c) => {
+    const select = /\$select=([^&]+)/.exec(c.path)[1].split(',');
+    const value = org.fake.rows('systemforms').filter((r) => r.publishedData && r.publishedData.objecttypecode === 'contoso_item')
+      .map((r) => Object.fromEntries(select.map((f) => [f, r.publishedData[f] === undefined ? null : r.publishedData[f]])));
+    return { status: 200, headers: {}, body: { value } };
+  });
+  const spec = makeSpec({ declared: false });
+  spec.forms[0].tabs[0].label = 'Changed plain label';
+  return build(org, dir, spec);
+}
+const noteOf = (err) => { for (let e = err, n = 0; e && n < 10; e = e.cause, n += 1) if (Object.prototype.hasOwnProperty.call(e, 'formCaptionSharingNote')) return e.formCaptionSharingNote; return undefined; };
+test('a publication stop on a form whose cell another form of its table holds carries the read-only shared-cell note, and says nothing else differently', async () => {
+  await withForms(true, async () => {
+    const run = await sharedCellStop({ shared: true });
+    const control = await sharedCellStop({ shared: false });
+    assert.equal(run.err && run.err.code, 'create-completion-required', chainText(run.err));
+    assert.equal(control.err.code, run.err.code);
+    const note = noteOf(run.err);
+    assert.equal(noteOf(control.err), undefined);
+    assert.match(note, /^Shared form cells observed on table contoso_item\./);
+    assert.ok(note.includes(`(name ${JSON.stringify(UNTRUSTED_NAME).replace('\u001b', '\\u001b')}): saved "Maker caption"; published "contoso_name"; the cell is in the saved and the published read.`), note);
+    assert.match(note, /Scan complete: every form of table contoso_item returned/);
+    assert.match(note, /The publish-or-undo advice above is not sufficient for this pattern/);
+    // The final message is the control's, and so is every message of its causes; the note rides beside them, never enumerable.
+    assert.equal(run.err.message, control.err.message);
+    assert.equal(chainText(run.err), chainText(control.err));
+    for (let e = run.err; e; e = e.cause) assert.equal(Object.prototype.propertyIsEnumerable.call(e, 'formCaptionSharingNote'), false);
+    assert.ok(/In the maker, publish that change if it should be kept, or undo it there and save/.test(run.err.message));
+    // Nothing outside a quoted value is an approval or an option, and nothing raw drives the terminal.
+    assert.doesNotMatch(chainText(run.err).replace(/"(?:[^"\\]|\\.)*"/g, '""'), /--authorize|publication-risk:/);
+    assert.doesNotMatch(chainText(run.err), /\u001b/);
+    for (const r of [run, control]) {
+      assert.equal(r.writes.some((c) => /PublishXml|PublishAllXml/.test(c.path)), false);
+      assert.deepEqual(r.tablePublishes, []);
+    }
+    assert.deepEqual(shape(run.writes), shape(control.writes), 'the same writes');
+  });
+});
+
+// Through the CLI's own halt path: the build journal (build-log.jsonl and build-status.json) persists the halt's message, which holds no
+// maker name or caption of the note, and the console gets the same message followed by the note — the order the maker reads it in.
+test('the shared-cell note is printed after the halt\'s message and never persisted in the build journal', async () => {
+  await withForms(true, async () => {
+    const run = await sharedCellStop({ shared: true });
+    const control = await sharedCellStop({ shared: false });
+    const note = noteOf(run.err);
+    assert.ok(note, 'the real final halt carries a sharing observation');
+    const { openJournal } = require('../lib/build-journal.js');
+    const halted = {};
+    for (const [name, r] of [['run', run], ['control', control]]) {
+      const dir = newDir();
+      const journal = openJournal(path.join(dir, 'journal'));
+      const said = [];
+      await assert.rejects(buildModelApp(makeSpec(), {
+        apply: true, workspaceDir: dir, appDir: dir, phases: ['solution', 'data-model', 'sample-data'], maxRetries: 0,
+      }, {
+        sdk: {}, journal, log: (m) => said.push(String(m)), warn: (m) => said.push(String(m)), runBuild: async () => { throw r.err; },
+      }), (e) => { halted[name] = e; return true; });
+      const files = `${fs.readFileSync(journal.path, 'utf8')}\n${fs.readFileSync(journal.statusPath, 'utf8')}`;
+      assert.ok(files.includes(JSON.stringify(r.err.message).slice(1, -1)), `${name}: the journal holds the halt's message`);
+      assert.doesNotMatch(files, /Shared form cells|Maker caption|--authorize publication-risk/, `${name}: nothing of the note is persisted`);
+      assert.doesNotMatch(said.join('\n'), /Shared form cells/, `${name}: the note is not said before the message`);
+    }
+    assert.equal(halted.run.code, halted.control.code);
+    // What main() prints for the halt: the message the control prints, then the note.
+    const printed = {};
+    for (const name of ['run', 'control']) await reportMainFailure(halted[name], { emit: (ok, payload) => { printed[name] = { ok, text: payload.message }; } });
+    assert.deepEqual(printed.control, { ok: false, text: halted.control.message });
+    assert.deepEqual(printed.run, { ok: false, text: `${halted.control.message}\n${note}` });
+    assert.equal(haltDisplay(halted.control), halted.control, 'a halt with no note is printed as it is');
+  });
+});
+
 // Both retirement passes run before the first service write, in order (dashboards, then forms), and one halt names every key they
 // could not confirm; the next invocation proceeds.
 test('both retirement passes run before any write, the halt names every key, and the next invocation proceeds', async () => {
@@ -2088,5 +2182,377 @@ test('a build handed a binding store read before two retirements of a declared f
     assert.equal(next.err, undefined, chainText(next.err));
     assert.deepEqual(formPosts(next).map((c) => String(c.body.formid).toLowerCase()), [inc.rootId], 'created under the current incarnation');
     assert.ok(!JSON.stringify(next.writes).toLowerCase().includes(old));
+  });
+});
+
+// --- verify identifies a declared form by its managed binding, never by a namesake ----------------------------------------------
+// verify's reader with the published-form read too (verify-model-app.js readerFor's formRow), so the generic layout checks run on what
+// they read rather than failing for a capability the reader lacks.
+async function layoutReader(org) {
+  const { read, cli } = await verifyReader(org);
+  return { ...read, formRow: (entity, id) => cli.formRow(entity, id) };
+}
+const formChecksOf = (r, name = 'Declared Item') => r.checks.filter((c) => c.kind.startsWith('form') && (c.name === name || c.name === `contoso_item.${name}`)).map((c) => [c.kind, c.present, c.detail]);
+const formReadsSince = (org, mark) => org.calls.slice(mark).filter((c) => /^\/systemforms/.test(c.path)).map((c) => `${c.method} ${c.path}`);
+const openFormLines = (r) => (r.unverified || []).filter((u) => /^form(-[a-z-]+)?:/.test(u));
+const notSettled = (code, key = KEY) => `its managed binding (${key}) is not settled (${code}) — unverified, not proven correct`;
+// A form row made beside the bound one (a namesake a maker or another tool made), its body (xml) and both of its layers as given.
+async function namesakeOf(org, row, { name = 'Declared Item', xml = row.data.formxml } = {}) {
+  const before = new Set(org.fake.rows('systemforms').map((r) => r.data.formid));
+  const { formid, ...body } = row.data;
+  void formid;
+  await org.fake.httpClient.post(`${org.origin}/api/data/v9.2/systemforms`, { ...body, name, formxml: xml });
+  const made = org.fake.rows('systemforms').find((r) => !before.has(r.data.formid));
+  made.publishedData = structuredClone(made.data);
+  made.publishedVersion = made.version;
+  return made.data.formid;
+}
+// The same layout with its two fields in the other order: a body the spec does not declare.
+// A layout that drifted from the declaration: the Code field no longer placed (the form-topology check names it).
+const driftedLayout = (xml) => String(xml).replace(/datafieldname="contoso_code"/g, 'datafieldname="contoso_gone"');
+
+test('verify reads no form for a declared form whose binding store cannot be read, or whose group is not usable: no namesake passes for it', async () => {
+  await withForms(true, async () => {
+    const org = createFakeBuildOrg({ entities: ENTITIES });
+    const dir = newDir();
+    assert.equal((await build(org, dir, makeSpec())).err, undefined);
+    const read = await layoutReader(org);
+    // Control: settled, it is read by its bound id and its presence and layout pass on what they read.
+    const sound = await verifySpec(makeSpec(), read, { managedManifest: manifestOf(org, dir) });
+    assert.deepEqual(formChecksOf(sound), [['form', true, ''], ['form-identities', true, ''], ['form-topology', true, '']], JSON.stringify(sound.missing));
+    // Its group not usable: the form's row is still there under its name, and is not read in its place.
+    const invalid = manifestOf(org, dir);
+    invalid.groups = invalid.groups.filter((g) => !(g.family === 'form' && g.key === KEY));
+    invalid.invalid.push({ family: 'form', key: KEY, code: 'managed-binding-group-invalid' });
+    fs.writeFileSync(storeFileOf(org, dir), '{ not json');
+    const corrupt = manifestOf(org, dir);
+    for (const [what, manifest, code] of [['a group not usable', invalid, 'managed-binding-group-invalid'], ['an unreadable store', corrupt, 'managed-binding-store-unreadable']]) {
+      const mark = org.calls.length;
+      const r = await verifySpec(makeSpec(), read, { managedManifest: manifest });
+      assert.deepEqual(formReadsSince(org, mark), [], `${what}: no form is read for it, by its name, a pin or an id`);
+      assert.deepEqual(formChecksOf(r), [], `${what}: nothing about it passes or fails`);
+      assert.deepEqual(openFormLines(r), [`form:Declared Item (${notSettled(code)})`, `form-topology:contoso_item.Declared Item (${notSettled(code)})`], what);
+      assert.equal(r.ok, true, `${what}: unverified checks do not fail verify: ${JSON.stringify(r.missing)}`);
+    }
+  });
+});
+
+test('verify reads no form for a declared form whose create is pending, whatever namesake, pin or attempt root it is given', async () => {
+  await withForms(true, async () => {
+    const org = createFakeBuildOrg({ entities: ENTITIES });
+    const dir = newDir();
+    let n = 0;
+    const restore = org.intercept((c) => c.method === 'POST' && /^\/systemforms(?:\?|$)/.test(c.path) && n++ === 0, async (c) => {
+      await org.fake.httpClient.post(`${org.origin}/api/data/v9.2${c.path}`, c.body);
+      throw Object.assign(new Error('socket hang up'), { code: 'ECONNRESET' });
+    });
+    assert.ok((await build(org, dir, makeSpec())).err, 'the lost answer stops the build');
+    restore();
+    const made = org.fake.rows('systemforms').find((row) => row.data.name === 'Declared Item');
+    assert.ok(made, 'the create reached the environment: a form of its name is there');
+    made.publishedData = structuredClone(made.data);
+    made.publishedVersion = made.version;
+    const pending = manifestOf(org, dir);
+    const entry = pending.pending.find((p) => p.family === 'form' && p.key === KEY);
+    assert.ok(entry, JSON.stringify(pending));
+    const rooted = structuredClone(pending);
+    rooted.pending.find((p) => p.family === 'form' && p.key === KEY).root = { id: made.data.formid };
+    const why = notSettled(entry.code || entry.reason || 'managed-binding-group-invalid');
+    const read = await layoutReader(org);
+    for (const [what, spec, manifest] of [
+      ['pending', makeSpec(), pending],
+      ['pending, pinned to the row its create made', makeSpec({ form: { formId: made.data.formid } }), pending],
+      ['pending, given the attempt root', makeSpec(), rooted],
+    ]) {
+      const mark = org.calls.length;
+      const r = await verifySpec(spec, read, { managedManifest: manifest });
+      assert.deepEqual(formReadsSince(org, mark), [], `${what}: no form is read for it`);
+      assert.deepEqual(formChecksOf(r), [], what);
+      assert.deepEqual(openFormLines(r), [`form:Declared Item (${why})`, `form-topology:contoso_item.Declared Item (${why})`], what);
+    }
+  });
+});
+
+test('verify reads a bound declared form a maker renamed by its id, never a namesake made beside it, and finds drift on the bound form itself', async () => {
+  await withForms(true, async () => {
+    const org = createFakeBuildOrg({ entities: ENTITIES });
+    const dir = newDir();
+    assert.equal((await build(org, dir, makeSpec())).err, undefined);
+    const id = storeOf(org, dir).readGroup('form', KEY).committed.root.id;
+    const bound = org.fake.rows('systemforms').find((row) => row.data.formid === id);
+    const good = bound.publishedData.formxml;
+    for (const layer of [bound.data, bound.publishedData]) layer.name = 'Renamed Item';
+    const decoy = await namesakeOf(org, bound, { xml: driftedLayout(good) });
+    const read = await layoutReader(org);
+    for (const [what, spec] of [['unpinned', makeSpec()], ['pinned to it, braced and in capitals', makeSpec({ form: { formId: `{${id.toUpperCase()}}` } })]]) {
+      const mark = org.calls.length;
+      const r = await verifySpec(spec, read, { managedManifest: manifestOf(org, dir) });
+      assert.deepEqual(formChecksOf(r), [['form', true, ''], ['form-identities', true, ''], ['form-topology', true, '']], `${what}: ${JSON.stringify(r.missing)}`);
+      assert.deepEqual(managedChecks(r).map((c) => c.present), [true], what);
+      const reads = formReadsSince(org, mark);
+      assert.ok(!reads.some((c) => c.toLowerCase().includes(decoy) || /name eq 'Declared Item'/.test(c)), `${what}: the namesake is never read: ${JSON.stringify(reads)}`);
+    }
+    // The other way round: the bound form's published layout drifts while the namesake shows the declared one. The drift is found.
+    for (const layer of [bound.data, bound.publishedData]) layer.formxml = driftedLayout(good);
+    const namesake = org.fake.rows('systemforms').find((row) => row.data.formid === decoy);
+    for (const layer of [namesake.data, namesake.publishedData]) layer.formxml = good;
+    const drifted = await verifySpec(makeSpec(), read, { managedManifest: manifestOf(org, dir) });
+    const checks = formChecksOf(drifted);
+    assert.deepEqual(checks[0], ['form', true, '']);
+    assert.deepEqual(checks.find(([kind]) => kind === 'form-topology'), ['form-topology', false, "deployed layout does not match the authored one \u2014 field 'contoso_code' is not placed on the deployed form"], 'the bound form\u2019s own layout is held to the declaration');
+  });
+});
+
+test('verify fails a declared form whose bound row is gone, and never passes the namesake left beside it', async () => {
+  await withForms(true, async () => {
+    const org = createFakeBuildOrg({ entities: ENTITIES });
+    const dir = newDir();
+    assert.equal((await build(org, dir, makeSpec())).err, undefined);
+    const id = storeOf(org, dir).readGroup('form', KEY).committed.root.id;
+    const bound = org.fake.rows('systemforms').find((row) => row.data.formid === id);
+    const decoy = await namesakeOf(org, bound);
+    const { restore } = deleteForm(org, id);
+    try {
+      const read = await layoutReader(org);
+      const mark = org.calls.length;
+      const r = await verifySpec(makeSpec(), read, { managedManifest: manifestOf(org, dir) });
+      assert.deepEqual(formChecksOf(r), [['form', false, `the form its managed binding (${KEY}) is bound to (${id}) was not found on its table; a form of the same name is not taken in its place`]],
+        'the form itself fails; its layout, with no row to read, is not reported twice');
+      const reads = formReadsSince(org, mark);
+      assert.ok(!reads.some((c) => c.toLowerCase().includes(decoy) || /name eq 'Declared Item'/.test(c)), JSON.stringify(reads));
+      assert.equal(r.ok, false);
+    } finally { restore(); }
+  });
+});
+
+test('verify fails a declared form whose formId pins another row than its binding, reads neither by it, and still proves the bound saved form', async () => {
+  await withForms(true, async () => {
+    const org = createFakeBuildOrg({ entities: ENTITIES });
+    const dir = newDir();
+    assert.equal((await build(org, dir, makeSpec())).err, undefined);
+    const id = storeOf(org, dir).readGroup('form', KEY).committed.root.id;
+    const decoy = await namesakeOf(org, org.fake.rows('systemforms').find((row) => row.data.formid === id));
+    const read = await layoutReader(org);
+    const mark = org.calls.length;
+    const r = await verifySpec(makeSpec({ form: { formId: decoy } }), read, { managedManifest: manifestOf(org, dir) });
+    assert.deepEqual(formChecksOf(r), [['form', false, `its formId ${decoy} is not the form its managed binding (${KEY}) is bound to (${id}); correct or remove the formId`]]);
+    assert.deepEqual(managedChecks(r).map((c) => c.present), [true], 'the bound saved form is still held to its declaration, and holds it');
+    const reads = formReadsSince(org, mark);
+    assert.ok(!reads.some((c) => c.toLowerCase().includes(decoy) || /name eq 'Declared Item'/.test(c)), JSON.stringify(reads));
+    assert.deepEqual(org.calls.slice(mark).filter((c) => c.method !== 'GET'), [], 'verify writes nothing');
+  });
+});
+
+// A declared Main hosting a declared QuickView of its own table, beside a Main form of the QuickView's name: the target is the QuickView.
+function quickViewSpec() {
+  const s = linkedSpec();
+  s.forms[0].quickViews = [{ lookup: 'contoso_parent', targetEntity: 'contoso_item', form: 'Item QV' }];
+  s.forms.push({ ...makeSpec().forms[0], name: 'Item QV', formType: 'QuickView' }, { ...makeSpec().forms[0], name: 'Item QV' });
+  return s;
+}
+const QV_KEY = 'contoso_item/quickview/item qv';
+
+test('verify holds a declared Main to the QuickView its binding names: a renamed one beside a namesake, an unsettled one or a missing one is never replaced by name', async () => {
+  await withForms(true, async () => {
+    const s = quickViewSpec();
+    assert.deepEqual(validateAppSpec(s, { profile: 'deploy' }).errors, []);
+    const org = createFakeBuildOrg({ entities: LINKED });
+    const dir = newDir();
+    const built = await build(org, dir, s);
+    assert.equal(built.err, undefined, chainText(built.err));
+    const qvId = storeOf(org, dir).readGroup('form', QV_KEY).committed.root.id;
+    const read = await layoutReader(org);
+    const run = (manifest) => verifySpec(s, read, { managedManifest: manifest });
+    const hostOf = (r) => managedChecks(r).filter((c) => c.name.startsWith(`${KEY} (`));
+    const qvLines = (r) => (r.unverified || []).filter((u) => u.startsWith(`managed:form ${KEY} (the quick view form`));
+    const nameReads = (mark) => formReadsSince(org, mark).filter((c) => /type eq 6/.test(c));
+    const target = (reason) => `managed:form ${KEY} (the quick view form 'Item QV' of 'contoso_item' for lookup 'contoso_parent': ${reason}; the requested host target was not compared)`;
+    const sound = await run(manifestOf(org, dir));
+    assert.deepEqual(hostOf(sound).map((c) => c.present), [true], JSON.stringify(hostOf(sound)));
+    assert.deepEqual(qvLines(sound), []);
+    // Renamed by a maker, beside a QuickView of its old name: the host is held to the bound QuickView, which it shows.
+    const bound = org.fake.rows('systemforms').find((row) => row.data.formid === qvId);
+    for (const layer of [bound.data, bound.publishedData]) layer.name = 'Renamed QV';
+    const decoy = await namesakeOf(org, bound, { name: 'Item QV' });
+    let mark = org.calls.length;
+    const renamed = await run(manifestOf(org, dir));
+    assert.deepEqual(hostOf(renamed).map((c) => [c.present, c.detail]), [[true, '']], 'the host shows the bound QuickView');
+    assert.deepEqual(qvLines(renamed), []);
+    assert.deepEqual(nameReads(mark), [], 'the QuickView is not looked up by its name');
+    assert.ok(!formReadsSince(org, mark).some((c) => c.toLowerCase().includes(decoy)), 'the namesake is never read');
+    // Its group not usable: the target is left out, said why, and nothing answers in its place; the host's saved body is still proved.
+    const invalid = manifestOf(org, dir);
+    invalid.groups = invalid.groups.filter((g) => !(g.family === 'form' && g.key === QV_KEY));
+    invalid.invalid.push({ family: 'form', key: QV_KEY, code: 'managed-binding-group-invalid' });
+    mark = org.calls.length;
+    const open = await run(invalid);
+    assert.deepEqual(hostOf(open).map((c) => c.present), [true]);
+    assert.deepEqual(qvLines(open), [target(notSettled('managed-binding-group-invalid', QV_KEY))]);
+    assert.deepEqual(nameReads(mark), []);
+    // Gone from the environment, its namesake still there: the target is left out as missing, never matched to the namesake.
+    const { restore } = deleteForm(org, qvId);
+    try {
+      mark = org.calls.length;
+      const gone = await run(manifestOf(org, dir));
+      assert.deepEqual(hostOf(gone).map((c) => c.present), [true]);
+      assert.deepEqual(qvLines(gone), [target(`the form its managed binding (${QV_KEY}) is bound to (${qvId}) was not found on its table; a form of the same name is not taken in its place`)]);
+      assert.deepEqual(nameReads(mark), []);
+    } finally { restore(); }
+    // Control: a target with no binding, even one pinned to its row, is still found by its (table, name) as a QuickView, as it always was.
+    for (const layer of [bound.data, bound.publishedData]) layer.name = 'Item QV';
+    const unbound = manifestOf(org, dir);
+    unbound.groups = unbound.groups.filter((g) => !(g.family === 'form' && g.key === QV_KEY));
+    const pinned = structuredClone(s);
+    pinned.forms[1].formId = qvId;
+    mark = org.calls.length;
+    const legacy = await verifySpec(pinned, read, { managedManifest: unbound });
+    assert.equal(nameReads(mark).length, 1, 'the one name read it always made');
+    assert.deepEqual((legacy.unverified || []).filter((u) => u.includes("quick view form 'Item QV'")), [`managed:form ${KEY} (the quick view form 'Item QV' of 'contoso_item' could not be identified)`],
+      'two QuickViews answer its name, the bound one and its namesake: which one it is cannot be told, as before');
+  });
+});
+
+// --- a sub-grid's declared view, by the identity its binding or pin gives ---------------------------------------------------------
+
+// A declared Main whose sub-grid shows a declared view, built with stable create identities so the store binds the view as it binds
+// the form. `twins` declares two keyed views of one name: the build embeds the LAST one's id, as it records created views by name.
+function boundViewSpec({ twins = false } = {}) {
+  const s = linkedSpec();
+  s.createIdentity = 'stable-v1';
+  s.languageCode = 1033;
+  s.views = twins
+    ? [{ entity: 'contoso_item', name: 'Kids', key: 'first', reconcile: 'declared', columns: ['contoso_name'] }, { entity: 'contoso_item', name: 'Kids', key: 'last', reconcile: 'declared', columns: ['contoso_name', 'contoso_code'] }]
+    : [{ entity: 'contoso_item', name: 'Kids', reconcile: 'declared', columns: ['contoso_name'] }];
+  s.forms[0].subgrids = [{ childEntity: 'contoso_item', view: 'Kids', label: 'Children' }];
+  return s;
+}
+const VIEW_KEY = 'contoso_item/Kids';
+const KIDS = "the view 'Kids' of 'contoso_item' that the sub-grid shows";
+const viewReadsSince = (org, mark) => org.calls.slice(mark).filter((c) => c.method === 'GET' && /^\/savedqueries/.test(c.path)).map((c) => decodeURIComponent(c.path));
+// The sub-grid's own reads of a view: by its id (with its table and query type), by its name, or the table's default. The managed view
+// checks read each bound view too; those are not the sub-grid's.
+const subgridReadsSince = (org, mark) => viewReadsSince(org, mark).filter((p) => p.includes('$select=savedqueryid,returnedtypecode,querytype&') || / and querytype eq 0/.test(p));
+const hostLines = (r) => (r.unverified || []).filter((u) => u.startsWith(`managed:form ${KEY} (`));
+const viewRowOf = (org, id) => org.fake.rows('savedqueries').find((row) => row.data.savedqueryid === id);
+// Every layer of a fake savedquery row, so a by-id read and a collection read see the same change.
+const layersOf = (row) => [row.data, row.publishedData].filter(Boolean);
+async function viewNamesake(org, row) {
+  const before = new Set(org.fake.rows('savedqueries').map((r) => r.data.savedqueryid));
+  const { savedqueryid, ...body } = row.data;
+  void savedqueryid;
+  await org.fake.httpClient.post(`${org.origin}/api/data/v9.2/savedqueries`, { ...body, name: 'Kids' });
+  return org.fake.rows('savedqueries').find((r) => !before.has(r.data.savedqueryid)).data.savedqueryid;
+}
+async function builtBoundView(opts) {
+  const org = createFakeBuildOrg({ entities: LINKED });
+  const dir = newDir();
+  const s = boundViewSpec(opts);
+  assert.deepEqual(validateAppSpec(s, { profile: 'deploy' }).errors, []);
+  const built = await build(org, dir, s, { phases: ['views', 'forms'] });
+  assert.equal(built.err, undefined, chainText(built.err));
+  const manifest = manifestOf(org, dir);
+  const viewId = (key) => manifest.groups.find((g) => g.family === 'view' && g.key === key).root.id;
+  const { read } = await verifyReader(org);
+  return { org, s, manifest, viewId, read, built };
+}
+
+test('verify holds a declared form\'s sub-grid to the view its binding or pin names: one a maker renamed beside a namesake passes, a gone or non-public one fails, and no view is read by name', async () => {
+  await withForms(true, async () => {
+    const { org, s, manifest, viewId, read } = await builtBoundView();
+    const id = viewId(VIEW_KEY);
+    const bound = viewRowOf(org, id);
+    for (const layer of layersOf(bound)) layer.name = 'Kids Renamed';
+    const decoy = await viewNamesake(org, bound);
+    const unbound = { ...manifest, groups: manifest.groups.filter((g) => g.family !== 'view') };
+    const pinned = structuredClone(s);
+    pinned.views[0].viewId = `{${id.toUpperCase()}}`;
+    for (const [what, spec, m] of [['bound', s, manifest], ['bound and pinned to it', pinned, manifest], ['pinned, with no binding', pinned, unbound]]) {
+      const mark = org.calls.length;
+      const r = await verifySpec(spec, read, { phases: ['forms'], managedManifest: m });
+      assert.deepEqual(managedChecks(r).map((c) => [c.present, c.detail]), [[true, '']], what);
+      assert.deepEqual(hostLines(r), [], what);
+      const reads = subgridReadsSince(org, mark);
+      assert.ok(reads.length === 1 && reads[0].includes(`savedqueryid eq ${id}`), `${what}: the view is read once, by its id: ${JSON.stringify(reads)}`);
+      assert.ok(!reads.some((p) => /name eq 'Kids'/.test(p) || p.includes(decoy) || /querytype eq 0/.test(p)), `${what}: neither its name nor the default view is read: ${JSON.stringify(reads)}`);
+    }
+    const by = `the view its managed binding (${VIEW_KEY}) is bound to (${id})`;
+    const failsWith = async (detail, what) => {
+      const r = await verifySpec(s, read, { phases: ['forms'], managedManifest: manifest });
+      assert.deepEqual(managedChecks(r).map((c) => c.present), [false], what);
+      assert.ok(managedChecks(r)[0].detail.startsWith(`form-host: ${KIDS}: ${detail}`), `${what}: ${managedChecks(r)[0].detail}`);
+      assert.deepEqual(hostLines(r), [], what);
+    };
+    // Not a public view of the child table: a personal-type query, or another table.
+    for (const [what, field, value, words] of [['query type 64', 'querytype', 64, `${by} is not a public view of 'contoso_item' (table 'contoso_item', query type 64)`], ['another table', 'returnedtypecode', 'contoso_other', `${by} is not a public view of 'contoso_item' (table 'contoso_other', query type 0)`]]) {
+      const was = bound.data[field];
+      for (const layer of layersOf(bound)) layer[field] = value;
+      try { await failsWith(words, what); } finally { for (const layer of layersOf(bound)) layer[field] = was; }
+    }
+    // The bound view is gone: the namesake left beside it is not taken in its place.
+    const byId = (c) => c.method === 'GET' && /^\/savedqueries/.test(c.path) && decodeURIComponent(c.path).includes(`savedqueryid eq ${id}`);
+    let restore = org.intercept(byId, () => ({ status: 200, headers: {}, body: { value: [] } }));
+    try { await failsWith(`${by} was not found on its table; a view of the same name is not taken in its place`, 'gone'); } finally { restore(); }
+    // A read that fails leaves the host out, listed unverified; the rest of the saved form is still proved.
+    restore = org.intercept(byId, () => ({ status: 500, headers: {}, body: { error: { code: '0x80040216', message: 'unexpected' } } }));
+    let failed;
+    try { failed = await verifySpec(s, read, { phases: ['forms'], managedManifest: manifest }); } finally { restore(); }
+    assert.deepEqual(managedChecks(failed).map((c) => [c.present, c.detail]), [[true, '']]);
+    assert.equal(hostLines(failed).length, 1, JSON.stringify(failed.unverified));
+    assert.ok(hostLines(failed)[0].startsWith(`managed:form ${KEY} (${KIDS} could not be read: `), hostLines(failed)[0]);
+  });
+});
+
+test('verify leaves a declared form\'s sub-grid out when its view\'s binding is not settled or its pin contradicts it, and reads no view for it', async () => {
+  await withForms(true, async () => {
+    const { org, s, manifest, viewId, read } = await builtBoundView();
+    const id = viewId(VIEW_KEY);
+    await viewNamesake(org, viewRowOf(org, id));
+    const groups = manifest.groups.filter((g) => g.family !== 'view');
+    const OTHER_VIEW = '99999999-0000-4000-8000-000000000009';
+    const pinnedElsewhere = structuredClone(s);
+    pinnedElsewhere.views[0].viewId = OTHER_VIEW;
+    const settled = (code) => `its managed binding (${VIEW_KEY}) is not settled (${code}) — unverified, not proven correct`;
+    for (const [what, spec, m, reason] of [
+      ['pending', s, { ...manifest, groups, pending: [{ family: 'view', key: VIEW_KEY, code: 'managed-attempt-pending', root: { id } }] }, settled('managed-attempt-pending')],
+      ['not usable', s, { ...manifest, groups, invalid: [{ family: 'view', key: VIEW_KEY, code: 'managed-binding-group-invalid' }] }, settled('managed-binding-group-invalid')],
+      ['pinned elsewhere', pinnedElsewhere, manifest, `its viewId ${OTHER_VIEW} is not the view its managed binding (${VIEW_KEY}) is bound to (${id}); correct or remove the viewId`],
+    ]) {
+      const mark = org.calls.length;
+      const r = await verifySpec(spec, read, { phases: ['forms'], managedManifest: m });
+      assert.deepEqual(managedChecks(r).map((c) => [c.present, c.detail]), [[true, '']], what);
+      assert.deepEqual(hostLines(r), [`managed:form ${KEY} (${KIDS}: ${reason}; the requested host target was not compared)`], what);
+      assert.deepEqual(subgridReadsSince(org, mark), [], `${what}: no view is read for the sub-grid`);
+    }
+  });
+});
+
+test('verify holds a sub-grid to the last of two keyed views of one name, the one the build embeds: bound, at its stable id, and never a row a witness found', async () => {
+  await withForms(true, async () => {
+    const { org, s, manifest, viewId, read, built } = await builtBoundView({ twins: true });
+    const last = viewId('last');
+    assert.equal(built.out.created.views['contoso_item|Kids'], last, 'the build embeds the last declaration');
+    const mark = org.calls.length;
+    const r = await verifySpec(s, read, { phases: ['forms'], managedManifest: manifest });
+    assert.deepEqual(managedChecks(r).map((c) => [c.present, c.detail]), [[true, '']]);
+    assert.deepEqual(hostLines(r), []);
+    const reads = subgridReadsSince(org, mark);
+    assert.ok(reads.length === 1 && reads[0].includes(`savedqueryid eq ${last}`), JSON.stringify(reads));
+    // #845: with no binding for either twin, each is the row at the id the build creates it at (createIdentity "stable-v1"), so the
+    // sub-grid is held to the last one's, read by that id; its name is not asked.
+    const unboundManifest = { ...manifest, groups: manifest.groups.filter((g) => g.family !== 'view') };
+    const unboundMark = org.calls.length;
+    const unbound = await verifySpec(s, read, { phases: ['forms'], managedManifest: unboundManifest });
+    assert.deepEqual(managedChecks(unbound).map((c) => [c.present, c.detail]), [[true, '']]);
+    assert.deepEqual(hostLines(unbound), []);
+    const unboundReads = subgridReadsSince(org, unboundMark);
+    assert.ok(unboundReads.length === 1 && unboundReads[0].includes(`savedqueryid eq ${last}`), JSON.stringify(unboundReads));
+    // Without createIdentity nothing identifies either twin's row: a row the name finds is no declaration's own, so the host is left
+    // out as unverified rather than compared with it.
+    const legacy = structuredClone(s);
+    delete legacy.createIdentity;
+    const legacyMark = org.calls.length;
+    const unattributed = await verifySpec(legacy, read, { phases: ['forms'], managedManifest: unboundManifest });
+    assert.deepEqual(hostLines(unattributed), [`managed:form ${KEY} (${KIDS}: no managed binding, viewId or observed stable id identifies its row; the requested host target was not compared)`]);
+    assert.deepEqual(subgridReadsSince(org, legacyMark), [], 'the sub-grid reads no view for it');
   });
 });

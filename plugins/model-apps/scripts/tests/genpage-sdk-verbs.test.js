@@ -883,3 +883,82 @@ test('addToSolution adds the page as the page table\u2019s type with its require
   await assert.rejects(genpage.addToSolution(P2, { uniqueName: 'ContosoCore', systemSolution: false }), (e) => e.code === 'GENPAGE_COMPONENT_TYPE_UNRESOLVED');
   assert.strictEqual(sdk.count('addSolutionComponent'), 1, 'nothing is sent without a page id and a component type');
 });
+
+// ── sharedWith: the other apps that show a page, read before an edit of it is uploaded ───────────────────────────
+
+// App 0 is the one the edit is made from; the others are the environment's other apps. `waits: []` takes the scan once, as the real waits (35 s in all) would only slow a test down.
+const NO_WAIT = { waits: [] };
+
+test('sharedWith: names the OTHER apps whose navigation shows the page — published or saved only — and never the app the edit is made from', async () => {
+  const sdk = deletable([
+    { unique: 'contoso_a', name: 'App A', published: [P1] },
+    { unique: 'contoso_b', name: 'App B', published: [P1, P2] },
+    { unique: 'contoso_c', name: 'App C', published: [], saved: [P1] },
+    { unique: 'contoso_d', name: 'App D', published: [P2] },
+  ]);
+  const out = await backend(sdk).sharedWith(P1.toUpperCase(), appIdOf(0).toUpperCase(), NO_WAIT);
+  assert.strictEqual(out.pageId, P1);
+  assert.strictEqual(out.appId, appIdOf(0));
+  assert.strictEqual(out.appUniqueName, 'contoso_a');
+  assert.deepStrictEqual(out.apps.map((a) => [a.uniqueName, a.name, a.appId, a.savedOnly]), [
+    ['contoso_b', 'App B', appIdOf(1), false],
+    ['contoso_c', 'App C', appIdOf(2), true],
+  ]);
+  assert.strictEqual(sdk.count('deleteRemoteArtifact') + sdk.count('uploadArtifact'), 0, 'it reads and writes nothing');
+});
+
+test('sharedWith: a page no other app shows is an empty list — the app\u2019s own navigation is not "another app"', async () => {
+  const sdk = deletable([
+    { unique: 'contoso_a', name: 'App A', published: [P1] },
+    { unique: 'contoso_b', name: 'App B', published: [P2] },
+  ]);
+  const out = await backend(sdk).sharedWith(P1, appIdOf(0), NO_WAIT);
+  assert.deepStrictEqual(out.apps, []);
+  const alone = await backend(deletable([{ unique: 'contoso_a', published: [P1] }])).sharedWith(P1, appIdOf(0), NO_WAIT);
+  assert.deepStrictEqual(alone.apps, []);
+});
+
+test('sharedWith fails closed: an app whose navigation cannot be read, a list of apps that cannot be read and an app that is not there each throw GENPAGE_APPS_UNREADABLE — never an empty list', async () => {
+  const unreadable = deletable([
+    { unique: 'contoso_a', published: [] },
+    { unique: 'contoso_b', published: [], unreadable: true },
+  ]);
+  await assert.rejects(backend(unreadable).sharedWith(P1, appIdOf(0), NO_WAIT), (e) => {
+    assert.strictEqual(e.code, 'GENPAGE_APPS_UNREADABLE');
+    assert.strictEqual(e.outcome, 'nothing');
+    assert.deepStrictEqual(e.unreadableApps, ['contoso_b']);
+    return true;
+  });
+
+  // Another app was found to show the page, and a third could not be read: the unread one may hold it too, so no confirmation can cover it.
+  const partly = deletable([
+    { unique: 'contoso_a', published: [] },
+    { unique: 'contoso_b', name: 'App B', published: [P1] },
+    { unique: 'contoso_c', published: [], unreadable: true },
+  ]);
+  await assert.rejects(backend(partly).sharedWith(P1, appIdOf(0), NO_WAIT), (e) => {
+    assert.strictEqual(e.code, 'GENPAGE_APPS_UNREADABLE');
+    assert.deepStrictEqual(e.apps.map((a) => a.uniqueName), ['contoso_b']);
+    assert.deepStrictEqual(e.unreadableApps, ['contoso_c']);
+    return true;
+  });
+
+  await assert.rejects(backend(deletable([{ unique: 'contoso_a', published: [] }], { listFails: true })).sharedWith(P1, appIdOf(0), NO_WAIT), (e) => e.code === 'GENPAGE_APPS_UNREADABLE');
+  await assert.rejects(backend(deletable([{ unique: 'contoso_a', published: [] }])).sharedWith(P1, appIdOf(7), NO_WAIT), (e) => e.code === 'GENPAGE_APPS_UNREADABLE');
+});
+
+test('sharedWith: an id that is no GUID is refused before any request is made', async () => {
+  const sdk = deletable();
+  await assert.rejects(backend(sdk).sharedWith('not-a-page', appIdOf(0), NO_WAIT), (e) => e.code === 'GENPAGE_ID_INVALID');
+  await assert.rejects(backend(sdk).sharedWith(P1, 'not-an-app', NO_WAIT), (e) => e.code === 'GENPAGE_ID_INVALID');
+  assert.strictEqual(sdk.count('queryRecords'), 0);
+});
+
+test('appsNaming (what a delete is refused with) names the same apps as before: the shared-page check shares its lookup and changes nothing there', async () => {
+  const sdk = deletable([{ unique: 'contoso_sales', name: 'Sales', published: [P1] }]);
+  await assert.rejects(backend(sdk).delete(P1, YES), (e) => {
+    assert.strictEqual(e.code, 'GENPAGE_IN_APP');
+    assert.deepStrictEqual(e.apps.map((a) => [a.uniqueName, a.name, a.appId]), [['contoso_sales', 'Sales', appIdOf(0)]]);
+    return true;
+  });
+});

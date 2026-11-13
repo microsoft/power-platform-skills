@@ -259,9 +259,31 @@ upload command, exactly `Choice: Overwrite the deployed changes` or
 chose "Overwrite the deployed changes". Log the refusal and that `Choice:` line
 in `workflow-log.md`.
 
+**Edit Phase 7 only — the shared-page check before every fix-up upload.** The page the edit
+uploaded may be shown by other apps, and the maker's confirmation in Edit Phase 6 was for the apps
+found then; an app can start to show the page in the minutes since. So right before the upload
+command below, and again before each retry of it, run the check exactly as Edit Phase 6 gives it
+(`edit-flow.md`, **Before anything is uploaded: the other apps that show this page**):
+
+```powershell
+node "${PLUGIN_ROOT}/scripts/genpage-shared-check.js" `
+  --env '<org-url>' `
+  --app-id '<app-id>' `
+  --page-id '<page-id>' `
+  --confirmed-apps '<uniqueName>,<uniqueName>'
+```
+
+Pass `--confirmed-apps` only with the unique names recorded in `workflow-log.md` as the user's
+confirmation for this page (the `Confirmed apps:` line); leave the flag out when none were recorded.
+Never add a name the user did not confirm. Handle the exit status as Edit Phase 6 does: exit 0 goes on
+to the upload; exit 2 names an app that was not confirmed, so ask (attended) or STOP and report
+(unattended) — a new answer is confirmed for the apps now named and is logged as there; exit 1 is
+a STOP in every mode. Log each run's result in `workflow-log.md`. A refused or retried upload
+needs a new check: the one before it does not cover the upload after it. The upload itself is unchanged.
+
 Check and clear `prompt.txt` and `agent-message.txt` as in SKILL.md Phase 6, then write them with your
 file-writing tool — `prompt.txt` holding the fix delta and `agent-message.txt` holding
-`Phase 7.5 fix re-deploy` — and deploy:
+`Phase 7.5 fix re-deploy` — and deploy (after the shared-page check above when you came from Edit Phase 7):
 
 ```powershell
 node "${PLUGIN_ROOT}/scripts/genpage-upload.js" `

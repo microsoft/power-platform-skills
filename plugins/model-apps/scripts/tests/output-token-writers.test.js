@@ -59,7 +59,7 @@ test('lib/apply-snapshot-store.js writes the snapshot, the baseline and the reco
   writeFileAtomic(path.join(dir, 'clean.json'), '{"a":1}');
   assert.strictEqual(fs.readFileSync(path.join(dir, 'clean.json'), 'utf8'), '{"a":1}');
   assert.deepStrictEqual(fs.readdirSync(dir).sort(), ['clean.json', 'last-applied.json'], 'no temporary file is left');
-  assert.deepStrictEqual(scriptsMatching(/\bwriteFileAtomic\s*\(/), ['lib/apply-snapshot-store.js', 'lib/dashboard-creation-records.js', 'lib/deployed-baseline.js', 'lib/page-ownership-records.js', 'lib/page-publish-records.js', 'lib/web-resource-records.js'], 'the baseline and the records are written by it, and by nothing else');
+  assert.deepStrictEqual(scriptsMatching(/\bwriteFileAtomic\s*\(/), ['lib/apply-snapshot-store.js', 'lib/configuration-create-state.js', 'lib/dashboard-creation-records.js', 'lib/deployed-baseline.js', 'lib/page-ownership-records.js', 'lib/page-publish-records.js', 'lib/web-resource-records.js'], 'the baseline and the records are written by it, and by nothing else');
   const { openUnconfirmedWebResources, unconfirmedRecordPath } = require('../lib/web-resource-records.js');
   const environment = 'https://contoso.crm.dynamics.com';
   const record = openUnconfirmedWebResources({ workspaceDir: dir, environment });
@@ -353,6 +353,7 @@ const OTHER_WRITERS = {
   'solution-settings.js': 'its template goes through `writeFileSafe(… leaving(text))` and both streams through its own `guardOutput`; the copy of the settings and the package it hands pac are data for another program, never altered',
   'lib/private-folder.js': 'the copy of the settings file the person gave, made private for pac: their own bytes',
   'lib/temp-workspace.js': 'the owner record of a temporary folder: a process id, a host and a time',
+  'lib/configuration-create-state.js': 'the quarantine archive of an unreadable configuration create receipt: its own bytes, which this plugin wrote through `writeFileAtomic`, copied unaltered so a person can compare them; the receipt and its markers go through `writeFileAtomic`',
   'lib/telemetry/lib/emit-dispatcher.js': 'telemetry events, in a hook process that obtains no token, limited to the approved fields',
   'lib/telemetry/lib/local-log.js': 'the local mirror of those events',
   'lib/telemetry/lib/user-config.js': 'the telemetry choice a person made',

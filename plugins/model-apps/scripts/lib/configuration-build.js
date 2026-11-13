@@ -57,6 +57,61 @@ function namedByPages(pages) {
 // Every stop before the build's first write: the same plan stops again, so it is RETRY.NEVER.
 const preflightHalt = (preflightCode, message) => new BuildHalt(message, { phase: 'preflight', code: preflightCode, recoverable: false, retry: RETRY.NEVER });
 
+/**
+ * The default build's create capability (#807), or an unavailable one with the reason (never a fallback to another route):
+ *   { available: true, writer, spec, dataverse, workspaceDir, context, kindTable }  |  { available: false, reason }
+ * Made from the bridge build-model-app.js makeSdk attaches to the build's SDK (lib/configuration-create-writer.js): the raw
+ * client, the durable app workspace the receipt lives in, the header-less reader and the receipt's context. The modules
+ * load only here, so a build without configuration loads none of them.
+ */
+function createUnitsFor({ spec, sdk, provision, opts = {}, appUniqueName }) {
+  const W = require('./configuration-create-writer.js');
+  const S = require('./configuration-create-state.js');
+  const P = require('./configuration-create-plan.js');
+  const bridge = W.configurationCreateBridgeOf(sdk) || W.configurationCreateBridgeOf(provision);
+  if (!bridge) return { available: false, reason: 'the build has no configuration create writer (its SDK carries no create bridge)' };
+  const workspaceDir = bridge.workspaceDir || (typeof opts.workspaceDir === 'string' && opts.workspaceDir ? opts.workspaceDir : null);
+  if (!workspaceDir) return { available: false, reason: 'the build has no durable app workspace for the create receipt' };
+  const reader = bridge.reader || provision || sdk;
+  const dataverse = reader && reader.dataverse;
+  if (!dataverse || typeof dataverse.get !== 'function') return { available: false, reason: 'the build has no reader for the verification reads' };
+  // The receipt's context: the environment origin, the solution, the app and the authoring language. The language is what
+  // the build authors labels in (build-model-app.js runBuildCommand authoringLanguageCode), handed over with the bridge;
+  // a caller that made its own bridge may name it as opts.preResolvedLanguageCode. A unit saved under another language is
+  // refused (configuration-create-context-mismatch), never continued.
+  const language = Number.isSafeInteger(bridge.authoringLanguageCode) ? bridge.authoringLanguageCode
+    : Number.isSafeInteger(opts.preResolvedLanguageCode) ? opts.preResolvedLanguageCode : null;
+  let context;
+  try {
+    const origin = new URL(bridge.environmentUrl || bridge.apiUrl('/')).origin;
+    context = S.createStateContext({ environmentUrl: origin, solutionUniqueName: spec.solution && spec.solution.uniqueName, appUniqueName, authoringLanguageCode: language });
+  } catch (error) {
+    return { available: false, reason: error && error.reason ? error.reason : 'the configuration create context could not be made' };
+  }
+  const writer = W.createDefaultConfigurationWriter({ bridge, dataverse, workspaceDir, context, ...(bridge.sleep ? { sleep: bridge.sleep } : {}) });
+  return Object.freeze({ available: true, writer, spec, dataverse, workspaceDir, context, kindTable: P.CONFIGURATION_CREATE_RECEIPT_KIND_TABLE });
+}
+
+// The App Spec's configuration roots as the receipt guard matches them (lib/configuration-create-recovery.js
+// assertDeferredUnitsExcluded): kind tag, port key, every name the root answers to, and the root a declaration depends on
+// (a data-source variable's parent definition). A declaration that reintroduces or depends on a deferred unit's root stops.
+function createDeclarationsOf(spec) {
+  const out = [];
+  const each = (list, fn) => { for (const e of Array.isArray(list) ? list : []) if (e && typeof e === 'object') fn(e); };
+  each(spec.environmentVariables, (e) => {
+    if (typeof e.schemaName !== 'string') return;
+    const parent = typeof e.parentSchemaName === 'string' && e.parentSchemaName ? [{ kind: 'env-definition', key: lower(e.parentSchemaName), name: e.parentSchemaName }] : [];
+    out.push({ kind: 'env-definition', key: lower(e.schemaName), names: [e.schemaName], ...(parent.length ? { dependsOn: parent } : {}) });
+  });
+  each(spec.connectionReferences, (e) => { if (typeof e.logicalName === 'string') out.push({ kind: 'connection-reference', key: lower(e.logicalName), names: [e.logicalName] }); });
+  each(spec.customApis, (e) => { if (typeof e.uniqueName === 'string') out.push({ kind: 'custom-api', key: lower(e.uniqueName), names: [e.uniqueName] }); });
+  each(spec.duplicateDetectionRules, (e) => {
+    if (typeof e.key !== 'string') return;
+    out.push({ kind: 'duplicate-rule', key: e.key, names: [e.key, ...(typeof e.name === 'string' && e.name ? [e.name] : [])] });
+  });
+  return out;
+}
+
 // Why the sweep let an undeclared attempt go (pendingSweep `retired[].how`), as the build's notice says it.
 const RETIRED_WHY = {
   unsent: 'it was never sent',
@@ -111,6 +166,20 @@ function createConfigurationRuntime({ spec, sdk, provision, opts = {}, appUnique
   // `sdk` is the workspace the build reads protected rows into: the preflight refuses to read over a local copy with edits.
   const protectedArgs = () => ({ spec, dataverse: sdk.dataverse, solution: spec.solution && spec.solution.uniqueName, bindings: opts.configurationBindings, sdk });
   const protectedPort = hookup ? hookup.port(protectedArgs()) : null;
+  // The hookup's read-only advice for a stopped duplicate rule whose first publication is not confirmed (#808), captured
+  // once with the port: a reader installed on the hookup later is not consulted.
+  const publicationHint = hookup && typeof hookup.publicationHint === 'function' ? hookup.publicationHint : null;
+  // One stop's advice, or '' (today's text). The reader decides from the hookup's own state; a throw or a non-string
+  // answer is no advice, never a failed build.
+  const hintFor = (query) => {
+    if (!publicationHint) return '';
+    try {
+      const text = publicationHint({ spec, ...query });
+      return typeof text === 'string' && text ? text : '';
+    } catch {
+      return '';
+    }
+  };
   const ctx = C.configurationContext({
     sdk,
     // The build's create port only when it can stand in for the configuration kinds' own (it protects every one of
@@ -128,6 +197,36 @@ function createConfigurationRuntime({ spec, sdk, provision, opts = {}, appUnique
     // The id the managed-artifacts manifest records for an item (synchronous), so a bound item keeps its id.
     boundIdOf: opts.managedIdOf,
   });
+  // Whether this runtime's create port was ever swapped (#808). Fixed when it happens, never inferred from what
+  // ctx.creates holds once a step is done: a stand-in that puts the protected port back before calling it and then throws
+  // a stop of its own would otherwise look like the port's own stop. `creates` reads and writes as a plain property does,
+  // so every step calls whatever is there exactly as before; only the first write of another port is remembered, and the
+  // accessor is not configurable, so it cannot be taken out and put back round the marker.
+  let portSwapped = false;
+  if (protectedPort) {
+    let current = ctx.creates;
+    Object.defineProperty(ctx, 'creates', {
+      enumerable: true,
+      configurable: false,
+      get: () => current,
+      set: (value) => {
+        if (value !== protectedPort) portSwapped = true;
+        current = value;
+      },
+    });
+  }
+  // The protected port's own methods as the hookup issued it: a step that starts with any other one is not explained.
+  const protectedMethods = protectedPort ? { resolve: protectedPort.resolve, run: protectedPort.run } : null;
+  // The default build's new rows (#807): closed singleton creates at stable ids through a durable receipt in the app
+  // workspace (lib/configuration-create-writer.js), never the SDK's deep insert and never the plain pass-through
+  // (configuration-artifacts.js defaultCreates). It is its own property, so the protected port above (ctx.creates) is never
+  // replaced or wrapped. A protected build and a caller that hands over a port of its own keep their route. A build whose SDK
+  // carries no bridge (made by build-model-app.js makeSdk for an apply) still classifies its plan, and any new row then
+  // stops the step with nothing sent (configuration-create-shape-refused): there is no fallback.
+  const createUnits = !protectedOptIn && !ctx.creates ? createUnitsFor({ spec, sdk, provision, opts, appUniqueName }) : null;
+  if (createUnits) Object.defineProperty(ctx, 'createUnits', { value: createUnits, enumerable: false });
+  const portIntact = () => Boolean(protectedPort) && !portSwapped && ctx.creates === protectedPort
+    && protectedPort.resolve === protectedMethods.resolve && protectedPort.run === protectedMethods.run;
   // What this run last observed of each item a page can name, `<kind>:<lower key>` -> blocker | null. Filled by
   // apply('data-model') from its own reads and by beforePages from fresh reads; an apply replaces what it covers.
   const observed = new Map();
@@ -173,6 +272,25 @@ function createConfigurationRuntime({ spec, sdk, provision, opts = {}, appUnique
       // The store's own debt first, whatever this App Spec still declares (sweepPendingConfiguration).
       sweepPendingConfiguration(spec, opts);
       if (!protectedOptIn) {
+        // The default build's create receipt (#807), a local read of the app workspace only: an open unit, an invalid or
+        // foreign receipt, a declaration that brings back a deferred unit's root, or an unacknowledged quarantine stops the
+        // build here, before its first service change. Never replayed: the operator resolves it with configuration-recovery.js.
+        if (ctx.createUnits && ctx.createUnits.available) {
+          const units = ctx.createUnits;
+          try {
+            require('./configuration-create-recovery.js').preflightConfigurationCreates({
+              workspaceDir: units.workspaceDir,
+              context: units.context,
+              kindTable: units.kindTable,
+              declarations: createDeclarationsOf(spec),
+              configurationWork: true,
+              quarantineAcknowledgment: opts.configurationQuarantineAcknowledgment,
+            });
+          } catch (error) {
+            if (!error || error.name !== 'ConfigurationCreateHalt') throw error;
+            throw fail(error.code, `${error.message} No service changes were sent by this build.`);
+          }
+        }
         // Removing the opt-in is not a migration: a declared item the build's binding store still holds (committed, or an
         // attempt pending) would go back to name lookup, where a namesake could stand in for its bound row. A local store
         // read only, and only when the build handed its hookup over; an App Spec that never opted in has nothing there.
@@ -189,11 +307,18 @@ function createConfigurationRuntime({ spec, sdk, provision, opts = {}, appUnique
         throw fail('create-identity-unverified', 'configurationIdentity "stable-v1" needs the binding store for protected configuration, and it is not available to this build. No service changes were sent by this build.');
       }
       // The maker's overwrite approvals reach only the preflight: the one step that may replace a protected item's local copy.
-      const { halts } = await hookup.preflight({ ...protectedArgs(), authorizedOverwrite: opts.authorizedOverwrite });
+      const result = await hookup.preflight({ ...protectedArgs(), authorizedOverwrite: opts.authorizedOverwrite });
+      const { halts } = result;
       if (!halts.length) return { halts };
+      // A stopped rule whose first publication is not confirmed says how to finish it (#808), asked of the preflight
+      // result that judged it; every other stop reads as before.
+      const hint = (h) => {
+        const text = hintFor({ source: result, kind: h.kind, key: h.key, code: h.code, guardId: h.id });
+        return text ? ` (${text})` : '';
+      };
       // The edit refusal leads when there is one: it is the halt a maker acts on first, and its text is fixed.
       const first = halts.find((h) => h.code === 'configuration-edit-unsupported') || halts[0];
-      const others = halts.filter((h) => h !== first).map((h) => `${h.kind} ${h.key} (${h.code})`);
+      const others = halts.filter((h) => h !== first).map((h) => `${h.kind} ${h.key} (${h.code})${hint(h)}`);
       // A row of an earlier, unfinished create that no answer proved this build's own is adopted only under the maker's
       // exact approval token, one per row (managed-create-context.js judgeRows), never wholesale.
       const approvals = [...new Set(halts.filter((h) => !h.adoption).flatMap((h) => h.approvals || []))];
@@ -203,18 +328,43 @@ function createConfigurationRuntime({ spec, sdk, provision, opts = {}, appUnique
       // the id of each row (in the approvals themselves) and every field the build would then change — never a bare
       // token for an item whose own sentence is not the one shown.
       const adoptions = halts.filter((h) => h.adoption).map((h) => ` Adopt ${h.kind} ${h.key} at its id ${h.adoption.id} (the build would then change ${h.adoption.change}) only under these exact approvals, given after checking those rows are yours: ${h.adoption.approvals.map((t) => JSON.stringify(t)).join(', ')}.`).join('');
-      throw fail(first.code, `${first.kind} ${first.key}: ${first.message}${others.length ? ` Also stopped: ${others.join(', ')}.` : ''}${approve}${adoptions}`);
+      throw fail(first.code, `${first.kind} ${first.key}: ${first.message}${hint(first)}${others.length ? ` Also stopped: ${others.join(', ')}.` : ''}${approve}${adoptions}`);
     },
     // Plan, apply and observe ONE phase's items. Returns {outcome, blocking, halt, plan}.
     async apply(phase) {
       if (phase !== 'solution' && phase !== 'data-model') throw new TypeError(`configuration runtime: unknown phase ${phase}`);
+      // Captured before the step runs and carried to the formatting below (#808): a step that did not start on the
+      // protected port's own methods gets today's text, whatever is in place once it ends.
+      const intactAtStart = portIntact();
       const step = await C.runConfigurationStep(spec, ctx, phase);
       const before = step.outcome.unknown.length;
       await record(step.outcome);
       let halt = step.halt;
       if (step.outcome.unknown.length > before) {
         const items = [...(halt ? halt.items : []), ...step.outcome.unknown.slice(before).map(({ kind, key, code }) => ({ kind, key, code }))];
-        halt = { phase, code: 'configuration-incomplete', retry: 'never', items, message: C.configurationHaltMessage(items) };
+        // A stopped create unit keeps its own configuration-create-* code: it names the receipt the next build is held by.
+        const created = C.configurationCreateHaltOf(step.outcome);
+        halt = created
+          ? { phase, code: created.code, retry: 'never', items, message: `${created.message} (${C.configurationHaltMessage(items)})` }
+          : { phase, code: 'configuration-incomplete', retry: 'never', items, message: C.configurationHaltMessage(items) };
+      }
+      // A stopped rule whose first publication is not confirmed says how to finish it (#808). Asked only when the stop is
+      // this runtime's protected port's own: exactly one unknown outcome for the item, carrying its id, from exactly one
+      // planning source (its plan read, or its one create). The step's own halt is left as it was; a new one carries the
+      // advice, and only when there is any.
+      if (halt && publicationHint && intactAtStart && portIntact()) {
+        const same = (p) => (f) => f && f.kind === p.kind && f.key === p.key;
+        const extraHint = (p) => {
+          const found = step.outcome.unknown.filter((f) => same(p)(f) && f.code === p.code);
+          if (found.length !== 1 || typeof found[0].id !== 'string') return '';
+          const plan = step.plan || {};
+          const planned = (plan.unknown || []).filter((f) => same(p)(f) && f.code === p.code).length
+            + (plan.operations || []).filter((op) => same(p)(op) && op.action === 'create').length;
+          if (planned !== 1) return '';
+          return hintFor({ source: protectedPort, kind: p.kind, key: p.key, code: p.code, guardId: found[0].id });
+        };
+        const message = C.configurationHaltMessage(halt.items, extraHint);
+        if (message !== halt.message) halt = { ...halt, message };
       }
       if (phase === 'data-model') {
         applied = true;

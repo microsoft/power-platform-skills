@@ -108,6 +108,20 @@ jobs:
                   git cat-file blob FETCH_HEAD:plugins/model-apps/scripts/vendor/cds-maker-sdk.cjs > "$RUNNER_TEMP/previous-cds-maker-sdk.cjs"
                   echo "MODEL_APPS_PREVIOUS_BUNDLE=$RUNNER_TEMP/previous-cds-maker-sdk.cjs" >> "$GITHUB_ENV"
 
+            # The previous release's own code (model-apps 2.27.0), for the downgrade tests: a binding store this release writes
+            # must be read safely by that release, run unchanged (scripts/tests/helpers/downgrade-release.js, which checks its
+            # version). The checkout is shallow, so the release commit is fetched by its hash and only its plugin manifest, lib and
+            # vendor folders are extracted (tar runs in the folder: GNU tar reads the drive of a Windows path as a remote host).
+            # In CI the tests FAIL without it rather than skip.
+            - name: fetch-downgrade-release
+              shell: bash
+              run: |
+                  git fetch --no-tags --depth=1 origin cb07d811d384ebec4ef29be589539c08f2db7833
+                  git archive -o "$RUNNER_TEMP/model-apps-downgrade.tar" FETCH_HEAD plugins/model-apps/.plugin/plugin.json plugins/model-apps/scripts/lib plugins/model-apps/scripts/vendor
+                  mkdir -p "$RUNNER_TEMP/model-apps-downgrade"
+                  (cd "$RUNNER_TEMP/model-apps-downgrade" && tar -xf ../model-apps-downgrade.tar)
+                  echo "MODEL_APPS_DOWNGRADE_SCRIPTS=$RUNNER_TEMP/model-apps-downgrade/plugins/model-apps/scripts" >> "$GITHUB_ENV"
+
             # run-tests.js is the plugin's own regression gate: it runs every
             # scripts/tests/*.test.js and exits non-zero on any failure. Invoking it
             # (rather than a bare `node --test`) keeps CI and the documented local
@@ -242,6 +256,20 @@ jobs:
                   git fetch --no-tags --depth=1 origin 5b6866cfe02c716f729728becc76f312d1204527
                   git cat-file blob FETCH_HEAD:plugins/model-apps/scripts/vendor/cds-maker-sdk.cjs > "$RUNNER_TEMP/previous-cds-maker-sdk.cjs"
                   echo "MODEL_APPS_PREVIOUS_BUNDLE=$RUNNER_TEMP/previous-cds-maker-sdk.cjs" >> "$GITHUB_ENV"
+
+            # The previous release's own code (model-apps 2.27.0), for the downgrade tests: a binding store this release writes
+            # must be read safely by that release, run unchanged (scripts/tests/helpers/downgrade-release.js, which checks its
+            # version). The checkout is shallow, so the release commit is fetched by its hash and only its plugin manifest, lib and
+            # vendor folders are extracted (tar runs in the folder: GNU tar reads the drive of a Windows path as a remote host).
+            # In CI the tests FAIL without it rather than skip.
+            - name: fetch-downgrade-release
+              shell: bash
+              run: |
+                  git fetch --no-tags --depth=1 origin cb07d811d384ebec4ef29be589539c08f2db7833
+                  git archive -o "$RUNNER_TEMP/model-apps-downgrade.tar" FETCH_HEAD plugins/model-apps/.plugin/plugin.json plugins/model-apps/scripts/lib plugins/model-apps/scripts/vendor
+                  mkdir -p "$RUNNER_TEMP/model-apps-downgrade"
+                  (cd "$RUNNER_TEMP/model-apps-downgrade" && tar -xf ../model-apps-downgrade.tar)
+                  echo "MODEL_APPS_DOWNGRADE_SCRIPTS=$RUNNER_TEMP/model-apps-downgrade/plugins/model-apps/scripts" >> "$GITHUB_ENV"
 
             # The same command as the matrix job, with those paths set: the oracle and A/B tests run instead of skipping.
             - name: run-model-apps-script-tests-with-parsers

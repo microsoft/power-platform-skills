@@ -240,6 +240,13 @@ function createManagedCreateContext({ store, approvals = [], notFoundCode, appro
   const begun = new Set();
   // The receipt-store failure that stopped this context (run): nothing more is sent under it.
   let stopped = null;
+  // #847: token -> { epoch } of an original two-row variable create whose run was NOT checked (its value request failed)
+  // but whose own definition POST this process saw acknowledged, kept in memory only (never a body, an error or a private
+  // input) until receiptPartialVariableRoot proves that root by a fresh exact read. A later process has no candidate:
+  // a matching read alone never makes a root this attempt's creation (judgeRows reads acknowledgedRoot as ownership).
+  const partialRoots = new Map();
+  // Tokens claimValue claimed in this process: one value claim per attempt per process.
+  const valueClaims = new Set();
 
   const accepts = (check, value) => {
     try { return check(value) === true; } catch { return false; }
@@ -258,6 +265,27 @@ function createManagedCreateContext({ store, approvals = [], notFoundCode, appro
       const fact = rowFacts.find((f) => f.token === token && f.kind === root.kind && f.key === root.key);
       if (!fact || fact.outcome !== 'acknowledged' || fact.mode !== 'create' || idKey(fact.id) !== idKey(root.id)) continue;
       store.noteSaved(token, { proof: null, acknowledgedRoot: true, phase: 'sending', epoch });
+    }
+  }
+
+  // #847: remember, for an UNCHECKED run, each attempt that is an original create of a two-row environment variable (a
+  // definition and its value, no base) whose root fact is this run's own acknowledged create at the root id, with no
+  // conflicting fact and no local failure. Only the epoch is kept; receiptPartialVariableRoot does the proving.
+  function notePartialRoots(attempts, rowFacts, localError) {
+    if (localError) return;
+    store.refresh();
+    const env = snapshot();
+    for (const { token, epoch } of attempts) {
+      const a = env.attempts.find((x) => x.token === token);
+      if (!a || a.family !== 'environmentVariable' || !a.rowProtocol || a.acknowledgedRoot || !a.expected || a.expected.baseObservation !== null) continue;
+      const rows = a.rowProtocol.rows;
+      const root = rows.find((r) => r.parentId === null);
+      if (rows.length !== 2 || !root || root.mode !== 'create' || root.kind !== a.root.kind || root.key !== a.root.key || idKey(root.id) !== idKey(a.root.id)) continue;
+      const mine = rowFacts.filter((f) => f.token === token);
+      if (mine.some((f) => f.outcome === 'conflict')) continue;
+      const fact = mine.find((f) => f.kind === root.kind && f.key === root.key);
+      if (!fact || fact.outcome !== 'acknowledged' || fact.mode !== 'create' || idKey(fact.id) !== idKey(root.id)) continue;
+      partialRoots.set(token, { epoch });
     }
   }
 
@@ -362,6 +390,60 @@ function createManagedCreateContext({ store, approvals = [], notFoundCode, appro
       return { family: a.family, key: a.key, token, epoch, expected: a.expected };
     },
     /**
+     * #847: whether this process holds a partial-root candidate for `token` at `epoch` (run kept one: an unchecked original
+     * variable create whose own definition answer was acknowledged, no conflicting fact, no local failure). Read only; a
+     * caller asks before spending a fresh read on receiptPartialVariableRoot.
+     */
+    hasPartialRoot(token, epoch) {
+      const cand = partialRoots.get(token);
+      return !!cand && cand.epoch === epoch;
+    },
+    /**
+     * #847: receipt the root of an original two-row variable create whose run was NOT checked (its value request failed)
+     * when this process saw that root's own create acknowledged (run kept it as a candidate at `epoch`) AND the fresh
+     * read `observation` (taken after that run) shows the root exactly as prepared: present at its id, no parent, its
+     * planned projection over a complete child graph. The attempt must still be the one prepared for `declarationSha256`.
+     * Writes only the root receipt (noteSaved phase `sending`, at `epoch`, which the store re-checks), never a child
+     * receipt or a saved observation; the run's own facts stay unchecked. Answers true when the root is receipted (now or
+     * earlier), false when the proof is incomplete (nothing written); a store failure throws typed.
+     */
+    receiptPartialVariableRoot({ token, epoch, observation, declarationSha256 } = {}) {
+      const cand = partialRoots.get(token);
+      if (!cand || cand.epoch !== epoch) return false;
+      store.refresh();
+      const a = attemptOf(snapshot(), token);
+      if (a.declarationSha256 !== declarationSha256 || a.family !== 'environmentVariable' || !a.rowProtocol || a.rowProtocol.rows.length !== 2) return false;
+      if (a.acknowledgedRoot === true) return true;
+      const root = a.rowProtocol.rows.find((r) => r.parentId === null);
+      const seen = root && observation && Array.isArray(observation.rows) ? observation.rows.find((r) => r.kind === root.kind && r.key === root.key) : null;
+      if (!seen || seen.state !== 'present' || normalizeGuid(seen.id) !== root.id || (seen.parentId ? normalizeGuid(seen.parentId) : null) !== null
+        || seen.projectionSha256 !== root.expectedSha256) return false;
+      store.noteSaved(token, { proof: null, acknowledgedRoot: true, phase: 'sending', epoch });
+      partialRoots.delete(token);
+      return true;
+    },
+    /**
+     * #847: claim the ONE never-dispatched value row of an unfinished variable create (store.claimUnsentValueRow) under a
+     * new fenced epoch: `{ id, parentId }` the value row and its definition, `capture` from captureReadOnly taken before
+     * the caller's fresh read, `declarationSha256` today's digest over the attempt's own rows. A root this attempt's own
+     * answer never acknowledged needs the maker's exact root approval (the adoption token of the definition). Refused for
+     * an attempt this process already began, resumed or claimed. Answers the entry `run` takes:
+     * { family, key, token, epoch, expected }.
+     */
+    claimValue(token, { id, parentId, capture, declarationSha256 } = {}) {
+      store.refresh();
+      const a = attemptOf(snapshot(), token);
+      if (begun.has(token) || valueClaims.has(token)) {
+        throw Object.assign(new Error(`the managed ${a.family} "${a.key}" attempt was already sent or claimed by this run; its value is not claimed again`), { code: STORE_CODES.pending });
+      }
+      const root = a.rowProtocol ? a.rowProtocol.rows.find((r) => r.parentId === null) : null;
+      const rootApproved = !!root && approved.has(approvalTokenOf(a.family, a.root.key, root));
+      valueClaims.add(token);
+      const { epoch } = store.claimUnsentValueRow({ token, id, parentId, capture, declarationSha256, rootApproved });
+      begun.add(token);
+      return { family: a.family, key: a.key, token, epoch, expected: a.expected };
+    },
+    /**
      * Run `fn` in the request scope of `attempts` (what begin/resume answered); keeps the answers per attempt.
      * `acceptResult(value)` is the driver's check of what `fn` answered (acceptSaved for an SDK push): the run is CHECKED
      * only when it answers exactly `true` (a throw is false), `fn` threw nothing, the scope latched no local failure and
@@ -392,6 +474,10 @@ function createManagedCreateContext({ store, approvals = [], notFoundCode, appro
           localError = e;
           checked = false;
         }
+      }
+      if (!checked) {
+        // Only a hint for a later proof: a store that cannot be read here leaves no candidate, never a failure.
+        try { notePartialRoots(attempts, rowFacts, localError); } catch { /* no candidate */ }
       }
       for (const f of outcome.facts) {
         if (!facts.has(f.token)) facts.set(f.token, []);
