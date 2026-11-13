@@ -7,9 +7,10 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
-const { spawnSync } = require('node:child_process');
+const { spawn, spawnSync } = require('node:child_process');
 const { sha256 } = require('../lib/hash.js');
 const S = require('../lib/configuration-create-state.js');
+const { withAppBuildLease, buildLockName } = require('../lib/app-operation-lease.js');
 
 // The fixture kind table: the eight receipt kinds with the plan's closed field maps (public field name -> type) and the fixed names of
 // each kind's private inputs.
@@ -1032,6 +1033,243 @@ test('teardown and clearing are refused while any configuration create evidence 
   const unknown = ws();
   fs.writeFileSync(path.join(unknown, 'configuration-create-state.v2.json'), '{}');
   throwsCode(() => S.assertConfigurationCreateWorkspaceClearable(unknown, kt), 'configuration-create-workspace-in-use');
+});
+
+// ── Quarantine across processes ──────────────────────────────────────────────────────────────────────────────────────────────────────
+// The quarantine is safe among processes that hold the leases the build's quarantine command takes: the app's build lease around it and
+// the record lease inside it. These tests run each quarantine in its own OS process (helpers/configuration-quarantine-crash-child.js)
+// that holds the real leases and ends with no unwinding at a chosen file system step, and the next run is this process, which takes the
+// dead process's leases over through the production lease code, as the next command would. Nothing removes a lock file by hand.
+const CRASH_CHILD = path.join(__dirname, 'helpers', 'configuration-quarantine-crash-child.js');
+const CRASH_EXIT = 80;
+const QUARANTINE_APP = 'contoso_app';
+const CHILD_ENV = (() => { const env = { ...process.env }; delete env.NODE_TEST_CONTEXT; return env; })();
+const ARCHIVE_RE = /^configuration-create-state\.unreadable\.[0-9a-f-]{36}\.bin$/;
+
+function runQuarantineChild(input) {
+  return new Promise((resolve) => {
+    const arg = Buffer.from(JSON.stringify({ appUniqueName: QUARANTINE_APP, ...input })).toString('base64');
+    const child = spawn(process.execPath, [CRASH_CHILD, arg], { env: CHILD_ENV, windowsHide: true });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (d) => { stdout += d; });
+    child.stderr.on('data', (d) => { stderr += d; });
+    child.on('close', (status) => {
+      const last = stdout.trim().split('\n').pop();
+      let out = null;
+      try { out = JSON.parse(last); } catch { /* reported below */ }
+      resolve({ status, out, stderr, stdout });
+    });
+  });
+}
+// Runs `fn` over `items` with at most `size` at once; every item runs, and the first failure is thrown once all have settled.
+async function inPool(items, size, fn) {
+  const failures = [];
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const item = items[next++];
+      try { await fn(item); } catch (e) { failures.push(e); }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(size, items.length) }, worker));
+  if (failures.length > 0) throw failures[0];
+}
+const samePoint = (a, b) => a.fn === b.fn && a.phase === b.phase && JSON.stringify(a.labels) === JSON.stringify(b.labels);
+const describePoint = (p) => `${p.phase} ${p.fn}(${p.labels.join(', ')}) #${p.n}`;
+const lastLabel = (p) => p.labels[p.labels.length - 1];
+// The original bytes are in the workspace at the state file or at an installed archive name; a staged copy alone does not count.
+function originalSurvives(dir, original) {
+  return fs.readdirSync(dir).some((n) => (n === S.STATE_FILE || ARCHIVE_RE.test(n)) && fs.readFileSync(path.join(dir, n)).equals(original));
+}
+function snapshotFiles(dir) {
+  return Object.fromEntries(fs.readdirSync(dir).sort().map((n) => [n, fs.readFileSync(path.join(dir, n)).toString('base64')]));
+}
+async function crashAt(dir, original, input, expected) {
+  const run = await runQuarantineChild({ dir, ...input });
+  assert.equal(run.status, CRASH_EXIT, `the quarantine process did not stop at ${JSON.stringify(input)}: ${run.stdout}${run.stderr}`);
+  if (expected) assert.ok(samePoint(run.out.stopped, expected), `stopped at ${describePoint(run.out.stopped)}, not ${describePoint(expected)}`);
+  const where = describePoint(run.out.stopped);
+  assert.ok(originalSurvives(dir, original), `${where}: the original bytes survive the crash`);
+  assert.ok(fs.existsSync(path.join(dir, buildLockName(QUARANTINE_APP))), `${where}: the dead process still holds the build lease`);
+  assert.ok(fs.existsSync(path.join(dir, `${S.STATE_FILE}.lock`)), `${where}: the dead process still holds the record lease`);
+  return where;
+}
+// The next command: takes the build lease (over from the dead process), then quarantines.
+async function nextQuarantine(dir, quarantineId) {
+  const warnings = [];
+  try {
+    const out = await withAppBuildLease({ workspaceDir: dir, appUniqueName: QUARANTINE_APP, warn: (m) => warnings.push(m) },
+      () => S.quarantineUnreadableReceipt(dir, { acknowledgeUnknownDispatch: true, quarantineId, invalidate: OK_INVALIDATE }));
+    return { out, warnings };
+  } catch (error) {
+    return { error, warnings };
+  }
+}
+// What a person does after a crash: run the quarantine again; if it names an interrupted quarantine, finish that one by its id.
+async function recoverAfterCrash(dir, original, where) {
+  const first = await nextQuarantine(dir);
+  assert.ok(first.warnings.some((w) => w.startsWith(`released the build lock for '${QUARANTINE_APP}'`)), `${where}: the next run took over the dead build lease: ${first.warnings.join(' | ')}`);
+  if (!first.error) {
+    assert.equal(first.out.halt.code, 'configuration-create-reconciled');
+    return first.out.quarantineId;
+  }
+  const e = first.error;
+  assert.equal(e.name, 'ConfigurationCreateHalt', `${where}: ${e.stack}`);
+  assert.ok(originalSurvives(dir, original), `${where}: the original bytes survive the refused run`);
+  const named = /--quarantine-id ([0-9a-f-]{36})/.exec(e.nextStep || '');
+  if (!named) {
+    // The crash came after the last step that mattered: there is nothing left to quarantine.
+    assert.equal(e.code, 'configuration-create-approval-stale', `${where}: ${e.message}`);
+    const [q] = S.discoverConfigurationCreateState(dir, kt).quarantines;
+    return q && q.quarantineId;
+  }
+  assert.equal(e.code, 'configuration-create-state-invalid', `${where}: ${e.message}`);
+  const second = await nextQuarantine(dir, named[1]);
+  assert.ok(!second.error, `${where}: the continuation failed: ${second.error && second.error.message}`);
+  assert.equal(second.out.halt.code, 'configuration-create-reconciled');
+  return second.out.quarantineId;
+}
+// Finished: one deferred quarantine with the exact bytes, nothing blocking, and each installed file under one name. A crash can leave a
+// temporary or staged copy that discovery ignores; it is debris, not a quarantine name.
+function assertQuarantined(dir, id, original, where) {
+  assert.ok(id, `${where}: a quarantine finished`);
+  const found = S.discoverConfigurationCreateState(dir, kt);
+  assert.equal(found.blocking, false, `${where}: the workspace is not blocked`);
+  assert.deepEqual(found.quarantines, [{ quarantineId: id, status: 'valid', state: 'deferred', archive: true }], where);
+  assert.deepEqual(found.orphanArchives, [], `${where}: no archive without a marker`);
+  assert.ok(fs.readFileSync(archiveOf(dir, id)).equals(original), `${where}: the archive holds the original bytes`);
+  assert.equal(fs.lstatSync(markerOf(dir, id)).nlink, 1, `${where}: the marker has one name`);
+  assert.equal(fs.lstatSync(archiveOf(dir, id)).nlink, 1, `${where}: the archive has one name`);
+  assert.equal(fs.existsSync(stateFile(dir)), false, `${where}: the state file is gone`);
+}
+// The points a crash grid stops at: every `after` checkpoint, plus the `before` of the first (the process dies before it changes a file).
+const crashPoints = (trace) => [trace[0], ...trace.filter((p) => p.phase === 'after')];
+
+test('a quarantine process that dies at any file step leaves the bytes, and the next leased run finishes it', async () => {
+  const traced = ws();
+  const tracedOriginal = unreadable(traced);
+  const full = await runQuarantineChild({ dir: traced });
+  assert.equal(full.status, 0, full.stderr);
+  assert.equal(full.out.halt, 'configuration-create-reconciled', full.stdout);
+  assertQuarantined(traced, full.out.quarantineId, tracedOriginal, 'the uninterrupted run');
+  const { trace } = full.out;
+  // The grid must reach every install and removal the protocol makes, or it proves nothing.
+  for (const [fn, last] of [['linkSync', 'marker'], ['linkSync', 'archive'], ['unlinkSync', 'state'], ['renameSync', 'marker'], ['unlinkSync', 'marker-stage'], ['unlinkSync', 'archive-stage']]) {
+    assert.ok(trace.some((p) => p.phase === 'after' && p.fn === fn && lastLabel(p) === last), `the run reached ${fn}(${last}): ${trace.map(describePoint).join('; ')}`);
+  }
+  await inPool(crashPoints(trace), 4, async (point) => {
+    const dir = ws();
+    const original = unreadable(dir);
+    const where = await crashAt(dir, original, { stop: point.n }, point);
+    assertQuarantined(dir, await recoverAfterCrash(dir, original, where), original, where);
+  });
+});
+
+test('a continuation that dies at any file step is itself finished by the next leased run', async () => {
+  // The first quarantine dies right after it installs the marker, or right after it installs the archive; the continuation by its id then
+  // dies at each of its own steps.
+  for (const last of ['marker', 'archive']) {
+    const setUp = async () => {
+      const dir = ws();
+      const original = unreadable(dir);
+      await crashAt(dir, original, { stopMatch: { fn: 'linkSync', phase: 'after', last } });
+      const [q] = S.discoverConfigurationCreateState(dir, kt).quarantines;
+      assert.equal(q.state, 'archiving');
+      return { dir, original, id: q.quarantineId };
+    };
+    const traced = await setUp();
+    const full = await runQuarantineChild({ dir: traced.dir, quarantineId: traced.id });
+    assert.equal(full.out && full.out.halt, 'configuration-create-reconciled', `${last}: ${full.stdout}${full.stderr}`);
+    assertQuarantined(traced.dir, traced.id, traced.original, `the uninterrupted continuation after ${last}`);
+    const { trace } = full.out;
+    assert.ok(trace.some((p) => p.fn === 'unlinkSync' && lastLabel(p) === `${last}-stage`), `${last}: the continuation removed the staged name`);
+    assert.ok(trace.some((p) => p.fn === 'renameSync' && lastLabel(p) === 'marker'), `${last}: the continuation wrote the deferred marker`);
+    await inPool(crashPoints(trace), 4, async (point) => {
+      const { dir, original, id } = await setUp();
+      const where = `after ${last}, the continuation: ${await crashAt(dir, original, { quarantineId: id, stop: point.n }, point)}`;
+      const finished = await recoverAfterCrash(dir, original, where);
+      assert.equal(finished, id, `${where}: the same quarantine finished`);
+      assertQuarantined(dir, id, original, where);
+    });
+  }
+});
+
+// Starts a quarantine process that stops, holding both leases, right after it installs its marker; answers once it is there.
+async function pausedQuarantine(dir) {
+  const signals = ws();
+  const ready = path.join(signals, 'ready');
+  const release = path.join(signals, 'release');
+  const done = runQuarantineChild({ dir, pause: { match: { fn: 'linkSync', phase: 'after', last: 'marker' }, ready, release } });
+  let settled = null;
+  done.then((r) => { settled = r; });
+  const end = Date.now() + 60000;
+  while (!fs.existsSync(ready)) {
+    if (settled) assert.fail(`the quarantine process ended before it paused: ${settled.stdout}${settled.stderr}`);
+    if (Date.now() > end) assert.fail('the quarantine process never paused');
+    await new Promise((r) => setTimeout(r, 20));
+  }
+  return { done, release: () => fs.writeFileSync(release, 'go') };
+}
+
+test('a second quarantine is refused by a live build lease and waits on a live record lease, and neither touches the first one\'s files', async () => {
+  // Another build command: refused at once by the build lease, before the quarantine runs.
+  const dir = ws();
+  const original = unreadable(dir);
+  const first = await pausedQuarantine(dir);
+  let finished;
+  try {
+    const before = snapshotFiles(dir);
+    let ran = false;
+    await assert.rejects(withAppBuildLease({ workspaceDir: dir, appUniqueName: QUARANTINE_APP, warn() {} }, () => { ran = true; }), (e) => e.code === 'build-locked');
+    assert.equal(ran, false, 'the second quarantine never ran');
+    assert.deepEqual(snapshotFiles(dir), before, 'the refused run changed no file, lock files included');
+  } finally {
+    first.release();
+    finished = await first.done;
+  }
+  assert.equal(finished.out && finished.out.halt, 'configuration-create-reconciled', finished.stdout + finished.stderr);
+  assertQuarantined(dir, finished.out.quarantineId, original, 'the first quarantine');
+
+  // A quarantine that holds only the record lease: it waits while the first holds it, and then finds nothing left to quarantine.
+  const dir2 = ws();
+  const original2 = unreadable(dir2);
+  const holder = await pausedQuarantine(dir2);
+  let waits = 0;
+  let unchangedWhileHeld = null;
+  let invalidated = 0;
+  let second;
+  try {
+    const before = snapshotFiles(dir2);
+    second = (() => {
+      try {
+        return S.quarantineUnreadableReceipt(dir2, {
+          acknowledgeUnknownDispatch: true,
+          invalidate: () => { invalidated += 1; return { ok: true }; },
+          leaseDeps: {
+            attempts: 6000,
+            sleep(ms) {
+              waits += 1;
+              if (waits === 1) {
+                unchangedWhileHeld = JSON.stringify(snapshotFiles(dir2)) === JSON.stringify(before);
+                holder.release();
+              }
+              Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+            },
+          },
+        });
+      } catch (e) { return e; }
+    })();
+  } finally {
+    holder.release();
+  }
+  const held = await holder.done;
+  assert.ok(waits >= 1, 'the second quarantine waited for the record lease');
+  assert.equal(unchangedWhileHeld, true, 'the waiting quarantine changed no file while the first held the lease');
+  assert.equal(held.out && held.out.halt, 'configuration-create-reconciled', held.stdout + held.stderr);
+  assert.equal(second.code, 'configuration-create-approval-stale', second.message);
+  assert.equal(invalidated, 0, 'the second quarantine invalidated nothing');
+  assertQuarantined(dir2, held.out.quarantineId, original2, 'the first quarantine');
 });
 
 // ── Privacy ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
