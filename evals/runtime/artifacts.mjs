@@ -7,7 +7,7 @@ import { inspectDocument, inspectSite } from './browser-checks.mjs';
 import { buildSite } from './site-build.mjs';
 
 const textFields = ['requiredText', 'forbiddenText', 'requiredPatterns', 'forbiddenPatterns', 'minTextLength'];
-const fileFields = ['path', 'type', ...textFields, 'headings', 'requiredKeys', 'diagram', 'responsive'];
+const fileFields = ['path', 'type', ...textFields, 'headings', 'requiredKeys', 'requiredValues', 'diagram', 'responsive'];
 
 function strings(value, label) {
   if (!Array.isArray(value) || value.some(item => typeof item !== 'string' || !item.trim())) {
@@ -47,6 +47,14 @@ export function validateContract(contract) {
     }
     validateText(file);
     for (const key of ['headings', 'requiredKeys']) if (file[key] !== undefined) strings(file[key], key);
+    if (file.requiredValues !== undefined) {
+      if (file.type !== 'json') throw new Error('requiredValues requires a JSON artifact');
+      assertObject(file.requiredValues, 'requiredValues');
+      if (!Object.keys(file.requiredValues).length || Object.values(file.requiredValues).some(value =>
+        value !== null && !['string', 'number', 'boolean'].includes(typeof value))) {
+        throw new Error('requiredValues must contain scalar top-level values');
+      }
+    }
     if (file.diagram !== undefined) {
       assertKeys(file.diagram, ['entities', 'relationships'], 'diagram');
       if (file.type !== 'html') throw new Error('ER diagram checks require an HTML artifact');
@@ -70,7 +78,7 @@ export function validateContract(contract) {
       }
     }
     if (!textFields.some(key => file[key] !== undefined) &&
-        !file.headings?.length && !file.requiredKeys?.length && !file.diagram) {
+        !file.headings?.length && !file.requiredKeys?.length && !file.requiredValues && !file.diagram) {
       throw new Error(`Artifact ${file.path} needs more than an existence check`);
     }
   }
@@ -219,6 +227,11 @@ export async function gradeArtifacts({ contract, workDir, suiteDir, output = '',
         for (const part of key.split('.')) current = current && Object.hasOwn(current, part) ? current[part] : undefined;
         add(`${spec.path}: has ${key}`, current !== undefined);
       }
+      for (const [key, expected] of Object.entries(spec.requiredValues ?? {})) {
+        add(`${spec.path}: ${key} equals ${JSON.stringify(expected)}`,
+          data !== null && typeof data === 'object' && !Array.isArray(data) &&
+          Object.hasOwn(data, key) && data[key] === expected);
+      }
     }
     if (spec.type !== 'html') {
       textChecks(source, spec, add, spec.path);
@@ -314,9 +327,17 @@ export function registerArtifactGrader(registry) {
   });
 }
 
-export function stripExternalSources(html) {
+export function stripExternalSources(html, relativeFile) {
   for (const node of nodes(html.tree)) {
-    if (node.tagName === 'base' || (node.tagName === 'script' && attr(node, 'src')) ||
+    let remoteScript = false;
+    if (node.tagName === 'script' && attr(node, 'src')) {
+      try {
+        remoteScript = new URL(attr(node, 'src'), `https://eval.invalid/${relativeFile}`).origin !== 'https://eval.invalid';
+      } catch {
+        remoteScript = true;
+      }
+    }
+    if (node.tagName === 'base' || remoteScript ||
         (node.tagName === 'meta' && /content-security-policy|refresh/i.test(attr(node, 'http-equiv') ?? ''))) {
       if (node.parentNode) node.parentNode.childNodes = node.parentNode.childNodes.filter(child => child !== node);
     }

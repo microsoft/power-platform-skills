@@ -9,14 +9,12 @@
         "tax",
         "total"
       ],
-      "requiredText": [
-        "GBP"
-      ],
-      "requiredPatterns": [
-        "\"subtotal\"\\s*:\\s*15(?:\\.0+)?\\s*[,}]",
-        "\"tax\"\\s*:\\s*3(?:\\.0+)?\\s*[,}]",
-        "\"total\"\\s*:\\s*18(?:\\.0+)?\\s*[,}]"
-      ]
+      "requiredValues": {
+        "currency": "GBP",
+        "subtotal": 15,
+        "tax": 3,
+        "total": 18
+      }
     }
   ],
   "unchanged": [

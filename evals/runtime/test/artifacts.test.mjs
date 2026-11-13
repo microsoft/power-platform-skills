@@ -93,6 +93,38 @@ test('rendered tabs are read rather than grading only the initial pane', async t
   assert.equal(result.passed, true, result.evidence);
 });
 
+test('workspace scripts render report content and their runtime errors fail the grade', async t => {
+  const root = await workspace(t);
+  await writeFile(path.join(root, 'docs/report.html'), document('<h1>Plan</h1><main id="plan"></main><script src="./report.js"></script>'));
+  const contract = { files: [{ path: 'docs/report.html', type: 'html', requiredText: ['Local report content'] }] };
+  await writeFile(path.join(root, 'docs/report.js'), "document.querySelector('#plan').textContent = 'Local report content';");
+  let result = await gradeArtifacts({ contract, workDir: root, suiteDir: root });
+  assert.equal(result.passed, true, result.evidence);
+  await writeFile(path.join(root, 'docs/report.js'), "document.querySelector('#plan').textContent = 'Local report content'; throw new Error('broken');");
+  result = await gradeArtifacts({ contract, workDir: root, suiteDir: root });
+  assert.equal(result.passed, false);
+  assert.match(result.evidence, /document scripts run without errors/);
+});
+
+test('nested disclosures in reports without tabs expose their content and headings', async t => {
+  const root = await workspace(t);
+  await writeFile(path.join(root, 'docs/report.html'), document(`
+    <nav><button aria-expanded="false" onclick="document.getElementById('menu').hidden=false">Menu</button>
+    <p id="menu" hidden>Navigation menu opened.</p></nav>
+    <h1>Plan</h1><details><summary>More</summary><details><summary>Details</summary>
+    <h2>Rollback</h2><p>Restore the exported source after approval.</p></details></details>
+    <button aria-expanded="false" onclick="this.setAttribute('aria-expanded','true'); document.getElementById('outer').hidden=false">Security</button>
+    <section id="outer" hidden>
+      <button aria-expanded="false" onclick="this.setAttribute('aria-expanded','true'); document.getElementById('inner').hidden=false">Access</button>
+      <p id="inner" hidden>Confirm least privilege before deployment.</p>
+    </section>`));
+  const result = await gradeArtifacts({
+    contract: { files: [{ path: 'docs/report.html', type: 'html', requiredText: ['Restore the exported source', 'Confirm least privilege'], forbiddenText: ['Navigation menu opened'], headings: ['Rollback'] }] },
+    workDir: root, suiteDir: root,
+  });
+  assert.equal(result.passed, true, result.evidence);
+});
+
 test('unfilled renderer tokens and script errors still fail report artifacts', async t => {
   const root = await workspace(t);
   for (const body of [
@@ -154,7 +186,7 @@ test('document JavaScript cannot contact even a listening local endpoint', async
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   t.after(() => new Promise(resolve => server.close(resolve)));
   const endpoint = `http://127.0.0.1:${server.address().port}/probe`;
-  await writeFile(path.join(root, 'docs/report.html'), document(`<h1>Offline plan</h1><p>Approval required.</p><img src="${endpoint}" alt="Blocked external image"><script>fetch(${JSON.stringify(endpoint)}).catch(()=>{});</script>`));
+  await writeFile(path.join(root, 'docs/report.html'), document(`<h1>Offline plan</h1><p>Approval required.</p><img src="${endpoint}" alt="Blocked external image"><script src="${endpoint}"></script><script>fetch(${JSON.stringify(endpoint)}).catch(()=>{});</script>`));
   const result = await gradeArtifacts({
     contract: { files: [{ path: 'docs/report.html', type: 'html', requiredText: ['Approval required'] }] },
     workDir: root, suiteDir: root,
@@ -184,6 +216,27 @@ test('JSON/YAML parsing, preservation, and absence checks do not silently pass m
   assert.equal(result.details.filter(check => !check.passed).length, 5);
 });
 
+test('purchase contracts require correct top-level numeric amounts', async t => {
+  const root = await workspace(t);
+  await mkdir(path.join(root, 'inputs'));
+  await mkdir(path.join(root, 'results'));
+  for (const skill of ['create-site', 'setup-auth']) {
+    const suiteDir = path.resolve(import.meta.dirname, `../../power-pages/${skill}`);
+    const contract = JSON.parse(await readFile(path.join(suiteDir, 'checks/stationery-purchase-dormancy.json'), 'utf8'));
+    await writeFile(path.join(root, 'inputs/purchase.json'), await readFile(path.join(suiteDir, 'fixtures/purchase.json')));
+    for (const [data, expected] of [
+      [{ currency: 'GBP', subtotal: 15, tax: 3, total: 18 }, true],
+      [{ currency: 'GBP', subtotal: 1, tax: 2, total: 3, nested: { subtotal: 15, tax: 3, total: 18 } }, false],
+      [{ currency: 'USD', subtotal: 15, tax: 3, total: 18, nested: { currency: 'GBP' } }, false],
+      [{ currency: 'GBP', subtotal: '15', tax: 3, total: 18 }, false],
+    ]) {
+      await writeFile(path.join(root, 'results/purchase.json'), JSON.stringify(data));
+      const result = await gradeArtifacts({ contract, workDir: root, suiteDir: suiteDir });
+      assert.equal(result.passed, expected, `${skill}: ${JSON.stringify(data)}: ${result.evidence}`);
+    }
+  }
+});
+
 test('contracts reject unknown fields, vacuous checks, invalid regexes, and traversal', () => {
   for (const contract of [
     {}, { output: {} }, { file: [] },
@@ -207,6 +260,10 @@ async function reactSite(root, bookingMarkup) {
   const site = path.join(root, 'site');
   await mkdir(path.join(site, 'src'), { recursive: true });
   await writeFile(path.join(site, 'package.json'), JSON.stringify({ name: 'contoso', private: true, type: 'module' }));
+  await writeFile(path.join(site, 'tsconfig.json'), JSON.stringify({
+    compilerOptions: { allowJs: true, noEmit: true, jsx: 'react-jsx', module: 'ESNext', moduleResolution: 'bundler', target: 'ES2020', skipLibCheck: true },
+    include: ['src'],
+  }));
   // A hostile config must never run: Vite is invoked with configFile:false.
   await writeFile(path.join(site, 'vite.config.js'), "require('fs').writeFileSync('pwned', '1'); export default {}");
   await writeFile(path.join(site, 'index.html'), '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Contoso Repairs</title></head><body><div id="root"></div><script type="module" src="/src/main.jsx"></script></body></html>');
@@ -241,4 +298,21 @@ test('generated React sites are built offline and every route must fit phone and
   const broken = await gradeArtifacts({ contract: siteContract, workDir: unbuildable, suiteDir: unbuildable });
   assert.equal(broken.passed, false);
   assert.match(broken.evidence, /site: builds offline: .*left-pad/s);
+});
+
+test('generated sites reject evaluator-only imports and TypeScript errors', async t => {
+  for (const [label, filename, source, diagnostic] of [
+    ['JavaScript import', 'check.js', "import { parse } from 'yaml'; console.log(parse('key: value'));", /yaml/],
+    ['TypeScript import', 'check.ts', "import { parse } from 'yaml'; console.log(parse('key: value'));", /TS2307.*yaml/],
+    ['TypeScript error', 'check.ts', 'const value: number = "not a number"; console.log(value);', /TS2322/],
+  ]) {
+    const root = await workspace(t);
+    await reactSite(root, '<p>Booking</p>');
+    const entry = path.join(root, 'site/src/main.jsx');
+    await writeFile(path.join(root, 'site/src', filename), source);
+    await writeFile(entry, `import './${filename}';\n${await readFile(entry, 'utf8')}`);
+    const result = await gradeArtifacts({ contract: siteContract, workDir: root, suiteDir: root });
+    assert.equal(result.passed, false, `${label} was accepted by the offline build`);
+    assert.match(result.evidence, diagnostic);
+  }
 });

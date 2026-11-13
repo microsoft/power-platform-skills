@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { cp, mkdtemp, realpath, rm, stat, symlink } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readFile, realpath, rm, stat, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -9,10 +9,9 @@ import { confinedPath } from './paths.mjs';
 const execFileAsync = promisify(execFile);
 const runtimeDir = path.dirname(fileURLToPath(import.meta.url));
 
-// Offline trials cannot install packages, so the evaluator compiles a generated
-// React site against the runtime's pinned copies of the create-site template
-// dependencies (react, react-dom, react-router-dom, vite, @vitejs/plugin-react).
-// An import outside that set fails the build, which is a genuine site failure.
+// Offline trials cannot install packages, so expose only the create-site
+// template's pinned dependencies to the generated project. Each dependency's
+// own imports resolve from the runtime's complete dependency tree.
 export async function buildSite({ workDir, root, signal, timeout = 120_000 }) {
   const source = await confinedPath(workDir, root);
   if (!(await stat(source)).isDirectory()) return { ok: false, error: `${root} is not a directory` };
@@ -28,22 +27,31 @@ export async function buildSite({ workDir, root, signal, timeout = 120_000 }) {
       recursive: true, dereference: false, verbatimSymlinks: true,
       filter: name => !['node_modules', 'dist'].includes(path.basename(name)),
     });
-    // Windows creates directory symlinks only with Developer Mode or elevation;
-    // a junction needs neither. Other platforms ignore the type argument.
-    await symlink(path.join(runtimeDir, 'node_modules'), path.join(project, 'node_modules'), 'junction');
-    await execFileAsync(process.execPath, [path.join(runtimeDir, 'site-build-child.mjs'), project, outDir], {
+    const templatePath = path.join(runtimeDir, '../../plugins/power-pages/skills/create-site/assets/react/package.json');
+    const template = JSON.parse(await readFile(templatePath, 'utf8'));
+    for (const name of Object.keys({ ...template.dependencies, ...template.devDependencies })) {
+      const target = path.join(project, 'node_modules', name);
+      await mkdir(path.dirname(target), { recursive: true });
+      // Windows junctions do not require Developer Mode or elevation.
+      await symlink(path.join(runtimeDir, 'node_modules', name), target, 'junction');
+    }
+    const options = {
       cwd: project, timeout, signal, maxBuffer: 2_000_000, windowsHide: true,
       env: {
         PATH: process.env.PATH ?? '', NODE_ENV: 'production',
         ...Object.fromEntries(['SystemRoot', 'WINDIR', 'TEMP', 'TMP', 'TMPDIR']
           .filter(key => process.env[key]).map(key => [key, process.env[key]])),
       },
-    });
+    };
+    // The React template's build runs tsc before Vite. Call the pinned compiler
+    // directly rather than running scripts from the generated package.json.
+    await execFileAsync(process.execPath, [path.join(runtimeDir, 'node_modules/typescript/bin/tsc'), '-b'], options);
+    await execFileAsync(process.execPath, [path.join(runtimeDir, 'site-build-child.mjs'), project, outDir], options);
     return { ok: true, distDir: outDir, cleanup };
   } catch (error) {
     await cleanup();
     if (signal?.aborted) throw error;
-    const detail = String(error.stderr || error.message).split('\n')
+    const detail = String(error.stderr || error.stdout || error.message).split('\n')
       .filter(line => line.trim() && !/^\s+at |triggerUncaughtException|^\s*\^\s*$|^node:internal/.test(line))
       .slice(0, 8).join('\n');
     return { ok: false, error: detail };

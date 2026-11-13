@@ -63,8 +63,12 @@ const parameters = properties => ({
   type: 'object', properties, required: Object.keys(properties), additionalProperties: false,
 });
 const string = { type: 'string' };
-const blockedResource = name => name.split('/').some(part =>
-  ['SKILL.md', 'AGENTS.md', 'CLAUDE.md', '.git', '.copilot', '.claude', 'node_modules'].includes(part));
+const blockedResource = name => name.split('/').some(part => {
+  // Windows treats trailing dots/spaces and stream suffixes as aliases of the
+  // same file, and commonly uses case-insensitive names.
+  const canonical = part.split(':', 1)[0].replace(/[. ]+$/, '').toLowerCase();
+  return ['skill.md', 'agents.md', 'claude.md', '.git', '.copilot', '.claude', 'node_modules'].includes(canonical);
+});
 
 export function createOfflineTools(workDir, pluginRoot) {
   const runLocal = async (scriptName, args, signal) => {

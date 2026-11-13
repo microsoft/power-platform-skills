@@ -37,7 +37,7 @@ export async function closeBrowser() {
 }
 
 const mime = name => ({
-  '.html': 'text/html', '.css': 'text/css', '.js': 'application/javascript',
+  '.html': 'text/html', '.css': 'text/css', '.js': 'application/javascript', '.mjs': 'application/javascript',
   '.json': 'application/json', '.png': 'image/png', '.svg': 'image/svg+xml',
   '.jpg': 'image/jpeg', '.woff2': 'font/woff2',
 })[path.extname(name)] ?? 'application/octet-stream';
@@ -60,12 +60,12 @@ export async function inspectDocument({ html, workDir, relativeFile, diagram, re
     const runtimeErrors = [];
     page.on('pageerror', error => runtimeErrors.push(error.message));
     const mermaidSource = await readFile(mermaidScript, 'utf8');
-    // Use the real document, including its inline render logic, with external
-    // script tags removed. The trusted pinned Mermaid replaces the CDN version.
+    // Keep workspace scripts behind the confined request handler; remote scripts
+    // are removed and the trusted pinned Mermaid replaces the CDN version.
     const { stripExternalSources } = await import('./artifacts.mjs');
     // Load the UMD bundle as a classic script: Playwright init scripts isolate
     // top-level vars, but Mermaid's UMD footer reads them from globalThis.
-    const source = stripExternalSources(html).replace(/<head(?:\s[^>]*)?>/, '$&<script src="/.eval-runtime/mermaid.js"></script><script>mermaid.initialize({startOnLoad:false,securityLevel:"strict"});</script>');
+    const source = stripExternalSources(html, relativeFile).replace(/<head(?:\s[^>]*)?>/, '$&<script src="/.eval-runtime/mermaid.js"></script><script>mermaid.initialize({startOnLoad:false,securityLevel:"strict"});</script>');
     await context.route('**/*', async route => {
       const url = new URL(route.request().url());
       if (url.href === `https://eval.invalid/${relativeFile}` && route.request().isNavigationRequest()) {
@@ -95,12 +95,15 @@ export async function inspectDocument({ html, workDir, relativeFile, diagram, re
       for (const heading of visibleHeadings) headings.add(heading.trim());
     };
     const expandDetails = async () => {
-      const expanders = page.locator('button#expandAllBtn, button[data-action="expand-all"], button[aria-expanded="false"]');
-      const count = await expanders.count();
-      for (let index = count - 1; index >= 0; index--) {
-        if (await expanders.nth(index).isVisible()) await expanders.nth(index).click();
+      await page.locator('details:not([open])').evaluateAll(elements => elements.forEach(element => { element.open = true; }));
+      const expanders = await page.locator('button#expandAllBtn, button[data-action="expand-all"], button[aria-expanded="false"]:not([role="tab"]):not([data-tab]):not(.tab-btn):not(.tab-button):not([aria-haspopup]):not(nav button)').elementHandles();
+      for (const button of expanders) {
+        if (await button.isVisible() && await button.getAttribute('aria-expanded') !== 'true') await button.click();
       }
+      await page.locator('details:not([open])').evaluateAll(elements => elements.forEach(element => { element.open = true; }));
     };
+    await captureContent();
+    await expandDetails();
     await captureContent();
     const tabs = page.locator('button[data-tab], button[role="tab"], button.tab-btn, button.tab-button');
     const tabCount = await tabs.count();

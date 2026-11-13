@@ -26,6 +26,10 @@ test('file tools enforce workspace containment and hide every skill from baselin
   }
   await assert.rejects(() => tool(tools, 'eval_read')({ root: 'plugin', path: 'skills/setup-auth/SKILL.md' }), /skill catalog/);
   await assert.rejects(() => tool(tools, 'eval_read')({ root: 'plugin', path: 'AGENTS.md' }), /skill catalog/);
+  for (const name of ['skills/setup-auth/skill.md', 'agents.md', 'skills/setup-auth/Skill.Md',
+    'skills/setup-auth/SKILL.md.', 'skills/setup-auth/SKILL.md::$DATA']) {
+    await assert.rejects(() => tool(tools, 'eval_read')({ root: 'plugin', path: name }), /skill catalog/);
+  }
   await assert.rejects(() => tool(tools, 'eval_render')({ renderer: 'deploy-site', data: 'x', output: 'y.html' }), /allowlisted/);
   const listed = await tool(tools, 'eval_list')({ root: 'plugin', path: 'skills/setup-auth' });
   assert.ok(!listed.some(entry => entry.name === 'SKILL.md'));
