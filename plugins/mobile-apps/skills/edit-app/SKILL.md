@@ -941,8 +941,8 @@ from `check-dataverse-query-support.js --project-root '<working_dir>'` and gate
 the required features as specified in `shared/references/data-performance.md`.
 Do not reinterpret this as a migration: preserve unrelated existing queries,
 computed columns, and refresh owners. A stale service or SDK is a prerequisite
-to resolve through `/check-updates` and an explicitly requested retained-source
-refresh, not permission to hand-edit generated files or rewrite the whole app.
+to report through the manual guidance in `data-performance.md`, not permission
+to invoke updates/refreshes, hand-edit generated files, or rewrite the whole app.
 
 Mark still-present services in the approved removal set as retiring: builders
 must not introduce or retain dependencies on them. Refresh this snapshot again

@@ -432,10 +432,18 @@ code, so this audit never proposes generated formula metadata.
   missing, return `NEEDS_CONTEXT: canonical-screen-specs` so the foreground
   restores that handoff; do not report zero related fields from a graph alone.
   Only legacy default-mode callers may use `_screens_section.md` when it
-  actually contains per-screen specs. Walk every spec and collect every
-  `related_entity_fields` block.
+  actually contains per-screen specs. Walk every spec and collect both its
+  `related_entity_fields` and its apply/getSavedQuery Data contracts.
 
-2. **Per entry, branch on `recommends`:**
+2. **Audit Data contracts independently.** Before iterating related fields,
+   validate every apply and saved-view query, including queries on the primary
+   table. Verify source/group keys or table/view identity, result aliases and
+   nullability, row identity, bounds, capabilities, and paging mode against
+   `data-performance.md`. Record one query row per consuming screen/contract
+   even when `related_entity_fields` is absent. Existing computed/business
+   columns remain read-only dependencies, not replacements for raw related values.
+
+3. **Per related entry, branch on `recommends`:**
 
    - **`recommends: formatted-lookup`** — verify the source is the primary
      display name of a direct lookup. Create no column.
@@ -457,12 +465,7 @@ code, so this audit never proposes generated formula metadata.
      implementation until a supported query or existing server-owned projection
      is approved. Do not silently drop the field.
 
-   Audit grouped apply and saved-view contracts in the screen Data entries too:
-   validate source/group keys or table/view identity, result fields, and the
-   correct paging mode. Existing computed/business columns remain read-only
-   dependencies; do not reinterpret a calculation as a raw expanded value.
-
-3. **De-duplicate.** Collapse identical source/resolution pairs and track all
+4. **De-duplicate.** Collapse identical source/resolution pairs and query contracts, and track all
    consuming screens.
 
 5. **Emit the addendum.** Write the `### Cross-entity Reads (auto-derived from screen plan)` subsection of `_dm_section.md`. Schema:
@@ -475,11 +478,14 @@ code, so this audit never proposes generated formula metadata.
    | Flight | formatted-lookup | cr3e9_flightid primary display | inspections list |
    | Inspector email | chained-fetch | _ownerid_value → systemuser.internalemailaddress | inspection detail |
    | Gate code | expand (online; verify generated service) | verified flight → gate navigation path; cr3e9_code | home |
+   | Account total (primary-table query) | apply | approved account aggregate and result alias | dashboard |
    ```
 
    In `mode: default` (Step 6a runs because `_screens_section.md` was found), append this subsection to the Step 7 output. In `mode: cross-entity-audit`, append it directly to the existing `_dm_section.md` (read it, append the subsection AFTER `### Notes` if present, otherwise at the end, then write back) and skip Step 7 entirely — return immediately.
 
-6. **No `related_entity_fields` blocks anywhere?** That is a valid outcome: every screen reads only its primary entity. Skip the addendum entirely; do not write an empty subsection.
+6. **Nothing to audit?** Skip the addendum only when both the related-field list
+   and the specialized Data-contract list are empty. A primary-table aggregate
+   or saved view still needs the Step 2 audit and its query row.
 
 ## Step 7 — Produce the `## Data Model` Section
 

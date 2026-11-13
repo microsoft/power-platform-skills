@@ -8,6 +8,7 @@ const { spawnSync } = require('node:child_process');
 const test = require('node:test');
 const { checkQuerySupport, supportsRelease } = require('../check-dataverse-query-support');
 const { findCursorViolations } = require('../../hooks/validate-dataverse-heavy-lists');
+const { topLevelKeys, findServerManagedCreatePayload } = require('../../hooks/validate-dataverse-payload');
 
 const pluginRoot = path.resolve(__dirname, '../..');
 
@@ -49,11 +50,11 @@ export class ContactsService {
   return { root, write };
 }
 
-test('only verified stable release lines enable SDK queries', () => {
-  for (const version of ['1.6.0', '1.6.1', '1.7.0', '1.6.0+build']) {
+test('stable SDKs meeting the feature minimum are not capped to one major', () => {
+  for (const version of ['1.6.0', '1.6.1', '1.7.0', '2.0.0', '1.6.0+build']) {
     assert.equal(supportsRelease(version, '1.6.0'), true, version);
   }
-  for (const version of [null, '', '^1.6.0', '1.5.0', '1.6.0-beta.1', '2.0.0', 'not-a-version']) {
+  for (const version of [null, '', '^1.6.0', '1.5.0', '1.6.0-beta.1', 'not-a-version']) {
     assert.equal(supportsRelease(version, '1.6.0'), false, String(version));
   }
 });
@@ -76,7 +77,22 @@ test('installed SDK, not a newer declared range, determines support', (t) => {
     assert.equal(report.sdkSupported, false);
     assert.equal(report.services[0].generated.expand, true);
     assert.equal(report.services[0].supported.expand, false);
+    assert.match(report.messages.join(' '), /manually/);
   }
+});
+
+test('older SDK diagnostics only explain prerequisites and leave app files unchanged', (t) => {
+  const { root } = fixture(t, { sdk: '1.5.0' });
+  const files = ['package.json', 'power.config.json', 'src/generated/services/ContactsService.ts'];
+  const before = files.map(file => fs.readFileSync(path.join(root, file)));
+  const result = spawnSync(process.execPath, [
+    path.join(pluginRoot, 'scripts/check-dataverse-query-support.js'),
+    '--project-root', root, '--table', 'contact', '--require', 'expand',
+  ], { encoding: 'utf8' });
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /SDK 1\.6\.0 or newer/);
+  assert.match(result.stderr, /No project files were changed/);
+  files.forEach((file, index) => assert.deepEqual(fs.readFileSync(path.join(root, file)), before[index]));
 });
 
 test('SDK upgrade does not hide stale services or mutate customer files', (t) => {
@@ -163,6 +179,23 @@ test('a separate aggregate cannot exempt an ordinary list from selection/order c
   assert.match(issues, /deterministic `orderBy`/);
 });
 
+test('comments before aggregate keys or colons do not create ordinary-list requirements', () => {
+  for (const comment of ['// Ignore { braces, ownerid: 1 }\n', '/* Ignore { braces, ownerid: 1 } */']) {
+    const options = `${comment} apply /* query */: 'aggregate($count as total)',
+      maxPageSize: pageSize, skipToken: skipToken`;
+    assert.deepEqual(topLevelKeys(options), ['apply', 'maxPageSize', 'skipToken']);
+    assert.deepEqual(findCursorViolations(`
+      useCursorListData<Total>({
+        fetchPage: ({ pageSize, skipToken }) => AccountsService.getAll<Total>({ ${options} }),
+      });
+    `), []);
+  }
+  assert.deepEqual(topLevelKeys("filter: 'contains(name, \\'// /*\\')', /* comment */ select: ['name']"),
+    ['filter', 'select']);
+  const violations = findServerManagedCreatePayload("AccountsService.create({ /* comment */ ownerid: 'bad' })");
+  assert.equal(violations[0].key, 'ownerid');
+});
+
 test('importing the shared Dataverse parser does not register a second stdin hook', () => {
   const result = spawnSync(process.execPath, ['-e', `
     const before = process.stdin.listenerCount('end');
@@ -172,13 +205,15 @@ test('importing the shared Dataverse parser does not register a second stdin hoo
   assert.equal(result.status, 0, result.stderr);
 });
 
-test('query-specific updates guide refresh without introducing an app migration', () => {
+test('query guidance preserves the base release workflow and leaves refresh manual', () => {
   const skill = fs.readFileSync(path.join(pluginRoot, 'skills/check-updates/SKILL.md'), 'utf8');
-  assert.match(skill, /scope\s+updates to `@microsoft\/power-apps` and `@microsoft\/power-apps-cli`/);
-  assert.match(skill, /Do not execute these refresh commands/);
-  assert.match(skill, /already current or updates were skipped/);
-  assert.match(skill, /query adoption not\s+performed/);
-  assert.match(skill, /There is no app migration/);
+  assert.match(skill, /Offer A Coordinated Native Release Or Host Repair/);
+  assert.match(skill, /Do not execute data-source\s+refreshes/);
+  assert.match(skill, /does not bypass the coordinated release\/approval rules/);
+  assert.doesNotMatch(skill, /scope\s+updates to `@microsoft\/power-apps` and `@microsoft\/power-apps-cli`/);
+  const reference = fs.readFileSync(path.join(pluginRoot, 'shared/references/data-performance.md'), 'utf8');
+  assert.match(reference, /never\s+installs packages, starts `\/check-updates`, refreshes sources/);
+  assert.match(reference, /manual guidance, not an instruction for the agent to execute/);
 });
 
 test('all query-producing surfaces reference the shared contract or capability checker', () => {
@@ -216,4 +251,20 @@ test('related-field resolutions represent aggregate and saved-view projections e
     assert.ok(architect.includes(`recommends: ${feature}`));
     assert.ok(builder.includes(`| \`${feature}\` |`));
   }
+});
+
+test('primary-table aggregate and saved-view contracts cannot skip the query audit', () => {
+  const planner = fs.readFileSync(path.join(pluginRoot, 'agents/native-app-planner.md'), 'utf8');
+  const architect = fs.readFileSync(path.join(pluginRoot, 'agents/data-model-architect.md'), 'utf8');
+  const start = planner.indexOf('### Step 5c —');
+  const end = planner.indexOf('\n## ', start);
+  assert.ok(start >= 0 && end > start);
+  const audit = planner.slice(start, end);
+  assert.match(audit, /or an `apply`\/`getSavedQuery` Data contract/);
+  assert.match(audit, /skip.*only when all three are\s+absent/i);
+  assert.match(audit, /Independently validate every apply\/getSavedQuery Data contract/);
+  assert.doesNotMatch(audit, /If no `related_entity_fields` blocks exist, return/);
+  assert.ok(architect.indexOf('**Audit Data contracts independently.**')
+    < architect.indexOf('**Per related entry, branch'));
+  assert.match(architect, /both the related-field list\s+and the specialized Data-contract list are empty/);
 });

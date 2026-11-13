@@ -1297,7 +1297,8 @@ node "${PLUGIN_ROOT}/scripts/check-dataverse-query-support.js" \
 not all features for every table. Read fresh relationship navigation metadata
 after creating a relationship; never guess its navigation name. An unsupported
 existing service is not permission to refresh outside approved scope: direct
-the user to `/check-updates` and the retained-source refresh workflow.
+the user to the manual prerequisite message in `data-performance.md`.
+Do not invoke package updates or refresh sources merely to enable a query.
 Keep existing app queries and server columns unchanged.
 
 ### Step 6b — Publish customizations

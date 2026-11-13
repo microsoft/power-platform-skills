@@ -357,9 +357,10 @@ Once Gate 1 selects Dataverse, before screen/data planning, run the read-only
 '<working_dir>'`. Pass its installed SDK/generator facts to the planner and
 architect. An empty service list is expected before generation; do not confuse
 that with SDK availability. The later generated-services gate verifies each
-planned query. If the required SDK/generator is unavailable, ask the user to
-use `/check-updates`; do not install packages or invent a calculated-column
-workaround during planning.
+planned query. If a requested query is unavailable, show the manual prerequisite
+message from `data-performance.md` and block only that unsupported feature.
+Do not invoke `/check-updates`, install packages, refresh sources, or invent a
+calculated-column workaround during query planning.
 
 Capture target Power Platform environment for the remaining flow.
 
