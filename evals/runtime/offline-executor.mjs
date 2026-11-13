@@ -269,8 +269,6 @@ export class OfflineExecutor {
     try {
       await client.start();
       const models = await client.listModels();
-      const opus = models.find(item => item.id === 'claude-opus-5');
-      console.error(`Opus 5 catalog status: ${!opus ? 'missing' : opus.policy?.state === 'disabled' ? 'disabled' : 'present'}`);
       assertModelSupport(models, options.model, options.reasoningEffort ?? 'medium');
       if (this.judgeModel) assertModelSupport(models, this.judgeModel, this.judgeReasoningEffort);
       session = await client.createSession({
