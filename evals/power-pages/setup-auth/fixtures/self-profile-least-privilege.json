@@ -1,0 +1,21 @@
+{
+  "siteName": "Contoso Members",
+  "framework": "React",
+  "profilePage": true,
+  "role": "Authenticated Users",
+  "table": "contact",
+  "editableFields": [
+    "firstname",
+    "lastname",
+    "jobtitle",
+    "mobilephone",
+    "telephone1",
+    "fax",
+    "websiteurl",
+    "nickname"
+  ],
+  "readOnlyFields": [
+    "emailaddress1"
+  ],
+  "profileRedirectEnabled": false
+}

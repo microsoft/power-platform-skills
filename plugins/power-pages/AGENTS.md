@@ -9,6 +9,11 @@ native metadata, Liquid, Bootstrap, and Design Studio-compatible content.
 
 Read `PLUGIN_DEVELOPMENT_GUIDE.md` for UX and reliability standards when creating new skills and agents.
 
+For skill-quality cases, document/ER graders, or evaluation results, read [`../../evals/README.md`](../../evals/README.md) in the repository checkout.
+Add offline Vally suites under `evals/power-pages/<skill>/` as individual skills are improved; coverage is incremental.
+Use synthetic fixtures and contained local artifacts; live environment access is outside these evaluations.
+Production plugin installs do not include the repository's evaluation runtime.
+
 ## Non-SPA creation and shared design quality
 
 `scripts/telemetry-config.js` delegates preference changes to the bundled shared CLI and adds the non-SPA creation disclosure.

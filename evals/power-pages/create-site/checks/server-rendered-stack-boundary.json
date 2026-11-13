@@ -1,0 +1,28 @@
+{
+  "files": [
+    {
+      "path": "docs/server-rendered-stack-boundary.md",
+      "type": "text",
+      "requiredText": [
+        "Next.js",
+        "Power Pages",
+        "Contoso Academy"
+      ],
+      "requiredPatterns": [
+        "not support|unsupported|cannot host|static",
+        "React|Vue|Angular|Astro"
+      ],
+      "minTextLength": 200
+    }
+  ],
+  "unchanged": [
+    {
+      "path": "inputs/server-rendered-stack-boundary.json",
+      "source": "fixtures/server-rendered-stack-boundary.json"
+    }
+  ],
+  "absent": [
+    "package.json",
+    "next.config.js"
+  ]
+}

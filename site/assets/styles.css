@@ -469,6 +469,11 @@ code {
   color: var(--color-primary);
 }
 
+.nav-list a[aria-current="page"] {
+  color: var(--color-primary);
+  text-decoration: underline;
+}
+
 .header-tools {
   display: flex;
   align-items: center;
