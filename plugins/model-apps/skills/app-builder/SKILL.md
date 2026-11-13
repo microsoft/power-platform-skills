@@ -747,7 +747,7 @@ version never deletes them for you. While such files remain, every command that 
 `WARNING:` naming the folders (never their content). A copy the plugin cannot prove is what the environment last
 held (an edit never sent, a file with no partner, a locked file) stops the step that needs it with
 `WORKSPACE_LEGACY_CONFIGURATION_COPY`, naming its two files; in the app's own workspace it stops an `--apply` before
-anything is sent, whichever item the copy belongs to (a dry run only warns). To clear either: when no build is running, move any
+any write, whichever item the copy belongs to (a dry run only warns). To clear either: when no build is running, move any
 change you still want into the App Spec or the deployment settings file (the build sends configuration only from
 those), close any program holding the files, delete the `.json` files in those folders, and run again. Tell the user
 what the warning or the stop names before deleting anything.

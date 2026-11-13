@@ -8,7 +8,7 @@ evidence and trade-offs behind a change live in its PR, in `docs/`, or in the li
 ## [2.28.0]
 
 - **Default configuration creates are sent once (#807):** new configuration rows, children included, have individual requests at stable ids; after a lost answer, builds stop until recovery settles it; teardown and build applies of an app cannot overlap within one workspace.
-- A build refuses an unsynced earlier workspace copy of a variable or connection reference before sending anything.
+- A build refuses an unsynced earlier workspace copy of a variable or connection reference before any write.
 - **Protected rule publication (#808):** the stop names the rule and its original id; a possibly sent publication is never replayed, even with `status: "published"`.
 - **Refused protected secret values (#847):** the stop reports the service code; correct the deployment settings and rebuild to send only the missing value.
 - **Busy customizations (#848):** a refused web-resource publish waits about 30, 60 and 90 seconds, or Retry-After, before retrying.

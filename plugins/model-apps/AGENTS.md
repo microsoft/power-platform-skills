@@ -3627,8 +3627,8 @@ legacy copy in the real workspace with the existing `WORKSPACE_LEGACY_CONFIGURAT
 receipt. The build command (`build-model-app.js` runBuildCommand) runs the same check over every pair in the
 app's durable workspace under its lease, before it makes the SDK: its configuration step works in the
 solution-scoped SDK's throwaway workspace, so the in-memory wrapper alone never meets a draft left there. A dirty,
-malformed or orphaned pair stops an apply with `WORKSPACE_LEGACY_CONFIGURATION_COPY` before any request (a dry run
-warns); a clean pair changes nothing.
+malformed or orphaned pair stops an apply with `WORKSPACE_LEGACY_CONFIGURATION_COPY` before any write (only the
+sign-in check and the organization language read come first; a dry run warns); a clean pair changes nothing.
 Recovery also compares a Custom API's or duplicate rule's workspace copy with its snapshot (the SDK's `diffArtifact`,
 over a storage that refuses writes and a client that refuses requests) in `prepare` and `resolve`, and an unsent
 edit stops both with `create-completion-required`, the code the build's `refuseLocalDraft` uses.
