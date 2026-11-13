@@ -95,6 +95,7 @@ const { makeWritesBlocking } = require('./lib/output-redaction.js');
 // The lease one apply of an app holds for the whole of its work in the workspace (lib/app-operation-lease.js).
 const { withAppBuildLease, applyWorkspaceOf } = require('./lib/app-operation-lease.js');
 const { assertConfigurationCreatesClear, acknowledgeQuarantines } = require('./lib/configuration-create-guard.js');
+const { legacyConfigurationArtifacts, checkLegacyConfigurationPair } = require('./lib/workspace-configuration-memory.js');
 const { publicationRiskApproval } = require('./lib/managed-bindings.js');
 const { readVerifyManifest } = require('./lib/declared-form-io.js');
 const { createAttemptSendObserver } = require('./lib/managed-feature-contract.js');
@@ -110,6 +111,17 @@ function assertWorkspaceDir(workspaceDir, { create }) {
   } catch (err) {
     if (create || !(err && err.reason === 'uninspectable')) throw err;
   }
+}
+
+// #807: every environment-variable and connection-reference pair (copy + last-synced snapshot) an earlier plugin version left in
+// `workspaceDir`, orphans included, must be absent or proven clean (lib/workspace-configuration-memory.js
+// checkLegacyConfigurationPair); the first that is not is refused as the SDK refuses it (SdkError WORKSPACE_LEGACY_CONFIGURATION_COPY).
+// Reads only: a folder that is absent holds nothing, one that cannot be listed throws.
+async function assertLegacyConfigurationCopiesClean(workspaceDir) {
+  const { createNodeWorkspaceStorage, SdkError } = require('./lib/maker-sdk.js');
+  const storage = createNodeWorkspaceStorage(workspaceDir);
+  const refuse = (code, message) => new SdkError(code, message);
+  for (const { folder, id } of legacyConfigurationArtifacts(storage)) await checkLegacyConfigurationPair(storage, folder, id, { refuse });
 }
 
 // Construct the SDK against the vendored bundle + an az-token HttpClient. Two clients:
@@ -2230,6 +2242,20 @@ async function runBuildCommand({ env, spec, languageCode, changedOnly, workspace
     if (opts.apply || !err || typeof err.code !== 'string' || !err.code.startsWith('configuration-create-')) throw err;
     configurationCreateNote = { code: err.code, ...(err.unitId ? { unitId: err.unitId } : {}), ...(err.nextStep ? { nextStep: err.nextStep } : {}) };
     process.stderr.write(`⚠ ${err.message} An --apply of this App Spec stops here until the receipt is resolved.\n`);
+  }
+  // #807: copies of environment variables and connection references an earlier plugin version left in this app's DURABLE workspace.
+  // The build's configuration step works in the solution-scoped SDK's own throwaway workspace (makeSdk), so the in-memory overlay
+  // (lib/workspace-configuration-memory.js), which checks such a pair only when the SDK touches it, never meets one here: a draft the
+  // maker edited and never sent would be passed over while the build PATCHes the same item from the App Spec. So every pair on disk
+  // is checked here, under the lease and before the SDK, the journal or any shortcut: a dirty, malformed or orphaned pair stops an
+  // apply with WORKSPACE_LEGACY_CONFIGURATION_COPY (nothing sent, the files kept as they are); a proven-clean pair changes nothing.
+  // Only file names and those two files are read, through the SDK's own file storage (its path checks refuse a link inside the
+  // workspace); main() has already refused a link at the workspace root. A dry run sends no write: the same finding is a warning.
+  try {
+    await assertLegacyConfigurationCopiesClean(workspaceDir);
+  } catch (err) {
+    if (opts.apply) throw err;
+    process.stderr.write(`⚠ ${err && err.message ? err.message : String(err)} An --apply of this App Spec stops here until the files are dealt with.\n`);
   }
   // Construct for both dry-run and apply: proves the vendored bundle + adapter wire up
   // (offline), and apply needs it. A spec validation error short-circuits before any write.

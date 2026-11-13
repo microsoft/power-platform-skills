@@ -657,7 +657,8 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   (`lib/workspace-configuration-memory.js`, applied by `lib/maker-sdk.js` to every SDK it makes). Copies an earlier
   version wrote there are never deleted or hidden by the plugin: a pair the SDK's own metadata proves clean (the copy
   equals its last-synced `snapshot`) is left on disk and never used as configuration (it is read only to prove it clean); anything else (a draft, a lone file, a file that cannot be
-  read) is refused with `WORKSPACE_LEGACY_CONFIGURATION_COPY` at the SDK's first touch of that artifact, naming its two
+  read) is refused with `WORKSPACE_LEGACY_CONFIGURATION_COPY` at the SDK's first touch of that artifact (and, in the
+  app's durable workspace, by an apply before it makes the SDK at all), naming its two
   files and quoting none of their content, and checked again on the next touch; every SDK made over a folder that still
   holds such files warns once per process, naming the folders. The maker removes them by hand (app-builder skill,
   "Sensitive configuration in the workspace"). The 16 phases
@@ -3594,7 +3595,11 @@ the same app in the workspace gets `build-locked`. The legacy original/snapshot 
 `workspace-configuration-memory.js` is exported (`checkLegacyConfigurationPair`, with
 `legacyConfigurationArtifacts` listing every pair on disk) so `configuration-recovery.js` refuses a dirty
 legacy copy in the real workspace with the existing `WORKSPACE_LEGACY_CONFIGURATION_COPY` before it changes a
-receipt; a build still meets the same check through its in-memory storage wrapper.
+receipt. The build command (`build-model-app.js` runBuildCommand) runs the same check over every pair in the
+app's durable workspace under its lease, before it makes the SDK: its configuration step works in the
+solution-scoped SDK's throwaway workspace, so the in-memory wrapper alone never meets a draft left there. A dirty,
+malformed or orphaned pair stops an apply with `WORKSPACE_LEGACY_CONFIGURATION_COPY` before any request (a dry run
+warns); a clean pair changes nothing.
 The receipt, its quarantine markers and archives are owned by the plugin: while a build or recovery runs, no
 other process may change, rename, create, sync or restore files in that workspace folder. The plugin's own
 entries coordinate through the app build lease and the receipt's record lease (`lib/record-lease.js`); an
