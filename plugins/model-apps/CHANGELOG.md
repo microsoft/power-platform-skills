@@ -7,22 +7,22 @@ evidence and trade-offs behind a change live in its PR, in `docs/`, or in the li
 
 ## [2.28.0]
 
-- **Default configuration creates are sent once (#807):** each new configuration row, children included, has its own request at a stable id; after a lost answer the next build stops until recovery settles it.
-- A build refuses an unsynced earlier copy of a variable or connection reference in the app's workspace before sending anything.
+- **Default configuration creates are sent once (#807):** each new configuration row, children included, has its own request at a stable id; after a lost answer, builds stop until recovery settles it; teardown and builds of an app no longer overlap.
+- A build refuses an unsynced earlier workspace copy of a variable or connection reference before sending anything.
 - **Protected rule publication (#808):** the stop names the rule and its original id; a possibly sent publication is never replayed, even with `status: "published"`.
 - **Refused protected secret values (#847):** the stop reports the service code; correct the deployment settings and rebuild to send only the missing value.
 - **Busy customizations (#848):** a refused web-resource publish waits about 30, 60 and 90 seconds, or Retry-After, before retrying.
 - **`verify` follows form bindings:** declared forms and their Quick View and sub-grid targets are checked through managed bindings, never through namesakes.
 - **Same-named declared views (#845):** `--verify` proves each has its own row and fails when two claim one saved query; nonconflicting bound or pinned groups are unchanged.
 - **Shared form cells (#797):** caption publication stops show the shared cells, the forms reusing them and both captions, with read-only recovery steps.
-- **`/genpage` asks before editing a shared page (#676):** an edit and its verification fix-up name other apps showing the page and need your confirmation; unattended runs and failed scans stop.
+- **`/genpage` asks before editing a shared page (#676):** edits and verification fix-ups name other apps showing the page and need your confirmation; unattended runs and failed scans stop.
 
 ### Limits
 
 - Other programs must not change an app's workspace files while a build, recovery or teardown runs.
 - Other publishes refused by a running customization still stop after the ordinary retries (#848).
 - `verify` proves distinct rows only within same-named groups; content of a view no binding, `viewId` or stable id identifies stays unverified.
-- Workspace copies an earlier version left stay until removed by hand (see the app-builder skill).
+- Earlier versions' workspace copies stay until removed by hand (see the app-builder skill).
 ## [2.27.0]
 
 - **Same-named declared views (#845):** `--verify` checks each declared view against its own row (managed binding, then `viewId`, then name), so two same-named views on one table, each with its own `key`, no longer fail verification.
