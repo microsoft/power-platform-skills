@@ -1285,6 +1285,7 @@ module.exports = {
   validateTemplateVariantDirectory,
   validateCatalogShape,
   normalizeCatalogFamilies,
+  effectivePreviewFields,
   validateResponsivePreviews,
   isSpaTemplate,
   isCreateWebsiteApiTemplate,

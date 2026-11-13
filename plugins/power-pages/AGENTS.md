@@ -22,6 +22,7 @@ For older SPA manifests, use `previewImages` only when `responsivePreviews` is a
 A SPA variant's own preview definition overrides its family's, including a legacy variant list.
 Inherit family previews only when the variant defines neither field.
 Keep this precedence in `scripts/lib/template-catalog.js`; create-site caches the effective variant previews before rendering and reuses them on the status page.
+The read-only browser shows each framework's effective previews in a labeled group within the family tab.
 The non-SPA experience-preview disclosure in `references/non-spa-preview.md` is separate and unchanged.
 
 ## Non-SPA creation and shared design quality
