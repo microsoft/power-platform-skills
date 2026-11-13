@@ -210,6 +210,7 @@ Build a map `{ [Value]: Label.UserLocalizedLabel.Label }` and use it when displa
 | 33 | Cloud Flow | No |
 | 34 | UX Component | No |
 | 35 | Server Logic | No |
+| 36 | Site Connection | No |
 
 > **Security warning — Type 9 (Site Settings)**: Site Settings can include OAuth provider secrets such as `Authentication/OpenAuth/Facebook/AppSecret`, `Authentication/OpenAuth/Microsoft/ClientSecret`, etc. Including these in a solution that is exported and deployed to other environments moves sensitive credentials across tenants. **Default: exclude site settings.** Ask the user explicitly before including them.
 
@@ -464,9 +465,35 @@ Written by `setup-solution`, read by `export-solution`, `import-solution`, and `
       "botId": "00000000-0000-0000-0000-000000000000",
       "name": "Support Bot"
     }
-  ]
+  ],
+  "siteConnections": [
+    {
+      "id": "00000000-0000-0000-0000-000000000000",
+      "name": "IT SharePoint",
+      "connectionReferenceLogicalName": "con_sharedsharepointonline_1a2b3c4d"
+    }
+  ],
+  "connectionReferences": [
+    {
+      "logicalName": "con_sharedsharepointonline_1a2b3c4d",
+      "connectorId": "/providers/Microsoft.PowerApps/apis/shared_sharepointonline",
+      "usedBy": ["00000000-0000-0000-0000-000000000000"]
+    }
+  ],
+  "connectorSolution": {
+    "uniqueName": "ContosoSite_Connectors",
+    "solutionId": "00000000-0000-0000-0000-000000000000",
+    "version": "1.0.0.0",
+    "customConnectors": [
+      { "connectorName": "shared_contosoapi-<hash>-<hash>", "schemaName": "con_contosoapi", "displayName": "Contoso API", "xrmConnectorId": "00000000-0000-0000-0000-000000000000" }
+    ]
+  }
 }
 ```
+
+**Notes on `siteConnections`, `connectionReferences` and `connectorSolution`:**
+- Present only when the site has site connections (powerpagecomponent type 36). See *Site Connections and Connection References* in Section 8.
+- `connectorSolution` is present only when a site connection uses a custom connector. It is a separate solution that every consumer (`export-solution`, `import-solution`, `deploy-pipeline`) ships **before** the site solution(s), in v1 and v2 manifests alike.
 
 **Notes on `cloudFlows` and `botComponents`:**
 - These arrays are **omitted entirely** when no flows or bots were discovered during `setup-solution` (not tracked).
@@ -513,6 +540,47 @@ Connection references are declared in `customizations.xml` (`<connectionreferenc
 - The `promptingbehavior: 0` setting means the import will NOT prompt the user to bind connections during import. The flow will be imported but **left in a disabled state** if no connection is bound.
 - After import, the user must navigate to Power Automate → target environment → each flow → Edit → bind connections.
 - Connection references use logical names (e.g., `new_sharedcommondataserviceforapps_511b0`) that are consistent across environments, but the underlying connection ID is always user/environment-specific.
+- Bind them at deploy time instead of by hand: `deploy-pipeline` Phase 5.1c passes `ConnectionReferences: [{ LogicalName, ConnectionId, ConnectorId }]` in `deploymentsettingsjson`, and `import-solution` Phase 6a PATCHes `connectionreference.connectionid` after import — both via `scripts/lib/connection-references.js`. Format: [deployment settings file](https://learn.microsoft.com/en-us/power-platform/alm/conn-ref-env-variables-build-tools#deployment-settings-file).
+
+### Site Connections and Connection References
+
+A site connection is a `powerpagecomponent` with `powerpagecomponenttype: 36`. Its `content` column is JSON that points at a Dataverse `connectionreference`:
+
+```json
+{"connectionreferencelogicalname": "con_sharedsharepointonline_1a2b3c4d",
+ "connectionreferenceid": "00000000-0000-0000-0000-000000000000",
+ "adx_siteconnection_adx_webrole": ["00000000-0000-0000-0000-000000000000"]}
+```
+
+- **The connection reference is not a powerpagecomponent.** Adding the website (or the type-36 rows) does not add it. `setup-solution` Step 5.2b discovers it with `scripts/lib/site-connections.js` and adds it with the runtime-resolved connection reference component type. Resolve that type from `solutioncomponentdefinitions` (`primaryentityname eq 'connectionreference'`) — it is environment-specific (`10137`, `10160` and `10171` have all been observed) and the lookup works even before any connection reference is in a solution.
+- **Resolve by logical name, never by id.** The solution XML keys connection references by `connectionreferencelogicalname`; importing creates them with **new ids** in the target. Only `connectionreferencelogicalname` resolves across environments, so a site connection that stores only `connectionreferenceid` cannot resolve after deployment. The skills report it (`LOGICAL_NAME_MISSING`) and never rewrite site connection content.
+- **Bind the connection reference in every target.** Connection references import unbound (see *Connection References (Cloud Flows)* above). After the deploy, `scripts/lib/verify-site-connections.js` checks each site connection: logical name present → connection reference exists → bound → connection `Connected`. It is read-only.
+- **Connector Integration** must also be enabled for the site after activation (in the site's details in the Power Platform admin center), otherwise site connections are not served.
+
+### Custom Connectors in Solutions
+
+A connection reference for a **custom connector** can only be exported once the connector is solution-aware; otherwise `ExportSolutionAsync` fails with `0x80040265` (*"Exporting connection reference … for a custom connector requires the custom connector to be added to a dataverse solution"*). Microsoft also requires custom connectors to be in **their own solution, imported before** any solution with connection references or flows that use them ([known limitations](https://learn.microsoft.com/en-us/connectors/custom-connectors/customconnectorssolutions#known-limitations)).
+
+- **Detect.** A solution-aware custom connector has a row in the Dataverse `connector` table (`connectorinternalid` = the connector name, e.g. `shared_contosoapi-<18 hex>-<18 hex>`); the connectivity API reports `properties.almMode: "Solution"` and `properties.xrmConnectorId`. Certified connectors (`shared_sharepointonline`, …) have neither and need no handling.
+- **Make solution-aware (consent required).** `scripts/lib/make-connectors-solution-aware.js` calls the environment-routed Power Platform API — the same operation the maker portal performs when a custom connector is added to a solution:
+  ```
+  POST https://{env-routed host}/connectivity/solutions/{solutionId}/makeConnectorsSolutionAware?api-version=2022-03-01-preview
+  { "apisToMigrate": ["shared_contosoapi-<hash>-<hash>"] }
+  → { "statuses": { "shared_contosoapi-<hash>-<hash>": { "status": "Success" } } }
+  ```
+  The env-routed host is the environment id without dashes split before its last 2 characters (Public cloud; 1 in US Government clouds), e.g. `https://<30 hex>.<2 hex>.environment.api.powerplatform.com`. Fallback when the call fails: maker portal → the connectors solution → **Add existing → Automation → Custom connector**.
+- **The internal name changes per environment.** After import the target connector gets a new internal name (e.g. `shared_con-5fcontosoapi-<hash>`), so connections in the target are listed — and deployment settings `ConnectorId` written — against the target id. Match connectors across environments by the Dataverse `connector.name` schema name (`connection-references.js#mapConnectorsToTarget`).
+- **Add an already solution-aware connector** to the connectors solution with `componentType: 372` (a fixed platform value) and `componentId` = its `connector` row id.
+- **Keep it out of the site solution.** Adding a connection reference can pull its connector in as a required component. If the site solution then lists the connector (componenttype `372`), remove it so it ships only in the connectors solution:
+  ```
+  POST {envUrl}/api/data/v9.2/RemoveSolutionComponent
+  {
+    "SolutionComponent": { "@odata.type": "Microsoft.Dynamics.CRM.solutioncomponent", "solutioncomponentid": "{connector objectid}" },
+    "ComponentType": 372,
+    "SolutionUniqueName": "{siteSolutionUniqueName}"
+  }
+  ```
+  `solutioncomponentid` takes the component's **object id** (the `connector` row id), not the `solutioncomponent` row id.
 
 ### Hardcoded Environment URLs in Flow JSON
 

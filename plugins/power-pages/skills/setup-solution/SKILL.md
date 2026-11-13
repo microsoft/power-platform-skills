@@ -21,7 +21,7 @@ Creates a Dataverse publisher and solution, then adds Power Pages site component
 
 - PAC CLI installed and authenticated (`pac env who` returns an environment URL)
 - Azure CLI installed and logged in (`az account show` succeeds)
-- `powerpages.config.json` exists in the project root (site must be deployed at least once so `.powerpages-site/` exists with component records)
+- A Power Pages project on the **Enhanced data model** (solutions can only carry `powerpagecomponent` sites): either a SPA code site (`powerpages.config.json`) or a non-SPA site downloaded with `pac pages download` (`.powerpages-site/website.yml`). The site must be deployed at least once so its component records exist in Dataverse. Site identity comes from `detect-project-context.js`, which handles both layouts.
 
 ## Phases
 
@@ -112,8 +112,12 @@ Steps:
    node "${PLUGIN_ROOT}/scripts/lib/verify-alm-prerequisites.js" --envUrl "{environmentUrl}"
    ```
    Capture output as JSON; extract `.envUrl` (store as `envUrl`) and `.token` (store as `token`). If the script exits non-zero, stop and explain what is missing (reference `${PLUGIN_ROOT}/references/dataverse-prerequisites.md`).
-3. Locate `powerpages.config.json` — read `siteName` and `websiteRecordId`
-4. Confirm `.powerpages-site/` folder exists (required to find component records)
+3. Resolve the site identity with `detect-project-context.js` — it reads `powerpages.config.json` for SPA code sites and `.powerpages-site/website.yml` for non-SPA sites, so both are supported:
+   ```bash
+   node "${PLUGIN_ROOT}/scripts/lib/detect-project-context.js"
+   ```
+   Capture output as JSON; store `.siteName` as `siteName`, `.websiteRecordId` as `websiteRecordId` and `.siteType` as `siteType`. If the script exits non-zero, stop — this is not a Power Pages project.
+4. Confirm the site's component tree exists (`.siteRoot` from step 3 — the `.powerpages-site/` folder for SPA sites, or the downloaded site folder for non-SPA sites)
 5. **Check for ALM plan context** — look for `docs/alm/alm-plan-context.json`:
    <!-- gate: setup-solution:1.preloaded | category=plan | cancel-leaves=nothing -->
    > 🚦 **Gate (plan · setup-solution:1.preloaded):** Use pre-loaded plan classifications, or re-discover. No write happens before this choice.
@@ -379,6 +383,51 @@ Skip this query if Query E returned `cloudFlows = []`.
    Store the filtered list as `connectionReferences[]`.
 
 If Query G returns no references (the cloud flows don't use connectors, or the publisher prefix doesn't match — rare), store `connectionReferences = []` and skip. Surface a soft warning if cloud flows exist but no matching connection refs were found — the user should verify whether their flows are using connectors that need binding in target envs.
+
+#### Step 5.2b — Site Connections: Connection References and Custom Connectors
+
+Site connections (powerpagecomponent type 36) are packaged with the other site components, but the **Dataverse connection references they point at — and the connectors behind those — are not powerpagecomponents**. Without this step the solution either exports without the connection references (the site connection has nothing to resolve in the target) or fails to export with `0x80040265` when a connection reference uses a custom connector that is not solution-aware. Query G above does not cover them: it is scoped to cloud flows and the site publisher's prefix, and site connections created in the design studio typically use the environment's default publisher prefix.
+
+Skip this step when Query B returned no type-36 components.
+
+**H. Discover site-connection dependencies:**
+```bash
+node "${PLUGIN_ROOT}/scripts/lib/site-connections.js" \
+  --envUrl "{envUrl}" --token "{token}" \
+  --siteId "{websiteRecordId}" \
+  [--solutionIds "{solutionId}[,{connectorSolutionId}]"]   # sync mode only
+```
+Capture output as JSON (`siteConnectionDeps`). It returns `siteConnections[]`, `connectionReferences[]` (each with `usedBy`), `connectors[]`, `customConnectors[]`, `componentTypes` (`connectionReference` resolved at runtime from `solutioncomponentdefinitions`; `connector` is the fixed platform value `372`) and `problems[]`. In sync mode, `missing.connectionReferences` / `missing.customConnectors` are the candidates.
+
+**Handle `problems[]` before continuing:**
+
+| `code` | Severity | Action |
+|---|---|---|
+| `CONTENT_UNPARSEABLE`, `NO_CONNECTION_REFERENCE`, `CONNECTION_REFERENCE_NOT_FOUND` | error | STOP. Show the site connection name and message; the user must fix or delete the site connection in the design studio, then re-run. |
+| `LOGICAL_NAME_MISSING` | warning | Continue packaging (the source id is valid here), but tell the user: site connections are resolved in the target by `connectionreferencelogicalname`, so a site connection that stores only `connectionreferenceid` will not resolve after deployment. It must be updated so it stores the logical name before it is promoted. This skill does not rewrite site connection content. |
+| `CUSTOM_CONNECTOR_NOT_SOLUTION_AWARE` | error | Handled by the custom connector flow below. |
+
+**Custom connectors → separate connectors solution.** Microsoft requires custom connectors to be solution-aware and imported in **their own solution, before** any connection reference that uses them ([known limitations](https://learn.microsoft.com/en-us/connectors/custom-connectors/customconnectorssolutions#known-limitations)). When `customConnectors[]` is non-empty:
+
+1. Create (or reuse in sync mode — `existingSolution.connectorSolution`) an unmanaged solution named `{solutionUniqueName}_Connectors` with the same publisher, via `create-solution.js` (same flags as Phase 4). Store its id as `connectorSolutionId`.
+2. For each custom connector with `isSolutionAware: false`:
+
+   <!-- gate: setup-solution:5.2b.connector-migration | category=consent | cancel-leaves=nothing -->
+   > 🚦 **Gate (consent · setup-solution:5.2b.connector-migration):** Making a custom connector solution-aware moves it into Dataverse under the solution's publisher. Never run the migration without an explicit "yes".
+
+   Ask via `AskUserQuestion`: *"Custom connector `{connectorName}` is not solution-aware, so connection references that use it can't be exported. May I make it solution-aware by adding it to `{solutionUniqueName}_Connectors`? This is the same change the maker portal makes when you add a custom connector to a solution."* Options: **"Yes, make it solution-aware (Recommended)"** / **"No, I'll do it in the maker portal"**.
+
+   On **Yes**, run (environment id from `pac env who`; `--cloud` defaults to the active PAC profile's cloud):
+   ```bash
+   node "${PLUGIN_ROOT}/scripts/lib/make-connectors-solution-aware.js" \
+     --environmentId "{environmentId}" --solutionId "{connectorSolutionId}" \
+     --connectors "{connectorName}[,{connectorName}…]" --consent
+   ```
+   If `ok` is `true`, the connector is now in the connectors solution. If `ok` is `false` (or the user chose **No**), show `fallback` (maker portal: open the connectors solution → **Add existing → Automation → Custom connector**), wait for the user to confirm they did it, then re-run Query H and continue only when the connector reports `isSolutionAware: true`.
+3. For each custom connector that was **already** solution-aware, add its Dataverse row to the connectors solution: `{ componentId: xrmConnectorId, componentType: 372, addRequired: false }` via `add-components-to-solution.js --solutionUniqueName "{solutionUniqueName}_Connectors"`.
+4. Store `connectorSolution = { uniqueName, solutionId: connectorSolutionId, version, customConnectors: [{ connectorName, schemaName, displayName, xrmConnectorId }] }` for the manifest. `schemaName` (the Dataverse `connector.name`) is the stable identity across environments — the connector's internal name changes in every environment it is imported into. Certified connectors (SharePoint, SQL, …) need no connectors solution.
+
+Store `siteConnectionRefs = siteConnectionDeps.connectionReferences` and `connectionReferenceComponentType = siteConnectionDeps.componentTypes.connectionReference` (reuse the value if Query G already resolved it).
 
 #### Step 5.3 — Categorize Site Settings
 
@@ -675,6 +724,12 @@ CLOUD FLOWS ({N} linked via powerpagecomponent type 33)
 BOT CONSUMERS ({N} linked via powerpagecomponent type 27)
   ✓ Support Bot             (botId: {guid}, Active)
 
+SITE CONNECTIONS ({N} site connections — Step 5.2b)
+  ✓ cr123_sharedsharepointonline_1a2b3c4d (SharePoint)          ← used by "IT SharePoint"
+  ✓ cr123_contosoapi_9f2c (Contoso API — custom connector)      ← used by "Orders API"
+  ⚠ "Legacy SharePoint" stores no connection reference logical name — will not resolve after deployment
+  Connectors solution: {solutionUniqueName}_Connectors (Contoso API) — imported first
+
 DATAVERSE TABLES (schema only — no data)
   ✓ crd50_invoice (Invoice)
   ...
@@ -734,7 +789,7 @@ The components array should be built in this order:
 5. **Dataverse tables** — `{ componentType: 1, componentId: MetadataId }`
 6. **Confirmed cloud flows** (from Step 5.5) — `{ componentId: workflowId, componentType: workflowComponentType }` (uses runtime-discovered type)
 7. **Confirmed bot components** — `{ componentId: botId, componentType: botComponentType }` (uses runtime-discovered type)
-8. **Connection references used by the confirmed cloud flows** (from Step 5.2 Query G) — one entry per reference: `{ componentId: connectionReferenceId, componentType: connectionReferenceComponentType, addRequired: false }`. Skip if `connectionReferences = []`. Use the **runtime-resolved** `connectionReferenceComponentType` — do **not** hardcode (observed values across tenants include `10137` and `10160`; the value is env-specific). Without these entries, the solution exports cleanly but the target import fails with a `MissingDependency` error — `deploy-pipeline` Phase 6.6.1 will surface it as a "missing connection reference" validation failure.
+8. **Connection references used by the confirmed cloud flows** (from Step 5.2 Query G) **and by site connections** (Step 5.2b, `siteConnectionRefs`) — one entry per distinct reference: `{ componentId: connectionReferenceId, componentType: connectionReferenceComponentType, addRequired: false }`. Skip if both lists are empty. Use the **runtime-resolved** `connectionReferenceComponentType` — do **not** hardcode (observed values across tenants include `10137`, `10160` and `10171`; the value is env-specific). Without these entries, the solution exports cleanly but the target import fails with a `MissingDependency` error — `deploy-pipeline` Phase 6.6.1 will surface it as a "missing connection reference" validation failure — and site connections have no connection reference to resolve in the target. Custom connectors themselves go **only** in the connectors solution (Step 5.2b); if one shows up in this solution as a required component (componenttype `372`) after the add, remove it with `RemoveSolutionComponent` (see `references/solution-api-patterns.md` → *Custom Connectors in Solutions*) so it does not ship in both.
 9. **Adopted orphan ppcs** (from Step 5.4c) — `{ componentId: ppc.id, componentType: subComponentType, addRequired: false }`. Use the `subComponentType` value resolved by `discover-component-types.js` in Step 5.1 — do **not** hardcode. Do **not** set `DoNotIncludeSubcomponents: true` — Dataverse rejects that flag on non-Entity components (HTTP 400 `0x80040216`).
 
 **Single-solution mode** (`MULTI_SOLUTION_MODE = false`): write the array to a temp file (e.g., `C:/Users/{user}/AppData/Local/Temp/components-to-add.json`), then run:
@@ -786,6 +841,8 @@ The script handles token refresh every 20 calls, treats "already in solution" as
    - See manifest format in `${PLUGIN_ROOT}/references/solution-api-patterns.md` Section 7
    - If cloud flows were confirmed, include a `cloudFlows` array: `[{ "workflowId": "...", "name": "...", "status": "active|inactive" }]`
    - If bot components were confirmed, include a `botComponents` array: `[{ "botId": "...", "name": "..." }]`
+   - If the site has site connections (Step 5.2b), include `siteConnections: [{ "id", "name", "connectionReferenceLogicalName" }]` and `connectionReferences: [{ "logicalName", "connectorId", "usedBy": ["<siteConnectionId>"] }]` — `deploy-pipeline` / `import-solution` use them to know what must be bound in each target.
+   - If a connectors solution was created, include the top-level `connectorSolution` block from Step 5.2b (`uniqueName`, `solutionId`, `version`, `customConnectors[]`). It applies to v1 and v2 manifests alike: every consumer deploys it **before** the site solution(s).
    - Omit these arrays entirely if no flows/bots were discovered or confirmed (absence = not tracked; `[]` = tracked but none selected)
 
    **In `MULTI_SOLUTION_MODE`, write manifest v2** with a `solutions[]` array:
@@ -833,6 +890,8 @@ Display a summary table:
 | Solution ID | `{solutionId}` |
 | Components added | N |
 | Env var definitions added | N (if any OAuth secrets converted) |
+| Site connections | N, using M connection reference(s) (if any) |
+| Connectors solution | `{solutionUniqueName}_Connectors` — deploy/import it first (if custom connectors) |
 | Manifest written | `.solution-manifest.json` |
 
 **If any auth settings were promoted to env vars**, confirm that each site setting was automatically linked. Show a brief confirmation:
@@ -919,10 +978,10 @@ When `nextStep` itself is `null` (every planned step is done) or the helper retu
 
 | Task subject | activeForm | Description |
 |---|---|---|
-| Verify prerequisites | Verifying prerequisites | Confirm PAC CLI auth, acquire Azure CLI token, verify API access, locate powerpages.config.json |
+| Verify prerequisites | Verifying prerequisites | Confirm PAC CLI auth, acquire Azure CLI token, verify API access, resolve site identity via detect-project-context.js (SPA or non-SPA) |
 | Gather solution configuration | Gathering solution configuration | Collect publisher name, prefix, solution name, version from user — confirm irreversible choices |
 | Check existing publishers and solutions | Checking existing state | Query Dataverse for existing publisher and solution to avoid duplicate creation |
 | Create publisher and solution | Creating publisher and solution | POST publisher and solution to Dataverse OData API, capture IDs |
-| Add site components to solution | Adding site components | Discover website/language/powerpagecomponents/tables/cloud flows (type 33)/bot consumers (type 27) via runtime field introspection; split site settings by category; present full manifest including CLOUD FLOWS and BOT CONSUMERS sections with active/inactive status; get user confirmation; call add-components-to-solution.js for website, site language(s), all confirmed components, tables (ComponentType=1), confirmed cloud flows, and confirmed bot components |
+| Add site components to solution | Adding site components | Discover website/language/powerpagecomponents/tables/cloud flows (type 33)/bot consumers (type 27) via runtime field introspection; discover site-connection connection references and custom connectors (site-connections.js), make custom connectors solution-aware with consent in a separate connectors solution; split site settings by category; present full manifest including CLOUD FLOWS, BOT CONSUMERS and SITE CONNECTIONS sections; get user confirmation; call add-components-to-solution.js for website, site language(s), all confirmed components, tables (ComponentType=1), confirmed cloud flows, confirmed bot components and connection references |
 | Verify and write manifest | Verifying solution and writing manifest | Confirm components in solution, write .solution-manifest.json, commit |
 | Present summary | Presenting summary | Show solution details, component count, and next steps |

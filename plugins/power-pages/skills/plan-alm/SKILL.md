@@ -299,6 +299,8 @@ Steps:
       --projectRoot "."
     ```
 
+    When `.solution-manifest.json` has a `connectorSolution` block, also pass `--connectorSolutionId "{connectorSolution.solutionId}"` — custom connectors live only in that solution, so without it `missing.customConnectors` reports only connectors that are not solution-aware.
+
     Parse stdout and evaluate `missing.*`:
 
     - **All `missing.*` arrays empty** → report "Solution contents match the site — proceeding with fresh plan inputs." Continue to Phase 2.
@@ -310,10 +312,13 @@ Steps:
       > - **{Y}** cloud flows
       > - **{Z}** environment variable definitions
       > - **{W}** custom tables
+      > - **{V}** connection references used by site connections, **{C}** custom connectors (these need a separate connectors solution, deployed first)
       >
       > A plan built now will ignore these components. How would you like to proceed?"
 
       Always render the **site languages** line when `missing.siteLanguages.length > 0`, even when other categories are zero — this gap was a recurring silent-failure mode before discover-site-components started enumerating `powerpagesitelanguages`. See `references/solution-api-patterns.md` for the 3-entity model.
+
+      Whether or not there are gaps, when the discovery output has `siteConnections` (the site has site connections), also add the plan notes the execution skills act on: every target stage needs a connection for each connection reference (bound by `deploy-pipeline` Phase 5.1c / `import-solution` Phase 6a, stored per stage in `deployment-settings.json`); custom connectors ship in a separate `{solution}_Connectors` solution deployed first; Connector Integration must be enabled per site after activation; and any `siteConnections.problems[]` entry with `LOGICAL_NAME_MISSING` is a site connection that will not resolve in targets until it stores `connectionreferencelogicalname`. See `references/solution-api-patterns.md` → *Site Connections and Connection References*.
 
       <!-- gate: plan-alm:1.completeness | category=progress | cancel-leaves=nothing -->
       > 🚦 **Gate (progress · plan-alm:1.completeness):** Completeness check found gaps vs live site. Sync first, plan with gaps recorded, or cancel.

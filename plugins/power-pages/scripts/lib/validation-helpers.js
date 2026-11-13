@@ -236,6 +236,30 @@ const BAP_HOSTS = new Set([
   'dod.api.bap.microsoft.us',
 ]);
 
+// Environment-routed Power Platform API hosts, e.g.
+//   https://0123456789abcdef0123456789abcd.ef.environment.api.powerplatform.com
+// The label pair is the environment GUID without dashes (prefixed with "default"
+// for a Default-<guid> environment), split before the last N hex characters —
+// N is 2 in the Public cloud and 1 in the US Government clouds. Connector
+// metadata, connection listing and connector migration (connectivity/*) are only
+// served from this per-environment host, so it cannot be an exact-host entry.
+// Match the full shape (32 hex characters in total, a known suffix) rather than
+// a wildcard so an Authorization header can never follow an arbitrary subdomain.
+const ENVIRONMENT_API_HOST_SUFFIXES = Object.freeze({
+  'environment.api.powerplatform.com': 2,
+  'environment.api.gov.powerplatform.microsoft.us': 1,
+  'environment.api.high.powerplatform.microsoft.us': 1,
+  'environment.api.appsplatform.us': 1,
+});
+
+function isEnvironmentApiHost(hostname) {
+  const match = /^(default)?([0-9a-f]+)\.([0-9a-f]+)\.(.+)$/.exec(String(hostname || '').toLowerCase());
+  if (!match) return false;
+  const shardLength = ENVIRONMENT_API_HOST_SUFFIXES[match[4]];
+  if (!shardLength) return false;
+  return match[3].length === shardLength && match[2].length + match[3].length === 32;
+}
+
 function isDataverseHost(hostname) {
   return DATAVERSE_HOST_PATTERNS.some((pattern) => pattern.test(hostname));
 }
@@ -243,7 +267,9 @@ function isDataverseHost(hostname) {
 function parseTrustedMicrosoftUrl(value, {
   purpose = 'URL',
   allowPath = true,
-  allowedHost = (hostname) => isDataverseHost(hostname) || POWER_PLATFORM_SERVICE_HOSTS.has(hostname),
+  allowedHost = (hostname) => isDataverseHost(hostname)
+    || POWER_PLATFORM_SERVICE_HOSTS.has(hostname)
+    || isEnvironmentApiHost(hostname),
 } = {}) {
   if (typeof value !== 'string' || value.length === 0) {
     throw new Error(`${purpose} must be a non-empty string.`);
@@ -601,6 +627,8 @@ module.exports = {
   validateDataverseEnvironmentUrl,
   validateTokenResourceUrl,
   validateAuthenticatedRequestUrl,
+  isEnvironmentApiHost,
+  ENVIRONMENT_API_HOST_SUFFIXES,
   validateBapUrl,
   validateBapPollingUrl,
   runAzureCli,

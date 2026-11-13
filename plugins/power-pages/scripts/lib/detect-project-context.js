@@ -17,6 +17,7 @@
 //                                  -> siteType "non-spa"
 //                                  (Design Studio sites; Standard or
 //                                  enhanced data model. website.yml carries `id` and
+//                                  `name` (or PAC's `adx_websiteid` / `adx_name`)
 //                                  `name` but no environment URL — callers re-confirm
 //                                  via `pac env who`. `.portalconfig/` is the positive
 //                                  non-SPA marker; BOTH site types carry website.yml,
@@ -73,6 +74,14 @@ function readJsonFile(filePath) {
 // Minimal reader for the flat `.powerpages-site/website.yml` (a simple `key: value`
 // per line — no nesting). Returns { id, name } or null. Zero-dependency by design
 // (the plugin ships no YAML library); only the two identity keys are needed here.
+//
+// Two key spellings occur in the wild:
+//   id: 117a52e7-…            name: Contoso          (plugin-scaffolded / code-site metadata)
+//   adx_websiteid: 117a52e7-… adx_name: Contoso      (`pac pages download`, Standard AND
+//                                                     Enhanced data model)
+// `id`/`name` win when both are present; the `adx_` keys are the fallback.
+const WEBSITE_YML_KEYS = Object.freeze({ id: 'id', name: 'name', adx_websiteid: 'adxId', adx_name: 'adxName' });
+
 function readWebsiteYml(filePath) {
   let raw;
   try {
@@ -101,9 +110,12 @@ function readWebsiteYml(filePath) {
         (value.startsWith("'") && value.endsWith("'"))) {
       value = value.slice(1, -1);
     }
-    if (key === 'id' || key === 'name') out[key] = value;
+    if (WEBSITE_YML_KEYS[key] && value) out[WEBSITE_YML_KEYS[key]] = value;
   }
-  return (out.id || out.name) ? out : null;
+  const site = {};
+  if (out.id || out.adxId) site.id = out.id || out.adxId;
+  if (out.name || out.adxName) site.name = out.name || out.adxName;
+  return (site.id || site.name) ? site : null;
 }
 
 function isDirectory(p) {

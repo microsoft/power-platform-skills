@@ -152,6 +152,8 @@ Steps:
 
    **In `MULTI_RUN_MODE`**, resolve `solutionName` + `solutionId` per iteration of `DEPLOYMENT_ORDER`. Entries where `status === "SkippedEmpty"` (typically the `{Prefix}_Future` buffer) are short-circuited — no stage run is created for them. The single `pipelineId` / `hostEnvUrl` / `sourceDeploymentEnvironmentId` apply to every run.
 
+   **Connectors solution first (site connections with custom connectors).** If `solutionManifest.connectorSolution` exists, it MUST deploy before every site solution — Microsoft requires custom connectors to be imported in their own solution before any connection reference that uses them ([known limitations](https://learn.microsoft.com/en-us/connectors/custom-connectors/customconnectorssolutions#known-limitations)). Prepend `{ solutionUniqueName: connectorSolution.uniqueName, solutionId: connectorSolution.solutionId, order: 0 }` to `DEPLOYMENT_ORDER`. In single-solution mode, switch to `MULTI_RUN_MODE = true` with `DEPLOYMENT_ORDER = [connectorSolution, the site solution]` against the same pipeline and stage — one stage run per solution, exactly as v3 does — and set `CONNECTOR_PROMOTED_MULTI_RUN = true` so checks that read `solutions[]` (Phase 2.5) keep their single-solution behavior. Re-deploying an unchanged connectors version is a same-version no-op.
+
    **In `MULTI_PIPELINE_MODE`** (legacy v2), resolve `solutionName` per pipeline in the loop (not globally). All pipelines share the same `hostEnvUrl` and `sourceDeploymentEnvironmentId`.
 
 4. Acquire host environment token:
@@ -226,7 +228,7 @@ Power Pages SPA solutions almost always contain `.js` bundle chunks (Vite/Rollup
 
 **Skip rule.** This check is for Power Pages projects only. Skip when `powerpages.config.json` has no `websiteRecordId` (non-Power-Pages ALM run — pure data-model solution, etc.). Skip when the user's plan/manifest indicates no solution being deployed has `Web File` componentType (rare in SPA projects but possible for back-end-only solutions).
 
-**Detection signal.** In MULTI_RUN_MODE / MULTI_PIPELINE_MODE: read `.solution-manifest.json` and check whether any entry in `solutions[]` has `componentTypes` including `"Web File"`. In single-solution mode: assume `true` for any Power Pages project (the umbrella solution carries web files).
+**Detection signal.** In MULTI_RUN_MODE / MULTI_PIPELINE_MODE: read `.solution-manifest.json` and check whether any entry in `solutions[]` has `componentTypes` including `"Web File"`. In single-solution mode — including a single-solution manifest promoted to `MULTI_RUN_MODE` in Phase 1 only so its `connectorSolution` deploys first (`CONNECTOR_PROMOTED_MULTI_RUN = true`; the manifest has no `solutions[]`) — assume `true` for any Power Pages project (the umbrella solution carries web files).
 
 **Steps:**
 
@@ -315,6 +317,8 @@ node "${PLUGIN_ROOT}/scripts/lib/discover-site-components.js" \
   --solutionId "{solutionId from .solution-manifest.json}" \
   --projectRoot "."
 ```
+
+When `.solution-manifest.json` has a `connectorSolution` block, also pass `--connectorSolutionId "{connectorSolution.solutionId}"` — custom connectors live only in that solution, so without it `missing.customConnectors` reports only connectors that are not solution-aware.
 
 Parse stdout and evaluate `missing.*`. **Before doing anything else**, capture the **pre-sync state** so a post-sync re-confirmation gate can show what changed:
 
@@ -688,6 +692,36 @@ Branch on `summary`:
 
 - **`summary.invalid === 0 && summary.['unknown-type'] > 0`** → log a one-line warning about the schemas whose types couldn't be looked up (probably auth or transient errors) and proceed. The downstream handler will still reject obvious garbage; the pre-PATCH gate is a fast-path, not the only line of defense.
 
+**5.1c Bind connection references (cloud flows and site connections):**
+
+Connection references import **unbound** unless the stage run supplies a connection for each one in `deploymentsettingsjson.ConnectionReferences`. Their ids also change on import, which is why site connections resolve them by `connectionreferencelogicalname`. An unbound reference leaves cloud flows off and makes every site connection that uses it fail at runtime, so every reference in the artifact must be bound before the deploy.
+
+1. **What the artifact carries and what is already configured** (source environment; `{ARTIFACT_SOLUTION_ID}` for this iteration; `--targetEnvUrl` maps each reference's connector to the target — a custom connector has a **different internal name in every environment**, matched through its stable Dataverse schema name):
+   ```bash
+   node "${PLUGIN_ROOT}/scripts/lib/connection-references.js" check-settings \
+     --envUrl "{sourceEnvUrl}" --solutionIds "{ARTIFACT_SOLUTION_ID}" \
+     --targetEnvUrl "{SELECTED_STAGE.targetEnvironmentUrl}" \
+     --settingsFile "./deployment-settings.json" --stageLabel "{SELECTED_STAGE.name}"
+   ```
+   Capture `{ required, configured, unbound }`. If `required` is empty, set `CONNECTION_REFERENCE_BINDINGS = []` and skip to 5.2. If any `required[]` entry has `targetConnectorFound: false`, STOP and show its `targetConnectorReason` — the custom connector is not in the target yet, so the connectors solution must deploy first (Phase 1 orders it first; a manual import of it also works).
+2. **Resolve each `unbound` reference against the TARGET** (environment id of `SELECTED_STAGE.targetEnvironmentUrl` — from the stage's deployment environment record or `pac env list`):
+   ```bash
+   node "${PLUGIN_ROOT}/scripts/lib/connection-references.js" list-connections \
+     --environmentId "{targetEnvironmentId}" --connector "{unbound[i].targetConnectorId}"
+   ```
+
+   <!-- gate: deploy-pipeline:5.connection-references | category=plan | cancel-leaves=nothing -->
+   > 🚦 **Gate (plan · deploy-pipeline:5.connection-references):** Connection references in the artifact without a target connection for this stage. User picks a target connection per reference (or creates one first). No deploy happens with an unbound reference. **Fires per loop iteration in MULTI_RUN_MODE / MULTI_PIPELINE_MODE, like 5.env-vars.**
+
+   Ask via `AskUserQuestion`, one question per unbound reference: *"Which connection in **{stageName}** should `{logicalName}` ({connector}) use?"* — options are the listed connections (`displayName — status`, `Connected` first) plus *"None yet — I'll create one"*. If the user has none, STOP: tell them to create the connection in the target (maker portal → **Connections → New connection**) and re-run. **Do not deploy with an unbound reference.**
+3. **Persist** the choices (always — they are per-stage configuration, like env var values) and re-run step 1 to confirm `unbound` is now empty:
+   ```bash
+   node "${PLUGIN_ROOT}/scripts/lib/connection-references.js" save-settings \
+     --settingsFile "./deployment-settings.json" --stageLabel "{SELECTED_STAGE.name}" --entriesFile "{tmpEntries.json}"
+   ```
+   `{tmpEntries.json}` is a JSON array of `{ "LogicalName", "ConnectionId", "ConnectorId" }` — `ConnectionId` = the chosen connection's `connectionId` and `ConnectorId` = its `connectorId` from `list-connections` (the **target** connector id); delete it afterwards.
+4. Set `CONNECTION_REFERENCE_BINDINGS = configured` from the final step-1 run.
+
 **5.2 PATCH stage run with artifact version, deployment notes, and environment variables** (always run):
 
 First, determine the current solution version in the **source (dev) environment** — this must match exactly:
@@ -699,7 +733,7 @@ Use the returned `version` as `artifactdevcurrentversion`. Do NOT use the versio
 
 For `artifactversion`, increment the patch number of the source version (e.g., `1.0.0.2` → `1.0.0.3`). This must be strictly greater than the version already deployed in the target stage. If deploying to the same stage multiple times, check `docs/alm/last-deploy.json` for the last `artifactVersion` and use a higher value.
 
-Then PATCH (include `deploymentsettingsjson` only if `ENV_VAR_OVERRIDES` is non-empty):
+Then PATCH (include `deploymentsettingsjson` only if `ENV_VAR_OVERRIDES` or `CONNECTION_REFERENCE_BINDINGS` is non-empty):
 
 ```
 PATCH {hostEnvUrl}/api/data/v9.0/deploymentstageruns({STAGE_RUN_ID})
@@ -710,7 +744,7 @@ Authorization: Bearer {HOST_TOKEN}
   "artifactdevcurrentversion": "{current version from source env — must match exactly}",
   "artifactversion": "{new version — must be > current version in target stage}",
   "deploymentnotes": "{AI_DEPLOY_NOTES if available, otherwise a brief description of what is being deployed}",
-  "deploymentsettingsjson": "{JSON.stringify({ EnvironmentVariables: ENV_VAR_OVERRIDES, ConnectionReferences: [] })}"
+  "deploymentsettingsjson": "{JSON.stringify({ EnvironmentVariables: ENV_VAR_OVERRIDES, ConnectionReferences: CONNECTION_REFERENCE_BINDINGS })}"
 }
 ```
 
@@ -718,11 +752,11 @@ The `deploymentsettingsjson` value must be a **JSON-encoded string** (double-ser
 ```js
 const deploymentsettingsjson = JSON.stringify({
   EnvironmentVariables: ENV_VAR_OVERRIDES,
-  ConnectionReferences: stageSettings.ConnectionReferences || [],
+  ConnectionReferences: CONNECTION_REFERENCE_BINDINGS, // from 5.1c: [{ LogicalName, ConnectionId, ConnectorId }]
 });
 ```
 
-If `ENV_VAR_OVERRIDES` is empty and there are no connection references, omit `deploymentsettingsjson` entirely.
+If `ENV_VAR_OVERRIDES` is empty and `CONNECTION_REFERENCE_BINDINGS` is empty, omit `deploymentsettingsjson` entirely.
 
 Response is HTTP 204. If the PATCH fails with a version conflict error, check both version values and retry.
 
@@ -837,12 +871,19 @@ Using `solutionManifest` captured in Phase 1 from `detect-project-context.js`, c
 
 **Connection reference warning** — if `solutionManifest.cloudFlows` is present and non-empty:
 
-> **⚠️ Connection references may need binding**
-> This solution includes cloud flow(s). If those flows use connection references (e.g. Dataverse, SharePoint), they must be bound to live connections in the target environment or the flows will remain disabled.
->
-> To bind: Power Automate → target environment → each flow → Edit → bind connections.
+> **⚠️ Cloud flows need their connections**
+> This solution includes cloud flow(s). Phase 5.1c bound every connection reference in the artifact for this stage; flows that were off before the deploy may still need to be turned on in the target.
 
 If `solutionManifest.cloudFlows` is absent or empty, skip this warning entirely.
+
+**Site connection verification** — if `solutionManifest.siteConnections` is present and non-empty (and this is the last site solution in `DEPLOYMENT_ORDER`, so every connection reference has landed):
+
+```bash
+node "${PLUGIN_ROOT}/scripts/lib/verify-site-connections.js" \
+  --envUrl "{targetEnvUrl}" --siteId "{websiteRecordId}" --environmentId "{targetEnvironmentId}"
+```
+
+Read-only. Show each `fail` / `warn` result with its `message` and record them in `docs/alm/last-deploy.json` as `siteConnectionWarnings[]` (`name`, `code`, `message`). `LOGICAL_NAME_MISSING` means the site connection was saved in the source without `connectionreferencelogicalname`; connection reference ids change on import, so it cannot resolve in the target until the source is fixed and redeployed — this skill never rewrites site connection content. Then remind the user that **Connector Integration** must be enabled for the site in the target after activation (in the site's details in the Power Platform admin center), otherwise site connections are not served.
 
 **Bot republish warning** — if `solutionManifest.botComponents` is present and non-empty:
 
@@ -1108,7 +1149,7 @@ Steps:
      Authorization: Bearer {HOST_TOKEN}
 
      {
-       "deploymentsettingsjson": "{JSON.stringify({ EnvironmentVariables: ENV_VAR_OVERRIDES, ConnectionReferences: ... })}"
+       "deploymentsettingsjson": "{JSON.stringify({ EnvironmentVariables: ENV_VAR_OVERRIDES, ConnectionReferences: CONNECTION_REFERENCE_BINDINGS })}"
      }
      ```
 
@@ -1314,6 +1355,6 @@ Authorization: Bearer {HOST_TOKEN}
 | Select target stage | Selecting target stage | Show available stages from docs/alm/last-pipeline.json; ask user to select target; warn if last deploy to this stage failed |
 | Resolve pipeline info | Resolving pipeline info | Call RetrieveDeploymentPipelineInfo (v9.1) to get SourceDeploymentEnvironmentId and DeployableArtifacts; match solution |
 | Validate package | Validating package | **`MULTI_RUN_MODE`**: run Phase 3.6 once (parallel batch) — `validate-stage-runs-batch.js` fans out create-stage-run + ValidatePackageAsync + poll-validation-status for all non-skipped solutions concurrently; halts the deploy on any failure or pending-approval batch; persists per-solution stageRunIds for the serial deploy loop to reuse. **Single-solution / legacy v2**: Phase 4 inline — POST deploymentstageruns (→ 201 or 204+header); POST ValidatePackageAsync top-level action (204); poll stagerunstatus until not 200000006; JSON.parse validationresults twice; fetch aigenerateddeploymentnotes; PATCH artifactversion + deploymentnotes + deploymentsettingsjson (from deployment-settings.json) |
-| Configure deployment settings | Configuring deployment settings | Check/display deployment-settings.json (5.0a: read or generate template; 5.0b: surface path); query solution for env var definitions (componenttype 380); diff against deployment-settings.json for selected stage; prompt user for any unconfigured values; offer to save back to deployment-settings.json; PATCH deploymentsettingsjson on stage run |
+| Configure deployment settings | Configuring deployment settings | Check/display deployment-settings.json (5.0a: read or generate template; 5.0b: surface path); query solution for env var definitions (componenttype 380); diff against deployment-settings.json for selected stage; prompt user for any unconfigured values; offer to save back to deployment-settings.json; 5.1c: list connection references in the artifact (connection-references.js check-settings), prompt for a target connection for each unbound one, persist to deployment-settings.json, block on unbound; PATCH deploymentsettingsjson (EnvironmentVariables + ConnectionReferences) on stage run |
 | Deploy and monitor | Deploying and monitoring | POST DeployPackageAsync top-level action (204); poll via filter GET (10s) until stagerunstatus terminal; handle approval gates (cancel via PATCH iscanceled=true); offer RetryFailedDeploymentAsync on failure; refresh token every 10 cycles |
-| Write deployment record | Writing deployment record | Write docs/alm/last-deploy.json (with artifactVersion + deployHistoryFile fields); write docs/deploy-history/{date}-{stage}-{version}.md; git add + commit history file; run skill tracking; if Succeeded: show connection reference warning (if solutionManifest.cloudFlows non-empty) and bot republish warning (if solutionManifest.botComponents non-empty); present summary; if Succeeded and Power Pages components present: switch PAC to target, run check-activation-status.js, switch back, ask user to activate if not yet provisioned; if Succeeded and cloud flow components present (componenttype 29): query solutioncomponents, resolve flow names, inform user, ask AskUserQuestion (non-blocking), note registration status in summary |
+| Write deployment record | Writing deployment record | Write docs/alm/last-deploy.json (with artifactVersion + deployHistoryFile fields); write docs/deploy-history/{date}-{stage}-{version}.md; git add + commit history file; run skill tracking; if Succeeded: show cloud-flow connection warning (if solutionManifest.cloudFlows non-empty), run verify-site-connections.js (if solutionManifest.siteConnections non-empty) and bot republish warning (if solutionManifest.botComponents non-empty); present summary; if Succeeded and Power Pages components present: switch PAC to target, run check-activation-status.js, switch back, ask user to activate if not yet provisioned; if Succeeded and cloud flow components present (componenttype 29): query solutioncomponents, resolve flow names, inform user, ask AskUserQuestion (non-blocking), note registration status in summary |
