@@ -50,7 +50,16 @@ rule things out, and these are how a rule-out that is read too widely would show
   loads for Claude — `--safe-mode` would skip it but also drops the plugin's own skills — and CI
   runners have none.
 - **Read-only.** The tool set is cut to "invoke a skill + read files". The trade-off is that a real
-  session offers more tools, so the model sees a slightly smaller menu.
+  session offers more tools, so the model sees a slightly smaller menu. Because nothing can be built
+  with it, every prompt is sent after a short note (`TRIAL_NOTE` in `lib/agents.js`, shown by
+  `--dry-run`): it says that only a skill or a file read is possible, and that if no skill fits the
+  agent should answer in one sentence and stop. It names no skill and no product. Why: in saved
+  transcripts of the failing negative cases the first turn chose no skill; some runs then said they
+  had no file-write or shell tool, and some runs (with or without that remark) later called
+  `report-issue`, the generic skill, while checking what tooling exists. These are separate
+  observations, and the working inference is that an agent with an empty menu has no way to finish.
+  It is not shown that every weekly mis-route follows that sequence; compare a whole-eval run
+  before and after a change to the note to see its effect.
 - **Stopped at the decision.** The JSONL transcript is parsed as it streams, and the agent is killed
   the moment it invokes a model-apps skill, so a positive trial costs about one model turn. A run that
   has not chosen a skill goes on to its own end, so a skill it reaches for later is seen, and graded, too
@@ -79,7 +88,9 @@ The agent runs with a read-only menu (a skill, `view`, `glob`, `grep`: no file w
 that is plainly not for the plugin can therefore go like this: turn 0 looks at the empty workspace and
 decides that no skill applies, which is the right answer, and turn 1, with nothing to build with, asks for
 a skill as a stand-in. The grade counts that request, so the case fails, and the first turn's decision is
-what tells a stand-in from a description that pulls the request in.
+what tells a stand-in from a description that pulls the request in. The note described under
+[How a trial runs](#how-a-trial-runs) tells the agent how to finish without a skill, which is what removes
+most stand-ins; one that still happens is counted as before.
 
 | | Meaning | Part of the grade |
 |---|---------|-------------------|
@@ -107,7 +118,7 @@ Each trial has `routedTo` (the first plugin skill of the run), `initial` (the fi
 `delayed` (the later one or `null`) and `turn` (which turn asked for the first plugin skill).
 
 Read a `later:` count as a question. In a real session the agent has file and shell tools and would do the
-work itself, so a stand-in is partly a property of this menu. A count that grows after a description edit,
+work itself, so a stand-in is partly a property of this menu, which the note in each prompt answers. A count that grows after a description edit,
 though, means the agent reached for the plugin on a request that is not for it. No option grades only the
 first turn: it would pass every negative case on any run that reads the workspace before it asks for a skill.
 

@@ -129,6 +129,80 @@ test('retireProvenUnsentAttempt releases only a sending attempt that sent nothin
   assert.throws(() => store.sealRowDispatch({ token: held.token, epoch: held.epoch, rows: [SEALED[0]] }), 'the released run sends nothing more under it');
 });
 
+// #847: a create the service refused before carrying it out (a 400 with a Dataverse code) un-seals exactly the rows that
+// request carried, so the run can release the attempt; anything that does not match leaves the stricter state.
+test('noteRowsNotStarted un-seals only the rows of the one refused request, at its epoch, and then the attempt is provably unsent', () => {
+  const held = (store) => {
+    const [token] = store.prepareAttemptSet([apiPlan()]);
+    return store.markAttemptSetSending([{ token, expected: apiExpected() }], { claim: 'first', observed: true })[0];
+  };
+  const refused = [
+    ['another epoch', ({ token, epoch }) => ({ token, epoch: epoch + 1, rows: SEALED })],
+    ['a row under another id', ({ token, epoch }) => ({ token, epoch, rows: [{ ...SEALED[0], id: API2 }] })],
+    ['a row sealed under another projection', ({ token, epoch }) => ({ token, epoch, rows: [{ ...SEALED[0], sentSha256: H('9') }] })],
+    ['one row named twice', ({ token, epoch }) => ({ token, epoch, rows: [SEALED[0], SEALED[0]] })],
+    ['no rows', ({ token, epoch }) => ({ token, epoch, rows: [] })],
+  ];
+  for (const [what, args] of refused) {
+    const store = open(dirOf());
+    const h = held(store);
+    store.sealRowDispatch({ token: h.token, epoch: h.epoch, rows: SEALED });
+    const before = text(store);
+    assert.ok(codeOf(() => store.noteRowsNotStarted(args(h))), what);
+    assert.equal(text(store), before, `${what}: nothing is written`);
+    assert.equal(codeOf(() => store.retireProvenUnsentAttempt(h)), CODES.pending, `${what}: the attempt stays possibly sent`);
+  }
+  // A row never sealed is not un-sealed by a refusal of another request.
+  const unsealed = open(dirOf());
+  const u = held(unsealed);
+  unsealed.sealRowDispatch({ token: u.token, epoch: u.epoch, rows: [SEALED[0]] });
+  assert.equal(codeOf(() => unsealed.noteRowsNotStarted({ ...u, rows: SEALED })), CODES.requestMismatch);
+
+  // Two requests sent, one refused: the other may have landed, so the attempt is kept.
+  const two = open(dirOf());
+  const t = held(two);
+  two.sealRowDispatch({ token: t.token, epoch: t.epoch, rows: [SEALED[0]] });
+  two.sealRowDispatch({ token: t.token, epoch: t.epoch, rows: [SEALED[1]] });
+  two.noteRowsNotStarted({ ...t, rows: [SEALED[1]] });
+  assert.equal(codeOf(() => two.retireProvenUnsentAttempt(t)), CODES.pending, 'the root request may have landed');
+
+  const store = open(dirOf());
+  const h = held(store);
+  store.sealRowDispatch({ token: h.token, epoch: h.epoch, rows: SEALED });
+  store.noteRowsNotStarted({ ...h, rows: SEALED });
+  const p = store.readGroup('customApi', API_KEY).pending;
+  assert.deepEqual(p.rowProtocol.rows.map((r) => [r.dispatched, r.sentSha256]), [[false, null], [false, null]]);
+  assert.deepEqual([p.sendWindow.possible, p.sendWindow.notStarted], [0, 1]);
+  assert.ok(codeOf(() => store.noteRowsNotStarted({ ...h, rows: SEALED })), 'one refusal is counted once');
+  assert.deepEqual(store.retireProvenUnsentAttempt(h), { retired: true, effects: 0 });
+  assert.ok(!store.readGroup('customApi', API_KEY).pending);
+});
+
+test('abandonAttempt stops tracking exactly the named configuration attempt, in any phase, and keeps every committed group', () => {
+  const store = open(dirOf());
+  const [{ token, epoch }] = sending(store);
+  store.sealRowDispatch({ token, epoch, rows: SEALED });
+  const before = text(store);
+  assert.equal(codeOf(() => store.abandonAttempt({ token, family: 'customApi', key: 'contoso_other' })), CODES.notSettled, 'another key');
+  assert.equal(codeOf(() => store.abandonAttempt({ token, family: 'environmentVariable', key: API_KEY })), CODES.notSettled, 'another family');
+  assert.ok(codeOf(() => store.abandonAttempt({ token: crypto.randomUUID(), family: 'customApi', key: API_KEY })), 'an attempt the store does not hold');
+  assert.equal(codeOf(() => store.abandonAttempt({ family: 'customApi', key: API_KEY })), CODES.notSettled, 'no token');
+  assert.equal(text(store), before, 'a refusal writes nothing');
+  assert.deepEqual(store.abandonAttempt({ token, family: 'customApi', key: API_KEY }), { retired: true, effects: 0 });
+  assert.ok(!store.readGroup('customApi', API_KEY).pending, 'the possibly-sent attempt is no longer tracked');
+  assert.throws(() => store.sealRowDispatch({ token, epoch, rows: [SEALED[0]] }), 'nothing more is sent under it');
+
+  // A prepared attempt goes the same way; another family's committed group is untouched.
+  const kept = open(dirOf());
+  settleForm(kept);
+  const groups = JSON.parse(text(kept)).groups;
+  const [prepared] = kept.prepareAttemptSet([apiPlan()]);
+  assert.equal(codeOf(() => kept.abandonAttempt({ token: prepared, family: 'form', key: API_KEY })), CODES.notSettled, 'only its own family');
+  kept.abandonAttempt({ token: prepared, family: 'customApi', key: API_KEY });
+  assert.ok(!kept.readGroup('customApi', API_KEY).pending);
+  assert.deepEqual(JSON.parse(text(kept)).groups, groups, 'every committed group stays');
+});
+
 test('ownership is proved row by row: a root acknowledgement never mints a child, and a child adoption names it exactly', () => {
   const dir = dirOf();
   const store = open(dir);

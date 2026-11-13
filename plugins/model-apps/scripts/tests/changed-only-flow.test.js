@@ -1092,3 +1092,23 @@ test('run: a PROVEN absent app still certifies an eligible fresh baseline', asyn
       `a fresh create must still yield an eligible baseline; debt=${JSON.stringify(snap.debt)}`);
   } finally { rm(dir); }
 });
+
+// #845: an edit of the earlier of two same-named declared views, made with a page edit. Aligned by name alone it was hidden by
+// its later namesake, so the run was pages-only, skipped the views phase and recorded the edited spec as applied: the next
+// run was a no-op and the edit was never made.
+test('run: an edit of the earlier of two same-named views beside a page edit runs the FULL build, and only a page edit stays fast', async () => {
+  const twins = (columns) => ({ ...baseSpec(), views: [
+    { key: 'v1', entity: 'new_x', name: 'Twin', reconcile: 'declared', columns },
+    { key: 'v2', entity: 'new_x', name: 'Twin', reconcile: 'declared', columns: ['new_name', 'createdon'] },
+  ] });
+  for (const [label, columns, decision] of [['earlier view edited', ['new_name', 'createdon'], 'full'], ['page only', ['new_name'], 'fast']]) {
+    const dir = ws();
+    try {
+      seedEligible(dir, annotate(twins(['new_name']), 'v1'));
+      const record = [];
+      const r = await flow.runChangedOnlyApply({ spec: twins(columns), opts: { workspaceDir: dir, apply: true }, deps: baseDeps(dir, { record, buildModelApp: stubBuild(record), readContent: readFor('v2') }) });
+      assert.strictEqual(r.changedOnly.decision, decision, label);
+      assert.deepStrictEqual(record[0].phases, decision === 'full' ? undefined : ['pages'], `${label}: a full build has no phase range`);
+    } finally { rm(dir); }
+  }
+});

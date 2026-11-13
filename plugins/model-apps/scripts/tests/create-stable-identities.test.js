@@ -25,6 +25,8 @@ const { createFakeBuildOrg } = require('./helpers/fake-app-build-org.js');
 const { gatedClient } = require('./helpers/gated-fake-client.js');
 const { seedManagedDebt } = require('./helpers/managed-debt.js');
 const { verifySpec } = require('../lib/verify-spec.js');
+const { appComponentsFor, declaredAppPins } = require('../lib/app-components.js');
+const { indexArtifacts } = require('../lib/apply-snapshot-index.js');
 
 const dirs = [];
 test.after(() => { for (const d of dirs) fs.rmSync(d, { recursive: true, force: true }); });
@@ -1463,5 +1465,154 @@ test('standalone discovery reads a workspace path that is a file, or lies under 
   for (const workspaceDir of [file, path.join(file, '.maker-workspace')]) {
     const found = openStandaloneManagedFence({ environment: org.origin, workspaceDir });
     assert.deepEqual([found.absent, found.debt], [true, []], workspaceDir);
+  }
+});
+
+// --- #845: two declared views of one name on one table, each under its own key ------------------------------------------------------
+
+// A reader over the fake org's saved queries that applies the filter verify sends, as the service does: by the row's id, or by its
+// table and name (every row of that name, up to `top`, in the order the org holds them).
+const savedQueryReader = (org, reads = []) => ({
+  findTable: async () => ({ logicalName: 'contoso_item' }),
+  findColumns: async () => [{ logicalName: 'contoso_code' }],
+  sitemapXml: async () => '<SiteMap><Area><Group><SubArea Entity="contoso_item"/></Group></Area></SiteMap>',
+  queryRecords: async (set, q) => {
+    if (set !== 'savedquery') return [];
+    reads.push(q.filter);
+    const all = org.fake.rows('savedqueries').map((r) => r.data);
+    const byId = /^savedqueryid eq ([0-9a-f-]{36})$/.exec(q.filter);
+    if (byId) return all.filter((r) => r.savedqueryid === byId[1]);
+    const byName = /^returnedtypecode eq '([^']*)' and name eq '([^']*)'$/.exec(q.filter);
+    return byName ? all.filter((r) => r.returnedtypecode === byName[1] && r.name === byName[2]).slice(0, q.top || 50) : [];
+  },
+});
+const twin = (key, columns) => ({ entity: 'contoso_item', name: 'Twin', key, reconcile: 'declared', columns });
+const twinSpec = (views) => stableSpec({ minimumPluginVersion: '2.21.0', views, charts: [] });
+const viewChecks = (r) => r.checks.filter((c) => c.kind === 'view' || c.kind === 'view-columns').map((c) => [c.kind, c.present, c.detail]);
+
+test('#845: two same-named declared views under their own keys are both recorded as created, and each is verified against its own row', async () => {
+  const org = createFakeBuildOrg({ entities: ENTITIES });
+  const dir = newDir();
+  const spec = twinSpec([twin('v1', ['contoso_name']), twin('v2', ['contoso_name', 'contoso_code'])]);
+  assert.deepEqual(validateAppSpec(spec).errors, []);
+  const built = await build(org, dir, spec);
+  assert.equal(built.err, undefined, built.err && built.err.message);
+  const rows = org.fake.rows('savedqueries').map((r) => r.data).filter((r) => r.name === 'Twin');
+  assert.equal(rows.length, 2, 'the build made a row for each key');
+  const s = createStableCreates({ spec, sdk: null, store: null, basePort: createPassthroughCreates() });
+  const [id1, id2] = ['v1', 'v2'].map((k) => s.identityFor('view', k).id);
+  assert.deepEqual(new Set(rows.map((r) => r.savedqueryid)), new Set([id1, id2]));
+  // The record of created views holds both: the `entity|name` entry as before (the last of the pair), the other in its own list.
+  assert.deepEqual(built.out.created.views, { 'contoso_item|Twin': id2 });
+  assert.deepEqual(built.out.created.sameNamedViews, [{ entity: 'contoso_item', name: 'Twin', key: 'v1', id: id1 }]);
+  assert.deepEqual(appComponentsFor(built.out.created).views, [id2, id1]);
+  // The table is published once, as for one view.
+  assert.equal(built.tablePublishes.filter((names) => names.includes('contoso_item')).length, 1);
+
+  // Verify with the bindings of this workspace: each view is read by its bound id and held to its own columns.
+  const managedManifest = readManagedManifest(workspaceArgs(org, dir));
+  const reads = [];
+  const r = await verifySpec(spec, savedQueryReader(org, reads), { managedManifest });
+  assert.equal(r.ok, true, JSON.stringify(r.missing));
+  assert.deepEqual(viewChecks(r), [['view', true, ''], ['view-columns', true, ''], ['view', true, ''], ['view-columns', true, '']]);
+  assert.deepEqual(reads.sort(), [`savedqueryid eq ${id1}`, `savedqueryid eq ${id1}`, `savedqueryid eq ${id2}`, `savedqueryid eq ${id2}`].sort(), 'each view read by its bound id (and its managed check)');
+  // A declaration that is not what its own row holds fails for that view only, named by its key.
+  const drifted = await verifySpec(twinSpec([twin('v1', ['contoso_name']), twin('v2', ['contoso_name', 'contoso_kind'])]), savedQueryReader(org), { managedManifest });
+  assert.deepEqual(drifted.missing.map((c) => [c.kind, c.name, c.detail]), [['view-columns', 'contoso_item.Twin', 'missing column(s): contoso_kind (view key v2)']]);
+
+  // A downloaded spec pins each view by its viewId: read by that id without the bindings too.
+  const pinned = twinSpec([{ ...twin('v1', ['contoso_name']), viewId: id1 }, { ...twin('v2', ['contoso_name', 'contoso_code']), viewId: id2 }]);
+  const byPin = await verifySpec(pinned, savedQueryReader(org));
+  assert.equal(byPin.ok, true, JSON.stringify(byPin.missing));
+  assert.equal(byPin.checks.filter((c) => c.kind === 'view-columns' && c.present).length, 2);
+
+  // Neither binding nor pin: the name finds a row, but which of the two it is cannot be told, so the content is unverified, not failed.
+  const unbound = await verifySpec(spec, savedQueryReader(org));
+  assert.equal(unbound.ok, true, JSON.stringify(unbound.missing));
+  assert.deepEqual(viewChecks(unbound), [['view', true, ''], ['view', true, '']]);
+  assert.deepEqual(unbound.unverified.filter((u) => u.startsWith('view')).length, 2);
+});
+
+test('#845: a bound or pinned view whose row is gone is missing, and its namesake is not taken in its place', async () => {
+  const org = createFakeBuildOrg({ entities: ENTITIES });
+  const dir = newDir();
+  const spec = twinSpec([twin('v1', ['contoso_name']), twin('v2', ['contoso_name', 'contoso_code'])]);
+  const built = await build(org, dir, spec);
+  assert.equal(built.err, undefined, built.err && built.err.message);
+  const managedManifest = readManagedManifest(workspaceArgs(org, dir));
+  const id2 = built.out.created.views['contoso_item|Twin'];
+  const reader = savedQueryReader(org);
+  const without = { ...reader, queryRecords: async (set, q) => (q.filter === `savedqueryid eq ${id2}` ? [] : reader.queryRecords(set, q)) };
+  const r = await verifySpec(spec, without, { managedManifest });
+  assert.equal(r.ok, false);
+  assert.deepEqual(r.missing.filter((c) => c.kind === 'view').map((c) => [c.name, c.detail]), [
+    ['contoso_item.Twin', `the view its managed binding (v2) is bound to (${id2}) was not found on its table; a view of the same name is not taken in its place (view key v2)`],
+  ]);
+  // A pin that names another row than the binding is a conflict to correct, not a pass.
+  const id1 = built.out.created.sameNamedViews.find((v) => v.key === 'v1').id;
+  const crossed = await verifySpec(twinSpec([twin('v1', ['contoso_name']), { ...twin('v2', ['contoso_name', 'contoso_code']), viewId: id1 }]), reader, { managedManifest });
+  assert.deepEqual(crossed.missing.map((c) => [c.kind, c.detail]), [
+    ['view', `its viewId ${id1} is not the view its managed binding (v2) is bound to (${id2}); correct or remove the viewId (view key v2)`],
+  ]);
+  // An attempt still pending for the key proves nothing: unverified, never a pass or a failure.
+  const open = { ...managedManifest, groups: managedManifest.groups.filter((g) => g.key !== 'v2'), pending: [{ family: 'view', key: 'v2', code: 'managed-settlement-pending' }] };
+  const held = await verifySpec(spec, reader, { managedManifest: open });
+  assert.ok(held.unverified.includes('view:contoso_item.Twin (its managed binding (v2) is not settled (managed-settlement-pending) — unverified, not proven correct)'));
+  assert.deepEqual(viewChecks(held), [['view', true, ''], ['view-columns', true, '']], 'only the settled view is checked');
+  // A binding store that cannot be read proves no binding either: each declared view is unverified, as a declared chart is,
+  // never read by its name in place of the row the store may bind.
+  const unreadable = { revision: 0, groups: [], pending: [], invalid: [{ family: 'store', key: 'managed-bindings', code: 'managed-binding-store-unreadable' }] };
+  const blind = await verifySpec(spec, reader, { managedManifest: unreadable });
+  assert.deepEqual(viewChecks(blind), [], 'no view is checked by its name');
+  for (const key of ['v1', 'v2']) {
+    assert.ok(blind.unverified.includes(`view:contoso_item.Twin (its managed binding (${key}) is not settled (managed-binding-store-unreadable) — unverified, not proven correct)`), JSON.stringify(blind.unverified));
+  }
+});
+
+test('#845 control: a spec without same-named views records and verifies exactly as before', async () => {
+  const org = createFakeBuildOrg({ entities: ENTITIES });
+  const dir = newDir();
+  const other = { entity: 'contoso_item', name: 'Other', reconcile: 'declared', columns: ['contoso_code'] };
+  const spec = twinSpec([twin('v1', ['contoso_name']), other]);
+  const built = await build(org, dir, spec);
+  assert.equal(built.err, undefined, built.err && built.err.message);
+  assert.deepEqual(Object.keys(built.out.created.views), ['contoso_item|Twin', 'contoso_item|Other']);
+  assert.equal(built.out.created.sameNamedViews, undefined);
+  assert.equal(built.tablePublishes.filter((names) => names.includes('contoso_item')).length, 1);
+  // Without bindings, a declared view is read by its table and name, one row, as it always was.
+  const reads = [];
+  const r = await verifySpec(spec, savedQueryReader(org, reads));
+  assert.equal(r.ok, true, JSON.stringify(r.missing));
+  assert.deepEqual(viewChecks(r), [['view', true, ''], ['view-columns', true, ''], ['view', true, ''], ['view-columns', true, '']]);
+  assert.deepEqual(reads, ["returnedtypecode eq 'contoso_item' and name eq 'Twin'", "returnedtypecode eq 'contoso_item' and name eq 'Other'"]);
+  // An unkeyed legacy view of the same name as a declared one is read by its name too, and its content checked, as before.
+  const legacyReads = [];
+  const legacy = await verifySpec({ ...spec, views: [{ entity: 'contoso_item', name: 'Other', columns: ['contoso_code'] }, other] }, savedQueryReader(org, legacyReads));
+  assert.equal(legacy.ok, true, JSON.stringify(legacy.missing));
+  assert.equal(legacy.checks.filter((c) => c.kind === 'view-columns' && c.present).length, 2);
+  assert.deepEqual(legacyReads, ["returnedtypecode eq 'contoso_item' and name eq 'Other'", "returnedtypecode eq 'contoso_item' and name eq 'Other'"]);
+});
+test('#845: a view named like another view plus a key keeps its own entry, and the same-named pair is still recorded in full', async () => {
+  for (const thirdFirst of [true, false]) {
+    // `Twin|v1` is a legal view name of its own; a record that joined `entity|name|key` would give its entry to the first Twin.
+    const third = { ...twin('third', ['contoso_code']), name: 'Twin|v1' };
+    const pair = [twin('v1', ['contoso_name']), twin('v2', ['contoso_name', 'contoso_code'])];
+    const spec = twinSpec(thirdFirst ? [third, ...pair] : [...pair, third]);
+    assert.deepEqual(validateAppSpec(spec).errors, []);
+    const org = createFakeBuildOrg({ entities: ENTITIES });
+    const built = await build(org, newDir(), spec);
+    assert.equal(built.err, undefined, built.err && built.err.message);
+    const s = createStableCreates({ spec, sdk: null, store: null, basePort: createPassthroughCreates() });
+    const [id1, id2, own] = ['v1', 'v2', 'third'].map((k) => s.identityFor('view', k).id);
+    assert.deepEqual(new Set(org.fake.rows('savedqueries').map((r) => r.data.savedqueryid)), new Set([id1, id2, own]), `thirdFirst=${thirdFirst}`);
+    // The name entries are what they always were: `Twin|v1` is its own view, `Twin` the last of the pair.
+    assert.deepEqual(built.out.created.views, { 'contoso_item|Twin|v1': own, 'contoso_item|Twin': id2 }, `thirdFirst=${thirdFirst}`);
+    assert.equal(indexArtifacts(spec, built.out.created).views['contoso_item|Twin|v1'].viewId, own);
+    assert.equal(indexArtifacts(spec, built.out.created).views['contoso_item|Twin'].viewId, id2);
+    // The first Twin is recorded too, apart from the name entries, so the app's components and declared pins hold all three.
+    assert.deepEqual(built.out.created.sameNamedViews, [{ entity: 'contoso_item', name: 'Twin', key: 'v1', id: id1 }]);
+    assert.deepEqual(new Set(appComponentsFor(built.out.created).views), new Set([id1, id2, own]));
+    assert.deepEqual(new Set(declaredAppPins(built.out.created).views), new Set([id1, id2, own]));
+    assert.equal(appComponentsFor(built.out.created).views.length, 3);
   }
 });

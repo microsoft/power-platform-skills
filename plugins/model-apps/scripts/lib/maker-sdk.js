@@ -32,12 +32,37 @@
 // The `workspaceStorage` the caller names is handed to the SDK with one addition too (lib/output-redaction.js): every text it is asked to write has the access tokens this process obtained taken out of it. The SDK writes each file
 // of its workspace — an artifact, its metadata, the manifest — through the storage's `writeTextAtomic`, and through nothing else, so a token a service repeated in an answer (which is the caller's data and is returned as it came) cannot
 // land in a file. The folder, the paths and every other member are the storage's own: the wrapper has it for a prototype, so a caller's `instanceof` and the SDK's own look for a file-system storage still hold.
+// Over it, the copies the SDK keeps of the two configuration kinds that carry what a deployment is given — environment variables (their current value,
+// default value, value schema, and for a secret the Key Vault reference the build sends) and connection references (their connection id) — are kept in
+// this instance's memory and never reach the storage (lib/workspace-configuration-memory.js, #846/#847): the SDK still creates, pushes and reads them
+// back within the run, but no file of any workspace — the build's throwaway one or the app folder's `.maker-workspace` — holds one at rest, even when the
+// process dies between two steps. A copy an earlier plugin version left there is never deleted or hidden by this plugin: one
+// the SDK's own metadata proves clean is left in place and never used as configuration (it is read only to prove it clean), anything else is refused (WORKSPACE_LEGACY_CONFIGURATION_COPY) at the
+// SDK's first touch of that artifact, and the folders still holding such files are named in one warning per workspace per process.
 const bundle = require('../vendor/cds-maker-sdk.cjs');
 const { loadVendoredTypeScript } = require('./typescript-compiler.js');
 const { guardPageNesting } = require('./page-nesting.js');
 const { guardTableLists } = require('./collection-answers.js');
 const { guardAppHeaderWrites } = require('./app-header-text.js');
 const { guardWorkspaceStorage } = require('./output-redaction.js');
+const { keepSensitiveConfigurationInMemory, legacyCopyFolders, legacyCopyWarning } = require('./workspace-configuration-memory.js');
+
+// Workspace folders already warned about in this process: a build makes several SDKs over one folder, and the maker needs the
+// warning once, not once per instance.
+const warnedLegacyFolders = new Set();
+
+// Names the sensitive folders of `storage` that still hold files an earlier plugin version wrote (names only, never content),
+// on stderr as every script's warnings are. Telling the maker must never stop an SDK from being made, so a failure is ignored.
+function warnLegacyCopies(storage) {
+  try {
+    const root = typeof storage.getRoot === 'function' ? storage.getRoot() : null;
+    if (typeof root !== 'string' || warnedLegacyFolders.has(root)) return;
+    const folders = legacyCopyFolders(storage);
+    if (folders.length === 0) return;
+    warnedLegacyFolders.add(root);
+    process.stderr.write(`WARNING: ${legacyCopyWarning(root, folders)}\n`);
+  } catch { /* the warning is advice; the SDK is made regardless */ }
+}
 
 // `create` given the vendored compiler unless the options name one, and — only for a caller that asked — the Power Apps service client
 // (a seam for the test: the bundle's own exports are read-only). The `connectivity` request itself is the factory's, never the SDK's.
@@ -56,7 +81,15 @@ function withVendoredCompiler(create) {
     }
     if (made.httpClient) made.httpClient = guardTableLists(made.httpClient, (code, message) => new bundle.SdkError(code, message));
     if (made.httpClient) made.httpClient = guardAppHeaderWrites(made.httpClient, (code, message) => new bundle.SdkError(code, message));
-    if (made.workspaceStorage) made.workspaceStorage = guardWorkspaceStorage(made.workspaceStorage);
+    if (made.workspaceStorage) {
+      // Outermost, so a sensitive copy never even reaches the token guard's write; the caller's storage stays the prototype.
+      const own = made.workspaceStorage;
+      made.workspaceStorage = keepSensitiveConfigurationInMemory(guardWorkspaceStorage(own), {
+        prototype: own,
+        refuse: (code, message) => new bundle.SdkError(code, message),
+      });
+      warnLegacyCopies(own);
+    }
     if (connectivity && made.powerAppsServiceClient === undefined) {
       // Required here, not at the top: the client pulls in the Azure CLI token code, which an instance that never reads connections does not need.
       const { createPowerAppsServiceClient } = require('./power-apps-service-client.js');

@@ -598,6 +598,8 @@ function tagged(kind, key, code, outcome, report) {
 // - the port's typed stops carry lower-case codes (create-identity-conflict: a row of that name sits at another
 //   id; create-identity-unverified: the derived id could not be read; create-outcome-unknown;
 //   create-completion-required) and pass through unchanged, so a caller can name them;
+// - the port's create-refused stop (`nothingCreated`: the service refused every request unstarted and the port released
+//   the attempt, #847) is refused even after execute was entered: the store itself proves nothing it sent can land;
 // - any other failure after execute was entered is unknown: what was sent is not known.
 const PORT_CODE = /^create-[a-z0-9-]{2,60}$/;
 const UNKNOWN_PORT_CODES = new Set(['create-identity-unverified', 'create-outcome-unknown', 'create-completion-required']);
@@ -608,10 +610,15 @@ function portCode(error) {
 function routeFailure(error, sent) {
   if (error && error[TAGGED]) return error.report || { bucket: error.outcome === 'nothing' ? 'refused' : 'unknown', code: error.code };
   const code = portCode(error);
+  if (code && error.nothingCreated === true && !UNKNOWN_PORT_CODES.has(code)) return { bucket: 'refused', code, ...serviceCodeOf(error) };
   if (code) return { bucket: sent || UNKNOWN_PORT_CODES.has(code) ? 'unknown' : 'refused', code };
   if (sent) return { bucket: 'unknown', code: 'create-outcome-unknown' };
   return { bucket: 'refused', code: codeOf(error) === 'UNEXPECTED_ERROR' ? 'CREATE_REFUSED' : codeOf(error) };
 }
+
+// The Dataverse error code a refused request was answered with (`0x80072040`), carried to the halt line; anything else
+// is dropped, so a message or a value can never ride along.
+const serviceCodeOf = (error) => (error && typeof error.serviceCode === 'string' && /^0x[0-9a-f]{8}$/i.test(error.serviceCode) ? { serviceCode: error.serviceCode } : {});
 
 const portOf = (ctx) => (ctx.creates && typeof ctx.creates.run === 'function' ? ctx.creates : null);
 
@@ -656,10 +663,13 @@ function identityStop(code, id) {
 // A copy that holds edits the service has not seen (an earlier run's unsent change, or one made by hand) is the maker's to
 // keep or drop, never this read's: it stops typed, the copy kept (the protected preflight names it first, as
 // workspace-copy-unsent-edits with the one approval that replaces it, overwrite:<kind>:<key>). Only a diff (lib/unsynced-edits.js), no request; a copy the workspace does not hold reads clean, and a diff
-// that cannot be made reads as edits, so a doubtful copy is kept too.
+// that cannot be made reads as edits, so a doubtful copy is kept too. A copy an earlier plugin version left that the
+// workspace cannot prove clean is refused by the workspace itself (lib/workspace-configuration-memory.js); that refusal
+// keeps its own code (WORKSPACE_LEGACY_CONFIGURATION_COPY), whose remedy differs: delete the old files, not refresh them.
 async function refuseLocalDraft(sdk, kind, id) {
   const { hasUnsyncedEdits } = require('./unsynced-edits.js');
-  if (await hasUnsyncedEdits(sdk, kind, id)) throw identityStop('create-completion-required', id);
+  const { isLegacyCopyRefusal } = require('./workspace-configuration-memory.js');
+  if (await hasUnsyncedEdits(sdk, kind, id, { rethrow: isLegacyCopyRefusal })) throw identityStop('create-completion-required', id);
 }
 
 // The id a typed stop is about, when it names one, so a maker can inspect the row the next run could not read. The
@@ -1889,7 +1899,7 @@ async function applyCreate(op, ctx, result, known) {
     const lost = routed.bucket === 'unknown' && error && error[TAGGED];
     pushFinding(result, routed.bucket, {
       kind, key, id: routed.bucket === 'unknown' && given ? given.id : undefined,
-      code: lost ? 'create-outcome-unknown' : routed.code, cause: lost ? routed.code : undefined,
+      code: lost ? 'create-outcome-unknown' : routed.code, cause: lost ? routed.code : undefined, serviceCode: routed.serviceCode,
     }, routed.bucket === 'unknown' ? handle : null);
     return;
   }
@@ -2042,7 +2052,7 @@ async function applyUpdate(op, ctx, result, known) {
     const routed = routeFailure(error, false);
     // A write (not a create) whose answer was lost: what it changed is not known.
     const lost = routed.bucket === 'unknown' && error && error[TAGGED] && !error.report;
-    pushFinding(result, routed.bucket, { kind, key, id, code: lost ? 'CONFIGURATION_WRITE_UNKNOWN' : routed.code, cause: lost ? routed.code : undefined }, routed.bucket === 'unknown' ? handle : null);
+    pushFinding(result, routed.bucket, { kind, key, id, code: lost ? 'CONFIGURATION_WRITE_UNKNOWN' : routed.code, cause: lost ? routed.code : undefined, serviceCode: routed.serviceCode }, routed.bucket === 'unknown' ? handle : null);
     return;
   }
   if (stop) { pushFinding(result, stop.bucket, { kind, key, id, code: stop.code }, handle); return; }
@@ -2521,7 +2531,7 @@ function configurationContext({ sdk, creates, managed, bindings, solutionUniqueN
 const configurationDestructive = (plan) => [...new Set(((plan && plan.operations) || []).filter((op) => op.destructive).flatMap((op) => op.authorize || []))];
 
 // A halt item: kind, key and fixed code, plus the tokens a refusal needs consent for (DESTRUCTIVE_CHANGE_UNAUTHORIZED's `authorize`).
-const haltItem = ({ kind, key, code, authorize }) => ({ kind, key, code, ...(Array.isArray(authorize) && authorize.length ? { authorize: authorize.slice() } : {}) });
+const haltItem = ({ kind, key, code, authorize, serviceCode }) => ({ kind, key, code, ...(Array.isArray(authorize) && authorize.length ? { authorize: authorize.slice() } : {}), ...serviceCodeOf({ serviceCode }) });
 
 // The configuration halt's text. A refusal that needs consent ends with the exact flags that give it, e.g.
 //   environmentVariable contoso_Mode (DESTRUCTIVE_CHANGE_UNAUTHORIZED) (approve with --authorize environmentVariable:contoso_mode:defaultValue)
@@ -2551,8 +2561,18 @@ const SAVED_UNPUBLISHED = Symbol('savedUnpublished');
 const UNPUBLISHED_RULE_HINT = 'saved, but its publication did not complete: publish the rule in the environment\'s duplicate detection rules settings, '
   + 'or set "status": "published" on it in the App Spec and build again; a build without "status" keeps it unpublished';
 const markSavedUnpublished = (item) => Object.defineProperty(item, SAVED_UNPUBLISHED, { value: true, enumerable: false });
+// A protected create or edit the service refused (create-refused, #847) was released in the same run, so its line says
+// that nothing is pending and what to correct, naming the Dataverse error code when the answer carried one — never the
+// service's message, which can echo a Key Vault reference or a connection id:
+//   environmentVariable contoso_Key (create-refused) (the service refused it (0x80072040): nothing was created or changed and nothing is left pending; ...)
+const REFUSED_FIX = {
+  environmentVariable: 'correct its value in the deployment settings (for a secret, a Key Vault secret reference this environment can read) or its definition in the App Spec',
+  connectionReference: 'correct its connection in the deployment settings or its definition in the App Spec',
+};
+const refusedHint = (p) => `the service refused it${p.serviceCode ? ` (${p.serviceCode})` : ''}: nothing was created or changed and nothing is left pending; `
+  + `${REFUSED_FIX[p.kind] || 'correct its definition in the App Spec'}, then build again, or remove it from the App Spec`;
 function configurationHaltMessage(items) {
-  const hint = (p) => (p[SAVED_UNPUBLISHED] && p.kind === 'duplicateRule' ? ` (${UNPUBLISHED_RULE_HINT})` : '');
+  const hint = (p) => (p[SAVED_UNPUBLISHED] && p.kind === 'duplicateRule' ? ` (${UNPUBLISHED_RULE_HINT})` : p.code === 'create-refused' ? ` (${refusedHint(p)})` : '');
   const line = (p) => `${p.kind} ${p.key} (${p.code})${p.authorize && p.authorize.length ? ` (approve with ${authorizeFlags(p.authorize)})` : ''}${hint(p)}`;
   return `${items.length} configuration item${items.length === 1 ? '' : 's'} not completed: ${items.map(line).join(', ')}`;
 }
@@ -2617,7 +2637,7 @@ const TOKEN_ROOTS = Object.freeze({
 // Sort the `--authorize` tokens the maker passed: those of this module's kinds are checked against the App Spec
 // (the root must be declared; the field must be one a plan can ask for) and normalized exactly as a plan writes them
 // (lower-cased names and child names; a rule's key and a condition's key byte for byte). Tokens of other kinds are
-// answered unclaimed, for their own grammar. `{keys: Set, overwrite: Set, rowApprovals: Set, problems: [{token, code}], unclaimed: [token]}`.
+// answered unclaimed, for their own grammar. `{keys: Set, overwrite: Set, retire: Set, rowApprovals: Set, problems: [{token, code}], unclaimed: [token]}`.
 // `overwrite:<kind>:<declared key>` (e.g. overwrite:customApi:contoso_Calc) is the one approval that replaces a protected
 // item's local workspace copy with the server's (lib/configuration-protected.js, the preflight's stop on a copy that
 // differs). It names a whole root item, matched as the other tokens are (a duplicate rule's key exactly), and is read only
@@ -2657,9 +2677,19 @@ const ADOPT_CHILD_TOKEN = /^adopt:(environmentVariableValue|customApiRequestPara
 const ADOPT_CHILD_PARENT = Object.freeze({
   environmentVariableValue: 'environmentVariable', customApiRequestParameter: 'customApi', customApiResponseProperty: 'customApi', duplicateRuleCondition: 'duplicateRule',
 });
+// `retire:<kind>:<key>@<attempt token>` (#847) lets the binding store stop tracking ONE unfinished protected attempt of an
+// item the App Spec no longer declares, which may have been sent (configuration-protected.js pendingSweep prints it with
+// the attempt's own random token and the key as the store keys it), e.g.
+//   retire:environmentVariable:contoso_key@6f1c2b9e-1d3a-4c5e-9f00-0a1b2c3d4e5f
+// The key is everything between the kind and the LAST '@' (a token holds none; a duplicate-rule key may). It names an
+// item the App Spec does NOT declare (a declared one is settled by its own build: CONFIGURATION_RETIRE_DECLARED) and is
+// read with or without the opt-in, since the store's debt is swept either way. It lands in `retire` as
+// `<kind>\u0000<port key>\u0000<token>` (lower-case token); the sweep matches it to the attempt exactly.
+const RETIRE_TOKEN = /^retire:(environmentVariable|connectionReference|customApi|duplicateRule):([\s\S]+)@([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$/;
 function configurationAuthorizationKeys(tokens, spec) {
   const keys = new Set();
   const overwrite = new Set();
+  const retire = new Set();
   const rowApprovals = new Set();
   const problems = [];
   const unclaimed = [];
@@ -2688,6 +2718,13 @@ function configurationAuthorizationKeys(tokens, spec) {
   const protectedSpec = isObject(spec) && spec.configurationIdentity === 'stable-v1';
   for (const token of tokens || []) {
     const text = typeof token === 'string' ? token : '';
+    if (text.startsWith('retire:')) {
+      const m = RETIRE_TOKEN.exec(text);
+      if (!m) problems.push({ token: text, code: 'CONFIGURATION_RETIRE_INVALID' });
+      else if (rootOf(m[1], m[2])) problems.push({ token: text, code: 'CONFIGURATION_RETIRE_DECLARED' });
+      else retire.add(`${m[1]}\u0000${portKeyOf(m[1], m[2])}\u0000${m[3].toLowerCase()}`);
+      continue;
+    }
     const replace = OVERWRITE_TOKEN.exec(text);
     if (replace) {
       const [, kind, name] = replace;
@@ -2753,7 +2790,7 @@ function configurationAuthorizationKeys(tokens, spec) {
     if (!TOKEN_FIELDS[kind].test(tail)) { problems.push({ token: text, code: 'CONFIGURATION_AUTHORIZATION_INVALID' }); continue; }
     keys.add(`${kind}:${portKeyOf(kind, root)}:${tail}`);
   }
-  return { keys, overwrite, rowApprovals, problems, unclaimed };
+  return { keys, overwrite, retire, rowApprovals, problems, unclaimed };
 }
 
 // The build runner's items for this feature: ONE data-model item and ONE solution-version item, whatever the
