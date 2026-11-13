@@ -7,10 +7,10 @@ evidence and trade-offs behind a change live in its PR, in `docs/`, or in the li
 
 ## [2.28.0]
 
-- **Configuration creates are sent once (#807):** each new configuration row, children included, has its own request at a stable id; after a lost answer the next build stops until the recovery commands settle it.
+- **Default configuration creates are sent once (#807):** each new configuration row, children included, has its own request at a stable id; after a lost answer the next build stops until recovery settles it.
 - A build refuses an unsynced earlier copy of a variable or connection reference in the app's workspace before sending anything.
 - **Protected rule publication (#808):** the stop names the rule and its original id; a possibly sent publication is never replayed, even with `status: "published"`.
-- **Refused secret values (#847):** the stop reports the service code; correct the deployment settings and rebuild to send only the missing value.
+- **Refused protected secret values (#847):** the stop reports the service code; correct the deployment settings and rebuild to send only the missing value.
 - **Busy customizations (#848):** a refused web-resource publish waits about 30, 60 and 90 seconds, or Retry-After, before retrying.
 - **`verify` follows form bindings:** declared forms and their Quick View and sub-grid targets are checked through managed bindings, never through namesakes.
 - **Same-named declared views (#845):** `--verify` proves each has its own row and fails when two claim one saved query; nonconflicting bound or pinned groups are unchanged.
