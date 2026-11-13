@@ -30,6 +30,10 @@
  * archive is not a plain file this user can read is blocking evidence. The archive and a fresh tombstone are installed with an atomic
  * no-replace (a hard link of a complete staged copy), so neither ever overwrites a file that took its name; removing the staged name
  * afterwards is a step of the quarantine, and a continuation finishes it when it was interrupted.
+ * SCOPE. The quarantine is correct among processes that hold this plugin's leases and at every crash or interruption point: an
+ * interrupted run leaves evidence that blocks, and a continuation finishes it. It does not defend against another program changing
+ * `configuration-create-state.*` files while a run holds the lease (a sync client, a restore, a person); keeping such writers out of the
+ * build workspace during a run is an operating requirement, described in the configuration recovery guide.
  *
  * FENCING. Every change runs synchronously under the record lease of the state file (lib/record-lease.js; no network I/O inside it),
  * re-reads the file, applies one change, writes it atomically (lib/apply-snapshot-store.js writeFileAtomic) and reads it back. The
