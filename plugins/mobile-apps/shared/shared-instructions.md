@@ -125,6 +125,21 @@ feature requests, first capture the lightweight entry choice below; do not run
 version/auth checks before the user chooses to proceed. Notifies the user if a
 tool version is below the supported minimum (Node 22+, npm 10+, Expo SDK 55+, etc.).
 
+Use the selected package contract's tooling requirements rather than assuming newer Expo/React Native versions work with an older binary.
+
+Native work also follows [mobile-release-lifecycle.md](./references/mobile-release-lifecycle.md).
+Resolve the app-version-matched inventory before adding native usage or changing
+dependencies, and verify the intended base before deployment. Never use the
+newest bundled template as an old app's native allowlist. This is an explicit
+workflow gate, not a telemetry/write hook. Source-only edits can continue when
+release evidence is unavailable without claiming native validation.
+
+Local diagnostic artifact selection is retired. Use the finalized published
+host/template contract and preserve app-owned offline configuration, normal
+approvals and telemetry checkpoints. Package inspection does not establish
+device execution or offline-sync success. Never send local paths, raw CLI
+output or package/native binaries to telemetry.
+
 ---
 
 ## Workflow Checkpoints

@@ -34,6 +34,15 @@ You will be invoked by `native-app-planner` in parallel with `data-model-archite
 ## Inputs You Can Rely On
 
 The planner gives you:
+- Sanitized app-matched resolved release context, or explicit unresolved status
+  for existing pure source/UI work. Read
+  [release lifecycle](../shared/references/mobile-release-lifecycle.md); use the
+  same context throughout planning and builder handoffs. Do not use the newest
+  bundled template as a runtime allowlist. Unknown/missing release records
+  block new/changed native use, not pure source/UI planning. Mark native
+  compatibility unverified; approval and previews are not native validation.
+  Treat sample APIs as illustrative: verify them against installed release
+  docs/types before planning their use, rather than assuming newest-host APIs.
 - App requirements (`$ARGUMENTS`)
 - Target users + device class (phone/tablet, internal/external)
 - Target platforms (iOS / Android)
@@ -55,12 +64,12 @@ The orchestrator uses separate graph and specs gates so the user can edit the sc
 
 **Hard rule — single-write in `phase: specs`.** Assemble the complete replacement, including the Step 6 markdown summary when requested, before one update to `plan_path`. A retry replaces the previous specs-owned output; it never adds a second copy. Do not write `_screens_section.md` or delete old sections in a separate operation before inserting their replacements.
 
-**The scaffolded project IS available at `<working_dir>/`.** The orchestrator's Step 2d background pipeline finishes the full template scaffold (clone → fixes → npm install → `pa app init -t MobileApp --display-name <name> --environment-id <environment-id> --non-interactive` → schemas → tsc smoke) in parallel with your run. By the time you start, `<working_dir>/` is populated with the complete template tree. Safe to `Glob` and `Read`:
+**The scaffolded project at `<working_dir>/` comes from the reviewed published npm template.** The orchestrator owns acquisition through the package's creation CLI and the separately approved shipped-lock `npm ci` installation under the fresh-template gate. Step 2d does not run a background scaffold pipeline. Template preparation and app initialization are later foreground-only steps; do not assume shared helpers, generated schemas or environment binding are already prepared. Do not create another scaffold or install dependencies during planning. Safe to `Glob` and `Read` existing files:
 
 - `<working_dir>/app/index.tsx`, `app/login.tsx`, `app/oauth-callback.tsx`, `app/(app)/_layout.tsx`, `app/(app)/home.tsx` — existing routes
 - `<working_dir>/tamagui.config.ts` — design tokens
 - `<working_dir>/package.json` — installed dependencies. Native modules must already be present; a verified pure-JavaScript library may instead be proposed with an exact version under `## Screens → ### JavaScript Dependencies` for the orchestrator to install before screen generation.
-- `<working_dir>/src/components/`, `src/hooks/`, `src/utils/`, `src/tokens/` — shared code copied by the orchestrator
+- `<working_dir>/src/components/`, `src/hooks/`, `src/utils/`, `src/tokens/` — shared code, if present; missing helpers are added by the orchestrator's foreground preparation, not by the planner
 
 **Hard rule — read-only on the scaffolded files.** You may NEVER write to anything outside this allow-list:
 
@@ -69,9 +78,9 @@ The orchestrator uses separate graph and specs gates so the user can edit the sc
 - `<working_dir>/_plan_preview.html` (only when `skip_preview` is unset/false)
 - `<working_dir>/.tmp/*` (scratch)
 
-If you discover a real issue in `app/`, `src/`, `package.json`, `tamagui.config.ts`, `tsconfig.json`, `power.config.json`, `node_modules/`, or `memory-bank.md`, return `DONE_WITH_CONCERNS: <issue>` — DO NOT silently edit. Those paths are owned by the orchestrator's bg pipeline and writing to them races `cp -R`, `pa app init`, or `npm install`.
+If you discover a real issue in `app/`, `src/`, `package.json`, `tamagui.config.ts`, `tsconfig.json`, `power.config.json`, `node_modules/`, or `memory-bank.md`, return `DONE_WITH_CONCERNS: <issue>` — DO NOT silently edit. Those paths are owned by the orchestrator's approved foreground preparation and initialization; writing to them here bypasses that ownership and can overwrite app-owned changes.
 
-Specifically — `memory-bank.md` is OFF-LIMITS during `phase: graph` and `phase: specs`. If a sub-agent (data-model architect, etc.) returns a concern that needs persisting, stash the line in `<working_dir>/.tmp/pending-memory-bank-appends.txt` (orchestrator's Step 6.7 flushes this after JOIN). Do not append to `memory-bank.md` directly.
+Specifically — `memory-bank.md` is OFF-LIMITS during `phase: graph` and `phase: specs`. Return concerns through `DONE_WITH_CONCERNS` so the orchestrator queues them in `DEFERRED_CONCERNS[]` and persists them when Step 6.7 creates the memory bank. Do not append to `memory-bank.md` directly.
 
 ## Workflow
 
@@ -320,12 +329,27 @@ Pick a layout strategy per screen based on target platform:
 | Tokens: `$4`, `$color12`, `$background`, `$sm` | Screen options: `presentation`, `headerSearchBarOptions`, `headerLargeTitle` |
 | Theme switching, breakpoints (`useMedia()`) | Scroll insets: `<ScrollView contentInsetAdjustmentBehavior="automatic">` |
 |  | Platform branching: `process.env.EXPO_OS`, `useWindowDimensions` |
-|  | Capabilities: `expo-camera`, `expo-document-picker`, `expo-print`, `expo-secure-store`, `expo-file-system`, `expo-sharing`, `@microsoft/power-apps-native-pdf-viewer`, `@microsoft/power-apps-native-pen-input`, `@microsoft/power-apps-native-bglocation` when allowlisted by the plan (see AGENTS.md §2) |
+|  | Capabilities: only packages/versions in the app's resolved native inventory; use release-conditional controls wrappers |
 |  | Calendar management views: `react-native-calendars` (`Calendar`, `CalendarList`, `Agenda`, `ExpandableCalendar`, `AgendaList`) when the approved `JavaScript Dependencies` table includes it |
 
 Reference `${PLUGIN_ROOT}/shared/samples/_layout.tsx` for existing navigation layout patterns (tab structure, safe-area, stack options).
 
 ### Pure-JavaScript dependency planning
+
+For native controls, read
+[the conditional import and permission contract](../skills/add-native/references/native-controls.md).
+Plan `/pdf`, `/pen`, or `/geolocation` only for a release containing those
+subpaths; the root is metadata and there is no barcode subpath. Legacy leaves
+require matching resolved inventory. Keep the installed APIs, not a newer
+release's signatures. Do not install controls to repair an older binary.
+
+One-shot location requires no `app_id`, data source, target table, or tracking.
+Continuous tracking needs one coordinated owner; background-location 0.2.3
+requests background permissions even with `trackInBackground: false`, and
+`stopTracking()` / `isTracking()` have no `app_id`. Treat OS declarations,
+runtime grants, package inclusion, and actual use as separate. Disabling a
+control does not remove default Android permissions; another declaration set
+requires another verified base. Optional permission wrapping is deferred.
 
 Read and follow `${PLUGIN_ROOT}/shared/references/javascript-dependency-planning.md`. Apply it both when the user explicitly names a JavaScript library and when a screen use case has an established library that materially reduces implementation or accessibility risk. Inspect existing dependencies first; otherwise research at most three candidates with the reference's read-only npm commands, select one compatible JS-only package, and emit the exact-version evidence table in `phase: specs` or legacy mode. Do not install during planning.
 
@@ -440,7 +464,14 @@ For each screen the user adds, provide this compact shape:
 - **Audit** (omit for read-only / non-write screens) — one line per audit-bearing action: `<trigger>: event <code> (<event label>); payload: <field, field, field>`. Example: `On submit: event 100000006 (Inspection Submitted); payload: inspectionId, submittedAt, defectCount, openCriticalCount.` The screen-builder wraps the payload field list in `JSON.stringify({...})` and writes the full `cr3e9_audit_log_entriesService.create(...)` call from the Generated Services table — do NOT spell out the wrapper or service name.
 - **Lookup writes** — for form/edit screens that set a parent reference (Task → Project, Comment → Task, etc.), explicitly copy the exact quoted `@odata.bind` property from the generated target model and pair it with the entity set, e.g. `'cr3e9_projectid@odata.bind': '/cr3e9_projects(<guid>)'` when that exact key exists in `src/generated/models/<Entity>Model.ts`. Never derive casing from Dataverse schema-name conventions. Without the generated-model key, mark the spec `BLOCKED: lookup write key not verified`. Skip for read-only and no-lookup screens.
 - **Pagination** — `cursor` if the table has no natural record ceiling (visits, inspections, work orders, tickets, any user-created records over time); `none` if the table is a bounded lookup (status types, categories, job types). When `cursor`, include SDK `maxPageSize: 50`, deterministic `orderBy` with a unique key, `select`, `skipToken` continuation support, and server-side `filter` for search in the data spec. Do not imply that `top: 50` alone is pagination.
-- **Native capabilities** — which native modules/wrappers it uses, and which iOS/Android platforms or permission states need fallback handling. For PDF/pen screens, be precise: `document-picker` (`expo-document-picker`) for user-picked files; `pdf-report` (`expo-print`, plus `expo-sharing` only when present and sharing is required) for generated local PDFs; `native-pdf-viewer` (`@microsoft/power-apps-native-pdf-viewer` 0.2.9+) for HTTPS PDF URLs and local `file://` URIs; `pen-input` (`@microsoft/power-apps-native-pen-input`) for signature/ink capture. For location screens, distinguish `geolocation` (`@microsoft/power-apps-native-bglocation`) — continuous/background tracking with native Dataverse sync, needs start/stop/tracking-status UI plus a permission-denied state — from one-shot `location` (`expo-location`) for a single foreground coordinate read. For haptics, name the exact interaction plus wrapper call: impact and strength for deliberate presses, selection for changed choices, or notification and outcome for completed operations; also name the visible feedback that accompanies it.
+- **Native capabilities** — name the resolved package/version and wrapper, plus
+  iOS/Android permission-denied and unsupported states. Preserve document
+  picking vs PDF generation vs PDF viewing vs pen capture boundaries.
+  Controls use the approved aggregate subpath or matching legacy leaf, never a
+  newer contract. Distinguish continuous `geolocation` (coordinated
+  start/stop/status UI and verified Dataverse target) from one-shot `location`
+  (no data source or tracking startup). Haptics specify the interaction,
+  feedback kind/strength, wrapper call, and accompanying visible feedback.
 - **Calendar library** — REQUIRED for screens with `Calendar pattern` unless the pattern is `timeline-day-list`. Write `react-native-calendars` and name the exact components expected, for example `CalendarProvider`, `ExpandableCalendar`, `AgendaList`, `Calendar`, `CalendarList`, or `Agenda`. The package must also appear in `### JavaScript Dependencies`; the screen-builder imports it directly after the orchestrator installs it. No `/add-native` wrapper or native rebuild is involved.
 - **Navigation** — what links to it / what it links to
 - **Navigation intent** — for each outgoing action, explicitly name `navigate`, `push`, or `replace` (must match Navigation Contracts `Intent`)
