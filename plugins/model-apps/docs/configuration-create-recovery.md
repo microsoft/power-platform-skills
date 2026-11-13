@@ -140,7 +140,8 @@ to be still unpublished, and nothing is to be published by hand.
 Adding a condition to a **published** rule unpublishes it, so a build does not mix that with other
 changes: it stops with `configuration-create-mixed-edit`. Unpublish the rule (the unbound
 `UnpublishDuplicateRule` action with `{ "DuplicateRuleId": "<ruleId>" }`), build the added condition, then
-publish the rule again.
+publish the rule again. To publish it through a build, set `status: "published"` on the rule in that later
+build: a rule declared without `status` keeps its current state, so it stays unpublished.
 
 ## Mixed edits
 
