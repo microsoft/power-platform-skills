@@ -171,6 +171,29 @@ This is a recommendation, not a prerequisite: honor explicit direct report
 requests. Plugin installation/loading failures can make app diagnosis unavailable;
 do not block reporting in those cases.
 
+## Push notifications
+
+The app ships Firebase Cloud Messaging with placeholder configuration in
+`firebase/`. While the placeholders remain, Firebase stays off and the app runs
+normally. To send push notifications to the wrapped app:
+
+1. In the Firebase console, register an Android app and an iOS app with the
+   bundle ID you wrap the app with, and connect Firebase to APNs.
+2. Run `/add-native push-notifications`. It places the app's
+   `google-services.json` and `GoogleService-Info.plist` in `firebase/` and
+   registers each signed-in device.
+3. Deploy the app. The deployment publishes the Firebase client files, and the
+   wrap injects them when push notifications are turned on for the platform in
+   the wrap wizard. You can upload the files in the wrap wizard instead.
+
+The Firebase client files are not secrets, but never add Firebase server
+credentials, such as a service account key, to the app.
+
+Push delivers only what Firebase or a backend sends. For notifications at times
+the app defines, such as a due date, an appointment or a daily check-in, run
+`/add-native scheduled-notifications`: the device schedules them itself, with no
+Firebase or backend.
+
 ## Upgrade the Native Host
 
 From the app directory, preview the next template upgrade:
