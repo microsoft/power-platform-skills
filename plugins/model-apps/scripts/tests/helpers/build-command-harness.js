@@ -54,7 +54,16 @@ function command(folder, { argv = [], apply = true, auth, language, makeSdk, ope
       emitResult: (ok, payload) => { printed.ok = ok; printed.payload = payload; printed.heldThen = held(); printed.at = calls.length; authCli.exports.emitResult(ok, payload); },
     },
     './lib/entity-provision.js': { ...realEntityProvision, resolveAuthoringLanguage: async () => { note('language'); return language ? language(held) : 1033; } },
-    './lib/sdk-http-client.js': { createAzHttpClient: () => ({}), SQL_DEADLOCK_VICTIM: /Sql Number: 1205/ },
+    // The build command attaches the configuration create bridge (lib/configuration-create-bridge.js) to the SDK of every apply
+    // that declares configuration, and the bridge requires a client with `post`. This harness mocks the engine, so no request is
+    // ever sent; both methods throw to prove that.
+    './lib/sdk-http-client.js': {
+      createAzHttpClient: () => ({
+        get: async () => { throw new Error('the build-command harness sends no request'); },
+        post: async () => { throw new Error('the build-command harness sends no request'); },
+      }),
+      SQL_DEADLOCK_VICTIM: /Sql Number: 1205/,
+    },
     './lib/maker-sdk.js': {
       createNodeWorkspaceStorage: (dir) => ({ dir }),
       createMakerSdk: () => { note('sdk'); if (makeSdk) makeSdk(held); return sdk; },
