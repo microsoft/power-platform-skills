@@ -32,11 +32,12 @@ function renderKeywordChips(keywords) {
 }
 
 function renderPreviewImages(template) {
-  const images = Array.isArray(template.previews)
-    ? template.previews.flatMap((preview) => [
+  const previews = template.responsivePreviews ?? template.previews;
+  const images = Array.isArray(previews)
+    ? previews.flatMap((preview) => [
         { url: preview.desktop, label: `${preview.displayName} - desktop` },
         { url: preview.mobile, label: `${preview.displayName} - mobile` },
-      ])
+      ]).filter((image) => image.url)
     : (Array.isArray(template.previewImages)
         ? template.previewImages.map((url, index) => ({ url, label: `Preview ${index + 1}` }))
         : []);

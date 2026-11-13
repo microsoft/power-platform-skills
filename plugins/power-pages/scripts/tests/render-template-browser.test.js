@@ -16,6 +16,33 @@ function tempDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'template-browser-test-'));
 }
 
+test('SPA browser uses responsive page labels and pairs ahead of legacy images', (t) => {
+  const dir = tempDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const dataPath = path.join(dir, 'templates.json');
+  const outputPath = path.join(dir, 'browser.html');
+  const template = {
+    displayName: '311 Portal', kind: 'spa', framework: 'react',
+    previewImages: ['https://legacy.example/ignored.png'],
+    responsivePreviews: [{
+      id: 'requests', displayName: 'Service <requests>',
+      desktop: 'https://example.com/wide.png', mobile: 'https://example.com/narrow.png',
+    }],
+  };
+  fs.writeFileSync(dataPath, JSON.stringify({ TEMPLATES_JSON: [template] }));
+  assert.equal(renderTemplateBrowser({ templatesJsonPath: dataPath, outputPath }).status, 'ok');
+  const html = fs.readFileSync(outputPath, 'utf8');
+  assert.match(html, /Service &lt;requests&gt; - desktop/);
+  assert.match(html, /Service &lt;requests&gt; - mobile/);
+  assert.match(html, /wide\.png/);
+  assert.match(html, /narrow\.png/);
+  assert.doesNotMatch(html, /legacy\.example/);
+  fs.writeFileSync(dataPath, JSON.stringify({ TEMPLATES_JSON: [{ ...template, responsivePreviews: [] }] }));
+  const emptyPath = path.join(dir, 'empty.html');
+  renderTemplateBrowser({ templatesJsonPath: dataPath, outputPath: emptyPath });
+  assert.match(fs.readFileSync(emptyPath, 'utf8'), /No preview image yet/);
+});
+
 test('parseArgs accepts templates JSON, output path, and open switch', () => {
   assert.deepEqual(parseArgs([
     '--templatesJsonPath', '/tmp/templates.json',
