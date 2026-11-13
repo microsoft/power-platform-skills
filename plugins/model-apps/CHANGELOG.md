@@ -7,7 +7,7 @@ evidence and trade-offs behind a change live in its PR, in `docs/`, or in the li
 
 ## [2.28.0]
 
-- **Default configuration creates are sent once (#807):** each new configuration row, children included, has its own request at a stable id; after a lost answer, builds stop until recovery settles it; teardown and builds of an app no longer overlap.
+- **Default configuration creates are sent once (#807):** new configuration rows, children included, have individual requests at stable ids; after a lost answer, builds stop until recovery settles it; teardown and build applies of an app cannot overlap within one workspace.
 - A build refuses an unsynced earlier workspace copy of a variable or connection reference before sending anything.
 - **Protected rule publication (#808):** the stop names the rule and its original id; a possibly sent publication is never replayed, even with `status: "published"`.
 - **Refused protected secret values (#847):** the stop reports the service code; correct the deployment settings and rebuild to send only the missing value.
