@@ -178,7 +178,13 @@ test('the SDK never pushes, creates, edits or publishes a configuration artifact
   const calls = [];
   for (const name of ['createArtifact', 'pushArtifact', 'pushArtifactUnlocked', 'pushAll', 'addElement', 'updateElement', 'removeElement', 'publishArtifact', 'publishArtifacts', 'deleteArtifact', 'createRecord', 'updateRecord']) {
     const real = sdk[name].bind(sdk);
-    sdk[name] = (...args) => { calls.push(`${name} ${JSON.stringify(args[0])}`); return real(...args); };
+    // The spy refuses as well as records: a configuration write the SDK was asked to make fails the build, whatever catches it.
+    sdk[name] = (...args) => {
+      const call = `${name} ${JSON.stringify(args[0])}`;
+      calls.push(call);
+      if (/environment|connection|customapi|duplicate/i.test(call)) throw new Error(`the SDK was asked to write configuration: ${name}`);
+      return real(...args);
+    };
   }
   const workspaceDir = makeTempDir('cfg-create-int-ws-');
   attachConfigurationCreateBridge(sdk, { httpClient, apiUrl: (p) => sdk.dataverse.apiUrl(p), sleep: async () => {} });
@@ -190,4 +196,136 @@ test('the SDK never pushes, creates, edits or publishes a configuration artifact
   assert.equal(org.rows('customapirequestparameters').length, 2);
   assert.deepEqual(calls.filter((c) => /environment|connection|customapi|duplicate/i.test(c)), []);
   assert.equal(org.requests.filter((q) => PUBLISH.test(q.path)).length, 1);
+});
+
+// Every applied-state snapshot the build left under the app folder (lib/apply-snapshot-store.js SNAPSHOT_FILE), parsed.
+function snapshotsIn(dir) {
+  const out = [];
+  const walk = (d) => { for (const e of fs.readdirSync(d, { withFileTypes: true })) { const p = path.join(d, e.name); if (e.isDirectory()) walk(p); else if (e.name === 'apply-snapshot.json') out.push(p); } };
+  walk(dir);
+  return out.map((f) => JSON.parse(fs.readFileSync(f, 'utf8')));
+}
+const notEligible = (dir, why) => { for (const s of snapshotsIn(dir)) assert.notEqual(s.eligible, true, `${why}: no applied state is recorded as a success`); };
+
+test('after a lost answer the next build sends no write of any kind, and neither build records its applied state as a success', async () => {
+  const org = losing(orgOf(), ({ method, path: p }) => method === 'POST' && p === '/duplicateruleconditions');
+  const first = await runCommand(makeSpec(), { org });
+  assert.notEqual(first.exitCode, 0);
+  assert.match(failed(first), /configuration-create-pending/);
+  notEligible(first.appDir, 'the first build');
+  const mark = org.requests.length;
+  const second = await runCommand(makeSpec(), { org, appDir: first.appDir });
+  assert.notEqual(second.exitCode, 0);
+  assert.match(failed(second), /configuration-create-pending/);
+  assert.deepEqual(org.writes(mark), [], 'no write of any kind: no create, no update, no membership, no publication');
+  notEligible(first.appDir, 'the second build');
+});
+
+test('a preserved condition and a new one whose answer was lost: whatever then changes on the service or in the declaration, the next build sends nothing', async () => {
+  const withNew = (spec) => ({ ...spec, duplicateDetectionRules: spec.duplicateDetectionRules.map((r) => (r.key === 'last' ? { ...r, conditions: [...r.conditions, { key: 'n', column: 'emailaddress1', match: 'exact' }] } : r)) });
+  const ruleOf = (org) => org.rows('duplicaterules').find((r) => r.name === 'Contacts with same last name');
+  const conditionsOf = (org, rule) => org.rows('duplicateruleconditions').filter((c) => String(c._regardingobjectid_value || c.regardingobjectid || '').toLowerCase() === String(rule.duplicateruleid).toLowerCase());
+  const changes = [
+    ['the root edited on the service', (org) => { ruleOf(org).description = 'edited elsewhere'; }, makeSpec()],
+    ['the preserved condition edited on the service', (org) => { const [a] = conditionsOf(org, ruleOf(org)); a.ignoreblankvalues = true; }, makeSpec()],
+    ['the preserved condition deleted on the service', (org) => { const [a] = conditionsOf(org, ruleOf(org)); org.sets.get('duplicateruleconditions').delete(a.duplicateruleconditionid); }, makeSpec()],
+    ['the root edited in the declaration', () => {}, { ...makeSpec(), duplicateDetectionRules: makeSpec().duplicateDetectionRules.map((r) => (r.key === 'last' ? { ...r, name: 'Renamed' } : r)) }],
+  ];
+  for (const [why, change, nextSpec] of changes) {
+    const base = orgOf();
+    const created = await runCommand(makeSpec(), { org: base });
+    assert.equal(created.exitCode, 0, failed(created));
+    assert.equal(conditionsOf(base, ruleOf(base)).length, 1, `${why}: the preserved condition`);
+    const org = losing(base, ({ method, path: p }) => method === 'POST' && p === '/duplicateruleconditions');
+    const added = await runCommand(withNew(makeSpec()), { org, appDir: created.appDir });
+    assert.notEqual(added.exitCode, 0);
+    assert.match(failed(added), /configuration-create-pending/, why);
+    assert.equal(conditionsOf(base, ruleOf(base)).length, 2, `${why}: the new condition was committed`);
+    change(base);
+    const mark = base.requests.length;
+    const next = await runCommand(withNew(nextSpec), { org: base, appDir: created.appDir });
+    assert.notEqual(next.exitCode, 0);
+    assert.match(failed(next), /configuration-create-pending/, why);
+    assert.deepEqual(base.writes(mark), [], `${why}: no write of any kind`);
+  }
+});
+
+test('membership: a child that joined the solution with its create is not added again; one that did not is added once', async () => {
+  const childSets = ['customapirequestparameters', 'customapiresponseproperties', 'duplicateruleconditions'];
+  const childIds = (org) => new Set(configWrites(org).filter((q) => childSets.includes(q.path.slice(1))).map((q) => String(q.body[ID_COLUMN[q.path.slice(1)]]).toLowerCase()));
+  const addsOf = (org) => org.requests.filter((q) => q.method === 'POST' && q.path === '/AddSolutionComponent').map((q) => String(q.body.ComponentId).toLowerCase());
+  const joined = createConfigOrg({ tables: [{ logicalName: 'contact', attributes: ['emailaddress1', 'lastname'] }], solution: { uniqueName: SOL, version: '1.0.0.0', prefix: 'contoso' }, childrenJoin: true });
+  const a = await runCommand(makeSpec(), { org: joined });
+  assert.equal(a.exitCode, 0, failed(a));
+  const kids = childIds(joined);
+  assert.ok(kids.size >= 4);
+  assert.deepEqual(addsOf(joined).filter((id) => kids.has(id)), [], 'no child is added: each joined with its create');
+  const plain = orgOf();
+  const b = await runCommand(makeSpec(), { org: plain });
+  assert.equal(b.exitCode, 0, failed(b));
+  const plainKids = childIds(plain);
+  const members = new Set(plain.rows('solutioncomponents').map((r) => String(r.objectid).toLowerCase()));
+  const added = addsOf(plain).filter((id) => plainKids.has(id));
+  assert.equal(new Set(added).size, added.length, 'each at most once');
+  for (const id of plainKids) assert.ok(members.has(id), `${id} is a member`);
+  for (const id of added) assert.ok(plainKids.has(id));
+  // Every child that is a component of its own and did not join with its create was added exactly once.
+  assert.ok(added.length > 0, 'the org without header joins needed adds');
+});
+
+test('a published rule gains a condition in three builds: unpublish it, add the condition (one POST), publish it again', async () => {
+  const out = await runCommand(makeSpec());
+  assert.equal(out.exitCode, 0, failed(out));
+  const ruleOf = () => out.org.rows('duplicaterules').find((r) => r.name === 'Contacts with same email');
+  assert.equal(ruleOf().statecode, 1);
+  const withEmail = (over) => makeSpec({ duplicateDetectionRules: makeSpec().duplicateDetectionRules.map((r) => (r.key === 'email' ? { ...r, ...over } : r)) });
+  const condition = { key: 'n', column: 'lastname', match: 'exact' };
+  let mark = out.org.requests.length;
+  const unpublished = await runCommand(withEmail({ status: 'unpublished' }), { org: out.org, appDir: out.appDir, argv: ['--stage', 'data', '--allow-destructive', '--authorize', 'duplicateRule:email:status'] });
+  assert.equal(unpublished.exitCode, 0, failed(unpublished));
+  assert.equal(ruleOf().statecode, 0, 'unpublished');
+  assert.deepEqual(configWrites(out.org, mark).filter((q) => q.path === '/duplicateruleconditions'), []);
+  mark = out.org.requests.length;
+  const appended = await runCommand(withEmail({ status: 'unpublished', conditions: [...withEmail({}).duplicateDetectionRules[0].conditions, condition] }), { org: out.org, appDir: out.appDir });
+  assert.equal(appended.exitCode, 0, failed(appended));
+  assert.deepEqual(configWrites(out.org, mark).map((q) => `${q.method} ${q.path}`), ['POST /duplicateruleconditions'], 'the new condition only');
+  assert.equal(ruleOf().statecode, 0);
+  mark = out.org.requests.length;
+  const republished = await runCommand(withEmail({ status: 'published', conditions: [...withEmail({}).duplicateDetectionRules[0].conditions, condition] }), { org: out.org, appDir: out.appDir });
+  assert.equal(republished.exitCode, 0, failed(republished));
+  assert.equal(ruleOf().statecode, 1, 'published again');
+  assert.deepEqual(configWrites(out.org, mark).filter((q) => q.path === '/duplicateruleconditions'), [], 'no condition created again');
+  for (const r of receiptsIn(out.appDir)) assert.deepEqual(r.units, []);
+});
+
+test('a build with no configuration, and a protected build, keep no create receipt', async () => {
+  const none = makeSpec();
+  delete none.environmentVariables;
+  delete none.customApis;
+  delete none.duplicateDetectionRules;
+  const plain = await runCommand(none);
+  assert.equal(plain.exitCode, 0, failed(plain));
+  assert.deepEqual(receiptsIn(plain.appDir), [], 'no configuration: no receipt file');
+  const protectedSpec = { ...makeSpec(), configurationIdentity: 'stable-v1' };
+  const guarded = await runCommand(protectedSpec);
+  assert.equal(guarded.exitCode, 0, failed(guarded));
+  assert.ok(configWrites(guarded.org).length > 0, 'the protected build created its rows');
+  assert.deepEqual(receiptsIn(guarded.appDir), [], 'the protected route keeps its own records, not this receipt');
+});
+
+test('a declaration the compiler refuses stops the build before any request is sent or any receipt is saved', async () => {
+  const A = require('../lib/configuration-artifacts.js');
+  const original = A.buildArtifact;
+  A.buildArtifact = (...args) => { const a = original(...args); return args[0] && args[0].kind === 'customApi' ? { ...a, hint: 'h' } : a; };
+  let out;
+  try {
+    out = await runCommand(makeSpec());
+  } finally {
+    A.buildArtifact = original;
+  }
+  assert.notEqual(out.exitCode, 0);
+  assert.match(failed(out), /configuration-create-shape-refused/);
+  assert.deepEqual(configWrites(out.org), [], 'no configuration write');
+  assert.deepEqual(out.org.requests.filter((q) => q.method !== 'GET' && /^\/customapi/.test(q.path)), []);
+  for (const r of receiptsIn(out.appDir)) assert.deepEqual(r.units, [], 'no unit saved');
 });
