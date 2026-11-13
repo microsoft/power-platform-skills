@@ -143,6 +143,26 @@ test('a preserved row edited in the same build as a new child is refused before 
   assert.deepEqual(out.org.writes(mark), [], 'no request changed anything');
 });
 
+test('membership: every new row but a value is a member of the solution, no component is added twice, a value row never is, and a rerun adds nothing', async () => {
+  const out = await runCommand(makeSpec());
+  assert.equal(out.exitCode, 0, failed(out));
+  const adds = out.org.requests.filter((q) => q.method === 'POST' && q.path === '/AddSolutionComponent').map((q) => String(q.body.ComponentId).toLowerCase());
+  assert.equal(new Set(adds).size, adds.length, 'each component is added at most once');
+  const created = configWrites(out.org).filter((q) => !PUBLISH.test(q.path)).map((q) => ({ set: q.path.slice(1), id: String(q.body[ID_COLUMN[q.path.slice(1)]]).toLowerCase() }));
+  const members = new Set(out.org.rows('solutioncomponents').map((r) => String(r.objectid).toLowerCase()));
+  for (const { set, id } of created) {
+    if (set === 'environmentvariablevalues') {
+      assert.ok(!adds.includes(id), 'a value row is never offered for membership');
+      assert.ok(!members.has(id), 'nor joined by a header');
+    } else {
+      assert.ok(members.has(id), `${set} ${id} is a member of the solution`);
+    }
+  }
+  const mark = out.org.requests.length;
+  const again = await runCommand(makeSpec(), { org: out.org, appDir: out.appDir });
+  assert.equal(again.exitCode, 0, failed(again));
+  assert.deepEqual(out.org.requests.slice(mark).filter((q) => q.path === '/AddSolutionComponent'), [], 'a rerun adds no component');
+});
 test('a dry run sends no write and leaves no receipt', async () => {
   const out = await runCommand(makeSpec(), { apply: false });
   assert.equal(out.exitCode, 0, failed(out));
