@@ -242,12 +242,15 @@ test('the spec decides the mode: no createIdentity and no new feature intents is
 // create writer and its plan and receipt modules (#807) only inside createUnitsFor and the receipt guard only in a preflight that has its
 // capability, and configuration-artifacts.js requires the plan and
 // receipt modules only inside the create-unit helpers a step with ctx.createUnits calls; build-model-app.js attaches the writer's bridge
-// through configuration-create-bridge.js, which requires nothing. Those edges are gated too. Apart
+// through configuration-create-bridge.js, which requires nothing. The configuration create receipt guard (configuration-create-guard.js,
+// which every build entry calls) loads the receipt modules only through lazy accessors, and only after its fast path found evidence in
+// the workspace. Those edges are gated too. Apart
 // from those gated edges the default build must load none of the new modules, and must still hand the engine the plain pass-through.
 const GATED_EDGES = [['sdk-build.js', 'creates-stable-build.js'], ['sdk-build.js', 'creates-catalog.js'], ['sdk-build.js', 'rule-settlement.js'], ['app-spec.js', 'rule-settlement.js'], ['declared-rule-io.js', 'rule-settlement.js'], ['sdk-build.js', 'bpf-settlement.js'], ['app-spec.js', 'bpf-settlement.js'], ['declared-bpf-io.js', 'bpf-settlement.js'], ['dashboard-reconcile.js', 'creates-identity.js'], ['dashboard-recovery-workspace.js', 'creates-local.js'], ['verify-model-app.js', 'configuration-protected.js'],
   ['build-model-app.js', 'managed-create-transport.js'], ['sdk-build.js', 'managed-create-context.js'], ['sdk-build.js', 'configuration-create-bindings.js'], ['sdk-build.js', 'configuration-protected.js'],
   ['configuration-build.js', 'configuration-create-writer.js'], ['configuration-build.js', 'configuration-create-state.js'], ['configuration-build.js', 'configuration-create-plan.js'], ['configuration-build.js', 'configuration-create-recovery.js'],
-  ['configuration-artifacts.js', 'configuration-create-plan.js'], ['configuration-artifacts.js', 'configuration-create-state.js']];
+  ['configuration-artifacts.js', 'configuration-create-plan.js'], ['configuration-artifacts.js', 'configuration-create-state.js'],
+  ['configuration-create-guard.js', 'configuration-create-recovery.js'], ['configuration-create-guard.js', 'configuration-create-state.js'], ['configuration-create-guard.js', 'configuration-create-plan.js']];
 const SCRIPTS = path.join(__dirname, '..');
 const NEW_MODULES = ['creates-identity.js', 'creates-capabilities.js', 'creates-port.js', 'creates-catalog.js'].map((f) => path.join(SCRIPTS, 'lib', f));
 function requireGraph(entry, { gated = false } = {}) {
@@ -335,6 +338,16 @@ test('the default build loads none of the stable-identity modules and still wire
   for (const m of ['configuration-create-plan', 'configuration-create-state']) {
     for (const line of artifacts.split('\n').filter((l) => l.includes(`require('./${m}.js')`))) assert.match(line, /^ {2,}/, `${m}.js is required only inside a function`);
   }
+  // The receipt guard: one lazy accessor per receipt module, reached only past the no-evidence fast path of each guard.
+  const guard = fs.readFileSync(path.join(SCRIPTS, 'lib', 'configuration-create-guard.js'), 'utf8');
+  assert.match(guard, /^const recovery = \(\) => require\('\.\/configuration-create-recovery\.js'\);$/m);
+  assert.match(guard, /^const createState = \(\) => require\('\.\/configuration-create-state\.js'\);$/m);
+  assert.match(guard, /^const kindTable = \(\) => require\('\.\/configuration-create-plan\.js'\)\.CONFIGURATION_CREATE_RECEIPT_KIND_TABLE;$/m);
+  for (const m of ['configuration-create-recovery', 'configuration-create-state', 'configuration-create-plan']) {
+    assert.equal(guard.match(new RegExp(`require\\('\\./${m}\\.js'\\)`, 'g')).length, 1, `${m}.js is required only in its accessor`);
+  }
+  assert.match(guard, /function assertConfigurationCreatesClear\([^\n]*\n {2}const ws = path\.resolve\(workspaceDir\);\n {2}if \(holdsNoEvidence\(ws\)\) return CLEAR;/);
+  assert.match(guard, /function assertTeardownClear\(dir\) \{\n {2}if \(holdsNoEvidence\(path\.resolve\(dir\)\)\) return;/);
   assert.ok(graph.has(path.join(SCRIPTS, 'lib', 'creates-passthrough.js')));
   for (const m of NEW_MODULES) assert.ok(!graph.has(m), `${path.basename(m)} is not reachable from a default build`);
   const build = fs.readFileSync(path.join(SCRIPTS, 'build-model-app.js'), 'utf8');

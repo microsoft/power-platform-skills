@@ -27,6 +27,21 @@ tells you, and changes only its local receipt when you decide.
 - **Membership.** A child row can become a solution member when it is created or later, when the build's
   existing membership step adds it. Either way, recovery requires that membership to be observable.
 
+## Leave the workspace folder to the plugin
+
+The receipt, the quarantine markers and their archives in the app workspace belong to the plugin. While a
+build or a `configuration-recovery.js` command runs, nothing else may change, rename, create, sync or
+restore files in that workspace folder:
+
+- Pause file sync clients (OneDrive, Dropbox, a network share's offline sync) and backup restores for the
+  folder while you build or recover.
+- Do not edit, move or delete those files by hand, and do not copy them in from another folder.
+
+The plugin's own builds, teardowns and recovery commands wait for each other: they hold the app's build
+lock, and every change to the receipt holds the receipt's own lock. An outside change made while one of them
+runs is not protected against. If one happened, stop, keep the workspace exactly as it is (do not delete or
+restore anything in it), and run `inspect` to see where it stands.
+
 ## The commands
 
 All commands print one JSON object on stdout. They hold the app's build lock, so no build or teardown of

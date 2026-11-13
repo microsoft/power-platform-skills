@@ -3593,6 +3593,11 @@ isolated folder). A teardown apply now holds the app's build lease too, so a con
 the same app in the workspace gets `build-locked`. The legacy original/snapshot pair check of
 `workspace-configuration-memory.js` is exported (`checkLegacyConfigurationPair`) so the guard and recovery
 refuse a dirty legacy copy against the real workspace with the existing `WORKSPACE_LEGACY_CONFIGURATION_COPY`.
+The receipt, its quarantine markers and archives are owned by the plugin: while a build or recovery runs, no
+other process may change, rename, create, sync or restore files in that workspace folder. The plugin's own
+entries coordinate through the app build lease and the receipt's record lease (`lib/record-lease.js`); an
+outside change during a run is not protected against, and the documented remedy is to stop, preserve the
+workspace as it is and run `inspect`.
 
 The halts are `retry: "never"` and must never be read as "run it again": an agent relays the stop and runs
 the GET-only `configuration-recovery.js inspect`, never a rebuild, a workspace delete or a row recreate.
