@@ -1,0 +1,32 @@
+{
+  "files": [
+    {
+      "path": "results/purchase.json",
+      "type": "json",
+      "requiredKeys": [
+        "currency",
+        "subtotal",
+        "tax",
+        "total"
+      ],
+      "requiredText": [
+        "GBP"
+      ],
+      "requiredPatterns": [
+        "\"subtotal\"\\s*:\\s*15(?:\\.0+)?\\s*[,}]",
+        "\"tax\"\\s*:\\s*3(?:\\.0+)?\\s*[,}]",
+        "\"total\"\\s*:\\s*18(?:\\.0+)?\\s*[,}]"
+      ]
+    }
+  ],
+  "unchanged": [
+    {
+      "path": "inputs/purchase.json",
+      "source": "fixtures/purchase.json"
+    }
+  ],
+  "absent": [
+    "powerpages.config.json",
+    "docs/alm/last-test-site.json"
+  ]
+}

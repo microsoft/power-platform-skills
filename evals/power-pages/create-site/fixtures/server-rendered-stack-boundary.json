@@ -1,0 +1,10 @@
+{
+  "siteName": "Contoso Academy",
+  "requestedFramework": "Next.js",
+  "requirements": [
+    "server-side rendering",
+    "server API routes",
+    "course catalog search"
+  ],
+  "hosting": "Power Pages code site"
+}

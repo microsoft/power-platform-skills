@@ -14,6 +14,9 @@
  *                    `node site/fetch-media.js` fills. See site/lib/media.js.
  *   --require-media  Fail if a pinned media file is missing. Without it, the build leaves the
  *                    video out with a warning, so the rest of the site can be previewed.
+ *   --eval-results   Summary JSON file or directory of summaries; repeat for multiple inputs.
+ *                    Without summaries, the evaluations page shows the untested inventory.
+ *   --allow-empty-eval-results  Allow empty results directories for first-time publication.
  *
  * The build has no dependencies beyond Node.js, so CI and contributors need no npm install.
  */
@@ -24,6 +27,8 @@ const { loadCatalog } = require('./lib/catalog.js');
 const render = require('./lib/render.js');
 const links = require('./lib/install-links.js');
 const { copyMedia, loadMediaManifest } = require('./lib/media.js');
+const { loadEvaluations } = require('./lib/evaluations.js');
+const { renderEvaluations } = require('./lib/render-evaluations.js');
 
 const SITE_DIR = __dirname;
 const REPO_ROOT = path.resolve(SITE_DIR, '..');
@@ -36,7 +41,7 @@ const MARKER = '.power-platform-skills-site';
 const ASSETS_DIR = 'assets';
 const EXTRA_ASSETS = [['lib/install-links.js', 'assets/install-links.js']];
 const MEDIA_MANIFEST = path.join(SITE_DIR, 'media.json');
-const USAGE = 'Usage: node site/build.js [--out <dir>] [--base-path <path>] [--media <dir>] [--require-media]';
+const USAGE = 'Usage: node site/build.js [--out <dir>] [--base-path <path>] [--media <dir>] [--require-media] [--eval-results <file-or-dir>] [--allow-empty-eval-results]';
 
 function listAssets(dir, relative = '') {
   return fs.readdirSync(path.join(dir, relative), { withFileTypes: true }).flatMap((entry) => {
@@ -67,10 +72,16 @@ function parseArgs(argv) {
       index += 1;
     } else if (arg === '--require-media') {
       options.requireMedia = true;
+    } else if (arg === '--eval-results' && value) {
+      options.evalResults = [...(options.evalResults || []), path.resolve(value)];
+      index += 1;
+    } else if (arg === '--allow-empty-eval-results') {
+      options.allowEmptyEvalResults = true;
     } else {
       throw new Error(`Unknown or incomplete argument: ${arg}\n${USAGE}`);
     }
   }
+  if (options.allowEmptyEvalResults && !options.evalResults) throw new Error('--allow-empty-eval-results requires --eval-results');
   if (!options.basePath.startsWith('/')) options.basePath = `/${options.basePath}`;
   if (!options.basePath.endsWith('/')) options.basePath = `${options.basePath}/`;
   return options;
@@ -97,12 +108,14 @@ function writeFile(outDir, relative, contents) {
 
 // mediaDir defaults to none, so a build in a test never depends on what happens to be in
 // site/media; the command line passes site/media.
-function build({ repoRoot = REPO_ROOT, outDir, basePath, mediaDir = null, requireMedia = false }) {
+function build({ repoRoot = REPO_ROOT, outDir, basePath, mediaDir = null, requireMedia = false, evalResults = null, allowEmptyEvalResults = false }) {
   const catalog = loadCatalog(repoRoot);
+  const evaluations = loadEvaluations({ repoRoot, catalog, evalResults, allowEmptyEvalResults });
   prepareOutDir(outDir);
 
   const written = [];
   written.push(writeFile(outDir, 'index.html', render.renderHome(catalog)));
+  written.push(writeFile(outDir, path.join('evaluations', 'index.html'), renderEvaluations(evaluations)));
   for (const plugin of catalog.plugins) {
     written.push(writeFile(outDir, path.join('plugins', plugin.name, 'index.html'), render.renderPlugin(plugin, catalog)));
   }

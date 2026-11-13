@@ -1,0 +1,37 @@
+{
+  "siteName": "Contoso Repairs",
+  "siteSlug": "contoso-repairs",
+  "framework": "React",
+  "locale": "en-GB",
+  "direction": "ltr",
+  "description": "Book and track phone and laptop repairs at Contoso Repairs.",
+  "pages": [
+    { "title": "Home", "route": "/" },
+    { "title": "Book a repair", "route": "/book" },
+    { "title": "Track repair", "route": "/track" }
+  ],
+  "brand": {
+    "primary": "#175a40",
+    "tone": "calm and practical"
+  },
+  "booking": {
+    "fields": ["full name", "email", "device type", "fault description", "preferred drop-off date"],
+    "deviceTypes": ["Phone", "Laptop", "Tablet"]
+  },
+  "tracking": {
+    "lookup": "repair reference such as CR-20418",
+    "stages": ["Received", "Diagnosing", "Repairing", "Ready for collection"]
+  },
+  "constraints": [
+    "keyboard-accessible booking form",
+    "clear invalid, empty, loading and success states",
+    "phone-first layout that works from 390px wide phones to desktop",
+    "no payment collection",
+    "no live data source yet: use clearly labelled local sample data"
+  ],
+  "planApproval": {
+    "approved": true,
+    "scope": "local scaffolding and source changes only",
+    "excludes": ["package installation", "authentication", "deployment", "Dataverse changes"]
+  }
+}

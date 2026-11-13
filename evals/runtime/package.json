@@ -1,0 +1,31 @@
+{
+  "name": "@power-platform-skills/evaluations",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.15.0"
+  },
+  "scripts": {
+    "validate": "node run.mjs validate",
+    "test": "node --test test/*.test.mjs",
+    "eval": "node run.mjs run",
+    "browsers": "playwright install chromium"
+  },
+  "dependencies": {
+    "@github/copilot": "1.0.106",
+    "@github/copilot-sdk": "1.0.28",
+    "@microsoft/vally": "0.21.0",
+    "@microsoft/vally-cli": "0.21.0",
+    "@vitejs/plugin-react": "4.7.0",
+    "acorn": "8.15.0",
+    "mermaid": "12.3.0",
+    "parse5": "8.1.0",
+    "playwright": "1.58.2",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "react-router-dom": "7.18.5",
+    "vite": "6.4.5",
+    "yaml": "2.9.1"
+  }
+}

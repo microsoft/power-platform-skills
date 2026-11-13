@@ -1,0 +1,51 @@
+name: power-pages-eval-validation
+
+on:
+    pull_request:
+        paths:
+            - "evals/runtime/**"
+            - "evals/power-pages/**"
+            - "plugins/power-pages/**"
+            - "scripts/lib/eval-evidence.js"
+            - "site/lib/evaluations.js"
+            - ".github/workflows/power-pages-eval-validation.yml"
+            - ".github/workflows/power-pages-evals.yml"
+    push:
+        branches: [main]
+        paths:
+            - "evals/runtime/**"
+            - "evals/power-pages/**"
+            - "plugins/power-pages/**"
+            - "scripts/lib/eval-evidence.js"
+            - "site/lib/evaluations.js"
+            - ".github/workflows/power-pages-eval-validation.yml"
+            - ".github/workflows/power-pages-evals.yml"
+
+permissions:
+    contents: read
+
+jobs:
+    validate:
+        strategy:
+            fail-fast: false
+            matrix:
+                os: [ubuntu-latest, windows-latest, macos-latest]
+        runs-on: ${{ matrix.os }}
+        timeout-minutes: 20
+        env:
+            POWER_PLATFORM_SKILLS_TELEMETRY_POWER_PAGES_OPTOUT: "1"
+        steps:
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+              with:
+                  persist-credentials: false
+            - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+              with:
+                  node-version: 22
+            - name: install pinned evaluation dependencies
+              run: npm ci --prefix evals/runtime --registry=https://packagefeedproxy.microsoft.io/npm/ --ignore-scripts --no-audit --no-fund
+            - name: install browser
+              run: node evals/runtime/node_modules/playwright/cli.js install --with-deps chromium
+            - name: validate suites
+              run: node evals/runtime/run.mjs validate
+            - name: test offline runtime
+              run: npm test --prefix evals/runtime

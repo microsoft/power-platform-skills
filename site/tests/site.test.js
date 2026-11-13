@@ -18,6 +18,9 @@ const render = require('../lib/render.js');
 const { build, parseArgs, MARKER } = require('../build.js');
 const media = require('../lib/media.js');
 const installer = require('../../scripts/install.js');
+const evaluations = require('../lib/evaluations.js');
+const { renderEvaluations } = require('../lib/render-evaluations.js');
+const { hashFile, hashTree } = require('../../scripts/lib/eval-evidence.js');
 
 const MARKETPLACE = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'marketplace.json'), 'utf8'));
 const MARKETPLACE_NAMES = MARKETPLACE.plugins.map((plugin) => plugin.name).sort();
@@ -60,6 +63,521 @@ function writeJson(file, value) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, JSON.stringify(value, null, 2));
 }
+
+// These tiny, synthetic summaries exist only in tests. Production builds ship no
+// example scores or model responses.
+function evidenceFixture() {
+  const root = tempDir('pps-evidence-');
+  const pluginDir = path.join(root, 'plugins', 'sample');
+  const skillFile = path.join(pluginDir, 'skills', 'write-docs', 'SKILL.md');
+  const suiteFile = path.join(root, 'evals', 'sample', 'write-docs', 'eval.yaml');
+  const runtimeDir = path.join(root, 'evals', 'runtime');
+  fs.mkdirSync(path.dirname(skillFile), { recursive: true });
+  fs.mkdirSync(path.dirname(suiteFile), { recursive: true });
+  fs.writeFileSync(skillFile, 'Test skill');
+  fs.writeFileSync(suiteFile, 'name: test-suite\n');
+  fs.mkdirSync(runtimeDir, { recursive: true });
+  fs.writeFileSync(path.join(runtimeDir, 'grader.js'), '// Test-only runtime\n');
+  writeJson(path.join(root, 'marketplace.json'), { plugins: [{ name: 'sample', source: './plugins/sample' }] });
+  const cases = [{ name: 'documentation', kind: 'capability' }, { name: 'diagram', kind: 'capability' }, { name: 'unrelated request', kind: 'dormancy' }];
+  const summary = {
+    schemaVersion: 1, plugin: 'sample', commit: 'a'.repeat(40), generatedAt: '2026-01-15T12:00:00Z',
+    model: 'test-model', judgeModel: 'test-judge', runUrl: 'https://github.com/example/project/actions/runs/123',
+    pluginHash: hashTree(pluginDir), runtimeHash: hashTree(runtimeDir),
+    suites: [{
+      skill: 'write-docs', skillHash: hashFile(skillFile), suiteHash: hashTree(path.dirname(suiteFile)), runs: 2,
+      expectedCases: cases,
+      results: cases.flatMap((item) => ['baseline', 'skilled'].flatMap((variant) => [0, 1].map((trial) => ({
+        ...item, variant, trial, status: variant === 'baseline' && item.kind === 'capability' ? 'failed' : 'passed',
+        score: variant === 'baseline' && item.kind === 'capability' ? 0 : 1,
+        checks: [{ name: 'artifact-quality', passed: !(variant === 'baseline' && item.kind === 'capability') }],
+        tokens: 100, durationMs: 2000, error: null,
+      })))),
+    }],
+  };
+  const catalog = { plugins: [{ name: 'sample', title: 'Sample plugin', docsUrl: 'https://github.com/example/project' }] };
+  const summaryFile = path.join(root, 'summary.json');
+  function load(value = summary, options = {}) {
+    writeJson(summaryFile, value);
+    return evaluations.loadEvaluations({ repoRoot: root, catalog, evalResults: summaryFile, now: new Date('2026-01-16T12:00:00Z'), ...options });
+  }
+  return { root, pluginDir, skillFile, suiteFile, runtimeDir, summary, summaryFile, catalog, load };
+}
+
+test('evaluation inventory discovers every real skill, not only featured catalog entries', () => {
+  const catalog = loadCatalog(REPO_ROOT);
+  const data = evaluations.loadEvaluations({ repoRoot: REPO_ROOT, catalog });
+  assert.deepEqual(data.plugins.map((plugin) => plugin.name).sort(), MARKETPLACE_NAMES);
+  for (const entry of MARKETPLACE.plugins.filter((plugin) => typeof plugin.source === 'string')) {
+    const skillDir = path.join(REPO_ROOT, entry.source, 'skills');
+    const expected = fs.existsSync(skillDir) ? fs.readdirSync(skillDir, { withFileTypes: true })
+      .filter((item) => item.isDirectory() && fs.existsSync(path.join(skillDir, item.name, 'SKILL.md'))).map((item) => item.name).sort() : [];
+    assert.deepEqual(data.plugins.find((plugin) => plugin.name === entry.name).skills.map((skill) => skill.name).sort(), expected);
+  }
+  const html = renderEvaluations(data);
+  assert.match(html, /No evaluation results published yet/);
+  assert.match(html, /Not evaluated/);
+  assert.match(html, /skill inventory is unavailable/);
+  assert.doesNotMatch(html, /test-model|percentage points with skill|Consistent offline evidence<\/span>/);
+});
+
+test('evaluations use the showcase layout, navigation and color theme', () => {
+  const catalog = loadCatalog(REPO_ROOT);
+  const html = renderEvaluations(evaluations.loadEvaluations({ repoRoot: REPO_ROOT, catalog }));
+  assert.match(html, /<header class="site-header">/);
+  assert.match(html, /<footer class="site-footer">/);
+  assert.match(html, /href="\.\.\/evaluations\/" aria-current="page"/);
+  assert.match(html, /<script src="\.\.\/assets\/theme\.js"><\/script>/);
+  assert.match(html, /<script src="\.\.\/assets\/site\.js" defer><\/script>/);
+  assert.match(html, /<link rel="stylesheet" href="\.\.\/assets\/styles\.css">/);
+  assert.match(html, /<link rel="stylesheet" href="\.\.\/assets\/evaluations\.css">/);
+  for (const choice of ['system', 'light', 'dark']) {
+    assert.match(html, new RegExp(`data-theme-choice="${choice}"`));
+  }
+  assert.doesNotMatch(html, /evaluations-theme\.js/);
+  assert.doesNotMatch(fs.readFileSync(path.join(REPO_ROOT, 'site/assets/evaluations.css'), 'utf8'), /--cp-/);
+});
+
+test('token dashboard aggregates retained runs and labels incomplete usage', () => {
+  const fixture = evidenceFixture();
+  const first = structuredClone(fixture.summary);
+  first.schemaVersion = 2;
+  const suite = first.suites[0];
+  suite.runs = 1;
+  suite.expectedCases = [suite.expectedCases[0]];
+  suite.results = suite.results.filter((item) => item.name === suite.expectedCases[0].name && item.trial === 0);
+  Object.assign(suite.results[0], {
+    tokens: 100,
+    agentUsage: { inputTokens: 70, outputTokens: 30, cacheReadTokens: 40, cacheWriteTokens: null },
+    judgeUsage: { calls: 1, reportedCalls: 1, inputTokens: 10, outputTokens: 5 },
+  });
+  Object.assign(suite.results[1], {
+    tokens: null, agentUsage: null,
+    judgeUsage: { calls: 1, reportedCalls: 0, inputTokens: 0, outputTokens: 0 },
+  });
+  const second = structuredClone(first);
+  second.generatedAt = '2026-01-16T00:00:00Z';
+  second.runUrl = 'https://github.com/example/project/actions/runs/124';
+  Object.assign(second.suites[0].results[0], {
+    tokens: 30,
+    agentUsage: { inputTokens: 20, outputTokens: 10, cacheReadTokens: 0, cacheWriteTokens: 0 },
+    judgeUsage: { calls: 0, reportedCalls: 0, inputTokens: 0, outputTokens: 0 },
+  });
+  Object.assign(second.suites[0].results[1], {
+    tokens: 10,
+    agentUsage: { inputTokens: 5, outputTokens: 5, cacheReadTokens: null, cacheWriteTokens: null },
+    judgeUsage: { calls: 2, reportedCalls: 1, inputTokens: 7, outputTokens: 3 },
+  });
+  const secondFile = path.join(fixture.root, 'second.json');
+  writeJson(secondFile, second);
+  const html = renderEvaluations(fixture.load(first, { evalResults: [fixture.summaryFile, secondFile] }));
+  assert.match(html, /Token usage/);
+  assert.match(html, /Reported total<\/h3><strong>At least 165/);
+  assert.match(html, /At least 140/);
+  assert.match(html, /At least 25/);
+  assert.match(html, /Judge input<\/h3><strong>At least 17/);
+  assert.match(html, /Judge output<\/h3><strong>At least 8/);
+  assert.match(html, /3 of 4 recorded trials/);
+  assert.match(html, /2 of 4 judge calls/);
+  assert.match(html, /2026-01-15/);
+  assert.match(html, /2026-01-16/);
+});
+
+test('complete evidence separates capability, dormancy, baseline and distinct tasks', () => {
+  const fixture = evidenceFixture();
+  const item = fixture.load().plugins[0].skills[0].evidence[0];
+  assert.equal(item.category, 'Consistent offline evidence');
+  assert.equal(item.capability.passed, 4);
+  assert.equal(item.capability.expected, 4);
+  assert.equal(item.capability.tasks, 2);
+  assert.equal(item.capability.allRunsPassed, 2);
+  assert.equal(item.dormancy.expected, 2);
+  assert.equal(item.baseline.passed, 0);
+  assert.equal(item.delta, 1);
+  assert.match(renderEvaluations(fixture.load()), /4\/4<\/strong> passed/);
+  fixture.summary.suites[0].results[0].score = 0.123456789;
+  const html = renderEvaluations(fixture.load());
+  assert.match(html, /<td>0\.123<\/td>/);
+  assert.doesNotMatch(html, /0\.123456789/);
+});
+
+test('reasoning effort is validated, displayed and kept separate from older or different-effort evidence', () => {
+  const fixture = evidenceFixture();
+  const medium = structuredClone(fixture.summary);
+  Object.assign(medium, { schemaVersion: 3, reasoningEffort: 'medium', judgeReasoningEffort: 'medium' });
+  for (const result of medium.suites[0].results) {
+    result.agentUsage = { inputTokens: 70, outputTokens: 30, cacheReadTokens: null, cacheWriteTokens: null };
+    result.judgeUsage = { calls: 1, reportedCalls: 1, inputTokens: 10, outputTokens: 5 };
+  }
+  assert.equal(evaluations.validateSummary(medium), medium);
+  const high = { ...medium, reasoningEffort: 'high' };
+  const highJudge = { ...medium, judgeReasoningEffort: 'high' };
+  writeJson(path.join(fixture.root, 'medium.summary.json'), medium);
+  writeJson(path.join(fixture.root, 'high.summary.json'), high);
+  writeJson(path.join(fixture.root, 'high-judge.summary.json'), highJudge);
+  const data = fixture.load(fixture.summary, { evalResults: fixture.root });
+  const items = data.plugins[0].skills[0].evidence;
+  assert.equal(items.length, 4, 'legacy, agent effort and judge effort cannot overwrite each other');
+  const html = renderEvaluations(data);
+  assert.match(html, /test-model \(medium effort\)/);
+  assert.match(html, /test-model \(high effort\)/);
+  assert.match(html, /test-model \(unreported effort\)/);
+  assert.match(html, /Judge: test-judge \(high effort\)/);
+  for (const patch of [
+    { reasoningEffort: 'auto' }, { judgeReasoningEffort: undefined }, { judgeModel: medium.model },
+  ]) {
+    assert.throws(() => evaluations.validateSummary({ ...medium, ...patch }), /Invalid evaluation summary/);
+  }
+});
+
+test('missing role/trial records stay incomplete and never receive a positive category', () => {
+  const fixture = evidenceFixture();
+  fixture.summary.suites[0].results.pop();
+  const item = fixture.load().plugins[0].skills[0].evidence[0];
+  assert.equal(item.complete, false);
+  assert.equal(item.category, 'Limited evidence');
+  assert.equal(item.dormancy.expected, 2);
+  assert.equal(item.dormancy.recorded, 1);
+  assert.equal(item.dormancy.missing, 1);
+  assert.equal(item.delta, null);
+  assert.match(renderEvaluations(fixture.load()), /1 missing records/);
+});
+
+test('summary directories discover nested summaries without reading private JSON artifacts', () => {
+  const fixture = evidenceFixture();
+  const results = path.join(fixture.root, 'results');
+  writeJson(path.join(results, 'run-one', 'summary.json'), fixture.summary);
+  writeJson(path.join(results, 'private-artifact.json'), { transcript: 'not a summary' });
+  const loaded = evaluations.readSummaries(results);
+  assert.equal(loaded.length, 1);
+  assert.equal(loaded[0].model, 'test-model');
+  assert.throws(() => evaluations.readSummaries(path.join(results, 'private-artifact.json')), /Invalid evaluation summary/);
+  assert.throws(() => evaluations.readSummaries(tempDir('pps-evidence-empty-')), /no JSON summaries/);
+});
+
+test('errors remain in the denominator and repeated passes are not independent tasks', () => {
+  const fixture = evidenceFixture();
+  const result = fixture.summary.suites[0].results.find((item) => item.variant === 'skilled');
+  Object.assign(result, { status: 'error', score: null, error: 'GRADER_ERROR', checks: [] });
+  const item = fixture.load().plugins[0].skills[0].evidence[0];
+  assert.equal(item.category, 'Mixed results');
+  assert.equal(item.capability.passed, 3);
+  assert.equal(item.capability.expected, 4);
+  assert.equal(item.capability.errors, 1);
+  assert.equal(item.capability.allRunsPassed, 1);
+  assert.equal(item.delta, .75);
+});
+
+test('changed plugin, skill, suite inputs and runtime invalidate current evidence', () => {
+  for (const target of ['plugin', 'skill', 'suite', 'fixture', 'hidden-check', 'runtime']) {
+    const fixture = evidenceFixture();
+    const file = {
+      plugin: path.join(fixture.pluginDir, 'helper.js'),
+      skill: fixture.skillFile,
+      suite: fixture.suiteFile,
+      fixture: path.join(path.dirname(fixture.suiteFile), 'fixture.txt'),
+      'hidden-check': path.join(path.dirname(fixture.suiteFile), 'hidden-check.js'),
+      runtime: path.join(fixture.runtimeDir, 'grader.js'),
+    }[target];
+    fs.appendFileSync(file, '\nchanged');
+    const item = fixture.load().plugins[0].skills[0].evidence[0];
+    assert.equal(item.changed, true, target);
+    assert.equal(item.category, 'Limited evidence', target);
+    if (target === 'runtime') {
+      assert.equal(item.runtimeChanged, true);
+      assert.match(renderEvaluations(fixture.load()), /Source mismatch - evaluation runtime changed/);
+    }
+  }
+  const fixture = evidenceFixture();
+  fs.rmSync(fixture.suiteFile);
+  assert.equal(fixture.load().plugins[0].skills[0].evidence[0].changed, true);
+  const runtimeFixture = evidenceFixture();
+  fs.rmSync(runtimeFixture.runtimeDir, { recursive: true });
+  assert.equal(runtimeFixture.load().plugins[0].skills[0].evidence[0].runtimeChanged, true);
+  const cached = evidenceFixture();
+  for (const dir of [cached.runtimeDir, path.dirname(cached.suiteFile)]) {
+    fs.mkdirSync(path.join(dir, 'node_modules'));
+    fs.writeFileSync(path.join(dir, 'node_modules', 'test-only-cache'), 'ignored');
+  }
+  assert.equal(cached.load().plugins[0].skills[0].evidence[0].category, 'Consistent offline evidence');
+});
+
+test('old evidence and narrow task coverage stay limited even when all trials pass', () => {
+  const fixture = evidenceFixture();
+  const old = fixture.load(fixture.summary, { now: new Date('2026-03-01T12:00:00Z') }).plugins[0].skills[0].evidence[0];
+  assert.equal(old.fresh, false);
+  assert.equal(old.category, 'Limited evidence');
+  const suite = fixture.summary.suites[0];
+  suite.expectedCases = suite.expectedCases.filter((item) => item.name !== 'diagram');
+  suite.results = suite.results.filter((item) => item.name !== 'diagram');
+  assert.equal(fixture.load().plugins[0].skills[0].evidence[0].category, 'Limited evidence');
+});
+
+test('summary validation rejects malformed, duplicate, contradictory and unsafe evidence', () => {
+  const fixture = evidenceFixture();
+  const mutations = [
+    (value) => { value.schemaVersion = 2; },
+    (value) => { value.output = 'raw output must not publish'; },
+    (value) => { value.plugin = 1; },
+    (value) => { value.pluginHash = 'wrong'; },
+    (value) => { delete value.runtimeHash; },
+    (value) => { value.runtimeHash = 'wrong'; },
+    (value) => { value.generatedAt = 'not a date'; },
+    (value) => { value.generatedAt = '2026-02-30T12:00:00Z'; },
+    (value) => { value.suites[0].runs = 0; },
+    (value) => { value.suites[0].expectedCases.push(value.suites[0].expectedCases[0]); },
+    (value) => { value.suites[0].results.push(value.suites[0].results[0]); },
+    (value) => { value.suites[0].results[0].trial = 2; },
+    (value) => { value.suites[0].results[0].variant = 'unknown'; },
+    (value) => { value.suites[0].results[0].score = 1.1; },
+    (value) => { value.suites[0].results[0].status = 'passed'; },
+    (value) => { value.suites[0].results[0].checks = [{ name: '<script>', passed: true }]; },
+    (value) => { value.suites[0].results[0].error = 'raw private error text'; },
+    (value) => { value.suites[0].results[0].tokens = -1; },
+    (value) => { value.runUrl = 'javascript:alert(1)'; },
+    (value) => { value.runUrl = 'https://github.com.evil.example/a/b/actions/runs/1'; },
+    (value) => { value.runUrl = 'https://github.com@evil.example/a/b/actions/runs/1'; },
+    (value) => { value.runUrl += '?token=private'; },
+  ];
+  for (const mutate of mutations) {
+    const value = structuredClone(fixture.summary);
+    mutate(value);
+    assert.throws(() => evaluations.validateSummary(value), /Invalid evaluation summary/, mutate.toString());
+  }
+  assert.throws(() => fixture.load({ ...fixture.summary, plugin: 'unknown' }), /unknown/);
+  assert.throws(() => fixture.load({ ...fixture.summary, generatedAt: '2027-01-01T00:00:00Z' }), /future/);
+});
+
+test('usage summaries reject invalid counts and private nested fields', () => {
+  const fixture = evidenceFixture();
+  const summary = structuredClone(fixture.summary);
+  summary.schemaVersion = 2;
+  for (const result of summary.suites[0].results) {
+    result.agentUsage = { inputTokens: 70, outputTokens: 30, cacheReadTokens: null, cacheWriteTokens: null };
+    result.judgeUsage = { calls: 1, reportedCalls: 1, inputTokens: 10, outputTokens: 5 };
+  }
+  assert.equal(evaluations.validateSummary(summary), summary);
+  const mutations = [
+    (result) => { result.agentUsage.prompt = 'private'; },
+    (result) => { result.judgeUsage.reasoning = 'private'; },
+    (result) => { result.agentUsage.inputTokens = -1; },
+    (result) => { result.tokens = 99; },
+    (result) => { result.judgeUsage.reportedCalls = 2; },
+    (result) => { result.judgeUsage.reportedCalls = 0; },
+  ];
+  for (const mutate of mutations) {
+    const invalid = structuredClone(summary);
+    mutate(invalid.suites[0].results[0]);
+    assert.throws(() => evaluations.validateSummary(invalid), /Invalid evaluation summary/);
+  }
+});
+
+test('legacy zero usage remains unknown rather than becoming a reported zero', () => {
+  const fixture = evidenceFixture();
+  for (const result of fixture.summary.suites[0].results) result.tokens = 0;
+  const html = renderEvaluations(fixture.load());
+  assert.match(html, /0 of 12 recorded trials reported totals/);
+  assert.match(html, /12 older trials have no judge data/);
+  assert.match(html, /Unknown tokens/);
+});
+
+test('HTML-sensitive case names and model labels are escaped, never rendered as HTML', () => {
+  const fixture = evidenceFixture();
+  const hostile = '</summary><script>alert("x")</script>';
+  fixture.summary.model = hostile;
+  fixture.summary.suites[0].expectedCases[0].name = hostile;
+  fixture.summary.suites[0].results.filter((item) => item.name === 'documentation').forEach((item) => { item.name = hostile; });
+  const html = renderEvaluations(fixture.load());
+  assert.doesNotMatch(html, /<script>alert|<\/summary><script>/);
+  assert.match(html, /&lt;script&gt;/);
+  assert.match(html, /Content-Security-Policy/);
+  assert.doesNotMatch(html, /<script(?! src=)/);
+});
+
+test('newest evidence is selected per skill, model and judge without backfilling missing trials', () => {
+  const fixture = evidenceFixture();
+  const secondSkill = path.join(fixture.pluginDir, 'skills', 'other-skill', 'SKILL.md');
+  fs.mkdirSync(path.dirname(secondSkill), { recursive: true });
+  fs.writeFileSync(secondSkill, 'Another test skill');
+  fixture.summary.pluginHash = hashTree(fixture.pluginDir);
+  const omittedSuite = structuredClone(fixture.summary.suites[0]);
+  omittedSuite.skill = 'other-skill';
+  omittedSuite.skillHash = hashFile(secondSkill);
+  fixture.summary.suites.push(omittedSuite);
+  const second = structuredClone(fixture.summary);
+  second.model = 'other-test-model';
+  const newer = structuredClone(fixture.summary);
+  newer.generatedAt = '2026-01-16T00:00:00Z';
+  newer.suites.pop();
+  newer.suites[0].results.pop();
+  writeJson(path.join(fixture.root, 'newer.json'), newer);
+  writeJson(path.join(fixture.root, 'other.json'), second);
+  writeJson(fixture.summaryFile, fixture.summary);
+  const inputs = [fixture.summaryFile, path.join(fixture.root, 'other.json'), path.join(fixture.root, 'newer.json')];
+  const data = fixture.load(fixture.summary, { evalResults: inputs });
+  const items = data.plugins[0].skills.find((skill) => skill.name === 'write-docs').evidence;
+  assert.equal(items.length, 2);
+  assert.equal(items.find((item) => item.model === 'test-model').complete, false);
+  assert.equal(items.find((item) => item.model === 'other-test-model').complete, true);
+  const differentJudge = structuredClone(fixture.summary);
+  differentJudge.judgeModel = 'other-judge';
+  writeJson(path.join(fixture.root, 'judge.json'), differentJudge);
+  const retained = data.plugins[0].skills.find((skill) => skill.name === 'other-skill').evidence.find((item) => item.model === 'test-model');
+  assert.equal(retained.generatedAt, fixture.summary.generatedAt);
+  assert.equal(retained.complete, true);
+  assert.equal(fixture.load(fixture.summary, { evalResults: [...inputs, path.join(fixture.root, 'judge.json')] }).plugins[0].skills.find((skill) => skill.name === 'write-docs').evidence.length, 3);
+  assert.throws(() => fixture.load(fixture.summary, { evalResults: [fixture.summaryFile, fixture.summaryFile] }), /ambiguous/);
+});
+
+test('test-only split matrix summaries preserve per-skill coverage and whole-run provenance', () => {
+  const fixture = evidenceFixture();
+  const otherFile = path.join(fixture.pluginDir, 'skills', 'other-skill', 'SKILL.md');
+  fs.mkdirSync(path.dirname(otherFile), { recursive: true });
+  fs.writeFileSync(otherFile, 'Test-only matrix skill');
+  const otherSuiteFile = path.join(fixture.root, 'evals', 'sample', 'other-skill', 'eval.yaml');
+  fs.mkdirSync(path.dirname(otherSuiteFile), { recursive: true });
+  fs.writeFileSync(otherSuiteFile, 'name: test-only-matrix-suite\n');
+  fixture.summary.pluginHash = hashTree(fixture.pluginDir);
+  const split = structuredClone(fixture.summary);
+  split.suites[0].skill = 'other-skill';
+  split.suites[0].skillHash = hashFile(otherFile);
+  split.suites[0].suiteHash = hashTree(path.dirname(otherSuiteFile));
+  const results = path.join(fixture.root, 'matrix');
+  const firstFile = path.join(results, 'first', 'summary.json');
+  const secondFile = path.join(results, 'second', 'summary.json');
+  writeJson(firstFile, fixture.summary);
+  writeJson(secondFile, split);
+  const load = () => fixture.load(fixture.summary, { evalResults: results });
+  const skills = load().plugins[0].skills;
+  assert.equal(skills.length, 2);
+  assert.match(renderEvaluations(load()), /1 linked Actions run \/ 2 summaries/);
+  for (const skill of skills) {
+    assert.equal(skill.evidence.length, 1);
+    assert.equal(skill.evidence[0].complete, true);
+    assert.equal(skill.evidence[0].category, 'Consistent offline evidence');
+  }
+  const newest = structuredClone(split);
+  newest.generatedAt = '2026-01-16T00:00:00Z';
+  newest.commit = 'b'.repeat(40);
+  newest.pluginHash = 'c'.repeat(64);
+  newest.suites[0].results.pop();
+  writeJson(path.join(results, 'newest', 'summary.json'), newest);
+  const selected = load().plugins[0].skills;
+  const other = selected.find((skill) => skill.name === 'other-skill').evidence[0];
+  assert.equal(other.commit, newest.commit);
+  assert.equal(other.complete, false);
+  assert.equal(other.changed, true);
+  assert.equal(other.dormancy.recorded, 1);
+  assert.equal(other.delta, null);
+  assert.equal(selected.find((skill) => skill.name === 'write-docs').evidence[0].commit, fixture.summary.commit);
+  writeJson(path.join(results, 'duplicate', 'summary.json'), split);
+  assert.throws(load, /ambiguous same-date skill\/model summaries/, 'duplicates are rejected even when a newer suite exists');
+});
+
+test('evidence tree hashes use sorted normalized paths and raw bytes, skipping build caches', () => {
+  const root = tempDir('pps-evidence-hash-');
+  fs.writeFileSync(path.join(root, 'b'), 'B');
+  fs.mkdirSync(path.join(root, 'a'));
+  fs.writeFileSync(path.join(root, 'a', 'c'), 'C');
+  const expected = require('node:crypto').createHash('sha256').update('a/c\0C\0b\0B\0').digest('hex');
+  assert.equal(hashTree(root), expected);
+  for (const name of ['dist', '.git', '__pycache__', 'node_modules']) {
+    fs.mkdirSync(path.join(root, name));
+    fs.writeFileSync(path.join(root, name, 'ignored'), 'ignored');
+  }
+  fs.writeFileSync(path.join(root, '.DS_Store'), 'ignored');
+  assert.equal(hashTree(root), expected);
+  if (process.platform !== 'win32') {
+    fs.symlinkSync(path.join(root, 'b'), path.join(root, 'link'));
+    assert.throws(() => hashTree(root), /symlinks/);
+    assert.throws(() => hashFile(path.join(root, 'link')), /regular files/);
+  }
+});
+
+test('dashboard model and evidence filters apply together and reset restores inventory', () => {
+  const listeners = {};
+  const controls = Object.fromEntries(['search', 'plugin', 'model', 'evidence', 'result-count', 'no-results', 'theme'].map((id) => [id, { value: '', hidden: false, addEventListener() {} }]));
+  const good = { dataset: { evidenceModel: 'good', current: 'true', attention: 'false' }, hidden: false };
+  const bad = { dataset: { evidenceModel: 'bad', current: 'false', attention: 'true' }, hidden: false };
+  const tested = { dataset: { search: 'write-docs' }, hidden: false, querySelectorAll: () => [good, bad] };
+  const untested = { dataset: { search: 'create-site' }, hidden: false, querySelectorAll: () => [] };
+  const group = { dataset: { plugin: 'sample', pluginSearch: 'sample plugin' }, hidden: false, querySelectorAll: () => [tested, untested] };
+  const form = { hidden: true, addEventListener: (name, fn) => { listeners[name] = fn; } };
+  const themeControl = { hidden: true };
+  const document = {
+    querySelector: (selector) => selector === '[data-filters]' ? form : themeControl,
+    querySelectorAll: () => [group],
+    getElementById: (id) => controls[id],
+    documentElement: { setAttribute() {} },
+  };
+  const window = { location: { search: '' }, matchMedia: () => ({ matches: false, addEventListener() {} }), localStorage: { getItem: () => null }, setTimeout: (fn) => fn() };
+  vm.runInNewContext(fs.readFileSync(path.join(REPO_ROOT, 'site/assets/evaluations.js'), 'utf8'), { document, window, URLSearchParams });
+  assert.equal(form.hidden, false);
+  controls.model.value = 'bad';
+  controls.evidence.value = 'current';
+  listeners.input();
+  assert.equal(group.hidden, true, 'a different model cannot supply current evidence');
+  controls.model.value = 'good';
+  listeners.change();
+  assert.equal(tested.hidden, false);
+  assert.equal(bad.hidden, true);
+  assert.equal(untested.hidden, true);
+  controls.search.value = 'nothing';
+  listeners.input();
+  assert.equal(controls['no-results'].hidden, false);
+  for (const id of ['search', 'plugin', 'model', 'evidence']) controls[id].value = '';
+  listeners.reset();
+  assert.equal(tested.hidden, false);
+  assert.equal(untested.hidden, false);
+  assert.match(controls['result-count'].textContent, /2 skills across 1 plugin/);
+});
+
+test('site build includes a linked evaluations page without depending on media or results', () => {
+  const outDir = path.join(tempDir('pps-evidence-build-'), 'dist');
+  const result = build({ repoRoot: REPO_ROOT, outDir, basePath: '/' });
+  assert.ok(result.files.includes('evaluations/index.html'));
+  assert.match(fs.readFileSync(path.join(outDir, 'index.html'), 'utf8'), /href="evaluations\/"/);
+  assert.match(fs.readFileSync(path.join(outDir, 'evaluations/index.html'), 'utf8'), /Offline only/);
+  assert.ok(fs.existsSync(path.join(outDir, 'assets', 'evaluations.css')));
+  const args = parseArgs(['--eval-results', 'a.json', '--eval-results', 'results']);
+  assert.deepEqual(args.evalResults, [path.resolve('a.json'), path.resolve('results')]);
+  const fixture = evidenceFixture();
+  const local = MARKETPLACE.plugins.find((entry) => entry.name === 'power-pages');
+  const pluginDir = path.join(REPO_ROOT, local.source);
+  const skill = fs.readdirSync(path.join(pluginDir, 'skills'), { withFileTypes: true })
+    .find((entry) => entry.isDirectory() && fs.existsSync(path.join(pluginDir, 'skills', entry.name, 'SKILL.md')));
+  const summary = fixture.summary;
+  summary.plugin = 'power-pages';
+  summary.generatedAt = new Date().toISOString();
+  summary.pluginHash = hashTree(pluginDir);
+  summary.suites[0].skill = skill.name;
+  summary.suites[0].skillHash = hashFile(path.join(pluginDir, 'skills', skill.name, 'SKILL.md'));
+  writeJson(fixture.summaryFile, summary);
+  build({ repoRoot: REPO_ROOT, outDir, basePath: '/', evalResults: fixture.summaryFile });
+  assert.match(fs.readFileSync(path.join(outDir, 'evaluations/index.html'), 'utf8'), /test-model/);
+  assert.ok(!fs.existsSync(path.join(outDir, 'summary.json')), 'input evidence must not be copied wholesale');
+  writeJson(fixture.summaryFile, { ...summary, transcript: 'private' });
+  assert.throws(() => build({ repoRoot: REPO_ROOT, outDir, basePath: '/', evalResults: fixture.summaryFile }), /Invalid evaluation summary/);
+  assert.match(fs.readFileSync(path.join(outDir, 'evaluations/index.html'), 'utf8'), /test-model/, 'invalid input cannot clear a previous build');
+});
+
+test('published site builds an untested dashboard when no retained summaries exist', () => {
+  const root = tempDir('pps-empty-publication-');
+  const results = path.join(root, 'published');
+  const outDir = path.join(root, 'site');
+  fs.mkdirSync(results);
+  const options = { evalResults: results, allowEmptyEvalResults: true };
+  build({ ...options, repoRoot: REPO_ROOT, outDir, basePath: '/' });
+  const html = fs.readFileSync(path.join(outDir, 'evaluations/index.html'), 'utf8');
+  assert.match(html, /No evaluation results published yet/);
+  assert.match(html, /No token usage published yet/);
+  assert.equal(parseArgs(['--eval-results', results, '--allow-empty-eval-results']).allowEmptyEvalResults, true);
+  assert.equal(parseArgs(['--allow-empty-eval-results', '--eval-results', results]).allowEmptyEvalResults, true);
+  assert.throws(() => parseArgs(['--allow-empty-eval-results']), /requires --eval-results/);
+  assert.throws(() => build({ repoRoot: REPO_ROOT, outDir, basePath: '/', evalResults: results }), /no JSON summaries/);
+  writeJson(path.join(results, 'unsafe.summary.json'), { transcript: 'private' });
+  assert.throws(() => build({ ...options, repoRoot: REPO_ROOT, outDir, basePath: '/' }), /Invalid evaluation summary/);
+});
 
 // ── Install links ───────────────────────────────────────────────
 
@@ -540,6 +1058,8 @@ test('every Pages deploy carries the repo stats report', () => {
   const stats = fs.readFileSync(path.join(REPO_ROOT, '.github', 'workflows', 'github-repo-stats.yml'), 'utf8');
   const statsName = /^name: (.+)$/m.exec(stats)[1].trim();
   assert.match(site, new RegExp(`workflow_run:\\n\\s+workflows:\\n\\s+- ${statsName}\\n`), 'site must republish after the stats workflow');
+  assert.match(site, /- name: build preview\n\s+if: github\.event_name == 'pull_request' \|\| github\.ref != 'refs\/heads\/main'/);
+  assert.match(site, /- name: build published site\n\s+if: github\.event_name != 'pull_request' && github\.ref == 'refs\/heads\/main'/);
   assert.match(site, /ref: github-repo-stats\n\s+path: repo-stats\n\s+sparse-checkout: microsoft\n/);
   assert.match(site, /run: cp -R repo-stats\/microsoft site\/dist\/microsoft\n/);
   assert.ok(site.indexOf('cp -R repo-stats/microsoft') < site.indexOf('upload-pages-artifact'), 'stats must be copied before the upload');

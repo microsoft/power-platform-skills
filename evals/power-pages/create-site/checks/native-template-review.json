@@ -1,0 +1,30 @@
+{
+  "files": [
+    {
+      "path": "docs/native-template-review.md",
+      "type": "text",
+      "requiredText": [
+        "Contoso Service",
+        "fr-FR",
+        "en-US",
+        "Customer service"
+      ],
+      "requiredPatterns": [
+        "language",
+        "import",
+        "activat",
+        "approval|consent"
+      ],
+      "minTextLength": 200
+    }
+  ],
+  "unchanged": [
+    {
+      "path": "inputs/native-template-review.json",
+      "source": "fixtures/native-template-review.json"
+    }
+  ],
+  "absent": [
+    "package.json"
+  ]
+}

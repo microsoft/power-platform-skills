@@ -1,0 +1,16 @@
+{
+  "currency": "GBP",
+  "items": [
+    {
+      "sku": "NOTEBOOK",
+      "quantity": 3,
+      "unitPrice": 4
+    },
+    {
+      "sku": "PEN",
+      "quantity": 2,
+      "unitPrice": 1.5
+    }
+  ],
+  "taxRate": 0.2
+}

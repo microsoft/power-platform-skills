@@ -1,0 +1,30 @@
+{
+  "siteName": "Contoso Repairs",
+  "framework": "React",
+  "locale": "en-GB",
+  "pages": [
+    {
+      "title": "Home",
+      "route": "/"
+    },
+    {
+      "title": "Book a repair",
+      "route": "/book"
+    },
+    {
+      "title": "Track repair",
+      "route": "/track"
+    }
+  ],
+  "brand": {
+    "primary": "#175a40",
+    "tone": "calm and practical"
+  },
+  "constraints": [
+    "keyboard-accessible booking form",
+    "clear invalid, empty, loading and success states",
+    "phone-first layout",
+    "no payment collection"
+  ],
+  "implementationApproved": false
+}
