@@ -332,7 +332,7 @@ test('the default build loads none of the stable-identity modules and still wire
     assert.equal(unitsFactory.match(new RegExp(`require\\('\\./${m}\\.js'\\)`, 'g')).length, 1, `${m}.js is required in createUnitsFor`);
     assert.equal(runtime.match(new RegExp(`require\\('\\./${m}\\.js'\\)`, 'g')).length, 1, `${m}.js is required nowhere else in the runtime`);
   }
-  assert.match(runtime, /if \(ctx\.createUnits && ctx\.createUnits\.available\) \{\n\s+const units = ctx\.createUnits;\n\s+try \{\n\s+require\('\.\/configuration-create-recovery\.js'\)\.preflightConfigurationCreates\(\{/);
+  assert.match(runtime, /if \(ctx\.createUnits && ctx\.createUnits\.available\) \{\r?\n\s+const units = ctx\.createUnits;\r?\n\s+try \{\r?\n\s+require\('\.\/configuration-create-recovery\.js'\)\.preflightConfigurationCreates\(\{/);
   assert.equal(runtime.match(/require\('\.\/configuration-create-recovery\.js'\)/g).length, 1, 'the receipt guard is required only behind the create capability');
   const artifacts = fs.readFileSync(path.join(SCRIPTS, 'lib', 'configuration-artifacts.js'), 'utf8');
   for (const m of ['configuration-create-plan', 'configuration-create-state']) {
@@ -346,8 +346,8 @@ test('the default build loads none of the stable-identity modules and still wire
   for (const m of ['configuration-create-recovery', 'configuration-create-state', 'configuration-create-plan']) {
     assert.equal(guard.match(new RegExp(`require\\('\\./${m}\\.js'\\)`, 'g')).length, 1, `${m}.js is required only in its accessor`);
   }
-  assert.match(guard, /function assertConfigurationCreatesClear\([^\n]*\n {2}const ws = path\.resolve\(workspaceDir\);\n {2}if \(holdsNoEvidence\(ws\)\) return CLEAR;/);
-  assert.match(guard, /function assertTeardownClear\(dir\) \{\n {2}if \(holdsNoEvidence\(path\.resolve\(dir\)\)\) return;/);
+  assert.match(guard, /function assertConfigurationCreatesClear\([^\r\n]*\r?\n {2}const ws = path\.resolve\(workspaceDir\);\r?\n {2}if \(holdsNoEvidence\(ws\)\) return CLEAR;/);
+  assert.match(guard, /function assertTeardownClear\(dir\) \{\r?\n {2}if \(holdsNoEvidence\(path\.resolve\(dir\)\)\) return;/);
   assert.ok(graph.has(path.join(SCRIPTS, 'lib', 'creates-passthrough.js')));
   for (const m of NEW_MODULES) assert.ok(!graph.has(m), `${path.basename(m)} is not reachable from a default build`);
   const build = fs.readFileSync(path.join(SCRIPTS, 'build-model-app.js'), 'utf8');
