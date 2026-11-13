@@ -9,6 +9,58 @@ native metadata, Liquid, Bootstrap, and Design Studio-compatible content.
 
 Read `PLUGIN_DEVELOPMENT_GUIDE.md` for UX and reliability standards when creating new skills and agents.
 
+## Data-model migration reliability
+
+Keep `migrate-datamodel`'s four phases, track selection, and approval gates unchanged
+when maintaining its scripts. Snapshot comparisons must not pass incomplete parses
+or ambiguous duplicate identities. Reuse the strict aggregate parser and site-root
+resolver; retain inactive navigation links, target/order/state, and both site-setting
+layouts. Capture canonical `web-link-sets` (plus legacy layout compatibility),
+prefixed/unprefixed states, nested advanced-form steps and per-record page-access
+rules. Wire new inventories through diff identities, meaningful values and report
+grouping. The live comparison must use record-level diff semantics, not just counts.
+Initialization must verify the website and
+environment identity before resuming or resetting an existing folder. Remediation
+reruns rebuild the selected FetchXML/Liquid passes from current source, preserving
+both passes without modifying live files before the approved apply step.
+Validate saved state and snapshot/remediation records before dereferencing them;
+invalid input must produce a clear error without replacing usable state or partially
+applying a proposal with missing staged files.
+Bind remediation apply to the manifest's canonical site root, reject linked
+descendants and restore originals after caught copy failures. Report rollback
+failures explicitly and preserve recovery inputs. Do not mutate either tree
+concurrently. Report links need scheme validation, and copyable terminal commands
+must identify their shell and quote paths accordingly. DME data copy requires
+verified metadata migration and complete source-to-component mappings.
+DME checklists apply
+only to mapped metadata tables; unsupported findings remain explicit manual review.
+Completion telemetry uses existing approved fields and shared regional dispatch;
+do not transmit migration-specific phase/template data through `eventInfo`.
+Keep migration instructions shell-independent: use `migration-runtime.js` for
+discovery, UTF-8 solution capture, delays, and bounded read-only polling, not
+PowerShell/Bash loops. PAC runs through the shared argument-array runner; retain
+complete verbose responses for agent-owned history/chunk report updates.
+After report initialization, every skill-owned input/manual-action pause must
+show the report-wide required-action notice. Reuse approval gates for existing
+approvals; use `--set-input` for other questions and clear it when resolved.
+Never treat a notification as approval or advance migration progress for it.
+Approved package installs reuse the indeterminate now-running bar and elapsed
+timer through installed-version verification; never invent an install percentage
+or advance migration phases for a package's progress display.
+Restart remains after activation in Phase 3, before Phase 4 runtime validation.
+Use `scripts/restart-site.js` only with explicit restart consent; verify the saved
+environment, Portal ID (not the Dataverse record ID), and site origin. Never
+automatically repeat an uncertain POST. Read-only readiness checks and manual
+fallback must not be reported as proof of a restart without prior submission
+or explicit user confirmation.
+Phase 4.1 offers Run now to invoke the existing test-site skill in the migration
+conversation, only after the user chooses it. Preserve its read-only scope and
+user-controlled login. Keep input notices/progress synchronized and record only
+the current matching-site result; warnings, skipped scope, cancellation and
+unavailable tools are not an unconditional pass. Preserve earlier-result,
+defer/skip and final-status/rollback choices.
+Regression coverage lives in `scripts/tests/{diff-snapshots,snapshot-site,update-state,generate-migration-reports,apply-remediation,render-live-report,detect-template,migration-telemetry}.test.js`.
+
 ## Non-SPA creation and shared design quality
 
 `scripts/telemetry-config.js` delegates preference changes to the bundled shared CLI and adds the non-SPA creation disclosure.
