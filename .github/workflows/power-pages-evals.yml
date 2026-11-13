@@ -85,7 +85,9 @@ jobs:
             max-parallel: 2
             matrix:
                 include: ${{ fromJSON(needs.select.outputs.matrix) }}
-        runs-on: ubuntu-latest
+        # Playwright 1.58.2 cannot install Chromium on Ubuntu 26.04.
+        # Revisit this pin when upgrading Playwright's supported runners.
+        runs-on: ubuntu-24.04
         timeout-minutes: 360
         permissions:
             contents: read

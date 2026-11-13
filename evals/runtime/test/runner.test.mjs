@@ -20,6 +20,23 @@ test('only the skills being improved have Vally suites; legacy-only skills remai
   await assert.rejects(() => loadSuites({ skill: 'setup-datamodel' }), /No evaluation suite/);
 });
 
+test('browser jobs use a Linux image supported by the pinned Playwright version', async t => {
+  const validation = parseYaml(await readFile(path.join(repoRoot, '.github/workflows/power-pages-eval-validation.yml'), 'utf8'));
+  const evaluation = parseYaml(await readFile(path.join(repoRoot, '.github/workflows/power-pages-evals.yml'), 'utf8'));
+  assert.ok(validation.jobs.validate.strategy.matrix.os.includes('ubuntu-24.04'));
+  assert.ok(!validation.jobs.validate.strategy.matrix.os.includes('ubuntu-latest'));
+  assert.equal(evaluation.jobs.evaluate['runs-on'], 'ubuntu-24.04');
+  const browsers = await mkdtemp(path.join(tmpdir(), 'pp-playwright-test-'));
+  t.after(() => rm(browsers, { recursive: true, force: true }));
+  const output = execFileSync(process.execPath, [
+    path.join(repoRoot, 'evals/runtime/node_modules/playwright/cli.js'), 'install', '--dry-run', 'chromium',
+  ], {
+    encoding: 'utf8',
+    env: { ...process.env, PLAYWRIGHT_HOST_PLATFORM_OVERRIDE: 'ubuntu24.04-x64', PLAYWRIGHT_BROWSERS_PATH: browsers },
+  });
+  assert.match(output, /Download url:.*linux64\/chrome-linux64\.zip/);
+});
+
 test('manual workflow selects available suites and rejects skills without one', async t => {
   const root = await mkdtemp(path.join(tmpdir(), 'pp-selection-test-'));
   t.after(() => rm(root, { recursive: true, force: true }));

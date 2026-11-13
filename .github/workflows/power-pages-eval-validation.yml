@@ -29,7 +29,9 @@ jobs:
         strategy:
             fail-fast: false
             matrix:
-                os: [ubuntu-latest, windows-latest, macos-latest]
+                # Playwright 1.58.2 cannot install Chromium on Ubuntu 26.04.
+                # Revisit this pin when upgrading Playwright's supported runners.
+                os: [ubuntu-24.04, windows-latest, macos-latest]
         runs-on: ${{ matrix.os }}
         timeout-minutes: 20
         env:
