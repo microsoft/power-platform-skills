@@ -5,6 +5,23 @@ All notable changes to the **model-apps** plugin.
 Entries are deliberately short: what changed and why it matters to you. The reasoning,
 evidence and trade-offs behind a change live in its PR, in `docs/`, or in the linked issue.
 
+## [2.28.0]
+
+- **Configuration creates are sent once (#807):** each new configuration row, children included, is created by its own request at a stable id and read back. After a lost answer the next build stops and sends nothing; the recovery commands settle it.
+- A build refuses an unsynced earlier copy of a variable or connection reference in the app's workspace before sending anything.
+- **Protected rule publication (#808):** the stop names the rule and its original id; a possibly sent publication is never replayed, even with `status: "published"`.
+- **Refused secret values (#847):** the stop reports the service code; correct the deployment settings and rebuild to send only the missing value.
+- **Busy customizations (#848):** a refused web-resource publish waits about 30, 60 and 90 seconds, or the service's Retry-After, before it retries.
+- **`verify` follows form bindings:** declared forms and their Quick View and sub-grid targets are checked through managed bindings, never through namesakes.
+- **Shared form cells (#797):** caption-related publication stops show the shared cells, the forms that reuse them and both captions, with read-only recovery steps.
+- **`/genpage` asks before editing a shared page (#676):** an edit and its verification fix-up name other apps that show the page and need your confirmation; unattended runs and unreadable scans stop.
+
+### Limits
+
+- Other programs must not change an app's workspace files while a build, recovery or teardown runs.
+- Generative-page and other publishes refused because another customization is running still stop after the ordinary retries (#848).
+- For two same-named declared views with no managed binding or `viewId`, `verify` lists their content as unverified and does not prove each has its own row.
+- Workspace copies an earlier version left stay until removed by hand (see the app-builder skill).
 ## [2.27.0]
 
 - **Same-named declared views (#845):** `--verify` checks each declared view against its own row (managed binding, then `viewId`, then name), so two same-named views on one table, each with its own `key`, no longer fail verification.
