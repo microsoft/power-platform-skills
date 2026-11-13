@@ -1,5 +1,5 @@
 export const DEFAULT_MODELS = Object.freeze([
-  'claude-opus-5.5', 'claude-sonnet-5.5', 'gpt-6-astra', 'gpt-6.1-sol',
+  'claude-opus-5', 'claude-sonnet-5.5', 'gpt-6-astra', 'gpt-6.1-sol',
 ]);
 export const REASONING_EFFORTS = Object.freeze(['none', 'low', 'medium', 'high', 'xhigh', 'max']);
 const modelId = /^[a-z0-9][a-z0-9._-]{0,127}$/;
@@ -19,7 +19,7 @@ export function evaluationMatrix({ skills, models = '', judgeModel = '', reasoni
   if (new Set(selected).size !== selected.length) throw new Error('Duplicate evaluation model');
   return skills.flatMap(skill => selected.map(model => {
     const pair = {
-      model, judgeModel: judgeModel.trim() || (model === 'claude-opus-5.5' ? 'gpt-6.1-sol' : 'claude-opus-5.5'),
+      model, judgeModel: judgeModel.trim() || (model === 'claude-opus-5' ? 'gpt-6.1-sol' : 'claude-opus-5'),
       reasoningEffort, judgeReasoningEffort,
     };
     validateModelPair(pair);

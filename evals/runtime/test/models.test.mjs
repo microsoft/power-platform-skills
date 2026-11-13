@@ -5,12 +5,17 @@ import { assertModelSupport, evaluationMatrix, validateModelPair } from '../mode
 test('default matrix pairs each evaluated model with a different medium-effort judge', () => {
   const matrix = evaluationMatrix({ skills: ['create-site', 'setup-auth'] });
   assert.equal(matrix.length, 8);
+  assert.deepEqual(matrix.filter(item => item.skill === 'create-site').map(item => [item.model, item.judgeModel]), [
+    ['claude-opus-5', 'gpt-6.1-sol'],
+    ['claude-sonnet-5.5', 'claude-opus-5'],
+    ['gpt-6-astra', 'claude-opus-5'],
+    ['gpt-6.1-sol', 'claude-opus-5'],
+  ]);
   for (const item of matrix) {
     assert.notEqual(item.model, item.judgeModel);
     assert.equal(item.reasoningEffort, 'medium');
     assert.equal(item.judgeReasoningEffort, 'medium');
   }
-  assert.equal(matrix.find(item => item.model === 'claude-opus-5.5').judgeModel, 'gpt-6.1-sol');
   const overridden = evaluationMatrix({
     skills: ['create-site'], models: 'test-agent-a, test-agent-b', judgeModel: 'test-judge',
     reasoningEffort: 'high', judgeReasoningEffort: 'low',
