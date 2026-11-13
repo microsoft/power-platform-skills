@@ -1993,9 +1993,10 @@ custom control), but the spec validator emits a warning.
   declared Custom API without an implementation is still built (a scaffold); only the pages that call it wait. A
   reference already there for another connector still stops the build (`pages-binding-reference-conflict`).
 - **Lost answers.** A configuration write is sent once in a build: when its answer is lost the step stops as
-  unknown (`configuration-incomplete`) and the build is not retried. Configuration rows are created through the
-  plain create path, so a whole-build retry after a lost answer can create a second one — check the environment
-  before you run the build again.
+  unknown (`configuration-incomplete`) and the build is not retried. A new configuration row on the default path
+  is created once, at a stable id, and recorded before it is sent: after a lost answer the next build stops
+  (`configuration-create-pending`) and sends nothing until `configuration-recovery.js` settles it (see
+  `docs/configuration-create-recovery.md`), so the row is never created again at a new id.
 - **Not carried by teardown or download.** A teardown never deletes a configuration item (nothing proves this app
   owns it); it names each one as kept, by name only, and says when a Custom API bound to a table the spec makes will
   block that table's delete. A plain download does not bring these items back into the spec. A managed download
