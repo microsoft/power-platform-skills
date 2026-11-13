@@ -41,7 +41,7 @@ jobs:
     select:
         # Only reviewed default-branch code can receive inference rights or feed
         # the public dashboard. No fork PR or arbitrary dispatch ref is eligible.
-        if: github.ref == 'refs/heads/main'
+        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/users/priyanshu92/power-pages-evaluations'
         runs-on: ubuntu-latest
         outputs:
             matrix: ${{ steps.select.outputs.matrix }}
