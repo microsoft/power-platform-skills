@@ -41,7 +41,7 @@ jobs:
     select:
         # Only reviewed default-branch code can receive inference rights or feed
         # the public dashboard. No fork PR or arbitrary dispatch ref is eligible.
-        if: github.ref == 'refs/heads/main'
+        if: false
         runs-on: ubuntu-latest
         outputs:
             matrix: ${{ steps.select.outputs.matrix }}
@@ -133,3 +133,25 @@ jobs:
                   path: evals/reports/action/summary.json
                   if-no-files-found: warn
                   retention-days: 90
+
+    catalog:
+        if: github.ref == 'refs/heads/users/priyanshu92/power-pages-evaluations'
+        runs-on: ubuntu-24.04
+        timeout-minutes: 10
+        permissions:
+            contents: read
+            copilot-requests: write
+        env:
+            POWER_PLATFORM_SKILLS_TELEMETRY_POWER_PAGES_OPTOUT: "1"
+        steps:
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+              with:
+                  persist-credentials: false
+            - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+              with:
+                  node-version: 22
+            - run: npm ci --prefix evals/runtime --registry=https://packagefeedproxy.microsoft.io/npm/ --ignore-scripts --no-audit --no-fund
+            - name: query native Actions model catalog
+              env:
+                  GITHUB_TOKEN: ${{ github.token }}
+              run: node evals/runtime/actions-model-probe.mjs
