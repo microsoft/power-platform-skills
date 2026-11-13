@@ -93,7 +93,8 @@ the receipt.
 
 - **`accept-current`**: every recorded row is present at its recorded id and parent, the complete public
   graph matches what was sent, the App Spec still declares the same thing, and the required solution
-  membership is visible. A new duplicate detection rule must be published. An environment variable or a
+  membership is visible. A new duplicate detection rule must be published, unless the App Spec declares it
+`status: "unpublished"`: then it must still be unpublished. An environment variable or a
   connection reference unit also needs `--accept-current-private-state` after you review
   its private values, which recovery neither compares nor prints. Acceptance records that you accept the
   current state; it does not prove what an earlier request did.
@@ -124,12 +125,14 @@ management, then run `inspect` again.
 
 ## Duplicate detection rules
 
-A new rule needs publication. The build sends `PublishDuplicateRule` once; publication takes some seconds.
+A new rule needs publication unless the App Spec declares it `status: "unpublished"`; the receipt records which.
+For one that does, the build sends `PublishDuplicateRule` once; publication takes some seconds.
 If its answer is lost or the rule cannot be shown published, the build stops with
 `configuration-create-publication-pending` and does not send it again. Run `inspect`: when the rule is
 published and the whole unit matches, use `accept-current`. If it stays unpublished or its state is
 unknown, publish it in the environment's duplicate detection rule settings (the earlier request may still
-run), or defer it.
+run), or defer it. A rule declared unpublished is never published for recovery: `accept-current` needs it
+to be still unpublished, and nothing is to be published by hand.
 
 Adding a condition to a **published** rule unpublishes it, so a build does not mix that with other
 changes: it stops with `configuration-create-mixed-edit`. Unpublish the rule (the unbound
