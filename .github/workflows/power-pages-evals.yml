@@ -41,7 +41,7 @@ jobs:
     select:
         # Only reviewed default-branch code can receive inference rights or feed
         # the public dashboard. No fork PR or arbitrary dispatch ref is eligible.
-        if: github.ref == 'refs/heads/main'
+        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/users/priyanshu92/power-pages-evaluations'
         runs-on: ubuntu-latest
         outputs:
             matrix: ${{ steps.select.outputs.matrix }}
@@ -122,7 +122,7 @@ jobs:
                   JUDGE_MODEL: ${{ matrix.judgeModel }}
                   REASONING_EFFORT: ${{ matrix.reasoningEffort }}
                   JUDGE_REASONING_EFFORT: ${{ matrix.judgeReasoningEffort }}
-              run: node evals/runtime/run.mjs run --skill "$SKILL" --runs "$RUNS" --model "$MODEL" --judge-model "$JUDGE_MODEL" --reasoning-effort "$REASONING_EFFORT" --judge-reasoning-effort "$JUDGE_REASONING_EFFORT" --out evals/reports/action
+              run: node evals/runtime/run.mjs run --skill "$SKILL" --case invitation-local-auth --runs "$RUNS" --model "$MODEL" --judge-model "$JUDGE_MODEL" --reasoning-effort "$REASONING_EFFORT" --judge-reasoning-effort "$JUDGE_REASONING_EFFORT" --out evals/reports/action
             # Raw trajectories, generated artifacts and screenshots are local-only.
             # A public repository's Actions artifacts must contain scalar summaries.
             - name: upload sanitized evidence
