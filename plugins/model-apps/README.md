@@ -137,11 +137,13 @@ vendored `cds-maker-sdk`. It runs an interactive, multi-turn authoring flow and 
    the deployed app against the spec
 7. **Edit** — downloads a deployed app back into an editable App Spec so you can change and rebuild it
 
-Declared environment variables, connection references, Custom APIs and duplicate detection rules are
-created one row at a time at ids fixed in advance and read back. If a build is interrupted while it
-creates them, the next build and teardown stop with a `configuration-create-*` code instead of sending
-anything again; recover with the read-only `configuration-recovery.js` described in
-[Configuration create recovery](docs/configuration-create-recovery.md).
+A default build (one without `configurationIdentity`) creates declared environment variables, connection
+references, Custom APIs and duplicate detection rules one row at a time, at ids fixed in advance, and reads
+them back. If it is interrupted while it creates them, the next build and teardown stop with a
+`configuration-create-*` code and send no write; recover with the read-only `configuration-recovery.js`
+described in [Configuration create recovery](docs/configuration-create-recovery.md). Under
+`configurationIdentity: "stable-v1"`, an interrupted create is decided by the next build instead (see
+`configurationIdentity` in [app-spec-schema-advanced.md](references/app-spec-schema-advanced.md)).
 
 **Usage:** Invoke directly with `/app-builder`, or use any of the keywords below:
 
