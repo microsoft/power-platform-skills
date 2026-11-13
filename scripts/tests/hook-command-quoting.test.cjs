@@ -10,11 +10,10 @@ const PLUGINS = [
   {
     name: 'code-apps',
     manifests: [
-      { file: 'plugins/code-apps/hooks.json', files: ['set-cli-origin.js'] },
-      { file: 'plugins/code-apps/hooks/hooks.json', files: ['set-cli-origin.js'] },
-      { file: 'plugins/code-apps/com.github.copilot/hooks/hooks.json', files: ['set-cli-origin.js'] },
+      { file: 'plugins/code-apps/hooks.json', files: [] },
+      { file: 'plugins/code-apps/hooks/hooks.json', files: [] },
+      { file: 'plugins/code-apps/com.github.copilot/hooks/hooks.json', files: [] },
     ],
-    bestEffortFiles: ['set-cli-origin.js'],
   },
   {
     name: 'mobile-apps',

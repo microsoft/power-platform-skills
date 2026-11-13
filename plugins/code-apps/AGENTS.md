@@ -26,12 +26,11 @@ agents/
 com.github.copilot/agents/
   code-app-architect.agent.md     <- Native Copilot copy with adjusted relative links
 com.github.copilot/hooks/
-  hooks.json                     <- Native Copilot hooks for the portable package
-hooks.json                        <- Native Copilot CLI preToolUse hook
+  hooks.json                     <- Empty native configuration (no tool interception)
+hooks.json                        <- Empty legacy Copilot configuration
 hooks/
-  hooks.json                      <- Claude Code PreToolUse hook
-  set-cli-origin.js               <- Narrow leading-invocation attribution (Node only)
-  README.md                       <- Hook contracts and limitations
+  hooks.json                      <- Empty Claude configuration
+  README.md                       <- Command-scoped attribution safety
 shared/
   shared-instructions.md          <- Cross-cutting concerns (Windows CLI, safety, planning, memory bank)
   connector-reference.md          <- Connector patterns and generated service usage
@@ -114,15 +113,12 @@ Always use generated services for data access.
 
 The Power Apps CLI (`@microsoft/power-apps-cli`) is installed into each project as a dev dependency; the Vite template doesn't include it, so `/create-code-app` adds it. It has shipped two binaries — grouped **`pa`** (preferred) and flat **`power-apps`** (fallback). **Resolve which one the project has via [shared/cli-binary.md](./shared/cli-binary.md) first**, then invoke it with `npx --no-install <pa|power-apps>` from the project directory — runs natively in bash on all platforms, no PowerShell wrapper needed. Commands below use the canonical grouped `pa` form:
 
-Shell hooks automatically supply `PA_CLI_ORIGIN=plugin/<host-agent>` for recognized
-CLI invocations without replacing explicit user values. Do not manually export
-attribution in skills. Keep both host hook configurations in sync; native Copilot
-events preserve shell identity, whereas its Claude-compatible `Bash` alias does
-not distinguish Bash from PowerShell. See [hooks/README.md](./hooks/README.md).
-Keep detection conservative and tokenizer-free: match supported single-line
-leading invocations and simple output captures, not arbitrary shell programs.
-Leave PowerShell `using` preambles unchanged. Handled hook/launcher failures must
-report stderr diagnostics but complete successfully without rewriting the call.
+Register no pre-tool hooks. Apply `PA_CLI_ORIGIN=plugin` only to CLI child processes
+initiated by a Code Apps skill. Preserve explicit user origins, including empty values.
+Remove inherited `PA_PLUGIN_REPORT_AGENT` only from that child process.
+The CLI detects the AI tool from its environment. Do not guess agent labels.
+Follow [command-scoped attribution](./shared/cli-binary.md#command-scoped-attribution).
+Do not modify parent environments, user commands, approvals, or unrelated tools.
 
 ```bash
 pa app push                   # Deploy app
@@ -155,8 +151,8 @@ node --test plugins/code-apps/scripts/tests/*.test.js
 The Code Apps workflow runs these checks on Windows and Ubuntu.
 Package checks do not prove that a client can install, update, or execute skills.
 Check those actions separately before claiming runtime support.
-The path-filtered `code-apps-script-tests` workflow exercises Bash and PowerShell
-on Windows and Linux with local CLI stubs. These tests never transmit telemetry.
+The path-filtered `code-apps-script-tests` workflow exercises command-scoped Bash
+attribution on Windows and Linux with local CLI stubs. These tests never transmit telemetry.
 
 ## Portable Package Rules
 
@@ -168,4 +164,4 @@ on Windows and Linux with local CLI stubs. These tests never transmit telemetry.
 - The repository's `.agents/plugins/marketplace.json` exposes Code Apps only. Do not add unadapted sibling plugins.
 - Preserve user approvals when replacing client-specific tools with equivalent capabilities.
 - Keep `com.github.copilot/hooks/hooks.json` equal to the legacy root `hooks.json`.
-- Preserve the existing Code Apps attribution hooks. Do not copy Managed Apps attribution variables or agent detection into them.
+- Keep all hook event maps empty. Apply attribution only through the command-scoped CLI instructions. Do not use Managed Apps (`MS_*`) variables.
