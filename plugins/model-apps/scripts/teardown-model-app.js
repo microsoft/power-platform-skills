@@ -226,9 +226,17 @@ async function teardownModelApp(spec, opts, deps) {
       // configuration rows nobody has accounted for, and only configuration-recovery.js may settle that. A build's quarantine
       // acknowledgment is never permission here; teardown accepts none.
       const refused = configurationRefusal(opts.workspaceDir, log);
-      return refused || fencedTeardown();
+      if (refused) return refused;
+      const result = await fencedTeardown();
+      // The caller's work that must still exclude a build of this app runs here, before the lease is let go: main()'s --clear-workspace.
+      // Run after the lease, a build could take the lock between the deletes and the clear, and the clear then moved and deleted the
+      // workspace that build had just started in, its lock with it (so a second build could start too). `workspaceCreated` says this
+      // teardown made the workspace folder itself: that folder is removed below, once the lock in it is let go, not cleared.
+      if (typeof deps.underLease === 'function') await deps.underLease(result, { workspaceCreated: removeWorkspaceAfter });
+      return result;
+    }).finally(() => {
+      if (removeWorkspaceAfter) snapStore.removeCreatedDir(opts.workspaceDir, createdWorkspaceDir);
     });
-    if (removeWorkspaceAfter) snapStore.removeCreatedDir(opts.workspaceDir, createdWorkspaceDir);
   } else {
     r = await fencedTeardown();
   }
@@ -306,12 +314,18 @@ async function main() {
   let r;
   let thrown = null;
   try {
-    const deps = { log: (m) => process.stderr.write(m + '\n'), sdk };
-    r = await teardownModelApp(spec, { apply, allowDestructive, workspaceDir, env, ...managed }, deps);
-
     // Clear the local workspace only after a clean apply — stale metadata there would make a
     // subsequent rebuild skip tables that no longer exist. Filesystem-local, opt-in.
-    if (apply && flags['clear-workspace'] && r && r.ok && !r.dryRun) {
+    //
+    // #807: the clear runs while the teardown still holds the app's build lease (teardownModelApp `deps.underLease`), so no build of the
+    // app can start in the workspace between the deletes and the clear and then have its folder, lock and all, moved and deleted under it.
+    // Its outcome is only written after the teardown returns: those are the run's last writes (below).
+    let clearOutcome = null;
+    const clearUnderLease = async (result, { workspaceCreated }) => {
+      if (!(apply && flags['clear-workspace'] && result && result.ok && !result.dryRun)) return;
+      // A workspace folder this teardown made itself (none was there) holds nothing but the lease's lock: the teardown removes it once the
+      // lock is let go, as it always did, and the clear then finds nothing to clear (said below).
+      if (workspaceCreated) { clearOutcome = { deferred: true }; return; }
       // VALIDATE BEFORE DELETING. `--workspace` is caller-supplied and this runs immediately
       // after a SUCCESSFUL teardown — the moment an operator is least expecting data loss — so an
       // unguarded `rmSync(dir, { recursive: true, force: true })` on a mistyped path, or on a
@@ -321,8 +335,8 @@ async function main() {
       //
       // A workspace whose changed-only snapshot is still tombstoned — another teardown of it is running,
       // or the release failed — is left whole: deleting it deletes the fence that teardown depends on.
-      const clearable = r.snapshotKept
-        ? { ok: false, reason: `the workspace still holds the changed-only fence (${r.snapshotKept}); clear it once that is done` }
+      const clearable = result.snapshotKept
+        ? { ok: false, reason: `the workspace still holds the changed-only fence (${result.snapshotKept}); clear it once that is done` }
         : checkWorkspaceClearable(workspaceDir);
       //
       // The clear itself runs under the workspace's lease, and only while no snapshot has appeared since this
@@ -343,6 +357,19 @@ async function main() {
         beforeRename: () => requireDisposable(clearable.target),
         beforeRemove: requireDisposable,
       }) : clearable;
+      clearOutcome = { clearable, cleared };
+    };
+    const deps = { log: (m) => process.stderr.write(m + '\n'), sdk, underLease: clearUnderLease };
+    r = await teardownModelApp(spec, { apply, allowDestructive, workspaceDir, env, ...managed }, deps);
+
+    if (clearOutcome) {
+      // The folder the teardown made is removed by now, so this reports what it reported before: nothing to clear. One still there was
+      // written into after the lease was let go — a build that started in it — and is that build's to keep.
+      let { clearable, cleared } = clearOutcome;
+      if (clearOutcome.deferred) {
+        clearable = checkWorkspaceClearable(workspaceDir);
+        cleared = clearable.ok ? { ok: false, reason: 'a build of the app started in the workspace after this teardown made it; it is that build\'s to keep' } : clearable;
+      }
       // The run's last writes: these lines, then the result and the exit, with no turn of the event loop between them — made blocking (lib/output-redaction.js).
       makeWritesBlocking(process.stdout, process.stderr);
       if (cleared.ok) {

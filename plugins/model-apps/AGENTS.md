@@ -3591,7 +3591,11 @@ with an open unit) and `teardown-model-app.js` (`assertTeardownClear`: any recov
 or deferred unit, an unreadable receipt, a quarantine marker or archive — refuses with
 `configuration-create-workspace-in-use`, before the fence, in `beforeRename` and in `beforeRemove` against the
 isolated folder). A teardown apply now holds the app's build lease too, so a concurrent build or teardown of
-the same app in the workspace gets `build-locked`. The legacy original/snapshot pair check of
+the same app in the workspace gets `build-locked`. It keeps that lease through `--clear-workspace` (main()
+passes the clear to `teardownModelApp` as `deps.underLease`, which runs it after the fenced teardown and before
+the lease is let go), so no build can start in the workspace between the deletes and the clear and then have its
+folder moved and deleted under it. A workspace folder the teardown made itself is still removed only after the
+lease is let go (the lock lives in it), and the clear then reports nothing to clear, as before. The legacy original/snapshot pair check of
 `workspace-configuration-memory.js` is exported (`checkLegacyConfigurationPair`, with
 `legacyConfigurationArtifacts` listing every pair on disk) so `configuration-recovery.js` refuses a dirty
 legacy copy in the real workspace with the existing `WORKSPACE_LEGACY_CONFIGURATION_COPY` before it changes a

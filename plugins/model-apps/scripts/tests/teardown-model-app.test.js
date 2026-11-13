@@ -591,6 +591,11 @@ test('teardown CLI applies, clears the local workspace only after a clean run, a
   assert.ok(harness.events.some((e) => e.type === 'releaseTombstone' && e.workspaceDir === workspaceDir && e.teardownId === 'td-1'),
     'a clean teardown releases the tombstone entry IT wrote');
   assert.ok(workspaceCleanupIndex > -1, '--clear-workspace removes the caller workspace only after clean apply');
+  // #807: the clear runs while the teardown still holds the app's build lease, so no build can start in the workspace in between.
+  const leaseIndex = harness.events.findIndex((e) => e.type === 'appLease' && e.workspaceDir === workspaceDir);
+  const leaseReleasedIndex = harness.events.findIndex((e) => e.type === 'appLeaseReleased');
+  assert.ok(leaseIndex > -1 && leaseIndex < workspaceCleanupIndex && workspaceCleanupIndex < leaseReleasedIndex,
+    `the clear runs under the lease: ${JSON.stringify(harness.events.map((e) => e.type))}`);
   assert.ok(sdkCleanupIndex > -1 && sdkCleanupIndex < emitIndex, 'emitResult exits, so SDK cleanup must happen first');
   assert.match(harness.stderr.join(''), /cleared workspace/);
   assert.strictEqual(harness.events[emitIndex].ok, true);
