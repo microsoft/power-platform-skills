@@ -56,6 +56,9 @@ const NULL_SOURCE_TYPE_IS_ORDINARY_TYPES = new Set([
   'lookup',
   'memo',
   'multiline',
+  // GUID columns cannot be specialized, so their explicit null is valid evidence.
+  // https://learn.microsoft.com/en-us/dotnet/api/microsoft.xrm.sdk.metadata.attributemetadata.sourcetype
+  'uniqueidentifier',
 ]);
 
 function parseArgs(argv) {
@@ -202,6 +205,7 @@ function dataverseType(column) {
     lookup: 'Lookup',
     image: 'Image',
     file: 'File',
+    uniqueidentifier: 'Uniqueidentifier',
     computed: String(column.attributeType || ''),
     calculated: String(column.attributeType || ''),
     rollup: String(column.attributeType || ''),
