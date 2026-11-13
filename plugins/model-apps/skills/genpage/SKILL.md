@@ -234,7 +234,10 @@ page overwrites source nobody reviewed, so on the **edit** path an unattended ru
 requires the page to be named explicitly in `$ARGUMENTS`. Do not infer the target
 from a search result and do not fall back to "the only page that matched". If the
 target is ambiguous, **halt and say so** — an unattended run that guesses which
-page to overwrite is the one failure this table exists to prevent.
+page to overwrite is the one failure this table exists to prevent. The same holds
+for the other apps that show the page: the edit reaches them too, so before the
+upload an unattended run **halts** and reports them (`edit-flow.md`, Edit Phase 6),
+and it never confirms them itself.
 
 Halting is a normal outcome here, not an error to route around: report what was
 missing and stop, so the run can be re-driven with the decision supplied.
