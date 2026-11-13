@@ -4,18 +4,18 @@
  * find-free-port.js - report the first loopback TCP port, from `--start` upward, that nothing is
  * listening on.
  *
- * Why this exists: `/create-mobile-app` starts the web preview with
- * `npx --no-install expo start --port <port> --localhost` from a background terminal. Without
- * a TTY, Expo does not offer to move to the next port when its port is taken; it exits with
- * `EADDRINUSE`. Picking a free port first keeps the preview from failing on a machine that already
- * runs Metro or another dev server.
+ * Why this exists: `/create-mobile-app` starts its preview with the template's
+ * `npm run dev -- --port <port>` from a background terminal. Given an explicit port, the template's
+ * `power-apps-dev` refuses a taken one (`Expo port <port> is already in use`) instead of moving on,
+ * and without a TTY Expo itself exits with `EADDRINUSE`. Picking a free port first keeps the
+ * preview from failing on a machine that already runs Metro or another dev server.
  *
  * `localhost` may resolve to 127.0.0.1 or ::1 depending on the platform and Node's DNS ordering
  * (Expo bound ::1 on macOS with Node 22), so a port is free only when it can be bound on both.
  * A host without IPv6 reports EADDRNOTAVAIL or EAFNOSUPPORT for ::1, which counts as free there.
  *
- * There is an unavoidable window between this probe and Expo binding the port. The skill treats an
- * `EADDRINUSE` from Expo as a cue to run this again rather than as a failure.
+ * There is an unavoidable window between this probe and Expo binding the port. The skill treats
+ * either refusal as a cue to run this again rather than as a failure.
  *
  * Usage:
  *   node find-free-port.js [--start 19006] [--attempts 50]

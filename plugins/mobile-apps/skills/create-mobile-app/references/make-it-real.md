@@ -757,17 +757,23 @@ node "$DOCS" --working-dir '<working_dir>' step --id dataverse --status skipped
 node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' step --id wiring --status active
 ```
 
-**Stop the sample-data preview.**
-Plain Expo web has no signed-in Power Apps host, so once the data layer calls real services the browser preview can only show errors.
-Stop the Expo web process Step 3.5 started (its background terminal or PID) and return the plan's phone to its building animation; the plan keeps the preview address and captions this stretch as connecting real data:
+**Move the plan's phone to the QR code.**
+From here the data layer calls real services, which need a signed-in Power Apps host.
+The browser frame has none, so the wired app would only show errors there; Power Apps Mobile Preview is one, and the dev server from Step 3.5 keeps serving it.
+Keep that server running, and switch the plan's phone from the browser preview to the code the preview gate drew:
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' phone --stage building
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' phone --stage qr
 ```
 
+When the preview gate drew no QR code (the server fell back to `--localhost`), use `--stage building` instead; the dev server step draws the code.
 Tell the user once:
 
-> "→ Stopped the sample-data preview. From here the app reads real data, which needs a signed-in host: it opens on your phone at Step 16, and `npm run web` gives a signed-in browser view afterwards."
+> "→ Your app now reads real data, which needs a signed-in host, so the build plan's phone shows the QR code instead of the browser preview. A phone that already scanned it keeps running the app: it may show errors for a moment while the data layer switches over, then reloads with your live data, and device features such as the camera use the real hardware. Sign in when it asks. After the run, `npm run web` opens the same app signed in, with live data, in your browser."
+
+Without a QR code, say instead:
+
+> "→ Your app now reads real data, which needs a signed-in host, so the build plan's phone stops showing the browser preview. The app opens on your phone at the dev server step, and after the run `npm run web` opens it signed in, with live data, in your browser."
 
 #### 14.1 — Snapshot generated services into the plan
 

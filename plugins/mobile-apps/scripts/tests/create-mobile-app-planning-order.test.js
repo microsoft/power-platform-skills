@@ -167,11 +167,24 @@ test('screens are planned, built, and previewed before any architecture or data-
   for (const marker of ['find-free-port.js', 'check-web-preview.js', 'phone --stage live', '#### 8.1 — The preview gate', 'Leave `CI` unset']) {
     assert.ok(phaseA.includes(marker), `Phase A must include ${marker}`);
   }
+  // The preview gate also offers the app on a phone, from the same server, without taking the
+  // browser preview out of the plan's phone frame: no `--stage` on that call.
+  const previewGate = section(phaseA, '#### 8.1 — The preview gate', '**On `Change screens`,**');
+  assert.match(previewGate, /npx --no-install qrcode -o "\$METRO_QR" "<lan-url>"/);
+  assert.match(previewGate, /app-docs\.js" --working-dir '<working_dir>' phone --qr-image "\$METRO_QR" --qr-url "<lan-url>"\n/);
+  assert.ok(previewGate.indexOf('phone --qr-image') < previewGate.indexOf('**Question header:** `Preview`'),
+    'the code is up before the user is asked to judge the app');
+  // Phase A device actions are sample stand-ins on a phone too; the gate must not claim otherwise.
+  assert.match(previewGate, /Device features such as the camera return sample results on both/);
 
   // Only the data layer is rewired once real sources exist, and the gate proves nothing stayed fake.
   const wiring = section(createSkill, '### Step 14 — Connect real data', '### Step 15 —');
   assert.match(wiring, /check-data-layer\.js" --project-root '<working_dir>' --require-wired/);
-  assert.match(wiring, /phone --stage building/);
+  // The wired app needs a signed-in host, so the plan's phone moves to the QR code; the one dev
+  // server keeps running, so a phone that scanned it reloads onto live data instead of losing it.
+  assert.match(wiring, /phone --stage qr/);
+  assert.doesNotMatch(wiring, /Stop the Expo web process|Stopped the sample-data preview/);
+  assert.match(wiring, /Keep that server running/);
   assert.match(wiring, /Data Contract Mapping/);
 });
 
@@ -181,10 +194,15 @@ test('the first screen reaches the phone while the rest are still building', () 
   const scaffold = section(phaseA, '### Step 3 — Scaffold the app', '#### 3.1');
   assert.match(scaffold, /three tool calls: the command below, a read of \[`references\/screen-graph\.md`\]/);
   // The graph is written in the same message that starts the preview server.
-  assert.match(phaseA, /three tool calls: start Expo web[\s\S]*write Step 4's screen graph/);
+  assert.match(phaseA, /three tool calls: start the template's dev server[\s\S]*write Step 4's screen graph/);
   // Expo is started and warmed before the gate, so going live later costs no cold bundle.
   const server = section(phaseA, '#### 3.5 — Start the preview server', '### Step 4 —');
-  assert.match(server, /expo start --port <port> --localhost < \/dev\/null/);
+  // The template's own dev command serves the plan's web preview and, over the LAN, a phone.
+  assert.match(server, /POWER_APPS_WEB_PREVIEW=1 npm run dev -- --port <port> < \/dev\/null/);
+  assert.doesNotMatch(server, /npx --no-install expo start/);
+  assert.match(server, /LAN development server: http:\/\/<lan-ip>:<port>\//);
+  // No LAN must not cost the web preview: it falls back to loopback, and the QR waits.
+  assert.match(server, /Could not determine a LAN address[\s\S]*npm run dev -- --port <port> --localhost/);
   assert.match(server, /check-web-preview\.js/);
 
   // One builder per screen, in the background, the entry screen first, from the graph alone.

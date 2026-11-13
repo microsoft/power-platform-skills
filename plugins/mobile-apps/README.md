@@ -215,11 +215,11 @@ An app whose data all comes from connectors (SharePoint, SQL, and so on) is not 
 **Screens first (recommended)** - watch your screens get built and run live in the build plan's phone within minutes, then make them real:
 1. **Scaffold** — validates the prepared template folder and runs `pa app init` while the screens are planned
 2. **Screen graph gate** — approve the screen list, navigation, and the data each screen shows
-3. **Live preview gate** — all screens are built in parallel on realistic sample data and run live in the build plan's phone frame (`expo start`, no sign-in), the first one a few minutes after your prompt; try them, ask for changes, and confirm
+3. **Live preview gate** — all screens are built in parallel on realistic sample data and run live in the build plan's phone frame (`npm run dev`, no sign-in), the first one a few minutes after your prompt; scan the QR code to try them on your phone too, ask for changes, and confirm
 4. **Design system** — brand inputs (logo, brand doc, website, or free-text) → cost picker → style picker; the live preview restyles itself
 5. **Architecture and data model gates** — native capabilities, connectors, and the data platform, then the Dataverse model, all derived from the screens you approved
-6. **Make it real** — auth, Dataverse tables, native capabilities, and connectors, then the app's data layer is switched from sample data to the real sources without touching the screens
-7. **Dev server** — the plugin starts a portable Metro session; scan the QR with your native dev client and use `/debug-app` against its persisted sanitized log
+6. **Make it real** — auth, Dataverse tables, native capabilities, and connectors, then the app's data layer is switched from sample data to the real sources without touching the screens; a phone that scanned the code reloads onto live data, and the build plan's phone switches to the QR code
+7. **Dev server** — the Metro session that has served the preview since the start keeps running; scan the QR with your native dev client and use `/debug-app` against its persisted sanitized log
 
 Your first screen runs in the build plan's phone about five minutes after the prompt, not counting the time you spend answering; the rest of the build happens after you confirm the screens.
 

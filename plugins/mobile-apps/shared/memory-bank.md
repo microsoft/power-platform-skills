@@ -21,7 +21,7 @@ This file is the per-project notebook the agent maintains across `/create-mobile
 | Metro logs | `.powernative/metro-logs/` — sanitized source used by `/debug-app`; do not copy ephemeral values from log filenames into this file |
 | Metro launch command | `npm run dev` |
 | Data layer | Screens-first apps only: `src/hooks/data/` — screens read data and device features only through it; `node scripts/check-data-layer.js` (plugin) lists anything still on sample data |
-| Web preview command | Screens-first apps only: `POWER_APPS_WEB_PREVIEW=1 npx --no-install expo start --port <free port> --localhost` — sample-data preview shown in the build plan's phone frame before real data is connected |
+| Web preview command | Screens-first apps only: `POWER_APPS_WEB_PREVIEW=1 npm run dev -- --port <free port>` — one dev server for the build plan's sample-data browser preview and the phone; after real data is connected, `npm run web` is the signed-in browser view |
 
 ## Power Platform context
 

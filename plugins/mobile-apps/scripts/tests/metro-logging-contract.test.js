@@ -85,6 +85,13 @@ test('skill contracts read logs and persist host-neutral state under .powernativ
   assert.match(createSkill, /\.powernative\/metro-logs/);
   assert.match(createSkill, /npm run dev/);
   assert.match(createSkill, /^### Step 16 [^\r\n]*Metro writes project-local logs/m);
+  // Screens first has run one `npm run dev` since Step 3.5; Step 16 confirms it through Metro's
+  // own health endpoint and must not start a second server beside it.
+  const reuse = createSkill.slice(createSkill.indexOf('**Screens first: reuse the running server.**'),
+    createSkill.indexOf('**Launch command:**'));
+  assert.match(reuse, /Do not start a second one/);
+  assert.match(reuse, /\/status'[\s\S]*packager-status:running/);
+  assert.match(reuse, /fell back to `--localhost`: stop that server/);
   // Template preparation's explanation of each fix lives beside SKILL.md, read when a fix fails.
   const templatePreparation = fs.readFileSync(path.join(pluginRoot, 'skills', 'create-mobile-app', 'references', 'template-preparation.md'), 'utf8');
   assert.match(templatePreparation, /createPowerAppsMetroConfig/);

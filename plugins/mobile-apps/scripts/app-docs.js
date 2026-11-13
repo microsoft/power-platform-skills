@@ -252,8 +252,8 @@ const PREVIEW_HOSTS = new Set(['localhost', '127.0.0.1']);
 /**
  * Validate the live-preview address and return it in one canonical form.
  *
- * The page embeds this URL in a frame, so it must only ever point at the local Expo web server
- * the skill started with `npx --no-install expo start` (for example `http://localhost:8082`). Keeping it
+ * The page embeds this URL in a frame, so it must only ever point at the loopback address of the
+ * dev server the skill started with `npm run dev` (for example `http://localhost:8082`). Keeping it
  * loopback-only stops the plan, which also carries the environment URL, tenant id and the whole
  * app plan, from framing arbitrary remote content. Anything else is refused rather than repaired:
  * a value that needs repairing did not come from the skill.
@@ -294,14 +294,18 @@ function normalizePreviewUrl(value) {
 /**
  * The device rail beside the plan. It moves through these stages as the run proceeds:
  *   building  an animation, from the first phase until the preview step starts the web server
- *   live      the app itself, running on sample data in the local Expo web server the skill
- *             starts at the preview step (Step 8), so the user can try each change as it
- *             hot-reloads. Needs `previewUrl`; see normalizePreviewUrl
- *   building  again from Step 14, when the skill stops that server to connect real data: plain
- *             Expo web cannot sign in to Dataverse, so the wired app would only show errors.
- *             `previewUrl` is deliberately kept, because it is how the page tells this stretch
- *             from the first one; it neither frames nor links the stopped server
- *   qr        the Metro QR code, so the last thing the plan shows is how to open the real app
+ *   live      the app itself, running on sample data from the dev server the skill starts at
+ *             Step 3.5, so the user can try each change as it hot-reloads. Needs `previewUrl`;
+ *             see normalizePreviewUrl. From the preview gate the same server also serves the
+ *             app to a phone, and a `qrImage` recorded without a stage change is drawn under the
+ *             frame rather than in it
+ *   qr        the Metro QR code. Screens first moves here at Step 14, when the app starts reading
+ *             real data: the browser frame has no signed-in Power Apps host, so the wired app
+ *             would only show errors there, while the phone app is one. Data model first moves
+ *             here at its dev server step. Either way the plan ends on how to open the real app
+ *   building  again after `live` only when no QR code was recorded (the dev server had no LAN
+ *             address). `previewUrl` is kept, because it is how the page tells this stretch from
+ *             the first one; it neither frames nor links the server
  *   screens   a carousel of the plan-time mockups `/design-system` renders into
  *             `_plan_preview.html`. Kept for the legacy `/design-system` mockup flow; the
  *             preview-first `/create-mobile-app` shows `live` instead

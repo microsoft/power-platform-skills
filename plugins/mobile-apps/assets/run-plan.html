@@ -21,7 +21,7 @@
   - No `connect-src` or `object-src`: the plan itself never talks to the network. The mockup
     carousel uses an inline `srcdoc` document, not a fetched frame.
   - `frame-src` is the one exception, and it is loopback-only: the live stage frames the app
-    running in the local Expo web server the skill started (`npx --no-install expo start`), for example
+    served on loopback by the dev server the skill started (`npm run dev`), for example
     `http://localhost:8082`. Only `http://localhost:*` and `http://127.0.0.1:*` are named, so an
     injected frame cannot load remote content. `app-docs.js` (normalizePreviewUrl) refuses any
     other URL before it reaches this page, and the page checks it again before drawing the frame.
@@ -250,6 +250,18 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
 .rail-link{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;color:var(--accent);
   text-decoration:none;padding:6px 12px;border-radius:999px;border:1px solid transparent;}
 .rail-link:hover{border-color:var(--accent-border);background:var(--accent-bg);}
+/* The QR under the live phone: compact and horizontal, so the phone above it gives up as little
+   height as possible on a short window. */
+.rail-qr{display:flex;align-items:center;gap:12px;width:300px;max-width:100%;padding:10px 12px;
+  border:1px solid var(--border);border-radius:var(--radius);background:var(--surface);text-align:left;}
+.rail-qr img{width:76px;height:76px;flex-shrink:0;image-rendering:pixelated;display:block;}
+.rail-qr-full{flex-shrink:0;}
+.rail-qr-copy{min-width:0;}
+.rail-qr-title{font-size:12.5px;font-weight:650;color:var(--text-bright);}
+.rail-qr-sub{font-size:11.5px;color:var(--text-dim);line-height:1.4;margin-top:2px;}
+.rail-qr-stores{font-size:11.5px;margin-top:4px;color:var(--text-dim);}
+.rail-qr-stores a{color:var(--accent);text-decoration:none;}
+.rail-qr-stores a:hover{text-decoration:underline;}
 .plan-doc{display:inline-flex;align-items:center;gap:8px;margin-bottom:14px;padding:8px 14px;
   background:var(--surface);border:1px solid var(--border);border-radius:999px;
   font-size:13px;color:var(--accent);text-decoration:none;box-shadow:var(--shadow-4);}
@@ -791,14 +803,56 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
     // The phone draws the live app at phone width; a tab gives it the whole window and the
     // browser's dev tools. noreferrer as well as noopener: it is a different origin from this
     // page, and the plan's own path is nothing the app needs to see.
-    if (phone.stage === 'live' && isLoopbackPreview(phone.previewUrl)) {
+    var live = phone.stage === 'live' && isLoopbackPreview(phone.previewUrl);
+    if (live) {
       add(phone.previewUrl, 'Open the live preview in a browser tab \u2197', 'noopener noreferrer');
+    }
+    // From the preview gate the dev server that feeds the phone frame also serves the app to a
+    // real phone, so the code is offered while the browser preview is still showing. It sits
+    // under the frame, small, because the frame is what the user is reviewing; Step 14 moves the
+    // code into the frame once the app needs a signed-in host. Only an inlined PNG is drawn: the
+    // page's CSP admits data: images and nothing else.
+    var liveQr = live && isQrImage(phone.qrImage);
+    if (liveQr) {
+      var card = el('div', 'rail-qr');
+      var code = document.createElement('img');
+      code.src = phone.qrImage;
+      code.alt = 'Metro QR code';
+      // The code is the full-size link here, so the rail needs no separate link row: on a short
+      // window that row would land behind the footer.
+      if (phone.qrHref) {
+        var full = el('a', 'rail-qr-full');
+        full.setAttribute('href', phone.qrHref);
+        full.setAttribute('target', '_blank');
+        full.setAttribute('rel', 'noopener');
+        full.setAttribute('title', 'Open QR code full size');
+        full.appendChild(code);
+        card.appendChild(full);
+      } else {
+        card.appendChild(code);
+      }
+      var copy = el('div', 'rail-qr-copy');
+      copy.appendChild(el('div', 'rail-qr-title', 'Try it on your phone'));
+      copy.appendChild(el('div', 'rail-qr-sub',
+        'Scan with Power Apps Mobile Preview, on the same network as this machine.'));
+      var get = el('div', 'rail-qr-stores');
+      STORE_LINKS.forEach(function (store, index) {
+        if (index) get.appendChild(document.createTextNode(' \u00b7 '));
+        var link = el('a', null, store.name);
+        link.setAttribute('href', store.href);
+        link.setAttribute('target', '_blank');
+        link.setAttribute('rel', 'noopener noreferrer');
+        get.appendChild(link);
+      });
+      copy.appendChild(get);
+      card.appendChild(copy);
+      container.appendChild(card);
     }
     add(phone.previewHref || summary.screenPreviewHref, 'Open screens full size \u2197');
     // The QR is already drawn in the phone; this is for scanning it larger, and it links the
     // PNG rather than the inlined data URI because browsers block top-level navigation to a
     // data: URL. It drops away once `.expo/` is cleaned, leaving the inlined copy.
-    add(phone.qrHref, 'Open QR code full size \u2197');
+    if (!liveQr) add(phone.qrHref, 'Open QR code full size \u2197');
 
     // The QR stage is the end of the run, and a code is useless without the app that reads it.
     // Only shown here: offering a store download while the app is still being generated would
@@ -950,6 +1004,10 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
   function isLoopbackPreview(url) {
     return typeof url === 'string'
       && /^http:\/\/(?:localhost|127\.0\.0\.1):\d{1,5}(?:\/[^\s?#\\]*)?$/.test(url);
+  }
+
+  function isQrImage(value) {
+    return typeof value === 'string' && value.indexOf('data:image/png;base64,') === 0;
   }
 
   /**
@@ -1110,10 +1168,12 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
     bld.appendChild(caps);
     screen.appendChild(bld);
     // A recorded preview address on the `building` stage means the preview has already run and
-    // the skill stopped it to connect real data: plain Expo web cannot sign in to Dataverse, so the
-    // wired app would only show errors there. The address stays in state, but the server is gone,
-    // so nothing frames or links it; the caption says what comes next instead. A `live` stage
-    // whose address failed the page check also lands here, and keeps the default caption.
+    // the app is now connecting real data with no QR code to show yet (the dev server found no
+    // LAN address, so the phone app waits for the dev server step). The browser frame has no
+    // signed-in Power Apps host, so the wired app would only show errors there, and nothing frames
+    // or links it; the caption says what comes next instead. Plans from older runs, which stopped the
+    // server at Step 14, land here as well. A `live` stage whose address failed the page check lands here too,
+    // and keeps the default caption.
     caption.textContent = phone.stage === 'building' && phone.previewUrl
       ? 'Connecting real data. The QR code to open the app on your phone appears here next.'
       : 'A live preview of your app appears here once its screens are built.';

@@ -940,10 +940,10 @@ test('the create skill shows its live preview in the plan and opens only that on
 
   // The plan embeds the live app, and only a loopback URL - the one origin its CSP frames.
   assert.match(skill, /phone --stage live --preview-url "http:\/\/localhost:<port>"/);
-  assert.match(skill, /npx --no-install expo start --port <port> --localhost < \/dev\/null/);
+  assert.match(skill, /POWER_APPS_WEB_PREVIEW=1 npm run dev -- --port <port> < \/dev\/null/);
   // The phone is the preview: the server must not open a second page beside the plan.
   for (const block of skill.matchAll(/```(?:bash|sh)\n([\s\S]*?)```/g)) {
-    assert.doesNotMatch(block[1], /expo start[^\n]*--web/, 'the preview server opens no browser tab');
+    assert.doesNotMatch(block[1], /(?:expo start|npm run dev)[^\n]*--web/, 'the preview server opens no browser tab');
   }
   assert.match(skill, /Your app is running in the build plan's phone frame/);
   // `/design-system` is told the real app is on screen, so it skips its own mockups.
@@ -1182,6 +1182,49 @@ test('the live stage frames the running app, sandboxed and scaled like the carou
   assert.equal(links[0].getAttribute('rel'), 'noopener noreferrer');
   assert.equal(findAll(page.elements.get('railPreviewLink'), (n) => n.className === 'store-btn').length, 0,
     'the store links wait for the QR');
+});
+
+test('a QR recorded during the live stage sits under the frame and leaves the preview in it', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'run-plan-live-qr-'));
+  const state = initState(root, { appName: 'Live QR', dataPlatform: 'dataverse' });
+  setPhone(state, { stage: 'live', previewUrl: 'http://localhost:8082' });
+  // What the preview gate's `phone --qr-image --qr-url` call produces: no stage change.
+  setPhone(state, {
+    qrImage: 'data:image/png;base64,iVBORw0KGgo=',
+    qrHref: '../.expo/metro-qr.png',
+    qrUrl: 'http://192.168.1.4:8082/',
+  });
+  assert.equal(state.phone.stage, 'live', 'recording the code must not take the preview out of the phone');
+  save(root, state);
+
+  const page = await runPage(outputPath(root));
+  assert.deepEqual(page.thrown.map((e) => e.message), []);
+  assert.equal(findAll(page.elements.get('deviceScreen'), (n) => n.tagName === 'IFRAME').length, 1,
+    'the browser preview stays in the phone frame');
+  const rail = page.elements.get('railPreviewLink');
+  const cards = findAll(rail, (n) => n.className === 'rail-qr');
+  assert.equal(cards.length, 1, 'the code is drawn under the frame');
+  assert.equal(findAll(cards[0], (n) => n.tagName === 'IMG')[0].src, 'data:image/png;base64,iVBORw0KGgo=');
+  // The phone app is usable now, so the card says where to get it, as compact text links: the
+  // full store buttons would take height from the phone above.
+  const stores = findAll(cards[0], (n) => n.className === 'rail-qr-stores')[0];
+  const storeLinks = findAll(stores, (n) => n.tagName === 'A');
+  assert.deepEqual(storeLinks.map((n) => n.textContent), ['App Store', 'Google Play']);
+  assert.ok(storeLinks.every((n) => n.getAttribute('rel') === 'noopener noreferrer'));
+  assert.equal(findAll(rail, (n) => n.className === 'store-btn').length, 0);
+  // The code itself opens the PNG full size, so the rail drops the separate link row, which a
+  // short window would push behind the footer.
+  const full = findAll(cards[0], (n) => n.className === 'rail-qr-full');
+  assert.equal(full.length, 1);
+  assert.equal(full[0].getAttribute('href'), '../.expo/metro-qr.png');
+  const railLinks = findAll(rail, (n) => String(n.className).split(' ').includes('rail-link'));
+  assert.deepEqual(railLinks.map((n) => n.textContent), ['Open the live preview in a browser tab \u2197']);
+
+  // A code that is not an inlined PNG is not drawn: the CSP admits only data: images.
+  setPhone(state, { qrImage: 'https://example.com/qr.png' });
+  save(root, state);
+  const rejected = await runPage(outputPath(root));
+  assert.equal(findAll(rejected.elements.get('railPreviewLink'), (n) => n.className === 'rail-qr').length, 0);
 });
 
 test('a live stage whose address fails the page check falls back to the build animation', async () => {

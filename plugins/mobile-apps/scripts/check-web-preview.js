@@ -3,8 +3,8 @@
 /**
  * check-web-preview.js - confirm the local Expo web preview serves a bundle that compiles.
  *
- * `/create-mobile-app` starts `expo start` at Step 8 and then asks the user to review the
- * app. An HTTP 200 for the page proves nothing: Expo serves the HTML shell immediately, and a broken
+ * `/create-mobile-app` starts its dev server at Step 3.5 and shows the app in the build plan's
+ * phone frame as screens land, then asks the user to review it at the preview gate. An HTTP 200 for the page proves nothing: Expo serves the HTML shell immediately, and a broken
  * import only surfaces when the browser requests the JavaScript bundle. So this requests the bundle
  * the page names, the way the browser would, and reports Metro's error instead of the user finding
  * a red screen.

@@ -16,11 +16,11 @@ Steps it names, by build order:
 <!-- The step starts here; everything above is about the file. -->
 
 **Print before starting:**
-> "→ [Step <n>/<total>] Launching Metro so you can scan the QR; logs will be written under .powernative/."
+> "→ [Step <n>/<total>] Getting Metro ready so you can scan the QR; logs are written under .powernative/."
 
 This skill launches the template's canonical `npm run dev` command. The template owns the `dev` and `predev` command bodies; this skill relies only on npm's lifecycle ordering and does not require either script to expand to a particular command. Logging is configured in `metro.config.js`.
 
-1. Expo prints the native Metro URL and may also render a QR in its terminal. Capture the URL and generate the QR PNG below so the user always receives a scannable code even when Metro runs in a background terminal or the host does not expose terminal rendering.
+1. `npm run dev` prints the native Metro URL as `LAN development server: http://<lan-ip>:<port>/` before Metro starts, and may also render a QR in its terminal. Capture the URL and generate the QR PNG below so the user always receives a scannable code even when Metro runs in a background terminal or the host does not expose terminal rendering.
 2. Hot-reload works on file edits — no restart needed for screen tweaks.
 3. `/debug-app` reads project-local `.powernative` logs regardless of whether the user or the agent started Metro. It never needs an opaque terminal ID.
 
@@ -31,6 +31,18 @@ The native host Metro logger stores runtime-only logs under `<working_dir>/.powe
 The **port** is the log identity: it is what the QR encodes, what the device dials, and what `/debug-app` probes to pick the latest live log. Expo rolls to the next free port when 8081 is taken, so always report the port discovered from the log/helper rather than assuming 8081.
 
 `.powernative/` is gitignored by the template. Do not copy these files into `memory-bank.md` or commit them.
+
+**Screens first: reuse the running server.**
+Step 3.5 started `npm run dev`, and the preview, the preview gate's QR code, and every later step have used that one server since. Do not start a second one; check that it is still running:
+
+```bash
+node -e "fetch('http://localhost:' + process.argv[1] + '/status').then((r) => r.text()).then((t) => process.exit(t.includes('packager-status:running') ? 0 : 1), () => process.exit(1))" '<port>'
+```
+
+`/status` is Metro's own health endpoint, and it answers `packager-status:running` whichever platform's bundle is broken, so a web-only bundle error from a native capability cannot hide a server the phone can still use.
+
+- Exit `0` and Step 3.5 printed a LAN address: skip the launch and the log lookup below. The Metro URL is that `<lan-url>`; continue at **When Expo prints a Metro URL**, which draws the code again into the same file.
+- Exit `1`, or Step 3.5 fell back to `--localhost`: stop that server if it is still running, then launch below as data model first does.
 
 **Launch command:**
 
@@ -137,7 +149,7 @@ node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' phone --
 
 The PNG is inlined as a data URI, so the plan still shows the code after `.expo/` is cleaned. This
 is the phone's final stage: animation while building, then the screen carousel once designed (data
-model first) or the live web preview and the animation again while real data is connected (screens
-first), then this.
+model first), or the live web preview with this code under it from the preview gate and this code in
+the frame from the moment real data is connected (screens first).
 
-After this step starts the long-running server, continue through the optional debug handoff and print the summary, then return so the user can iterate locally. Production build + tenant push remains a separate, explicit user action via the `/deploy` skill.
+After this step starts or confirms the long-running server, continue through the optional debug handoff and print the summary, then return so the user can iterate locally. Production build + tenant push remains a separate, explicit user action via the `/deploy` skill.
