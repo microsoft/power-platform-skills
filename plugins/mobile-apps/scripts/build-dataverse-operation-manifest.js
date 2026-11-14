@@ -178,7 +178,9 @@ function hasOwn(value, key) {
 }
 
 function normalizeColumnType(value) {
-  return String(value || '').replace(/[\s_-]/g, '').toLowerCase();
+  const type = String(value || '').replace(/[\s_-]/g, '').toLowerCase();
+  // An API-type alias must use the same option checks and write payload as choice.
+  return type === 'picklist' ? 'choice' : type;
 }
 
 function dataverseType(column) {
@@ -200,7 +202,6 @@ function dataverseType(column) {
     date: 'DateTime',
     boolean: 'Boolean',
     choice: 'Picklist',
-    picklist: 'Picklist',
     multiselectchoice: 'Virtual',
     lookup: 'Lookup',
     image: 'Image',
@@ -1214,13 +1215,17 @@ function columnCompatibility(tableName, column, liveColumn) {
   if (!base.compatible) return base;
   const expected = derivedExpected(tableName, column);
   if (!expected) return base;
+  const actual = expected.kind === 'computed' ? liveColumn.computed : liveColumn;
+  if (expected.kind === 'computed' && actual?.metadataStatus !== 'available') {
+    return { compatible: false, reasons: ['computed column metadata is unavailable'] };
+  }
   const compared = compareDerivedColumn(expected, {
     type: liveColumn.type,
-    sourceType: liveColumn.sourceType,
-    sourceTypeMask: liveColumn.sourceTypeMask,
+    sourceType: actual.sourceType,
+    sourceTypeMask: actual.sourceTypeMask,
     lookupTargets: liveColumn.lookupTargets,
     options: liveColumn.choices,
-    formulaDefinition: liveColumn.formulaDefinition || liveColumn.formula,
+    formulaDefinition: actual.formulaDefinition || actual.formula,
   });
   return compared;
 }
