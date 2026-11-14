@@ -1,0 +1,357 @@
+import type { PowerPagesUser } from '../types/powerPages';
+
+export type AuthProviderType =
+  | 'local'
+  | 'oidc'
+  | 'entra-id'
+  | 'saml2'
+  | 'ws-federation'
+  | 'social';
+
+export interface AuthProviderConfig {
+  /** Stable identifier - used as React key and to distinguish multiple instances of same type */
+  id: string;
+  type: AuthProviderType;
+  /** Button label shown on the Login page */
+  displayName: string;
+  /**
+   * Provider identifier the server expects in the ExternalLogin form POST.
+   * For OIDC: the Authority URL (matches the AuthenticationType site setting).
+   * For SAML2/WS-Fed/social: the provider identifier from the site settings.
+   * For Entra ID (workforce): OMIT this - resolveProviderIdentifier() derives it
+   *   at runtime from window.Microsoft.Dynamic365.Portal.tenant.
+   * Not used for local.
+   */
+  providerIdentifier?: string;
+  /** Local-only: send Email field (true) or Username field (false) */
+  loginByEmail?: boolean;
+}
+
+export const AUTH_PROVIDERS: AuthProviderConfig[] = [
+  // Each provider gets a stable id. For multiple instances of the same type
+  // (e.g., 2 Entra External ID tenants), use distinct ids.
+  {
+    // Entra ID (workforce) - providerIdentifier is OMITTED. The runtime resolver
+    // computes https://login.windows.net/{site-tenant-id}/ from Portal.tenant.
+    // No tenant ID hardcoded; site can move between tenants without code changes.
+    id: 'entra-id',
+    type: 'entra-id',
+    displayName: 'Sign in with Microsoft',
+  },
+  {
+    // Entra External ID - providerIdentifier IS required. External ID is a
+    // separate tenant from the site's parent, so we can't derive from Portal.tenant.
+    id: 'entra-external-id',
+    type: 'oidc',
+    displayName: 'Sign in with Entra External ID',
+    providerIdentifier: 'https://contoso.ciamlogin.com/00000000-0000-0000-0000-000000000001',
+  },
+];
+
+if (AUTH_PROVIDERS.length === 0) {
+  throw new Error('AUTH_PROVIDERS array is empty. Configure at least one authentication provider.');
+}
+
+// Exported helpers for the Login page to filter providers cleanly:
+export const LOCAL_PROVIDER = AUTH_PROVIDERS.find(p => p.type === 'local');
+export const EXTERNAL_PROVIDERS = AUTH_PROVIDERS.filter(p => p.type !== 'local');
+
+// Backward-compat for any code that still imports AUTH_PROVIDER:
+const AUTH_PROVIDER: AuthProviderConfig =
+  AUTH_PROVIDERS.find(p => p.type === 'local') ?? AUTH_PROVIDERS[0];
+
+const isDevelopment =
+  typeof window !== 'undefined' &&
+  (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
+
+// Mock user for local development - auth only works on deployed Power Pages sites
+const MOCK_USER: PowerPagesUser = {
+  userName: 'dev@contoso.com',
+  firstName: 'Dev',
+  lastName: 'User',
+  email: 'dev@contoso.com',
+  contactId: '00000000-0000-0000-0000-000000000001',
+  userRoles: ['Authenticated Users', 'Administrators'],
+};
+
+// Track mock sign-out state in dev mode (persists across page reloads via sessionStorage)
+const DEV_SIGNEDOUT_KEY = '__pp_dev_signedout__';
+
+/**
+ * Returns the configured authentication provider.
+ */
+export function getAuthProvider(): AuthProviderConfig {
+  return AUTH_PROVIDER;
+}
+
+/**
+ * Returns the currently logged-in user, or undefined if not authenticated.
+ */
+export function getCurrentUser(): PowerPagesUser | undefined {
+  if (typeof window === 'undefined') return undefined; // SSR guard (Astro)
+  if (isDevelopment) {
+    // In dev mode, respect mock sign-out state
+    if (sessionStorage.getItem(DEV_SIGNEDOUT_KEY)) return undefined;
+    return MOCK_USER;
+  }
+  return window.Microsoft?.Dynamic365?.Portal?.User;
+}
+
+/**
+ * Returns true if a user is currently logged in.
+ */
+export function isAuthenticated(): boolean {
+  const user = getCurrentUser();
+  return !!user?.userName;
+}
+
+/**
+ * Returns the Entra ID tenant ID from the portal configuration.
+ * Only applicable for Entra ID provider type.
+ */
+export function getTenantId(): string | undefined {
+  if (isDevelopment) return '00000000-0000-0000-0000-000000000000';
+  return window.Microsoft?.Dynamic365?.Portal?.tenant;
+}
+
+/**
+ * Fetches the anti-forgery token required for login form posts and Power Pages Web API calls.
+ * The token is embedded in an HTML response from /_layout/tokenhtml.
+ */
+export async function fetchAntiForgeryToken(): Promise<string> {
+  const response = await fetch('/_layout/tokenhtml');
+  if (!response.ok) {
+    throw new Error(
+      `Failed to fetch anti-forgery token: ${response.status} ${response.statusText}. ` +
+      'Ensure the site is deployed and accessible.'
+    );
+  }
+  const html = await response.text();
+  const match = html.match(/value="([^"]+)"/);
+  if (!match) {
+    throw new Error('Failed to extract anti-forgery token from /_layout/tokenhtml');
+  }
+  return match[1];
+}
+
+/**
+ * Resolves the providerIdentifier the server expects in /Account/Login/ExternalLogin's
+ * `provider` form field. For Entra ID, derives from the site's parent tenant at runtime
+ * - no need to hardcode the tenant ID in the AUTH_PROVIDERS array. For other external
+ * providers, returns the explicitly-configured providerIdentifier.
+ */
+export function resolveProviderIdentifier(provider: AuthProviderConfig): string {
+  if (provider.type === 'local') {
+    throw new Error(`resolveProviderIdentifier called for local provider ${provider.id}`);
+  }
+
+  if (provider.type === 'entra-id') {
+    const tenantId = getTenantId();
+    if (!tenantId) {
+      throw new Error(
+        `Cannot resolve Entra ID provider identifier - tenant ID not available. ` +
+        `Ensure the site is properly deployed and window.Microsoft.Dynamic365.Portal.tenant is set.`
+      );
+    }
+    return `https://login.windows.net/${tenantId}/`;
+  }
+
+  if (!provider.providerIdentifier) {
+    throw new Error(
+      `Provider ${provider.id} (type ${provider.type}) is missing providerIdentifier.`
+    );
+  }
+  return provider.providerIdentifier;
+}
+
+export async function loginExternal(
+  providerIdentifier: string,
+  returnUrl?: string,
+  invitationCode?: string
+): Promise<void> {
+  if (isDevelopment) {
+    sessionStorage.removeItem(DEV_SIGNEDOUT_KEY);
+    window.location.reload();
+    return;
+  }
+
+  const token = await fetchAntiForgeryToken();
+
+  const form = document.createElement('form');
+  form.method = 'POST';
+  form.action = invitationCode
+    ? `/Account/Login/ExternalLogin?InvitationCode=${encodeURIComponent(invitationCode)}`
+    : '/Account/Login/ExternalLogin';
+
+  const fields: Record<string, string> = {
+    __RequestVerificationToken: token,
+    provider: providerIdentifier,
+    returnUrl: returnUrl || '/',
+  };
+
+  for (const [name, value] of Object.entries(fields)) {
+    const input = document.createElement('input');
+    input.type = 'hidden';
+    input.name = name;
+    input.value = value;
+    form.appendChild(input);
+  }
+
+  document.body.appendChild(form);
+  form.submit();
+}
+
+export async function loginWithProvider(
+  provider: AuthProviderConfig,
+  options: {
+    returnUrl?: string;
+    invitationCode?: string;
+    /** Local-only: credentials are required when provider.type === 'local' */
+    credentials?: { credential: string; password: string; rememberMe?: boolean };
+  } = {}
+): Promise<void> {
+  if (provider.type === 'local') {
+    throw new Error('Add loginLocal from the local service template before enabling local authentication.');
+  }
+
+  const providerIdentifier = resolveProviderIdentifier(provider);
+  return loginExternal(providerIdentifier, options.returnUrl, options.invitationCode);
+}
+
+// Existing framework wrappers use this signature; new multi-provider UI uses
+// loginWithProvider so a selected button cannot accidentally use another IdP.
+export function login(
+  returnUrl?: string,
+  credentials?: { username: string; password: string; rememberMe?: boolean },
+  invitationCode?: string
+): Promise<void> {
+  return loginWithProvider(getAuthProvider(), {
+    returnUrl,
+    invitationCode,
+    credentials: credentials
+      ? { credential: credentials.username, password: credentials.password, rememberMe: credentials.rememberMe }
+      : undefined,
+  });
+}
+
+export function getSessionExpiredMessage(): string | undefined {
+  if (typeof window === 'undefined') return undefined;
+  return new URLSearchParams(window.location.search).get('sessionExpired') === 'true'
+    ? 'Your session has expired. Please sign in again.'
+    : undefined;
+}
+
+export function logout(returnUrl?: string): void {
+  if (isDevelopment) {
+    sessionStorage.setItem(DEV_SIGNEDOUT_KEY, '1');
+    window.location.reload();
+    return;
+  }
+
+  const target = returnUrl || '/';
+  window.location.href = `/Account/Login/LogOff?returnUrl=${encodeURIComponent(target)}`;
+}
+
+// --- Auth Error Handling ---
+
+/**
+ * Error codes returned by the Power Pages server via query string parameters.
+ * The server redirects back to the login page with ?message=<code> or ?error=<code>.
+ */
+const AUTH_ERROR_MESSAGES: Record<string, string> = {
+  access_denied: 'Access was denied by the identity provider.',
+  missing_license: 'Your account does not have the required license.',
+  invalid_login: 'Invalid login. Please try again.',
+  invalid_username_or_password: 'Invalid username or password.',
+  user_locked: 'Your account has been locked due to too many failed attempts. Please try again later.',
+  too_many_attempts: 'Too many failed login attempts. Please try again later.',
+  invalid_invitation: 'The invitation code is invalid or has expired.',
+  duplicate_login: 'This external identity is already linked to another account.',
+  registration_blocked: 'Registration is not available for this provider.',
+  signin_failed: 'Sign-in failed. Please try again.',
+  external_auth_failed: 'Sign-in failed. Please try again.',
+  email_required: 'An email address is required.',
+  username_required: 'A username is required.',
+  password_required: 'A password is required.',
+  password_confirmation_failure: 'Passwords do not match.',
+  invalid_two_factor_code: 'The verification code is invalid.',
+  duplicate_email: 'This email address is already in use.',
+  duplicate_username: 'This username is already taken.',
+  deny_minors: 'Registration is not available for users under the minimum age.',
+};
+
+/**
+ * Parses authentication error from the current page URL.
+ * The Power Pages server passes errors via ?message= or ?error= query parameters
+ * when redirecting back to the login page after a failed authentication attempt.
+ *
+ * @returns The user-friendly error message, or undefined if no error.
+ */
+export function getAuthError(): string | undefined {
+  if (typeof window === 'undefined') return undefined;
+  const params = new URLSearchParams(window.location.search);
+  const message = params.get('error') || params.get('message');
+  if (!message) return undefined;
+  if (!params.get('error') && message === 'password_reset_success') return undefined;
+  return AUTH_ERROR_MESSAGES[message] || 'An authentication error occurred. Please try again.';
+}
+
+// --- Server Error Parsing ---
+// When the server rejects a login/registration POST, it returns 200 with HTML containing
+// validation errors. This helper parses those errors from the response HTML so they can
+// be shown inline in the SPA instead of the user seeing the server-rendered error page.
+
+function parseServerErrors(html: string): string[] {
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(html, 'text/html');
+  const errors: string[] = [];
+
+  // MVC validation summary (login, forgot password)
+  doc.querySelectorAll('.validation-summary-errors li').forEach(li => {
+    const text = li.textContent?.trim();
+    if (text) errors.push(text);
+  });
+
+  // Web Forms validation summary (registration)
+  doc.querySelectorAll('.alert-danger li').forEach(li => {
+    const text = li.textContent?.trim();
+    if (text && !errors.includes(text)) errors.push(text);
+  });
+
+  // Individual field errors
+  doc.querySelectorAll('.field-validation-error').forEach(el => {
+    const text = el.textContent?.trim();
+    if (text && !errors.includes(text)) errors.push(text);
+  });
+
+  return errors;
+}
+
+export function getUserDisplayName(): string {
+  const user = getCurrentUser();
+  if (!user) return '';
+  const fullName = [user.firstName, user.lastName].filter(Boolean).join(' ');
+  if (fullName) return fullName;
+  if (user.firstName) return user.firstName;
+  if (user.lastName) return user.lastName;
+  if (user.email) return user.email;
+  if (user.userName) return user.userName;
+  return 'User';
+}
+
+/**
+ * Returns the user's initials for avatar display.
+ * Same fallback priority as getUserDisplayName but uses the first character of each source.
+ */
+export function getUserInitials(): string {
+  const user = getCurrentUser();
+  if (!user) return '';
+  if (user.firstName && user.lastName) {
+    return `${user.firstName[0]}${user.lastName[0]}`.toUpperCase();
+  }
+  if (user.firstName) return user.firstName[0].toUpperCase();
+  if (user.lastName) return user.lastName[0].toUpperCase();
+  if (user.email) return user.email[0].toUpperCase();
+  if (user.userName) return user.userName[0].toUpperCase();
+  return '?';
+}

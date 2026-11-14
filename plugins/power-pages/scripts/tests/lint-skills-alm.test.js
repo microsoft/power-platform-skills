@@ -538,6 +538,17 @@ test('findPromptLines: matches backticked AskUserQuestion followed by colon', ()
   assert.deepEqual(lines, [2, 3]);
 });
 
+test('findPromptLines: recognizes agent-neutral prompts without matching ordinary prose', () => {
+  const content = [
+    'Ask the user:',
+    '  Ask the user: **Approve / Cancel**.',
+    'Ask the user to review the plan later.',
+    'The reference explains when to ask the user:',
+    '| Ask the user: | Not a prompt introduction |',
+  ].join('\n');
+  assert.deepEqual(findPromptLines(content), [1, 2]);
+});
+
 test('preserved manage-governance consent call sites require markers when re-enabled', (t) => {
   const skill = fs.readFileSync(
     path.join(__dirname, '../../skills/manage-governance/SKILL.disabled.md'),
@@ -911,6 +922,18 @@ test('reference workflows enforce marker pairing even when every marker is missi
     ({ rule, severity, file: findingFile })), [
     { rule: 'GATE-must-have-marker', severity: 'error', file },
   ]);
+});
+
+test('agent-neutral prompts require markers in skills and reference workflows', (t) => {
+  const root = mkPluginRoot(t);
+  const skillFile = writeSkill(root, 'setup-auth', '# Auth\n\n## Plan\nAsk the user: Approve or cancel.\n');
+  const referenceFile = writeReferenceWorkflow(root, 'setup-auth',
+    '# Provision\n\n## Consent\nAsk the user: Configure the app or cancel.\n');
+  const findings = collectFindings({ pluginRoot: root });
+  assert.deepEqual(findings.map(({ rule, file }) => ({ rule, file })).sort((a, b) => a.file.localeCompare(b.file)), [
+    { rule: 'GATE-must-have-marker', file: skillFile },
+    { rule: 'GATE-must-have-marker', file: referenceFile },
+  ].sort((a, b) => a.file.localeCompare(b.file)));
 });
 
 test('reference workflows require prose outside code fences and catalog membership', (t) => {

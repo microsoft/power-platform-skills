@@ -1,0 +1,259 @@
+import { useEffect, useState, type FormEvent } from 'react'
+import { useNavigate, Link } from 'react-router-dom'
+import { useAuth } from '../hooks/useAuth'
+import {
+  getMyProfile,
+  updateMyProfile,
+  applyContactUpdateLocally,
+  type ProfileContact,
+} from '../services/authService'
+
+const validatePhone = (v: string) => {
+  if (!v) return ''  // optional
+  if (v.length < 6) return 'Enter a valid phone number'
+  return ''
+}
+
+export default function UserProfile() {
+  const { user, isAuthenticated, refresh } = useAuth()
+  const navigate = useNavigate()
+  const [profile, setProfile] = useState<ProfileContact | null>(null)
+  const [isLoading, setIsLoading] = useState(true)
+  const [loadError, setLoadError] = useState<string | undefined>()
+  const [serverError, setServerError] = useState<string | undefined>()
+  const [successMessage, setSuccessMessage] = useState<string | undefined>()
+  const [errors, setErrors] = useState<Record<string, string>>({})
+  const [touched, setTouched] = useState<Record<string, boolean>>({})
+  const [isSubmitting, setIsSubmitting] = useState(false)
+
+  // Form state mirrors the editable profile values; empty string = clear column.
+  // Note: email is NOT in this form - it's shown read-only in Account Details.
+  const [form, setForm] = useState<Record<string, string>>({
+    firstname: '', lastname: '',
+    mobilephone: '', address1_line1: '', address1_city: '',
+    address1_stateorprovince: '', address1_postalcode: '', address1_country: '',
+  })
+
+  // Replace the site placeholder with its existing title; retain the site's U+2014 separator.
+  useEffect(() => { document.title = 'My Profile \u2014 <SITE_NAME>' }, [])
+
+  useEffect(() => {
+    if (!isAuthenticated) {
+      navigate('/login?returnUrl=' + encodeURIComponent('/user-profile'))
+      return
+    }
+    if (!user?.contactId) {
+      setLoadError(
+        'Profile unavailable for this account. Your contact record is missing or has no ID. ' +
+        'If you signed in with workforce Entra ID, your admin needs to ensure RegistrationClaimsMapping ' +
+        'is configured so contacts are created with the correct fields.'
+      )
+      setIsLoading(false)
+      return
+    }
+    getMyProfile(user.contactId)
+      .then(p => {
+        setProfile(p)
+        setForm({
+          firstname: p.firstname ?? '',
+          lastname: p.lastname ?? '',
+          mobilephone: p.mobilephone ?? '',
+          address1_line1: p.address1_line1 ?? '',
+          address1_city: p.address1_city ?? '',
+          address1_stateorprovince: p.address1_stateorprovince ?? '',
+          address1_postalcode: p.address1_postalcode ?? '',
+          address1_country: p.address1_country ?? '',
+        })
+        setIsLoading(false)
+      })
+      .catch(err => {
+        setLoadError(err instanceof Error ? err.message : 'Failed to load profile.')
+        setIsLoading(false)
+      })
+  }, [isAuthenticated, user?.contactId, navigate])
+
+  function validateField(name: string, value: string) {
+    let error = ''
+    if (name === 'mobilephone') error = validatePhone(value)
+    setErrors(prev => {
+      if (error) return { ...prev, [name]: error }
+      const next = { ...prev }; delete next[name]; return next
+    })
+    return error
+  }
+
+  function handleBlur(e: React.FocusEvent<HTMLInputElement>) {
+    setTouched(prev => ({ ...prev, [e.target.name]: true }))
+    validateField(e.target.name, e.target.value)
+  }
+
+  function handleChange(e: React.ChangeEvent<HTMLInputElement>) {
+    setForm(prev => ({ ...prev, [e.target.name]: e.target.value }))
+    if (serverError) setServerError(undefined)
+    if (successMessage) setSuccessMessage(undefined)
+    if (touched[e.target.name]) validateField(e.target.name, e.target.value)
+  }
+
+  function handleSubmit(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault()
+    if (!profile) return
+
+    // Validate phone format (only field with a format check)
+    const phoneErr = validatePhone(form.mobilephone)
+    const errs: Record<string, string> = {}
+    if (phoneErr) errs.mobilephone = phoneErr
+    setErrors(errs)
+    setTouched(prev => ({ ...prev, mobilephone: true }))
+    if (Object.keys(errs).length > 0) return
+
+    // Build payload: convert empty strings to null (clear column);
+    // skip unchanged fields by comparing to loaded profile values
+    const payload: Record<string, string | null> = {}
+    for (const key of Object.keys(form)) {
+      const newValue = form[key] === '' ? null : form[key]
+      const oldValue = (profile as Record<string, string | null>)[key] ?? null
+      if (newValue !== oldValue) payload[key] = newValue
+    }
+    if (Object.keys(payload).length === 0) {
+      setSuccessMessage('No changes to save.')
+      return
+    }
+
+    setIsSubmitting(true)
+    setServerError(undefined)
+    updateMyProfile(profile.contactid, payload).then(() => {
+      setSuccessMessage('Profile updated.')
+      // Update local profile snapshot so the next save's diff is correct
+      setProfile(prev => prev ? { ...prev, ...payload } as ProfileContact : prev)
+      // Mirror the saved name fields into window.Microsoft.Dynamic365.Portal.User
+      // so the header avatar / display name picks up the new values immediately.
+      // Without this, refresh() below re-reads the unchanged Portal.User snapshot
+      // and the header keeps showing the old name until the next full page load.
+      applyContactUpdateLocally(payload)
+      // refresh() re-reads getCurrentUser() and (because useAuth's refresh spreads
+      // the result into a fresh object) triggers a re-render so AuthButton repaints.
+      refresh()
+      setIsSubmitting(false)
+    }).catch(err => {
+      setServerError(err instanceof Error ? err.message : 'Failed to save profile.')
+      setIsSubmitting(false)
+    })
+  }
+
+  const show = (f: string) => touched[f] ? errors[f] : undefined
+
+  const accountFullName = [user?.firstName, user?.lastName]
+    .map(s => s?.trim()).filter(Boolean).join(' ') || user?.userName || '-'
+  const accountEmail = user?.email || '-'
+
+  if (isLoading) {
+    return (
+      <section style={styles.page}>
+        <div style={styles.card}>
+          <p style={{ textAlign: 'center', color: 'var(--color-text-muted)' }}>Loading profile...</p>
+        </div>
+      </section>
+    )
+  }
+
+  if (loadError) {
+    return (
+      <section style={styles.page}>
+        <div style={styles.card}>
+          <h1 style={styles.title}>Profile unavailable</h1>
+          <p style={{ color: 'var(--color-text-muted)', marginBottom: 24 }}>{loadError}</p>
+          <Link to="/" style={{ color: 'var(--color-primary)' }}>Back to home</Link>
+        </div>
+      </section>
+    )
+  }
+
+  return (
+    <section style={styles.page}>
+      <div className="animate-in" style={styles.card}>
+        <h1 style={styles.title}>My Profile</h1>
+        <p style={styles.subtitle}>Update your contact information. All fields are optional.</p>
+
+        {/* Read-only Account Details: just full name + email. No contactId, no roles. */}
+        <section aria-label="Account details" style={styles.accountDetails}>
+          <h2 style={styles.sectionHeading}>Account details</h2>
+          <dl style={styles.dl}>
+            <div style={styles.dlRow}>
+              <dt style={styles.dt}>Name</dt>
+              <dd style={styles.dd}>{accountFullName}</dd>
+            </div>
+            <div style={styles.dlRow}>
+              <dt style={styles.dt}>Email</dt>
+              <dd style={styles.dd}>{accountEmail}</dd>
+            </div>
+          </dl>
+        </section>
+
+        {successMessage && <div style={styles.successMessage} role="status">{successMessage}</div>}
+        {serverError && <div style={styles.serverError} role="alert">{serverError}</div>}
+
+        <form onSubmit={handleSubmit} noValidate style={styles.form}>
+          <h2 style={styles.sectionHeading}>Edit details</h2>
+          <div style={styles.grid}>
+            <Field name="firstname" label="First name" value={form.firstname} onBlur={handleBlur} onChange={handleChange} error={show('firstname')} />
+            <Field name="lastname" label="Last name" value={form.lastname} onBlur={handleBlur} onChange={handleChange} error={show('lastname')} />
+            <Field name="mobilephone" label="Mobile phone" type="tel" value={form.mobilephone} onBlur={handleBlur} onChange={handleChange} error={show('mobilephone')} />
+          </div>
+
+          <h2 style={styles.sectionHeading}>Address</h2>
+          <div style={styles.grid}>
+            <Field name="address1_line1" label="Street" value={form.address1_line1} onBlur={handleBlur} onChange={handleChange} />
+            <Field name="address1_city" label="City" value={form.address1_city} onBlur={handleBlur} onChange={handleChange} />
+            <Field name="address1_stateorprovince" label="State / Province" value={form.address1_stateorprovince} onBlur={handleBlur} onChange={handleChange} />
+            <Field name="address1_postalcode" label="Postal code" value={form.address1_postalcode} onBlur={handleBlur} onChange={handleChange} />
+            <Field name="address1_country" label="Country" value={form.address1_country} onBlur={handleBlur} onChange={handleChange} />
+          </div>
+
+          <button type="submit" className="btn-primary" disabled={isSubmitting}
+            style={{ marginTop: 24, justifyContent: 'center' }}>
+            {isSubmitting ? 'Saving...' : 'Save changes'}
+          </button>
+        </form>
+      </div>
+    </section>
+  )
+}
+
+function Field({ name, label, value, onChange, onBlur, error, type = 'text' }: {
+  name: string; label: string; value: string; type?: string;
+  onChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
+  onBlur: (e: React.FocusEvent<HTMLInputElement>) => void;
+  error?: string;
+}) {
+  return (
+    <div style={styles.field}>
+      <label htmlFor={`p-${name}`} style={styles.label}>{label}</label>
+      <input id={`p-${name}`} name={name} type={type} value={value} onChange={onChange} onBlur={onBlur}
+        style={{ ...styles.input, ...(error ? styles.inputError : {}) }}
+        aria-invalid={!!error} />
+      {error && <span style={styles.error} role="alert">{error}</span>}
+    </div>
+  )
+}
+
+const styles: Record<string, React.CSSProperties> = {
+  page: { minHeight: 'calc(100vh - 64px)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '48px 24px', background: 'var(--color-bg)' },
+  card: { width: '100%', maxWidth: 580, background: 'var(--color-surface)', borderRadius: 'var(--radius-lg)', padding: 40, boxShadow: 'var(--shadow-md)', border: '1px solid var(--color-border)' },
+  title: { fontSize: '1.5rem', fontWeight: 600, marginBottom: 8 },
+  subtitle: { fontSize: '0.875rem', color: 'var(--color-text-muted)', marginBottom: 24 },
+  sectionHeading: { fontSize: '1rem', fontWeight: 600, marginTop: 24, marginBottom: 12 },
+  accountDetails: { padding: '16px 20px', background: 'var(--color-bg)', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-sm)', marginBottom: 24 },
+  dl: { margin: 0, display: 'flex', flexDirection: 'column', gap: 8 },
+  dlRow: { display: 'flex', gap: 16, alignItems: 'baseline' },
+  dt: { fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.04em', color: 'var(--color-text-muted)', fontWeight: 600, minWidth: 60 },
+  dd: { margin: 0, fontSize: '0.875rem', color: 'var(--color-text)' },
+  form: { display: 'flex', flexDirection: 'column' },
+  grid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 16 },
+  field: { display: 'flex', flexDirection: 'column', gap: 6 },
+  label: { fontSize: '0.875rem', fontWeight: 500 },
+  input: { fontFamily: 'var(--font-body)', fontSize: '0.875rem', padding: '10px 14px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--color-border)', background: 'var(--color-surface)', color: 'var(--color-text)', outline: 'none' },
+  inputError: { borderColor: '#DA1E28' },
+  error: { fontSize: '0.75rem', color: '#DA1E28' },
+  successMessage: { padding: '12px 16px', background: '#DEFBE6', border: '1px solid #24A148', borderRadius: 'var(--radius-sm)', color: '#0E6027', fontSize: '0.875rem', marginBottom: 20 },
+  serverError: { padding: '12px 16px', background: '#FFF1F1', border: '1px solid #DA1E28', borderRadius: 'var(--radius-sm)', color: '#DA1E28', fontSize: '0.875rem', marginBottom: 20 },
+}
