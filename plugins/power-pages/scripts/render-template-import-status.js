@@ -6,6 +6,7 @@ const path = require('path');
 const { fileURLToPath, pathToFileURL } = require('url');
 const { renderTemplate } = require('./lib/render-template');
 const { openInDefaultBrowser } = require('./lib/default-browser');
+const { validateResponsivePreviews } = require('./lib/template-catalog');
 
 const LOCAL_PREVIEW_SIGNATURES = {
   '.png': Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
@@ -21,6 +22,7 @@ function parseArgs(argv) {
     else if (argv[i] === '--statusPath') args.statusPath = argv[++i];
     else if (argv[i] === '--outputPath') args.outputPath = argv[++i];
     else if (argv[i] === '--previewImagesJson') args.previewImages = JSON.parse(argv[++i] || '[]');
+    else if (argv[i] === '--responsivePreviewsJson') args.responsivePreviews = JSON.parse(argv[++i] || '[]');
     else if (argv[i] === '--solutionCount') args.solutionCount = Number(argv[++i]);
     else if (argv[i] === '--open') args.open = true;
   }
@@ -76,12 +78,12 @@ function toDataUrl(filePath) {
   return `data:image/png;base64,${fs.readFileSync(filePath).toString('base64')}`;
 }
 
-function buildModel({ templateName, templateDescription, statusPath, outputPath, previewImages, solutionCount }) {
+function buildModel({ templateName, templateDescription, statusPath, outputPath, previewImages = [], responsivePreviews, solutionCount }) {
   const statusUrl = path.dirname(path.resolve(statusPath)) === path.dirname(path.resolve(outputPath))
     ? path.basename(statusPath)
     : pathToFileURL(path.resolve(statusPath)).href;
   const previewGroups = new Map();
-  for (let index = 0; index < previewImages.length; index++) {
+  for (let index = 0; responsivePreviews === undefined && index < previewImages.length; index++) {
     const image = previewImages[index];
     const url = previewImageUrl(image, index, path.dirname(path.resolve(outputPath)));
     if (!url) continue;
@@ -109,7 +111,18 @@ function buildModel({ templateName, templateDescription, statusPath, outputPath,
     const device = deviceMatch ? deviceMatch[1].toLowerCase() : 'desktop';
     preview[device] = url;
   }
-  const previews = [...previewGroups.values()];
+  let previews = [...previewGroups.values()];
+  if (responsivePreviews !== undefined) {
+    const error = validateResponsivePreviews(responsivePreviews, 'Import status');
+    if (error) throw new Error(error);
+    const outputDir = path.dirname(path.resolve(outputPath));
+    previews = responsivePreviews.map((preview, index) => ({
+      name: preview.id,
+      displayName: preview.displayName,
+      desktop: previewImageUrl(preview.desktop, index * 2, outputDir),
+      mobile: previewImageUrl(preview.mobile, index * 2 + 1, outputDir),
+    })).filter((preview) => preview.desktop || preview.mobile);
+  }
   const pluralSolutions = solutionCount > 1;
   const pluginRoot = path.resolve(__dirname, '..');
 
@@ -181,11 +194,12 @@ function renderTemplateImportStatus({
   statusPath,
   outputPath,
   previewImages = [],
+  responsivePreviews,
   solutionCount = 1,
   open = false,
 }, deps = {}) {
   if (!templateName || !statusPath || !outputPath) {
-    throw new Error('Usage: render-template-import-status.js --templateName <name> --statusPath <path> --outputPath <path> [--templateDescription <description>] [--previewImagesJson <json>] [--solutionCount <count>] [--open]');
+    throw new Error('Usage: render-template-import-status.js --templateName <name> --statusPath <path> --outputPath <path> [--templateDescription <description>] [--responsivePreviewsJson <json> | --previewImagesJson <json>] [--solutionCount <count>] [--open]');
   }
   if (!Number.isSafeInteger(solutionCount) || solutionCount < 1) {
     throw new Error('solutionCount must be a positive integer');
@@ -198,7 +212,7 @@ function renderTemplateImportStatus({
     'assets',
     'non-spa-creation-status-template.html',
   );
-  const model = buildModel({ templateName, templateDescription, statusPath, outputPath, previewImages, solutionCount });
+  const model = buildModel({ templateName, templateDescription, statusPath, outputPath, previewImages, responsivePreviews, solutionCount });
   // Unlike the standalone non-SPA page, SPA import is served over HTTP and polls
   // a same-origin JSON feed. Allow its local images/feed plus only the explicit
   // remote preview origins, while retaining default-src 'none' and nonce scripts.

@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { normalizeCatalogFamilies } = require('../lib/template-catalog');
 
 const {
   parseArgs,
@@ -15,6 +16,92 @@ const {
 function tempDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'template-browser-test-'));
 }
+
+for (const emptyFamily of [true, false]) {
+  test(`nested SPA browser honors variant preview overrides with ${emptyFamily ? 'empty' : 'nonempty'} family previews`, (t) => {
+    const dir = tempDir();
+    t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+    const pair = (name) => [{
+      id: name, displayName: `${name} page`,
+      desktop: `https://example.test/${name}-wide.png`,
+      mobile: `https://example.test/${name}-narrow.png`,
+    }];
+    const template = {
+      id: 'supplier-portal', displayName: 'Supplier Portal', kind: 'spa',
+      description: 'Supplier invoice portal', keywords: [],
+      responsivePreviews: emptyFamily ? [] : pair('family'),
+      previewImages: ['https://example.test/ignored-family.png'],
+      variants: {
+        react: {},
+        vue: { responsivePreviews: pair('vue'), previewImages: ['https://example.test/ignored-vue.png'] },
+        angular: { previewImages: ['https://example.test/angular-legacy.png'] },
+        astro: emptyFamily ? { responsivePreviews: [] } : { previewImages: [] },
+      },
+    };
+    for (const [shape, family] of [
+      ['raw', template],
+      ['normalized', normalizeCatalogFamilies({ templates: [template] })[0]],
+    ]) {
+      const templatesJsonPath = path.join(dir, `${shape}.json`);
+      const outputPath = path.join(dir, `${shape}.html`);
+      fs.writeFileSync(templatesJsonPath, JSON.stringify({ TEMPLATES_JSON: [family] }));
+      assert.equal(renderTemplateBrowser({ templatesJsonPath, outputPath }).status, 'ok');
+      const html = fs.readFileSync(outputPath, 'utf8');
+      assert.match(html, /vue-wide\.png/);
+      assert.match(html, /vue-narrow\.png/);
+      assert.match(html, /angular-legacy\.png/);
+      const groups = html.split('<div class="variant-previews">').slice(1);
+      assert.equal(groups.length, 4);
+      const [react, vue, angular, astro] = groups;
+      assert.match(react, /class="field-label">React</);
+      assert.match(vue, /class="field-label">Vue</);
+      assert.match(vue, /vue page - desktop/);
+      assert.match(vue, /vue-wide\.png/);
+      assert.match(vue, /vue-narrow\.png/);
+      assert.doesNotMatch(vue, /family-wide\.png|ignored-vue/);
+      assert.match(angular, /class="field-label">Angular</);
+      assert.match(angular, /angular-legacy\.png/);
+      assert.doesNotMatch(angular, /family-wide\.png/);
+      assert.match(astro, /class="field-label">Astro</);
+      assert.match(astro, /No preview image yet/);
+      assert.doesNotMatch(astro, /family-wide\.png/);
+      if (emptyFamily) assert.match(react, /No preview image yet/);
+      else {
+        assert.match(react, /family-wide\.png/);
+        assert.match(react, /family-narrow\.png/);
+      }
+      assert.doesNotMatch(html, /ignored-family|ignored-vue/);
+      assert.doesNotMatch(html, /data-tab="template-2"/);
+    }
+  });
+}
+
+test('SPA browser uses responsive page labels and pairs ahead of legacy images', (t) => {
+  const dir = tempDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const dataPath = path.join(dir, 'templates.json');
+  const outputPath = path.join(dir, 'browser.html');
+  const template = {
+    displayName: '311 Portal', kind: 'spa', framework: 'react',
+    previewImages: ['https://legacy.example/ignored.png'],
+    responsivePreviews: [{
+      id: 'requests', displayName: 'Service <requests>',
+      desktop: 'https://example.com/wide.png', mobile: 'https://example.com/narrow.png',
+    }],
+  };
+  fs.writeFileSync(dataPath, JSON.stringify({ TEMPLATES_JSON: [template] }));
+  assert.equal(renderTemplateBrowser({ templatesJsonPath: dataPath, outputPath }).status, 'ok');
+  const html = fs.readFileSync(outputPath, 'utf8');
+  assert.match(html, /Service &lt;requests&gt; - desktop/);
+  assert.match(html, /Service &lt;requests&gt; - mobile/);
+  assert.match(html, /wide\.png/);
+  assert.match(html, /narrow\.png/);
+  assert.doesNotMatch(html, /legacy\.example/);
+  fs.writeFileSync(dataPath, JSON.stringify({ TEMPLATES_JSON: [{ ...template, responsivePreviews: [] }] }));
+  const emptyPath = path.join(dir, 'empty.html');
+  renderTemplateBrowser({ templatesJsonPath: dataPath, outputPath: emptyPath });
+  assert.match(fs.readFileSync(emptyPath, 'utf8'), /No preview image yet/);
+});
 
 test('parseArgs accepts templates JSON, output path, and open switch', () => {
   assert.deepEqual(parseArgs([

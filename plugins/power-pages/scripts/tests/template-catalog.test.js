@@ -92,6 +92,93 @@ const VALID_TRADITIONAL_TEMPLATE_FAMILY = {
   },
 };
 
+const RESPONSIVE_PREVIEWS = [{
+  id: 'requests',
+  displayName: 'Service requests',
+  desktop: 'spa/company-portal/previews/wide.png',
+  mobile: 'spa/company-portal/previews/narrow.png',
+}];
+
+test('SPA responsive previews validate without legacy images and reject malformed pages', () => {
+  const { previewImages, ...template } = VALID_TEMPLATE;
+  const validate = (responsivePreviews) => validateCatalogShape({
+    templates: [{ ...template, responsivePreviews }],
+  });
+  assert.equal(validate(RESPONSIVE_PREVIEWS), null);
+  assert.equal(validate([]), null);
+  assert.match(validate(null), /responsivePreviews must be an array/);
+  assert.match(validate([null]), /responsive preview must be an object/);
+  for (const field of ['id', 'displayName', 'desktop', 'mobile']) {
+    assert.match(validate([{ ...RESPONSIVE_PREVIEWS[0], [field]: '' }]), new RegExp(`missing string field: ${field}`));
+  }
+  assert.match(validate([...RESPONSIVE_PREVIEWS, ...RESPONSIVE_PREVIEWS]), /duplicate responsive preview id/);
+  assert.match(validateCatalogShape({ templates: [template] }), /responsivePreviews or previewImages/);
+  assert.match(validateCatalogShape({
+    templates: [{ ...VALID_TEMPLATE_FAMILY, variants: { react: { responsivePreviews: [{}] } } }],
+  }), /variant react responsive preview missing string field/);
+});
+
+test('responsive SPA previews resolve manifest-relative paths and survive normalized selection', async (t) => {
+  const dir = tempDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const { previewImages, ...template } = VALID_TEMPLATE;
+  const result = await fetchCatalog({ owner: 'o', repo: 'r', ref: SHA, cacheRoot: dir }, {
+    requestJson: async () => ({ templates: [{ ...template, responsivePreviews: RESPONSIVE_PREVIEWS }] }),
+  });
+  assert.equal(result.ok, true, result.error);
+  const expected = RESPONSIVE_PREVIEWS.map((preview) => ({
+    ...preview,
+    desktop: `templates/${preview.desktop}`,
+    mobile: `templates/${preview.mobile}`,
+  }));
+  assert.deepEqual(result.catalog.templates[0].responsivePreviews, expected);
+  assert.deepEqual(result.selectableCatalog.templates[0].responsivePreviews, expected);
+  assert.deepEqual(result.selectableCatalog.templates[0].variants[0].responsivePreviews, expected);
+});
+
+test('SPA variants preserve responsive overrides, legacy overrides, inheritance and empty lists', async (t) => {
+  const dir = tempDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const variantPreviews = [{
+    id: 'invoices', displayName: 'Invoices',
+    desktop: 'spa/supplier-portal/variants/vue/wide.png',
+    mobile: 'templates/spa/supplier-portal/variants/vue/narrow.png',
+  }];
+  const result = await fetchCatalog({ owner: 'o', repo: 'r', ref: SHA, cacheRoot: dir }, {
+    requestJson: async () => ({
+      templates: [{
+        ...VALID_TEMPLATE_FAMILY,
+        responsivePreviews: RESPONSIVE_PREVIEWS,
+        variants: {
+          react: {},
+          vue: { responsivePreviews: variantPreviews, previewImages: ['legacy.png'] },
+          angular: { previewImages: ['angular-legacy.png'] },
+          astro: { responsivePreviews: [] },
+        },
+      }],
+    }),
+  });
+  assert.equal(result.ok, true, result.error);
+  const family = result.selectableCatalog.templates[0];
+  const [react, vue, angular, astro] = family.variants;
+  assert.equal(family.previewImages, undefined);
+  assert.deepEqual(react.responsivePreviews, family.responsivePreviews);
+  assert.deepEqual(vue.responsivePreviews, [{
+    ...variantPreviews[0],
+    desktop: `templates/${variantPreviews[0].desktop}`,
+  }]);
+  assert.equal(vue.previewImages, undefined);
+  assert.deepEqual(angular.previewImages, ['templates/angular-legacy.png']);
+  assert.equal(angular.responsivePreviews, undefined);
+  assert.deepEqual(astro.responsivePreviews, []);
+  const emptyFamily = normalizeCatalogFamilies({
+    templates: [{ ...VALID_TEMPLATE_FAMILY, responsivePreviews: [], variants: { react: {}, vue: { previewImages: [] } } }],
+  })[0];
+  assert.deepEqual(emptyFamily.responsivePreviews, []);
+  assert.deepEqual(emptyFamily.variants[0].responsivePreviews, []);
+  assert.deepEqual(emptyFamily.variants[1].previewImages, []);
+});
+
 function fakeZipWithLocalFile(name) {
   const nameBytes = Buffer.from(name, 'utf8');
   const header = Buffer.alloc(30);
