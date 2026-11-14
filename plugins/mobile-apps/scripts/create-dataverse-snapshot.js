@@ -1242,9 +1242,10 @@ function managedValue(value) {
 }
 
 function normalizeIntegerMetadata(value) {
-  if (value === null || value === undefined || value === '') return null;
+  if ((typeof value !== 'number' && typeof value !== 'string')
+    || (typeof value === 'string' && value.trim() === '')) return null;
   const normalized = Number(value);
-  return Number.isInteger(normalized) ? normalized : null;
+  return Number.isInteger(normalized) && normalized >= 0 ? normalized : null;
 }
 
 function relationshipCount(table) {

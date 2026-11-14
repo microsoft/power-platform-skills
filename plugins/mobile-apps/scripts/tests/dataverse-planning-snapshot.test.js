@@ -1235,6 +1235,30 @@ test('snapshot preserves explicit null or integer SourceType without inventing a
   }
 });
 
+test('computed metadata does not coerce malformed source masks into integers', async () => {
+  for (const SourceTypeMask of ['', ' ', false, true, [], {}, -64]) {
+    const table = await loadDetailedEntity(async (_method, apiPath) => {
+      if (apiPath.includes('/Attributes?$select=')) {
+        return { status: 200, data: { value: [{
+          MetadataId: 'computed-id', LogicalName: 'new_total', SchemaName: 'new_Total',
+          AttributeType: 'Decimal', AttributeTypeName: { Value: 'DecimalType' },
+          SourceType: 1,
+        }] } };
+      }
+      if (apiPath.includes('Attributes(computed-id)')) {
+        return { status: 200, data: {
+          LogicalName: 'new_total', SourceType: 1, SourceTypeMask,
+          FormulaDefinition: 'new_amount * 2',
+        } };
+      }
+      return { status: 200, data: { value: [] } };
+    }, entity('new_order', 'Order'));
+    const computed = table.columns[0].computed;
+    assert.equal(computed.sourceTypeMask, null, JSON.stringify(SourceTypeMask));
+    assert.equal(computed.metadataStatus, 'unavailable');
+  }
+});
+
 test('computed metadata is explicitly unavailable when SourceTypeMask cannot be proven', async () => {
   const table = await loadDetailedEntity(async (_method, apiPath) => {
     if (apiPath.includes('/Attributes?$select=')) {

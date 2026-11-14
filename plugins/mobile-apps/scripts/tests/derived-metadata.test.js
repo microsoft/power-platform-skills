@@ -3,6 +3,8 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const { spawnSync } = require('node:child_process');
+const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 
 const {
@@ -111,6 +113,50 @@ test('malformed normalized metadata fails closed', () => {
   assert.match(result.reasons.join('; '), /lookupTargets must be an array/);
 });
 
+test('SourceType requires explicit null or integer evidence on both sides', () => {
+  const expected = {
+    table: 'cr1_order', logicalName: 'cr1_customerid', kind: 'lookup',
+    type: 'Lookup', sourceType: 0, lookupTarget: 'account',
+  };
+  const actual = { type: 'Lookup', sourceType: 0, lookupTargets: ['account'] };
+  for (const sourceType of [undefined, '', '0', false, true, [], {}, 0.5]) {
+    for (const result of [
+      compareDerivedColumn(expected, { ...actual, sourceType }),
+      compareDerivedColumn({ ...expected, sourceType }, actual),
+    ]) {
+      assert.strictEqual(result.compatible, false, JSON.stringify({ sourceType }));
+      assert.match(result.reasons.join('; '), /sourceType.*missing|sourceType.*malformed/);
+    }
+  }
+  for (const sourceType of [null, 0]) {
+    assert.strictEqual(compareDerivedColumn(expected, { ...actual, sourceType }).compatible, true);
+  }
+});
+
+test('derived validator CLI reports malformed SourceType as BLOCKED', (context) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'derived-metadata-'));
+  context.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const expectedPath = path.join(directory, 'expected.json');
+  const actualPath = path.join(directory, 'actual.json');
+  const expected = {
+    table: 'cr1_order', logicalName: 'cr1_customerid', kind: 'lookup',
+    type: 'Lookup', sourceType: 0, lookupTarget: 'account',
+  };
+  fs.writeFileSync(expectedPath, JSON.stringify([expected]));
+  fs.writeFileSync(actualPath, JSON.stringify([{
+    table: expected.table, logicalName: expected.logicalName,
+    type: 'Lookup', sourceType: '', lookupTargets: ['account'],
+  }]));
+  const result = spawnSync(process.execPath, [
+    path.resolve(__dirname, '..', 'validate-derived-metadata.js'),
+    '--expected', expectedPath, '--actual', actualPath,
+  ], { encoding: 'utf8' });
+  assert.strictEqual(result.status, 2, result.stderr || result.stdout);
+  const output = JSON.parse(result.stdout);
+  assert.strictEqual(output.status, 'BLOCKED');
+  assert.match(output.results[0].reasons.join('; '), /sourceType.*malformed/);
+});
+
 test('malformed expected contracts and duplicate live rows fail closed', () => {
   const malformed = compareDerivedColumn(
     { table: 'cr1_order', logicalName: 'cr1_status', kind: 'choice', type: 'Picklist' },
@@ -215,6 +261,28 @@ test('computed-column reuse rejects invalid or mismatched source type masks', ()
   );
   assert.strictEqual(result.compatible, false);
   assert.match(result.reasons.join('; '), /Invalid bit/);
+});
+
+test('computed masks cannot coerce missing or malformed evidence into zero', () => {
+  const expected = {
+    table: 'cr1_order', logicalName: 'cr1_total', kind: 'computed',
+    type: 'Decimal', sourceType: 1, sourceTypeMask: 0,
+    formulaDefinition: 'cr1_amount * 2',
+  };
+  const actual = {
+    type: 'Decimal', sourceType: 1, sourceTypeMask: 0,
+    formulaDefinition: expected.formulaDefinition,
+  };
+  assert.strictEqual(compareDerivedColumn(expected, actual).compatible, true);
+  for (const sourceTypeMask of [null, undefined, '', '0', false, true, [], {}, 0.5, -64]) {
+    for (const result of [
+      compareDerivedColumn(expected, { ...actual, sourceTypeMask }),
+      compareDerivedColumn({ ...expected, sourceTypeMask }, actual),
+    ]) {
+      assert.strictEqual(result.compatible, false, JSON.stringify({ sourceTypeMask }));
+      assert.match(result.reasons.join('; '), /sourceTypeMask.*missing|sourceTypeMask.*malformed/);
+    }
+  }
 });
 
 test('legacy calculated-column helper fails before attempting mutation', () => {
