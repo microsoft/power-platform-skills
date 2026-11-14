@@ -21,6 +21,7 @@ const test = require('node:test');
 const vm = require('node:vm');
 
 const { applyStep, initState, outputPath, save, setPhone, setSection } = require('../app-docs');
+const { createSkillWorkflow } = require('./helpers/create-skill');
 
 /** Mermaid's crow's-foot tokens. Anything else aborts the parse and blanks the diagram. */
 const ER_CARDINALITY_TOKENS = ['||--||', '}o--o{', '}o--||', '||--o{'];
@@ -32,6 +33,8 @@ function node(id, attributes = {}) {
     children: [],
     style: {},
     dataset: {},
+    // Recorded so a test can fire an event the page subscribed to (see `dispatch`).
+    listeners: {},
     classList: { add() {}, remove() {}, toggle() {}, contains() { return false; } },
     _text: '',
     _html: '',
@@ -44,7 +47,9 @@ function node(id, attributes = {}) {
     setAttribute(name, value) { attributes[name] = String(value); },
     getAttribute(name) { return Object.hasOwn(attributes, name) ? attributes[name] : null; },
     removeAttribute() {},
-    addEventListener() {}, removeEventListener() {}, remove() {},
+    addEventListener(type, listener) { (this.listeners[type] = this.listeners[type] || []).push(listener); },
+    removeEventListener() {}, remove() {},
+    dispatch(type) { (this.listeners[type] || []).forEach((listener) => listener({ type })); },
     querySelector() { return null; }, querySelectorAll() { return []; },
     closest() { return null; }, focus() {}, scrollIntoView() {},
     getBoundingClientRect() { return { top: 0, left: 0, width: 0, height: 0 }; },
@@ -110,22 +115,29 @@ async function runPage(htmlPath, { session = {} } = {}) {
     querySelectorAll() { return []; },
     addEventListener() {}, removeEventListener() {},
     body: node('body'), documentElement: node('html'),
-    hidden: false, readyState: 'complete',
+    hidden: false, readyState: 'complete', activeElement: null,
   };
 
   const diagrams = [];
   const renders = [];
   const errors = [];
+  // The page's self-reload: each interval callback it schedules, and each URL it reloads through.
+  const intervals = [];
+  const reloads = [];
+  const location = {
+    hash: '', href: 'file:///app/docs/create-app-plan.html', reload() {},
+    replace(url) { reloads.push(url); },
+  };
   const sandbox = {
     document,
     window: {
       document,
       addEventListener() {}, removeEventListener() {},
-      location: { hash: '', reload() {} },
+      location,
       matchMedia() { return { matches: false, addEventListener() {} }; },
       setTimeout() { return 0; }, setInterval() { return 0; }, scrollTo() {}, scrollY: 0,
     },
-    location: { hash: '', reload() {} },
+    location,
     sessionStorage: {
       store: new Map(Object.entries(session)),
       getItem(key) { return this.store.has(key) ? this.store.get(key) : null; },
@@ -167,7 +179,7 @@ async function runPage(htmlPath, { session = {} } = {}) {
     },
     console: { log() {}, warn() {}, error(message) { errors.push(String(message)); } },
     setTimeout() { return 0; }, clearTimeout() {},
-    setInterval() { return 0; }, clearInterval() {},
+    setInterval(callback) { intervals.push(callback); return intervals.length; }, clearInterval() {},
     requestAnimationFrame() { return 0; },
   };
   sandbox.globalThis = sandbox;
@@ -205,7 +217,7 @@ async function runPage(htmlPath, { session = {} } = {}) {
 
   return {
     diagrams, diagramNotes, errors, thrown, elements, rendered, scriptCount: scripts.length,
-    session: sandbox.sessionStorage.store,
+    session: sandbox.sessionStorage.store, document, intervals, reloads, window: sandbox.window,
   };
 }
 
@@ -614,23 +626,23 @@ test('a blocked run shows a waiting-for-input banner, and clears it when unblock
 test('a dismissed banner stays dismissed across reloads, for that prompt only', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'run-plan-dismiss-'));
   let state = initState(root, { appName: 'Dismiss', dataPlatform: 'dataverse' });
-  state = applyStep(state, { id: 'data-model', status: 'active', note: 'Gate 2 — awaiting your approval' });
+  state = applyStep(state, { id: 'data-model', status: 'active', note: 'Data model gate - awaiting your approval' });
   save(root, state);
   const KEY = 'mobile-plan-dismissed-prompt';
 
   // The page reloads itself every few seconds, so a dismissal held only in memory came back on
   // the next reload. What the user closed is carried in sessionStorage instead.
-  let page = await runPage(outputPath(root), { session: { [KEY]: 'Gate 2 — awaiting your approval' } });
+  let page = await runPage(outputPath(root), { session: { [KEY]: 'Data model gate - awaiting your approval' } });
   assert.equal(page.elements.get('inputBanner').hidden, true, 'the dismissed prompt stays hidden');
 
   // Keyed to the prompt text, so closing one gate's banner does not silence the next gate's.
-  page = await runPage(outputPath(root), { session: { [KEY]: 'Gate 1 — awaiting your approval' } });
+  page = await runPage(outputPath(root), { session: { [KEY]: 'Architecture gate - awaiting your approval' } });
   assert.equal(page.elements.get('inputBanner').hidden, false, 'a different prompt is shown');
 
   // And forgotten once nothing is waiting, so the same words asked again are shown again.
   state = applyStep(state, { id: 'data-model', status: 'done' });
   save(root, state);
-  page = await runPage(outputPath(root), { session: { [KEY]: 'Gate 2 — awaiting your approval' } });
+  page = await runPage(outputPath(root), { session: { [KEY]: 'Data model gate - awaiting your approval' } });
   assert.equal(page.session.has(KEY), false);
 
   const template = fs.readFileSync(path.resolve(__dirname, '..', '..', 'assets', 'run-plan.html'), 'utf8');
@@ -646,7 +658,7 @@ test('the trust report is labelled a draft, not sent to a terminal prompt that n
   save(root, state);
 
   const { rendered } = await runPage(outputPath(root));
-  // No gate asks the user about the trust report; it is finalised at Step 10.
+  // No gate asks the user about the trust report; it is finalised at Step 13.
   assert.match(rendered('approval-trust'), /^\s*Draft - written from the approved plan/);
   assert.doesNotMatch(rendered('approval-trust'), /terminal/);
   // A section that is put to a gate keeps the instruction.
@@ -862,8 +874,8 @@ test('the planner markdown is linked only once it exists on disk', async () => {
     return found;
   };
 
-  // The planner writes native-app-plan.md at Step 3. Before that a link would 404 in the
-  // user's browser, so it is not emitted at all.
+  // The planner writes native-app-plan.md while the screens are planned. Before that a link would
+  // 404 in the user's browser, so it is not emitted at all.
   assert.deepEqual(links(await runPage(outputPath(root))), [], 'no link before the file exists');
 
   // The plan is written into docs/, so the file sits one level up.
@@ -904,7 +916,7 @@ test('the full-size screens are linked under the phone, once they exist', async 
     return found;
   };
 
-  // `/design-system` writes it at Step 6.75; before that the link would 404.
+  // `/design-system` writes it for its mockup carousel; before that the link would 404.
   assert.deepEqual(railLink(await runPage(outputPath(root))), [], 'no link before the file exists');
 
   // Written into docs/, beside the plan, where every reviewable artifact is collected.
@@ -915,25 +927,27 @@ test('the full-size screens are linked under the phone, once they exist', async 
   assert.match(shown[0].textContent, /full size/i);
 });
 
-test('the create skill renders the screen preview but never opens it', () => {
-  const skill = fs.readFileSync(
-    path.resolve(__dirname, '..', '..', 'skills', 'create-mobile-app', 'SKILL.md'), 'utf8',
-  );
+test('the create skill shows its live preview in the plan and opens only that one tab', () => {
+  const skill = createSkillWorkflow();
 
-  // The plan shows these screens in its phone frame and links out to the file, so a browser tab
-  // opening mid-run interrupts a user who is already watching the plan.
+  // The running app replaces the plan-time HTML mockups: a static approximation next to the
+  // real screens would only disagree with them. No runnable command opens or carries the file.
   for (const block of skill.matchAll(/```(?:bash|sh)\n([\s\S]*?)```/g)) {
-    assert.ok(
-      !/_plan_preview\.html/.test(block[1])
-        || /app-docs\.js"[^\n]*phone --stage screens --preview-file/.test(block[1]),
-      `a command opens the preview instead of embedding it: ${block[1].trim().slice(0, 80)}`,
-    );
+    assert.doesNotMatch(block[1], /_plan_preview\.html/,
+      `a command still handles the static mockups: ${block[1].trim().slice(0, 80)}`);
   }
-  // It must still be rendered - the carousel takes its markup from those blocks - and it is
-  // written into docs/ with every other artifact the user is asked to look at.
-  assert.match(skill, /Render `_plan_preview\.html`/);
-  assert.match(skill, /phone --stage screens --preview-file '<working_dir>\/_plan_preview\.html'/);
-  assert.doesNotMatch(skill, /screens-preview\.json/);
+  assert.doesNotMatch(skill, /phone --stage screens/);
+
+  // The plan embeds the live app, and only a loopback URL - the one origin its CSP frames.
+  assert.match(skill, /phone --stage live --preview-url "http:\/\/localhost:<port>"/);
+  assert.match(skill, /POWER_APPS_WEB_PREVIEW=1 npm run dev -- --port <port> < \/dev\/null/);
+  // The phone is the preview: the server must not open a second page beside the plan.
+  for (const block of skill.matchAll(/```(?:bash|sh)\n([\s\S]*?)```/g)) {
+    assert.doesNotMatch(block[1], /(?:expo start|npm run dev)[^\n]*--web/, 'the preview server opens no browser tab');
+  }
+  assert.match(skill, /Your app is running in the build plan's phone frame/);
+  // `/design-system` is told the real app is on screen, so it skips its own mockups.
+  assert.match(skill, /live_preview: http:\/\/localhost:<port>/);
 });
 
 test('the QR is drawn in the phone and linked for scanning full size', async () => {
@@ -1025,9 +1039,7 @@ test('the store links are only offered once the app can actually be used', async
 });
 
 test('the skill points at the plan instead of opening the QR in a window', () => {
-  const skill = fs.readFileSync(
-    path.resolve(__dirname, '..', '..', 'skills', 'create-mobile-app', 'SKILL.md'), 'utf8',
-  );
+  const skill = createSkillWorkflow();
   // The plan draws the QR and links it, so a window opening over a run the user is watching
   // adds nothing. Asserted on runnable commands, not prose - the prose states the rule and
   // would trip a naive whole-file match.
@@ -1109,6 +1121,234 @@ test('screen documents are sandboxed and scaled, with carousel controls outside 
   assert.equal(elements.get('railControls').children[0].className, 'car-nav');
 });
 
+/** Every element under `root` whose tag or class matches, depth first. */
+function findAll(root, match) {
+  const found = [];
+  (function walk(target) {
+    if (match(target)) found.push(target);
+    target.children.forEach(walk);
+  })(root);
+  return found;
+}
+
+function livePlan(previewUrl, { raw = false } = {}) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'run-plan-live-'));
+  const state = initState(root, { appName: 'Field "Readings"', dataPlatform: 'dataverse' });
+  // `raw` writes the stored value directly, as a hand-edited or corrupted plan would, so the
+  // page's own check is exercised without app-docs.js validating first.
+  if (raw) state.phone = { stage: 'live', screens: [], previewUrl };
+  else setPhone(state, { stage: 'live', previewUrl });
+  save(root, state);
+  return outputPath(root);
+}
+
+test('the live stage frames the running app, sandboxed and scaled like the carousel', async () => {
+  const page = await runPage(livePlan('http://localhost:8082'));
+  assert.deepEqual(page.thrown.map((error) => error.message), []);
+  assert.deepEqual(page.errors, []);
+
+  const frames = findAll(page.elements.get('deviceScreen'), (n) => n.tagName === 'IFRAME');
+  assert.equal(frames.length, 1, 'the live stage draws exactly one frame');
+  const [frame] = frames;
+  assert.equal(frame.getAttribute('src'), 'http://localhost:8082/');
+  assert.equal(frame.getAttribute('sandbox'), 'allow-scripts allow-same-origin allow-forms allow-popups');
+  assert.equal(frame.getAttribute('referrerpolicy'), 'no-referrer');
+  // The name is plan data, so it reaches the attribute as text, quotes and all.
+  assert.equal(frame.getAttribute('title'), 'Live preview of Field "Readings"');
+  assert.equal(frame.srcdoc, undefined, 'the live app is loaded by URL, not injected as markup');
+
+  // The carousel's 375-wide viewport, scaled into the device. Unlike a 375 x 812 mockup, the
+  // running app takes whatever height fills the screen, so it is never letterboxed.
+  const scale = Number(frame.style.transform.match(/scale\(([^)]+)\)/)[1]);
+  assert.equal(scale, 282 / 375);
+  assert.equal(Number.parseFloat(frame.style.height) * scale, 602);
+  assert.equal(frame.style.left, '0px');
+  const classes = findAll(page.elements.get('deviceScreen'), (n) => n.className).map((n) => n.className);
+  assert.ok(classes.includes('live') && classes.includes('car-frame'));
+  assert.ok(!classes.includes('car') && !classes.includes('bld'), 'no carousel and no build animation');
+
+  assert.equal(page.elements.get('railTitle').textContent, 'Live preview');
+  assert.match(page.elements.get('railCaption').textContent, /^Sample data\. Edits hot-reload here\.$/);
+  assert.equal(page.elements.get('railControls').hidden, true, 'the live app has no carousel controls');
+  assert.equal(page.elements.get('railNote').hidden, true, 'the mockup caveat does not apply to the real app');
+
+  // A link out, for the full window and the browser's dev tools. It leaves this page's origin,
+  // so it carries noreferrer as well as noopener.
+  const links = findAll(page.elements.get('railPreviewLink'), (n) => String(n.className).split(' ').includes('rail-link'));
+  assert.equal(links.length, 1);
+  assert.match(links[0].textContent, /Open the live preview in a browser tab/);
+  assert.equal(links[0].getAttribute('href'), 'http://localhost:8082/');
+  assert.equal(links[0].getAttribute('target'), '_blank');
+  assert.equal(links[0].getAttribute('rel'), 'noopener noreferrer');
+  assert.equal(findAll(page.elements.get('railPreviewLink'), (n) => n.className === 'store-btn').length, 0,
+    'the store links wait for the QR');
+});
+
+test('a QR recorded during the live stage sits under the frame and leaves the preview in it', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'run-plan-live-qr-'));
+  const state = initState(root, { appName: 'Live QR', dataPlatform: 'dataverse' });
+  setPhone(state, { stage: 'live', previewUrl: 'http://localhost:8082' });
+  // What the preview gate's `phone --qr-image --qr-url` call produces: no stage change.
+  setPhone(state, {
+    qrImage: 'data:image/png;base64,iVBORw0KGgo=',
+    qrHref: '../.expo/metro-qr.png',
+    qrUrl: 'http://192.168.1.4:8082/',
+  });
+  assert.equal(state.phone.stage, 'live', 'recording the code must not take the preview out of the phone');
+  save(root, state);
+
+  const page = await runPage(outputPath(root));
+  assert.deepEqual(page.thrown.map((e) => e.message), []);
+  assert.equal(findAll(page.elements.get('deviceScreen'), (n) => n.tagName === 'IFRAME').length, 1,
+    'the browser preview stays in the phone frame');
+  const rail = page.elements.get('railPreviewLink');
+  const cards = findAll(rail, (n) => n.className === 'rail-qr');
+  assert.equal(cards.length, 1, 'the code is drawn under the frame');
+  assert.equal(findAll(cards[0], (n) => n.tagName === 'IMG')[0].src, 'data:image/png;base64,iVBORw0KGgo=');
+  // The phone app is usable now, so the card says where to get it, as compact text links: the
+  // full store buttons would take height from the phone above.
+  const stores = findAll(cards[0], (n) => n.className === 'rail-qr-stores')[0];
+  const storeLinks = findAll(stores, (n) => n.tagName === 'A');
+  assert.deepEqual(storeLinks.map((n) => n.textContent), ['App Store', 'Google Play']);
+  assert.ok(storeLinks.every((n) => n.getAttribute('rel') === 'noopener noreferrer'));
+  assert.equal(findAll(rail, (n) => n.className === 'store-btn').length, 0);
+  // The code itself opens the PNG full size, so the rail drops the separate link row, which a
+  // short window would push behind the footer.
+  const full = findAll(cards[0], (n) => n.className === 'rail-qr-full');
+  assert.equal(full.length, 1);
+  assert.equal(full[0].getAttribute('href'), '../.expo/metro-qr.png');
+  const railLinks = findAll(rail, (n) => String(n.className).split(' ').includes('rail-link'));
+  assert.deepEqual(railLinks.map((n) => n.textContent), ['Open the live preview in a browser tab \u2197']);
+
+  // A code that is not an inlined PNG is not drawn: the CSP admits only data: images.
+  setPhone(state, { qrImage: 'https://example.com/qr.png' });
+  save(root, state);
+  const rejected = await runPage(outputPath(root));
+  assert.equal(findAll(rejected.elements.get('railPreviewLink'), (n) => n.className === 'rail-qr').length, 0);
+});
+
+test('a live stage whose address fails the page check falls back to the build animation', async () => {
+  // Each of these would get past a prefix test. `@` makes everything before it userinfo, so the
+  // first frames example.com; the CSP would also refuse it, and this is the check before that.
+  for (const url of [
+    'http://localhost:8082@example.com/',
+    'http://localhost:8082\\@example.com/',
+    'https://localhost:8082/',
+    'http://localhost:/',
+    'javascript:alert(1)//http://localhost:8082/',
+    'http://localhost:8082/?next=https://example.com',
+    undefined,
+  ]) {
+    const page = await runPage(livePlan(url, { raw: true }));
+    assert.deepEqual(page.thrown.map((error) => error.message), [], String(url));
+    assert.equal(findAll(page.elements.get('deviceScreen'), (n) => n.tagName === 'IFRAME').length, 0,
+      `${url} must not be framed`);
+    assert.equal(page.elements.get('railTitle').textContent, 'Building your app', String(url));
+    assert.equal(findAll(page.elements.get('railPreviewLink'), (n) => n.className === 'rail-link').length, 0,
+      `${url} must not be linked`);
+  }
+});
+
+test('after the preview is stopped, the phone says real data is being connected and links nothing', async () => {
+  const CONNECTING = 'Connecting real data. The QR code to open the app on your phone appears here next.';
+  const BEFORE = 'A live preview of your app appears here once its screens are built.';
+  const iframes = (page) => findAll(page.elements.get('deviceScreen'), (n) => n.tagName === 'IFRAME');
+  const railLinks = (page) => findAll(page.elements.get('railPreviewLink'),
+    (n) => String(n.className).split(' ').includes('rail-link'));
+
+  // Step 14 stops the sample-data web server, because plain Expo web cannot sign in to
+  // Dataverse, and moves the phone back to `building`. The address is still in state.
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'run-plan-stopped-'));
+  const state = initState(root, { appName: 'Stopped', dataPlatform: 'dataverse' });
+  setPhone(state, { stage: 'live', previewUrl: 'http://localhost:8082' });
+  setPhone(state, { stage: 'building' });
+  save(root, state);
+
+  const stopped = await runPage(outputPath(root));
+  assert.deepEqual(stopped.thrown.map((error) => error.message), []);
+  assert.equal(iframes(stopped).length, 0, 'the stopped server must not be framed');
+  assert.equal(railLinks(stopped).length, 0, 'the stopped server must not be linked');
+  assert.equal(stopped.elements.get('railTitle').textContent, 'Building your app');
+  assert.equal(findAll(stopped.elements.get('deviceScreen'), (n) => n.className === 'bld').length, 1,
+    'the build animation is back');
+  assert.equal(stopped.elements.get('railCaption').textContent, CONNECTING);
+
+  // Before any preview has run, the animation keeps saying what is coming.
+  const early = fs.mkdtempSync(path.join(os.tmpdir(), 'run-plan-early-'));
+  save(early, initState(early, { appName: 'Early', dataPlatform: 'dataverse' }));
+  const fresh = await runPage(outputPath(early));
+  assert.equal(fresh.elements.get('railCaption').textContent, BEFORE);
+
+  // A `live` stage whose address fails the page check also draws the animation, but no preview
+  // has been stopped, so it must not claim real data is being connected.
+  const rejected = await runPage(livePlan('http://localhost:8082@example.com/', { raw: true }));
+  assert.equal(rejected.elements.get('railCaption').textContent, BEFORE);
+});
+
+test('the plan reloads only when it changed, and never over someone using the live preview', async () => {
+  const open = async () => {
+    const planPath = livePlan('http://127.0.0.1:19006/');
+    const page = await runPage(planPath);
+    assert.deepEqual(page.thrown.map((error) => error.message), []);
+    assert.equal(page.intervals.length, 1, 'a run in progress schedules its check');
+    const [frame] = findAll(page.elements.get('deviceScreen'), (n) => n.tagName === 'IFRAME');
+    const version = fs.readFileSync(planPath, 'utf8').match(/"version":"([0-9a-f]+)"/)[1];
+    const probes = () => findAll(page.document.body, (n) => n.tagName === 'SCRIPT');
+    // What the sidecar does when it loads: report the version app-docs.js last rendered.
+    const report = (v) => page.window.__planVersion(v);
+    return { page, frame, tick: page.intervals[0], version, probes, report };
+  };
+
+  // Every reload restarts the app in the phone on its first screen, so an unchanged plan must
+  // never reload. A tick only asks the sidecar for the current version.
+  const unchanged = await open();
+  unchanged.tick();
+  unchanged.report(unchanged.version);
+  unchanged.tick();
+  assert.deepEqual(unchanged.page.reloads, [], 'nothing changed, so the app keeps its place');
+  const [probe] = unchanged.probes();
+  assert.match(probe.src, /^create-app-plan\.version\.js\?t=\d+$/, 'a fresh URL, so a cached copy is never read');
+
+  // A newer render, and nobody using the page: the next tick reloads through a fresh URL.
+  const changed = await open();
+  changed.report('a-newer-render');
+  changed.tick();
+  assert.equal(changed.page.reloads.length, 1, 'a changed plan refreshes itself');
+  assert.match(changed.page.reloads[0], /create-app-plan\.html\?t=\d+$/);
+
+  // A plan rendered before the sidecar existed, or a browser that blocks file scripts: fall back
+  // to the timed refresh rather than leave the page stale.
+  const blocked = await open();
+  blocked.tick();
+  blocked.probes()[0].dispatch('error');
+  blocked.tick();
+  assert.equal(blocked.page.reloads.length, 1, 'no sidecar means the old timed refresh');
+
+  // Clicks inside a cross-origin frame never reach this page's listeners, so the frame's own
+  // pointer and focus state is all the page can go on - and a change still waits for the reader.
+  const hovered = await open();
+  hovered.report('a-newer-render');
+  hovered.frame.dispatch('pointerenter');
+  hovered.tick();
+  hovered.tick();
+  assert.deepEqual(hovered.page.reloads, [], 'the pointer is over the preview');
+
+  // Leaving restarts the quiet window rather than letting the next tick reload.
+  const left = await open();
+  left.report('a-newer-render');
+  left.frame.dispatch('pointerenter');
+  left.frame.dispatch('pointerleave');
+  left.tick();
+  assert.deepEqual(left.page.reloads, [], 'the reader only just left the preview');
+
+  // Keyboard focus in the frame counts as using it, even with the pointer elsewhere.
+  const focused = await open();
+  focused.report('a-newer-render');
+  focused.page.document.activeElement = focused.frame;
+  focused.tick();
+  assert.deepEqual(focused.page.reloads, [], 'focus is inside the preview');
+});
+
 test('a preview without screen blocks reports the problem instead of silently showing an animation', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'run-plan-invalid-preview-'));
   const state = initState(root, { appName: 'Invalid preview' });
@@ -1139,7 +1379,16 @@ test('the page carries a policy that makes injected mockup markup inert', () => 
   assert.doesNotMatch(policy.match(/script-src[^;]*/)[0], /unsafe-inline|unsafe-eval/);
   // Every image the plan shows is inlined, so an injected <img src> cannot call out.
   assert.match(policy, /img-src data:/);
-  assert.doesNotMatch(policy, /connect-src|frame-src/);
+  assert.doesNotMatch(policy, /connect-src|child-src|object-src/);
+
+  // One exception, for the live preview: frames may load only the two loopback hosts, over
+  // http, on any port. Nothing broader - no wildcard host, no https:, no scheme-only source -
+  // so an injected frame still cannot reach remote content.
+  const frameSources = (policy.match(/(?:^|;\s*)frame-src ([^;]*)/) || [])[1];
+  assert.ok(frameSources, 'the live preview needs a frame-src');
+  assert.deepEqual(frameSources.trim().split(/\s+/), ['http://localhost:*', 'http://127.0.0.1:*']);
+  assert.equal((policy.match(/frame-src/g) || []).length, 1);
+  assert.doesNotMatch(policy, /frame-src \*|https:|\bhttp:(?!\/\/(?:localhost|127\.0\.0\.1):\*)/);
 
   // The nonce the policy names must be the one the page's own scripts carry.
   assert.ok(template.includes('<script nonce="__ATTR_CSP_NONCE__"'), 'page scripts need the nonce');
@@ -1281,7 +1530,14 @@ test('mockup CSS cannot reach past the phone frame', () => {
   // absolute descendants, so an injected overlay stays inside the phone.
   assert.match(template, /\.car-frame\{[^}]*contain:layout paint/);
   assert.match(template, /viewport\.setAttribute\('sandbox', ''\)/);
-  assert.doesNotMatch(template, /sandbox', 'allow-/);
+  // The mockup carousel runs nothing. The live preview is the one frame given any sandbox
+  // tokens, and it is a cross-origin frame onto the local Expo web server, not mockup markup.
+  const sandboxes = [...template.matchAll(/(\w+)\.setAttribute\('sandbox', '([^']*)'\)/g)]
+    .map((m) => [m[1], m[2]]);
+  assert.deepEqual(sandboxes, [
+    ['liveFrame', 'allow-scripts allow-same-origin allow-forms allow-popups'],
+    ['viewport', ''],
+  ]);
 });
 
 test('a table status tints the whole entity box, not just its header', () => {

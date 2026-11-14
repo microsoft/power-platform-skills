@@ -244,7 +244,7 @@ Per-project notebook persisted at `<working_dir>/memory-bank.md`. Every skill MU
    workflow. Follow its resume gate and verify the current phase; bank presence
    alone is not resume intent. Existing-app edits must not resume creation.
 
-If the bank doesn't exist yet, `/create-mobile-app` is responsible for copying the template (`${PLUGIN_ROOT}/shared/memory-bank.md`) into the working directory at Step 6 (right after `pa app init` succeeds).
+If the bank doesn't exist yet, `/create-mobile-app` creates it from the template (`${PLUGIN_ROOT}/shared/memory-bank.md`) right after `pa app init` succeeds: at Step 3.4 with `scripts/seed-memory-bank.js` in the screens-first order, or at Step 6.7 in the data-model-first order.
 
 ---
 

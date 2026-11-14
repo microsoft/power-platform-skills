@@ -167,11 +167,12 @@ After the prereq sanity check passes:
 > /create-mobile-app build me a small notes app
 ```
 
-Expected: ~6 prompts (wizard + gates), then ~5 minutes of scaffolding, table creation, and parallel screen builds. End state: a working Notes app with a project-local Metro session ready to scan and debug.
+Expected: first one setup question (name, environment, look, and the features for a short prompt), then a build-order question that shows the brief. With **Screens first** (recommended), one screen-list approval follows, then your first screen runs in the build plan's phone about five minutes after the prompt, before any table or connector exists; after you confirm it, the design system, data model, and connections are added. With **Data model first**, ~6 prompts (wizard + gates) approve the architecture, data model, and screens up front, then ~5 minutes of scaffolding, table creation, and parallel screen builds. Either way, the end state is a working Notes app with a project-local Metro session ready to scan and debug. Pass `--screens-first` or `--data-model-first` to skip the question.
 
 If creation stops, explicitly ask to continue that creation. The skill checks
 the [memory bank](#glossary), saved build-plan progress, and current artifacts,
-then confirms the unfinished phase. A plan written before app initialization
+then confirms the unfinished phase and continues in the build order it started with.
+A plan written before app initialization
 is not a completed app. Opening an existing app or asking for a feature change
 does not automatically resume creation, even if a memory bank exists.
 
@@ -208,16 +209,29 @@ Five typical flows:
 > /create-mobile-app I want a field inspection app where technicians log site visits with photos, GPS location, and notes
 ```
 
-What happens:
-1. **Wizard** (~30s) — confirms device class / aesthetic
-2. **Requirements brief** — the orchestrator infers features (data entry, camera, location), pre-checks them, asks you to confirm or adjust
-3. **Industry confirmation** — only fires if the inference is shaky (your description matched multiple industries, or none)
-4. **Up to 4 approval gates** — data platform + native capabilities + connectors → Dataverse model when selected → screen graph → screen specs (reviewed in markdown before code is written)
-5. **Design system** — brand inputs (logo, brand doc, website, or free-text) → cost picker → style picker → component reference sheet → branded screen previews
-6. **Scaffold + build** — validates the prepared template folder, runs `pa app init`, verifies installed dependencies, generates schemas, builds Dataverse tables, wires connectors, spawns N parallel screen-builders for the TSX
-7. **Dev server** — the plugin starts a portable Metro session; scan the QR with your native dev client and use `/debug-app` against its persisted sanitized log
+What happens: the skill first asks one **setup question** (~30s) — the app name, environment, look, and, for a short prompt, the features to build. It then shows the brief and asks for a **build order**; choosing one confirms the brief, and typing a change revises it. Both orders make the same app; they differ in what you see first. Pass `--screens-first` or `--data-model-first` to skip the question.
+An app whose data all comes from connectors (SharePoint, SQL, and so on) is not asked: it builds data model first, because its screens need the connector's real data rather than samples.
 
-End state: a working app you can iterate on with hot reload. ~5–12 minutes for the planning gates, then scaffolding runs.
+**Screens first (recommended)** - watch your screens get built and run live in the build plan's phone within minutes, then make them real:
+1. **Scaffold** — validates the prepared template folder and runs `pa app init` while the screens are planned
+2. **Screen graph gate** — approve the screen list, navigation, and the data each screen shows
+3. **Live preview gate** — all screens are built in parallel on realistic sample data and run live in the build plan's phone frame (`npm run dev`, no sign-in), the first one a few minutes after your prompt; scan the QR code to try them on your phone too, ask for changes, and confirm
+4. **Design system** — brand inputs (logo, brand doc, website, or free-text) → cost picker → style picker; the live preview restyles itself
+5. **Architecture and data model gates** — native capabilities, connectors, and the data platform, then the Dataverse model, all derived from the screens you approved
+6. **Make it real** — auth, Dataverse tables, native capabilities, and connectors, then the app's data layer is switched from sample data to the real sources without touching the screens; a phone that scanned the code reloads onto live data, and the build plan's phone switches to the QR code
+7. **Dev server** — the Metro session that has served the preview since the start keeps running; scan the QR with your native dev client and use `/debug-app` against its persisted sanitized log
+
+Your first screen runs in the build plan's phone about five minutes after the prompt, not counting the time you spend answering; the rest of the build happens after you confirm the screens.
+
+**Data model first** - approve the architecture and data model up front, then build the screens on real data:
+1. **Plan preview** — a rough estimate of tables, screens, and time from the confirmed brief, with a last chance to edit the brief or abort
+2. **Industry confirmation** — only fires if the inference is shaky (your description matched multiple industries, or none)
+3. **Up to 4 approval gates** — data platform + native capabilities + connectors → Dataverse model when selected → screen graph → screen specs (reviewed in markdown before code is written)
+4. **Design system** — brand inputs (logo, brand doc, website, or free-text) → cost picker → style picker → component reference sheet → branded screen previews
+5. **Scaffold + build** — validates the prepared template folder, runs `pa app init`, verifies installed dependencies, generates schemas, builds Dataverse tables, wires connectors, spawns N parallel screen-builders for the TSX
+6. **Dev server** — the plugin starts a portable Metro session; scan the QR with your native dev client and use `/debug-app` against its persisted sanitized log
+
+End state: a working app you can iterate on with hot reload.
 
 ### 2. Add Dataverse tables to an existing app
 
@@ -393,7 +407,7 @@ metadata alone never means the app is healthy.
 
 | Command | Status | Description |
 | --- | --- | --- |
-| `/create-mobile-app` | ✅ v0 | Orchestrator — starts from a fresh installed `expo-app-standalone` template folder, gates planning, runs `pa app init`, resolves the selected environment tenant, discovers tenant-visible app registrations and checks the complete required permission profile, lets the user select or create one (or skip auth), then applies data/native/connectors, builds screens, starts dev server |
+| `/create-mobile-app` | ✅ v0 | Orchestrator — starts from a fresh installed `expo-app-standalone` template folder and asks for a build order: screens first (recommended) plans and builds the screens on sample data and shows them in a live web preview before architecture and data model planning, while data model first approves the architecture, data model, and screens up front. Either way it runs `pa app init`, resolves the selected environment tenant, discovers tenant-visible app registrations and checks the complete required permission profile, lets the user select or create one (or skip auth), then applies data/native/connectors, builds screens, starts dev server |
 | `/set-app-registration-native` | ✅ v0 | Auth helper — discovers tenant-visible app registrations, checks the applicable native runtime permission profile, opens the environment-specific Wrap page for creation or repair, and writes the selected client ID to `auth.config.json`. |
 | `/add-dataverse` | ✅ v0 | Add Dataverse — connect to existing tables, or create / extend tables in Tier 0 → N order via the Dataverse Web API, then generate TS services. Accepts ER diagrams via image / Mermaid / text, or spawns the data-model-architect agent. |
 | `/setup-datamodel` | ✅ v0 | Plan and approve a scoped Dataverse/connector change. Choose data-only work or full `/edit-app` integration; `--plan-only` returns a proposal without applying it. |
@@ -408,7 +422,7 @@ metadata alone never means the app is healthy.
 | `/open-wrap-url` | ✅ v0 | Opens the Wrap URL in browser for an app ID using `https://make.powerapps.com/environments/<envID>/wrap?appID=<appID>`. Requires both `--app-id` and `--env-id`. |
 | `/report-issue` | ✅ v0 | Read-only diagnostic — collects env / Expo / Node versions, project context, recent errors, and renders a copy-paste-ready GitHub issue body. Sanitizes secrets. |
 | `/telemetry` | ✅ v0 | Enable, disable, or show the per-user Mobile Apps telemetry transmission preference. |
-| `/design-system` | ✅ v0 | End-to-end design system — collects brand inputs (logo, brand doc, website, free text, canvas app, code app, Figma), runs a 3-style visual picker, writes `brand/design-system.md` + `brand/tokens.ts`, renders branded screen previews. Auto-invoked at Step 6.75 of `/create-mobile-app`; also standalone. |
+| `/design-system` | ✅ v0 | End-to-end design system — collects brand inputs (logo, brand doc, website, free text, canvas app, code app, Figma), runs a 3-style visual picker, writes `brand/design-system.md` + `brand/tokens.ts`, renders branded screen previews (skipped inside `/create-mobile-app`, whose live preview restyles instead). Auto-invoked at Step 9 of `/create-mobile-app`; also standalone. |
 | `/preview-screens` | ✅ v0 | Renders generated TSX screens as a browser-viewable HTML preview (no Metro needed). Uses Tamagui → HTML mapping. |
 | `/add-datasource` | ✅ v0 | Intent-aware entry point for data/action integrations; asks full `/edit-app` integration vs implementation-only, then uses the approved Dataverse/SharePoint/connector leaf. |
 | `/add-sharepoint`, `/add-teams`, `/add-office365`, `/add-excel`, `/add-onedrive`, `/add-azuredevops` | 🟡 v1 | Pre-filled wrappers around `/add-connector` |
@@ -423,10 +437,11 @@ metadata alone never means the app is healthy.
 
 | Agent | Role |
 | --- | --- |
-| `native-app-planner` | Orchestrator — approves data platform + native capabilities + connectors, conditionally coordinates the data-model architect, coordinates screen planning, and runs up to 4 approval gates |
+| `native-app-planner` | Planner — derives native capabilities, connectors, and the data platform from the approved screens (architecture gate), then conditionally coordinates the data-model architect (data model gate) |
 | `data-model-architect` | Read-only — discovers Dataverse, scores reuse / extend / create, returns an ER section |
 | `screen-planner` | Read-only — picks navigation pattern, designs per-screen specs |
-| `screen-builder` | Mutation — writes ONE TSX file per assigned screen, runs N in parallel |
+| `preview-screen-builder` | Mutation — writes ONE preview screen from the approved screen graph, fast, runs N in parallel |
+| `screen-builder` | Mutation — writes or upgrades ONE TSX file per assigned screen to the full design and accessibility checklist, runs N in parallel |
 | `offline-profile-architect` | Read-only — proposes per-table row scope, relationships, selected columns, sync frequency; returns `_offline_section.md` for `/setup-offline-profile` to embed in `native-app-plan.md` |
 
 ## Telemetry and privacy

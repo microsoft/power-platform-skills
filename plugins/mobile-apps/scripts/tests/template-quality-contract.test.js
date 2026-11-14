@@ -1,9 +1,12 @@
 'use strict';
 
 const assert = require('assert');
+const { spawnSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const test = require('node:test');
+const vm = require('node:vm');
+const { createSkillDataModelFirst, createSkillWorkflow } = require('./helpers/create-skill');
 const {
   hasNavigationTapGuard,
 } = require('../../hooks/validate-navigation-idempotency');
@@ -101,15 +104,16 @@ test('bundled dependencies match the current host-factory template boundary', ()
 });
 
 test('create flow keeps host theme foregrounds aligned with Tamagui brand accents', () => {
-  const skill = read('skills/create-mobile-app/SKILL.md');
   const integration = read('skills/design-system/references/tamagui-integration.md');
-  assert.match(skill, /appLightTheme/);
-  assert.match(skill, /appDarkTheme/);
-  assert.match(skill, /accentOnAccent:\s*appLightTheme\.accentOnAccent/);
-  assert.match(skill, /accentOnAccent:\s*appDarkTheme\.accentOnAccent/);
-  assert.match(skill, /surface4:\s*appLightTheme\.color6/);
-  assert.match(skill, /surface4:\s*appDarkTheme\.color6/);
-  assert.doesNotMatch(skill, /function parseColorChannels/);
+  for (const skill of [createSkillWorkflow(), createSkillDataModelFirst()]) {
+    assert.match(skill, /appLightTheme/);
+    assert.match(skill, /appDarkTheme/);
+    assert.match(skill, /accentOnAccent:\s*appLightTheme\.accentOnAccent/);
+    assert.match(skill, /accentOnAccent:\s*appDarkTheme\.accentOnAccent/);
+    assert.match(skill, /surface4:\s*appLightTheme\.color6/);
+    assert.match(skill, /surface4:\s*appDarkTheme\.color6/);
+    assert.doesNotMatch(skill, /function parseColorChannels/);
+  }
   assert.match(integration, /createPowerAppsTamaguiConfig/);
   assert.match(integration, /withPowerAppsSemanticAliases/);
   assert.match(integration, /export const appLightTheme/);
@@ -146,4 +150,63 @@ test('template path aliases are inherited from the host tsconfig', () => {
   const tsconfig = JSON.parse(read('template/tsconfig.json'));
   assert.strictEqual(tsconfig.extends, '@microsoft/power-apps-native-host/config/tsconfig');
   assert.strictEqual(tsconfig.compilerOptions, undefined);
+});
+
+test('daysFromToday returns the local calendar date, not the UTC one', () => {
+  // Screens compare sample dates with the device's local "today". Run the helper in a UTC+10 zone at
+  // 00:30 local time, when the UTC date is still yesterday. core.ts is TypeScript, so its plain-JS
+  // body is lifted out with its two type annotations removed.
+  const source = read('shared/samples/src/hooks/data/core.ts');
+  const fn = /export function daysFromToday\(days: number\): string \{[\s\S]*?\n\}/.exec(source);
+  assert.ok(fn, 'core.ts defines daysFromToday');
+  const js = fn[0].replace(/^export /, '').replace(/: (?:number|string)\b/g, '');
+  const probe = `
+    const RealDate = Date;
+    const now = new RealDate(2026, 10, 12, 0, 30).getTime();
+    globalThis.Date = class extends RealDate { constructor(...args) { super(...(args.length ? args : [now])); } };
+    ${js}
+    process.stdout.write(JSON.stringify([daysFromToday(0), daysFromToday(1), daysFromToday(-1)]));`;
+  const run = spawnSync(process.execPath, ['-e', probe], {
+    encoding: 'utf8',
+    env: { ...process.env, TZ: 'Australia/Brisbane' },
+  });
+  assert.strictEqual(run.status, 0, run.stderr);
+  assert.deepStrictEqual(JSON.parse(run.stdout), ['2026-11-12', '2026-11-13', '2026-11-11']);
+});
+
+test('the mock source recomputes a reference display value on update, not only on create', async (t) => {
+  // A screen edits a record's reference (`siteId`) and then shows and searches its display value
+  // (`siteName`). Computed only when the record is created, the old name kept showing after the
+  // edit. This runs the shipped createMockSource itself: Node's own type stripping turns core.ts
+  // into JavaScript, so the test exercises the code builders copy, not a re-typed imitation.
+  const { stripTypeScriptTypes } = require('node:module');
+  if (typeof stripTypeScriptTypes !== 'function') {
+    t.skip('this Node version cannot strip TypeScript types; covered on the Node 22 CI jobs');
+    return;
+  }
+  const source = read('shared/samples/src/hooks/data/core.ts')
+    // The React hooks at the bottom are not exercised here, so their imports become empty stubs.
+    .replace(/^import .*$/gm, '')
+    .replace(/^export /gm, '');
+  const context = vm.createContext({ setTimeout });
+  vm.runInContext(`${stripTypeScriptTypes(source)}\nthis.createMockSource = createMockSource;`, context);
+
+  const sites = [{ id: 's1', name: 'North yard' }, { id: 's2', name: 'South dock' }];
+  const sample = context.createMockSource(
+    [{ id: 'i1', title: 'Crane check', siteId: 's1', siteName: 'North yard' }],
+    {
+      searchFields: ['title', 'siteName'],
+      latencyMs: 0,
+      derive: (record) => ({ ...record, siteName: sites.find((site) => site.id === record.siteId)?.name ?? '' }),
+    },
+  );
+
+  const created = await sample.create({ title: 'Dock survey', siteId: 's2' });
+  assert.strictEqual(created.siteName, 'South dock', 'create fills the display value');
+
+  const updated = await sample.update('i1', { siteId: 's2' });
+  assert.strictEqual(updated.siteName, 'South dock', 'update recomputes it from the new reference');
+  assert.strictEqual((await sample.get('i1')).siteName, 'South dock', 'and stores the recomputed record');
+  const { items } = await sample.list({ pageSize: 10, search: 'north' });
+  assert.strictEqual(items.length, 0, 'search no longer finds the old name');
 });

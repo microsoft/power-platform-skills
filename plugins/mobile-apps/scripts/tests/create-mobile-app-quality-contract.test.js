@@ -9,12 +9,9 @@ const test = require('node:test');
 const { createSnapshot } = require('../create-dataverse-snapshot');
 const { loadAndValidateArchitectEvidence } = require('../render-dataverse-architect-evidence');
 const { shellBlocks } = require('./helpers/markdown-shell-blocks');
+const { createSkillWorkflow } = require('./helpers/create-skill');
 
-const skillPath = path.resolve(
-  __dirname,
-  '../../skills/create-mobile-app/SKILL.md',
-);
-const skill = fs.readFileSync(skillPath, 'utf8');
+const skill = createSkillWorkflow();
 
 function planningAttemptBlock(source) {
   const block = shellBlocks(source)
@@ -66,15 +63,16 @@ test('approved architecture precedes typed discovery without retrying the normal
   assert.match(architecture, /approved-architecture\.md/);
   assert.doesNotMatch(architecture, /create-dataverse-snapshot\.js|detect-publisher-prefix\.js/);
   const concepts = skill.slice(conceptsStart, commandsStart);
-  assert.match(concepts, /Gate 1-approved architecture/);
+  // The approved screens' Data Contract is the primary source of concepts in the preview-first flow.
+  assert.match(concepts, /approved architecture[\s\S]*approved Data Contract's entities and fields are the primary concepts/);
   assert.match(concepts, /exclude connector-owned\s+records from Dataverse candidate selection/);
   assert.doesNotMatch(skill, /planning-timings\.js|PLANNING_TIMINGS_PATH/);
   assert.doesNotMatch(skill, /telemetry-output|PLANNING_TELEMETRY_PATH/);
 });
 
-test('inline Dataverse planning keeps compact evidence and validates before Gate 2', () => {
-  const fallbackStart = skill.indexOf('#### 3.0a — Inline-gate fallback');
-  const fallbackEnd = skill.indexOf('#### 3.0 — Sub-agent return-status switch');
+test('inline Dataverse planning keeps compact evidence and validates before the data model gate', () => {
+  const fallbackStart = skill.indexOf('#### 10.0a — Inline-gate fallback');
+  const fallbackEnd = skill.indexOf('#### 10.0 — Architecture and Dataverse return signals');
   assert.ok(fallbackStart >= 0 && fallbackStart < fallbackEnd);
   const fallback = skill.slice(fallbackStart, fallbackEnd);
   assert.match(fallback, /Approved native capabilities:[\s\S]*Approved connectors:/);
@@ -82,7 +80,9 @@ test('inline Dataverse planning keeps compact evidence and validates before Gate
   assert.match(fallback, /full snapshot is\s+validator input only; read only the compact evidence/);
   assert.doesNotMatch(fallback, /\bEVIDENCE_PATH\b/);
   assert.doesNotMatch(fallback, /timing protocol|modelArchitect|screenPlanner|--retry/);
-  assert.match(fallback, /Before presenting Gate 2[\s\S]*validate-dataverse-planning-decisions\.js/);
+  assert.match(fallback, /Before presenting the data model gate[\s\S]*validate-dataverse-planning-decisions\.js/);
+  // The direct architect gets the approved screens, whose Data Contract it must map.
+  assert.match(fallback, /approved `## Screens` section with its\s+Data Contract/);
   assert.match(fallback, /permit approval only on exit `0`/);
   assert.match(fallback, /every direct revision and the fully-inline fallback/);
   assert.match(fallback, /approve native capabilities, connectors, and data platform first/);
@@ -184,90 +184,97 @@ test('planning recovery keeps the agent active without weakening approval or met
 });
 
 test('offline setup follows materialized Dataverse data and never infers connector-only from absence', () => {
-  const dataModel = skill.indexOf('### Step 8 — Apply data model');
-  const sampleData = skill.indexOf('### Step 8.5 — Seed sample data');
+  const dataModel = skill.indexOf('### Step 12 — Apply data model');
+  const sampleData = skill.indexOf('### Step 12.5 — Seed sample data');
   const offline = skill.indexOf('### Offline profile');
-  const native = skill.indexOf('### Step 9 — Apply native capabilities');
+  const native = skill.indexOf('### Step 13 — Apply native capabilities');
 
-  assert.ok(dataModel < sampleData);
+  assert.ok(dataModel > 0 && dataModel < sampleData);
   assert.ok(sampleData < offline);
   assert.ok(offline < native);
   assert.doesNotMatch(skill, /Step 6\.85/);
-  const design = skill.slice(skill.indexOf('### Step 6.75'), skill.indexOf('### Step 7'));
-  assert.match(design, /`DONE`[^\n]+continue to Step 7/);
-  assert.match(design, /Continuing to Step 7/);
+  const design = skill.slice(skill.indexOf('### Step 9 — Design system'), skill.indexOf('### Step 9.2'));
+  assert.match(design, /`DONE`[^\n]+continue to Step 9\.2/);
+  assert.match(design, /Offline profile setup is intentionally deferred/);
   const offlineSetup = skill.slice(offline, native);
   assert.match(offlineSetup, /Do not infer connector-only from a missing manifest/);
-  assert.match(offlineSetup, /read-only manifest\s+recovery in Step 8\.5 before asking/);
-  assert.match(offlineSetup, /If verification still fails, report\s+`BLOCKED: offline setup requires the materialized Dataverse manifest from Step 8`/);
+  assert.match(offlineSetup, /read-only manifest\s+recovery in Seed sample data before asking/);
+  assert.match(offlineSetup, /If verification still fails, report\s+`BLOCKED: offline setup requires the materialized Dataverse manifest from the Apply data model step`/);
   assert.match(skill, /seeding step fails[\s\S]*continue to the offline-profile phase/);
 });
 
-test('template preparation is delegated to the deterministic script', () => {
-  const start = skill.indexOf('### Step 5 — Prepare existing template');
-  const end = skill.indexOf('### Step 6 — Initialize');
-  const step = skill.slice(start, end);
+// Step 3 runs preparation, `init`, and the scaffold gate as one chained command, so the
+// contracts below read that command and the notes under each of its parts.
+function scaffoldCommand() {
+  const step = skill.slice(skill.indexOf('### Step 3 — Scaffold the app'), skill.indexOf('#### 3.1 —'));
+  const block = shellBlocks(step)[0];
+  assert.ok(block, 'Step 3 has one shell command');
+  return block;
+}
 
-  assert.match(step, /scripts\/prepare-mobile-template\.js/);
-  assert.match(step, /JSON_STRING_OF_WORKING_DIR/);
-  assert.match(step, /JSON_STRING_OF_DISPLAY_NAME/);
-  assert.match(step, /JSON_STRING_OF_SLUG/);
-  assert.doesNotMatch(step, /--display-name "<displayName>"/);
-  assert.match(step, /must not create, reset, delete, or\s+write anything under `src\/generated\/`/);
-  assert.doesNotMatch(step, /rm\s+-rf[\s\S]*src\/generated/);
-  assert.doesNotMatch(step, /src\/generated\/index\.ts[\s\S]*printf/);
-  assert.doesNotMatch(step, /\ncp\s+.*shared\/samples/);
-  assert.doesNotMatch(step, /baseUrl\s*=/);
-  assert.doesNotMatch(step, /Write `app\/_layout\.tsx`/);
-  assert.match(
-    step,
-    /`native-app-plan\.md` is expected here because Step 3 writes the approved plan before template preparation/,
-  );
+test('template preparation is delegated to the deterministic script', () => {
+  const command = scaffoldCommand();
+  const notes = skill.slice(skill.indexOf('#### 3.2 — Prepare the template'), skill.indexOf('#### 3.3 —'));
+
+  // The display name and slug are read from the brief's JSON as data. A command substitution's
+  // result is never re-parsed, so quotes, `$`, or backticks in a name stay literal.
+  assert.match(command, /req\(\) \{ node -e "process\.stdout\.write\(String\(require\('\.\/\.tmp\/requirements\.json'\)/);
+  assert.match(command, /NAME=\$\(req appName\); SLUG=\$\(req slug\)/);
+  // `--screens-first` adds the data layer and the web-preview override only this order uses.
+  assert.match(command, /node "\$\{PLUGIN_ROOT\}\/scripts\/prepare-mobile-template\.js" --working-dir \. --display-name "\$NAME" --slug "\$SLUG" --screens-first > \.tmp\/prepare\.json \|\| exit 34/);
+  assert.doesNotMatch(command, /--display-name "<displayName>"/);
+  assert.match(notes, /Nothing writes under `src\/generated\/`, which only Power Apps generation commands own/);
+  for (const source of [command, notes]) {
+    assert.doesNotMatch(source, /rm\s+-rf[\s\S]*src\/generated/);
+    assert.doesNotMatch(source, /src\/generated\/index\.ts[\s\S]*printf/);
+    assert.doesNotMatch(source, /\ncp\s+.*shared\/samples/);
+    assert.doesNotMatch(source, /baseUrl\s*=/);
+    assert.doesNotMatch(source, /Write `app\/_layout\.tsx`/);
+  }
+  // A refused folder is reported, never repaired by hand.
+  assert.match(skill, /\| 34 \| Preparation refused the folder \| Report its exact error and STOP\.[^\n]*never fall back to rewriting files by hand/);
+
+  // Step 2 writes the plan skeleton before preparation, so the creation-state evidence is
+  // gathered at Step 0, before anything in this run has written a file. A plan alone is
+  // creation's own artifact, never proof of a created app.
+  const startup = skill.slice(skill.indexOf('### Step 0 —'), skill.indexOf('### Step 1 —'));
+  assert.match(startup, /for f in memory-bank\.md native-app-plan\.md docs\/\.run-plan\.json \.datamodel-manifest\.json; do \[ -e "\$f" \] && echo "FOUND \$f"; done/);
+  assert.match(startup, /`FOUND native-app-plan\.md` or `FOUND docs\/\.run-plan\.json` alone \| Creation's own planning artifacts, allowed on a fresh starter/);
+  assert.ok(skill.indexOf('### Step 0 —') < skill.indexOf('### Step 2 — The plan files'));
 });
 
 test('Power Apps initialization directly invokes the CLI with approved values', () => {
-  const initializeStart = skill.indexOf('### Step 6 — Initialize');
-  const initializeEnd = skill.indexOf('### Step 6.5 — Verify dependencies');
-  const initialize = skill.slice(initializeStart, initializeEnd);
+  const command = scaffoldCommand();
   // `$PA` is only safe because every resolver assignment keeps `--no-install`; without it, npx
   // would download a registry package when the local shim is missing.
   const cliBinary = fs.readFileSync(path.resolve(__dirname, '../../shared/cli-binary.md'), 'utf8');
-  assert.match(initialize, /\$PA app init -t MobileApp/);
+  assert.match(command, /^PA="npx --no-install pa"/m);
+  assert.match(command, /\$PA app init -t MobileApp --display-name "\$NAME" --environment-id "\$ENV_ID" --non-interactive \|\| exit 35/);
   assert.match(cliBinary, /PA="npx --no-install pa"/);
   assert.match(cliBinary, /PA="npx --no-install power-apps"/);
   assert.doesNotMatch(cliBinary, /PA="npx (?!--no-install )/);
-  assert.match(initialize, /--display-name "<displayName>"/);
-  assert.match(initialize, /--environment-id "<environment-id>"/);
-  assert.match(initialize, /approved Step 2 display name and Step 4 environment ID/);
-  assert.match(initialize, /shell-safe quoting/);
-  assert.match(initialize, /If a populated file remains, STOP/);
-  assert.doesNotMatch(initialize, /spawnSync|node <<'NODE'/);
+  // `init` must have written the approved values, and a rerun never re-initializes.
+  assert.match(command, /c\.environmentId===process\.argv\[1\] && c\.appDisplayName===process\.argv\[2\][\s\S]*"\$ENV_ID" "\$NAME" \|\| exit 36/);
+  assert.match(skill, /never rerun 3\.3 once `power\.config\.json` holds an environment/);
+  assert.doesNotMatch(command, /spawnSync|node <<'NODE'/);
 });
 
 test('scaffold changed-file validation separates preparation and generator ownership', () => {
-  const preparation = skill.slice(
-    skill.indexOf('### Step 5 — Prepare existing template'),
-    skill.indexOf('### Step 6 — Initialize'),
-  );
-  const memory = skill.slice(
-    skill.indexOf('### Step 6.7 — Seed the memory bank'),
-    skill.indexOf('### Step 6.75 — Design system'),
-  );
+  const notes = skill.slice(skill.indexOf('#### 3.2 — Prepare the template'), skill.indexOf('#### 3.3 —'));
+  const check = skill.slice(skill.indexOf('### Step 7 —'), skill.indexOf('### Step 8 —'));
   const shared = fs.readFileSync(path.resolve(__dirname, '../../shared/shared-instructions.md'), 'utf8');
 
-  assert.match(preparation, /result\.writtenFiles/);
-  assert.match(preparation, /removedPowerConfig.*removedLegacyFiles/);
-  assert.match(preparation, /Do not rebuild this list from `git status`/);
-  assert.match(memory, /Step 5's `writtenFiles`.*`memory-bank\.md`/);
-  assert.match(memory, /read-only.*Step 6/);
+  assert.match(notes, /`\.tmp\/prepare\.json` keeps its `writtenFiles` for Step 7's changed-file gate/);
+  assert.match(check, /`\.tmp\/prepare\.json`'s `writtenFiles`, `memory-bank\.md`/);
+  assert.match(check, /never rebuild it from `git status` or a directory scan/);
+  assert.match(check, /`removedPowerConfig` and `removedLegacyFiles` are removals, not `--file` targets/);
+  assert.match(check, /`power\.config\.json` and `src\/generated\/` are CLI-generated and stay out/);
   assert.match(shared, /not modified afterward by the skill or its subagents/);
   assert.match(shared, /Do not suppress a protected-path finding/);
 });
 
 test('no user-authored value reaches the shell as a command argument', () => {
-  const skill = fs.readFileSync(
-    path.resolve(__dirname, '..', '..', 'skills', 'create-mobile-app', 'SKILL.md'), 'utf8',
-  );
+  const skill = createSkillWorkflow();
 
   // A `'` ends a single-quoted argument; a `"`, a backtick or `$(...)` breaks out of a
   // double-quoted one and runs before Node sees it. Both forms have shipped here: first the
@@ -299,11 +306,11 @@ test('no user-authored value reaches the shell as a command argument', () => {
 
 test('authentication discovers and checks registrations before writing a client ID', () => {
   const auth = skill.slice(
-    skill.indexOf('### Step 7 — Auth config'),
-    skill.indexOf('### Step 8 — Apply data model'),
+    skill.indexOf('### Step 11 — Auth config'),
+    skill.indexOf('### Step 12 — Apply data model'),
   );
   const discovery = auth.indexOf('discover-app-registrations.js');
-  const write = auth.indexOf('#### 7.3 Verify and write the selected client ID');
+  const write = auth.indexOf('#### Verify and write the selected client ID');
 
   assert.ok(discovery >= 0 && discovery < write);
   assert.match(auth, /all tenant app registrations visible to the signed-in user/);
@@ -349,6 +356,6 @@ test('authentication discovers and checks registrations before writing a client 
   assert.match(auth, /Treat any nonzero exit,[\s\S]*empty registration list as a discovery failure/);
   assert.match(auth, /Do not retry or ask the user to repair Azure CLI authentication/);
   assert.match(auth, /App registration discovery was unavailable\. Paste the Entra ID app registration client ID/);
-  assert.match(auth, /continue to 7\.3 with permission check `unavailable`/);
+  assert.match(auth, /continue to "Verify and write the selected client ID" with permission check `unavailable`/);
   assert.doesNotMatch(auth, /tenant-wide admin consent is not required/);
 });

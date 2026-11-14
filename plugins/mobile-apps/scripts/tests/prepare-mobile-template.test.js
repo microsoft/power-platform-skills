@@ -9,7 +9,10 @@ const test = require('node:test');
 
 const {
   HOST_TSCONFIG,
+  WEB_PREVIEW_ENV,
   assertFreshTemplate,
+  ensureWebPreviewOutput,
+  parseArgs,
   prepareMobileTemplate,
   prepareRootLayout,
 } = require('../prepare-mobile-template');
@@ -377,6 +380,11 @@ test('preparation is idempotent and preserves generated and existing helper file
   assert.ok(first.removedLegacyFiles.includes('src/hooks/useContacts.ts'));
   assert.ok(!first.writtenFiles.includes('src/components/index.tsx'));
   assert.ok(!first.writtenFiles.includes('src/generated/index.ts'));
+  // Without `--screens-first` the app gets no data layer: screen-builder and /edit-app read an
+  // existing src/hooks/data/ as a data-layer app.
+  assert.ok(!first.writtenFiles.includes('src/hooks/data/core.ts'));
+  assert.ok(!fs.existsSync(path.join(projectRoot, 'src', 'hooks', 'data')));
+  assert.strictEqual(first.webPreviewOutput, 'not-requested');
   assert.deepStrictEqual(fs.readFileSync(generatedPath, 'utf8'), '// generated-owner sentinel\n');
   assert.deepStrictEqual(fs.readFileSync(existingHelperPath, 'utf8'), '// existing-helper sentinel\n');
   assert.deepStrictEqual(
@@ -516,6 +524,26 @@ test('fresh-template validation allows the approved plan but blocks created-app 
   fs.mkdirSync(generatedServices, { recursive: true });
   fs.writeFileSync(path.join(generatedServices, 'CreatedService.ts'), 'export {};\n');
   assert.throws(() => assertFreshTemplate(projectRoot), /src\/generated\/services\/\*\.ts/);
+});
+
+test('fresh-template validation requires the template-owned dev lifecycle scripts, not their bodies', (context) => {
+  const projectRoot = copyTemplate();
+  context.after(() => fs.rmSync(projectRoot, { recursive: true, force: true }));
+  const packagePath = path.join(projectRoot, 'package.json');
+  const pkg = JSON.parse(fs.readFileSync(packagePath, 'utf8'));
+
+  // Any non-empty body is the template's choice.
+  fs.writeFileSync(packagePath, JSON.stringify({ ...pkg, scripts: { ...pkg.scripts, dev: 'custom-dev', predev: 'custom-predev' } }));
+  assert.doesNotThrow(() => assertFreshTemplate(projectRoot));
+
+  for (const scriptName of ['dev', 'predev']) {
+    for (const value of [undefined, '   ', 42]) {
+      const scripts = { ...pkg.scripts, [scriptName]: value };
+      if (value === undefined) delete scripts[scriptName];
+      fs.writeFileSync(packagePath, JSON.stringify({ ...pkg, scripts }));
+      assert.throws(() => assertFreshTemplate(projectRoot), new RegExp(`scripts\\.${scriptName} to be a non-empty command`));
+    }
+  }
 });
 
 function writeLayoutFixture(source) {
@@ -722,4 +750,117 @@ test('failed full preparation restores every mutated file', () => {
   }), /must not wrap Slot with SafeAreaView/);
 
   assertSnapshotsEqual(before, fileSnapshot(projectRoot));
+});
+
+test('only the screens-first order gets the data layer and the web-preview override', () => {
+  const dataModelFirst = copyTemplate();
+  const configBefore = fs.readFileSync(path.join(dataModelFirst, 'app.config.js'), 'utf8');
+  const plain = prepareMobileTemplate({ workingDir: dataModelFirst, displayName: 'Plain App', slug: 'plain-app' });
+  assert.strictEqual(plain.webPreviewOutput, 'not-requested');
+  assert.doesNotMatch(fs.readFileSync(path.join(dataModelFirst, 'app.config.js'), 'utf8'), new RegExp(WEB_PREVIEW_ENV));
+  assert.match(configBefore, /customizeExpoConfig/);
+  assert.ok(!fs.existsSync(path.join(dataModelFirst, 'src', 'hooks', 'data')));
+
+  // The preview data layer's shared contract sits one folder deeper than the other helpers; the
+  // screens built before any data source exists import it, so it is copied with its folder.
+  const screensFirst = copyTemplate();
+  const preview = prepareMobileTemplate({
+    workingDir: screensFirst, displayName: 'Preview App', slug: 'preview-app', screensFirst: true,
+  });
+  assert.ok(preview.writtenFiles.includes('src/hooks/data/core.ts'));
+  assert.ok(fs.existsSync(path.join(screensFirst, 'src', 'hooks', 'data', 'core.ts')));
+  assert.strictEqual(preview.webPreviewOutput, 'added');
+
+  assert.deepStrictEqual(parseArgs(['--working-dir', '.', '--screens-first']).screensFirst, true);
+});
+
+test('the sample-data web preview opts out of per-request server rendering, and nothing else does', () => {
+  const projectRoot = copyTemplate();
+  const result = prepareMobileTemplate({
+    workingDir: projectRoot, displayName: 'Preview App', slug: 'preview-app', screensFirst: true,
+  });
+  assert.strictEqual(result.webPreviewOutput, 'added');
+  assert.ok(result.writtenFiles.includes('app.config.js'));
+
+  // The host's default is static output; only the preview env var switches it to single.
+  const createConfig = loadAppConfig(path.join(projectRoot, 'app.config.js'));
+  const hostDefault = { web: { bundler: 'metro', output: 'static' } };
+  const previous = process.env[WEB_PREVIEW_ENV];
+  try {
+    delete process.env[WEB_PREVIEW_ENV];
+    assert.strictEqual(createConfig({ config: hostDefault }).web.output, 'static');
+    process.env[WEB_PREVIEW_ENV] = '1';
+    const preview = createConfig({ config: hostDefault }).web;
+    assert.deepStrictEqual(preview, { bundler: 'metro', output: 'single' });
+  } finally {
+    if (previous === undefined) delete process.env[WEB_PREVIEW_ENV];
+    else process.env[WEB_PREVIEW_ENV] = previous;
+  }
+
+  // Idempotent: a second pass finds the override and changes nothing.
+  const before = fs.readFileSync(path.join(projectRoot, 'app.config.js'), 'utf8');
+  assert.strictEqual(ensureWebPreviewOutput(projectRoot), 'present');
+  assert.strictEqual(fs.readFileSync(path.join(projectRoot, 'app.config.js'), 'utf8'), before);
+});
+
+test('an unrecognized customization hook is reported, not rewritten', () => {
+  const projectRoot = copyTemplate();
+  const configPath = path.join(projectRoot, 'app.config.js');
+  const custom = fs.readFileSync(configPath, 'utf8').replace(
+    'function customizeExpoConfig(config) {',
+    'const customizeExpoConfig = (config) => {',
+  );
+  fs.writeFileSync(configPath, custom);
+  assert.strictEqual(ensureWebPreviewOutput(projectRoot), 'unsupported');
+  assert.strictEqual(fs.readFileSync(configPath, 'utf8'), custom);
+});
+
+test('a CRLF checkout of the template still gets the web-preview override, in its own line endings', () => {
+  // A Windows checkout with core.autocrlf gives app.config.js CRLF endings; the override must still
+  // go in, without leaving the file half LF and half CRLF.
+  const projectRoot = copyTemplate();
+  const configPath = path.join(projectRoot, 'app.config.js');
+  const crlf = fs.readFileSync(configPath, 'utf8').replace(/\r?\n/g, '\r\n');
+  fs.writeFileSync(configPath, crlf);
+  assert.strictEqual(ensureWebPreviewOutput(projectRoot), 'added');
+  const updated = fs.readFileSync(configPath, 'utf8');
+  assert.match(updated, new RegExp(WEB_PREVIEW_ENV));
+  assert.doesNotMatch(updated, /[^\r]\n/, 'every line still ends in CRLF');
+  assert.strictEqual(ensureWebPreviewOutput(projectRoot), 'present');
+});
+
+test('a failed screens-first preparation leaves no directory it created behind', () => {
+  // Directory presence is meaningful: screen-builder and /edit-app treat an existing src/hooks/data/
+  // as a data-layer app. So rollback must remove the folders it made (the template has no src/ at
+  // all), deepest first, while keeping any folder that was already there.
+  function directories(root) {
+    const found = [];
+    (function visit(relative) {
+      for (const entry of fs.readdirSync(path.join(root, relative), { withFileTypes: true })) {
+        if (!entry.isDirectory() || entry.name === 'node_modules') continue;
+        found.push(path.join(relative, entry.name));
+        visit(path.join(relative, entry.name));
+      }
+    })('');
+    return found.sort();
+  }
+  function failPreparation(projectRoot) {
+    const layoutPath = path.join(projectRoot, 'app', '_layout.tsx');
+    fs.writeFileSync(layoutPath, fs.readFileSync(layoutPath, 'utf8').replace('<Slot />', '<SafeAreaView><Slot /></SafeAreaView>'));
+    const before = { files: fileSnapshot(projectRoot), directories: directories(projectRoot) };
+    assert.throws(() => prepareMobileTemplate({
+      workingDir: projectRoot, displayName: 'Rollback Probe', slug: 'rollback-probe', screensFirst: true,
+    }), /must not wrap Slot with SafeAreaView/);
+    assertSnapshotsEqual(before.files, fileSnapshot(projectRoot));
+    assert.deepStrictEqual(directories(projectRoot), before.directories);
+  }
+
+  const fresh = copyTemplate();
+  assert.ok(!fs.existsSync(path.join(fresh, 'src')));
+  failPreparation(fresh);
+
+  const existing = copyTemplate();
+  fs.mkdirSync(path.join(existing, 'src', 'hooks'), { recursive: true });
+  failPreparation(existing);
+  assert.ok(fs.existsSync(path.join(existing, 'src', 'hooks')), 'a folder that was already there stays');
 });

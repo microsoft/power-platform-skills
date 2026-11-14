@@ -2,7 +2,7 @@
 
 This file provides guidance to AI Agents when working with the **mobile-app** plugin.
 
-> **Status:** v0 — 24 skills + 5 agents authored. The latest Expo standalone template snapshot is bundled under `template/`. Read [README.md](./README.md) for the command list.
+> **Status:** v0 — 24 skills + 6 agents authored. The latest Expo standalone template snapshot is bundled under `template/`. Read [README.md](./README.md) for the command list.
 
 ## What This Plugin Is
 
@@ -23,7 +23,7 @@ claude --plugin-dir /path/to/power-platform-skills/plugins/mobile-apps
 .claude-plugin/plugin.json     ← Legacy metadata mirror
 AGENTS.md                      ← This file
 README.md                      ← Plugin overview
-agents/                        ← native-app-planner, data-model-architect, screen-planner, screen-builder
+agents/                        ← native-app-planner, data-model-architect, screen-planner, preview-screen-builder, screen-builder, offline-profile-architect
 shared/                        ← shared-instructions, references, samples, memory-bank template
 skills/                        ← /create-mobile-app, /add-dataverse, /add-connector, /add-native, ...
 scripts/                       ← shared helpers, including validate-mobile-files.js and bundled telemetry
@@ -53,19 +53,65 @@ Do not add preparation rewrites for `scheme`, `package`, `bundleIdentifier`, `sr
 3. **Fresh-template mode** — `/create-mobile-app` validates and prepares an existing fresh Expo standalone template working directory. Do not silently copy the bundled `template/` snapshot over the user's folder.
 4. **Safety guardrails** — Confirm before deploys, before global installs, before edits outside the project root.
 5. **Memory bank** — Persist `memory-bank.md` in the project root.
-6. **Plan mode** — Confirm requirements first. Gate 1 then presents native
-   capabilities, connectors, and the data-platform choice before conditional
-   Dataverse modeling; later gates approve the applicable data model and screen
-   plan.
+6. **Two build orders** - `/create-mobile-app` routes the request, gathers the
+   requirements with one setup question, classifies where the data lives, and
+   then asks for a build order (showing the brief) at Step 0 of
+   `skills/create-mobile-app/SKILL.md`; a connector-only brief skips the question
+   and builds data model first. It then loads only
+   that order's flow file. Keep each order's steps in its own flow file, and keep
+   what both share (routing, the creation-state table, the requirements, the
+   child-skill handoff context) in `SKILL.md`.
+   - **Screens first** (recommended) scaffolds, drafts
+     the screen graph itself, gets it approved (screen graph gate), builds every
+     screen in parallel with `preview-screen-builder` on sample data behind the
+     data layer in
+     [`shared/references/preview-data-layer.md`](shared/references/preview-data-layer.md),
+     and shows them in a live web preview (preview gate) before any architecture
+     work. One `npm run dev` server, started at Step 3.5, serves that preview and,
+     through the QR code the preview gate draws, the same app on a phone; it runs
+     to the end of the run, so connecting real data reloads the app in place. The architecture gate (`architecture-planner`) then derives native
+     capabilities, connectors, and the data platform from the approved screens,
+     and the data model gate maps their Data Contract to Dataverse. Gates are
+     named, not numbered. Phase A (up to the preview gate) lives in
+     `references/screens-first.md` and aims to put the first screen in the phone
+     about five minutes after the prompt; Phase B lives in
+     `references/make-it-real.md`, so the model never loads it before the user
+     has seen the app. Keep anything the preview does not need out of Phase A.
+     That includes the full screen checklist: `preview-screen-builder` reads only
+     what one screen needs, and Phase B's Step 9.3 runs `screen-builder`'s full
+     design and accessibility checklist over every screen once the design system
+     exists.
+   - **Data model first** is the original workflow, in
+     `references/data-model-first.md`: confirm requirements first, then Gate 1
+     (`native-app-planner`) presents native capabilities, connectors, and the
+     data-platform choice before conditional Dataverse modeling; later gates
+     approve the applicable data model and screen plan, and screens are built
+     last on generated services. Its apps have no `src/hooks/data/`, so shared
+     agents and `/edit-app` treat them as legacy-mode apps.
+   - **Shared steps.** A step both orders run the same way lives once, in its
+     own flat file under `references/` (publisher prefix, Dataverse planning
+     snapshot and recovery, post-plan prefix check, auth, apply data model,
+     sample data, offline profile, native capabilities, connectors, stylistic
+     sweep, dev server, debug handoff, summary). Each flow keeps the numbered
+     heading and its telemetry checkpoint, then says
+     `` **Shared step:** read [`<file>.md`](<file>.md) and follow it in full. ``
+     Fix a shared step in its file, never in a flow, so there is one place to
+     fix it. Shared files name steps rather than number them, and open with a
+     table mapping each name to both orders' step numbers. Tests read the flows
+     through `scripts/tests/helpers/create-skill.js`, which expands each include
+     so assertions see the text a run reads.
 7. **Persisted plan** — Write `native-app-plan.md` (Mermaid ER + per-screen specs + native capabilities matrix) as the source of truth that sub-skills `Read`.
 8. **CLI compatibility** — Resolve the Power Apps CLI per [`shared/cli-binary.md`](./shared/cli-binary.md) and run code-app lifecycle and data-source commands as `$PA …` in the canonical grouped `pa` form — never a bare `pa`, `power-apps`, or `npx pa`. Every other agent-run `npx` (`tsc`, `expo`, `qrcode`, …) also uses `--no-install` against a package the template pins; never `npx --yes` or a bare `npx <pkg>` that can download from the registry. Use `scripts/resolve-environment.js` plus `az` tokens for Dataverse environment URL/tenant discovery and Azure/Entra operations. See [`shared/shared-instructions.md`](./shared/shared-instructions.md).
    Mobile Node helpers use `scripts/lib/process-runner.js` for external CLI
    execution. Keep arguments separate from commands and reuse its native/batch
    handling rather than adding per-tool Windows shims or `shell: true`.
 9. **Agent invocation namespace** — All `Task` invocations of agents in this plugin MUST use the fully-qualified `mobile-app:<agent-name>` form (e.g. `mobile-app:native-app-planner`, `mobile-app:screen-builder`). Bare names like `native-app-planner` return `Agent type 'native-app-planner' not found` because Claude Code namespaces all plugin agents by plugin name.
+   Agent frontmatter names no `model`, so each agent runs on the session's model in every host.
+   A host-specific alias fails elsewhere: GitHub Copilot CLI rejects `sonnet` and refuses to start the agent, which turned every parallel screen build into a slow inline one.
+   Claude Code resolves an absent `model` to the main conversation's model ([model order](https://code.claude.com/docs/en/sub-agents#choose-a-model)).
 10. **Plugin isolation** — `hooks/hooks.json` is limited to fail-open telemetry start hooks. They never validate, mutate, or block tool calls. Do not add write/validation hooks: mutating skills follow the changed-file gate in `shared/shared-instructions.md`, and final-artifact agents invoke `scripts/validate-mobile-files.js` directly.
 11. **Invocation metadata** — Public entry skills use `user-invocable: true` and remain model-invocable. Bundled implementation helpers use both `user-invocable: false` and `disable-model-invocation: true`; their owner reads `SKILL.md` directly. Hidden standalone workflows such as `assign-offline-profile` and `preview-offline-scope` use `user-invocable: false` without disabling model invocation because no owner reads them directly. Agents use `user-invocable: false` without `disable-model-invocation` so qualified `Task` delegation remains available.
-12. **Sub-agent return-status protocol** — Every agent in this plugin (`native-app-planner`, `data-model-architect`, `screen-planner`, `screen-builder`) MUST return a status code as the **literal first line** of its final message. Orchestrators (skills that invoke agents via `Task`) MUST parse the first line and branch:
+12. **Sub-agent return-status protocol** — Every agent in this plugin (`native-app-planner`, `data-model-architect`, `screen-planner`, `preview-screen-builder`, `screen-builder`, `offline-profile-architect`) MUST return a status code as the **literal first line** of its final message. Orchestrators (skills that invoke agents via `Task`) MUST parse the first line and branch:
 
     | Code | Meaning | Orchestrator action |
     |---|---|---|
@@ -80,8 +126,8 @@ Do not add preparation rewrites for `scheme`, `package`, `bundleIdentifier`, `sr
     - `DONE_WITH_CONCERNS` requires at least one concern. If none, use `DONE`.
     - In `/create-mobile-app` only, `NEEDS_CONTEXT: dataverse-planning-mode:<required|connector-only>` from the `gate-only` architecture pass is a phase-completion signal, not a retry. The canonical handler validates the approved architecture before continuing; other phases cannot use it to change the data platform.
     - Special early-return signals (`INDUSTRY_CONFIRM_REQUESTED:`, `DESIGN_VIBE_REQUESTED:`) pre-date this protocol and remain in effect — they are special-cased "ask the user one question and re-spawn me" handoffs, not terminal returns.
-    - The canonical orchestrator handler lives in [`skills/create-mobile-app/SKILL.md`](./skills/create-mobile-app/SKILL.md) Step 3.0. Future skills that spawn agents should reference it rather than duplicating the switch.
-13. **Every run documents itself in `docs/`** - [`scripts/app-docs.js`](scripts/app-docs.js) writes `<app>/docs/create-app-plan.html`, a living Fluent-format plan in the same visual language as the Power Pages `/create-site` artifacts (shared encoder ported to [`scripts/lib/render-template.js`](scripts/lib/render-template.js)). It records the environment, the confirmed brief, the Gate 1 architecture, the Gate 2 data model with a colour-coded ER diagram, the screen plan, and the design system, plus per-phase progress. Sections are written **when the decision is made**, so an aborted run still explains itself. The ER, column tables and new/reused/extended colouring are all derived from `dataModel.tables[]`, so populate those structurally rather than only shipping a Mermaid string. It is best-effort and must never gate, retry, or fail a build.
+    - The canonical orchestrator handler lives in each `/create-mobile-app` build order's flow: `## Sub-agent return status` in [`references/screens-first.md`](./skills/create-mobile-app/references/screens-first.md) (with the architecture and Dataverse signals in Step 10.0 of [`references/make-it-real.md`](./skills/create-mobile-app/references/make-it-real.md) and the shared [`references/dataverse-planning-recovery.md`](./skills/create-mobile-app/references/dataverse-planning-recovery.md)), and Step 3.0 of [`references/data-model-first.md`](./skills/create-mobile-app/references/data-model-first.md). Future skills that spawn agents should reference them rather than duplicating the switch.
+13. **Every run documents itself in `docs/`** - [`scripts/app-docs.js`](scripts/app-docs.js) writes `<app>/docs/create-app-plan.html`, a living Fluent-format plan in the same visual language as the Power Pages `/create-site` artifacts (shared encoder ported to [`scripts/lib/render-template.js`](scripts/lib/render-template.js)). It records the environment, the confirmed brief, the screen plan, the design system, the architecture, and the data model with a colour-coded ER diagram, plus per-phase progress in the order of the run's build order (`buildOrder` in `docs/.run-plan.json`; a plan without one is data-model-first). In the screens-first order its phone frame shows the live web preview while the app runs on sample data, and that phone is the only place the preview appears (Step 3.5 starts the template's `npm run dev`, which opens no browser tab). That one dev server also serves the app to a phone: the preview gate draws its QR code under the frame, and Step 14 moves the code into the frame, because a wired app needs a signed-in host the browser frame does not have. Each render also writes `create-app-plan.version.js`, and the open page reloads only when that version changes, because a reload restarts the app in the phone. Sections are written **when the decision is made**, so an aborted run still explains itself. The ER, column tables and new/reused/extended colouring are all derived from `dataModel.tables[]`, so populate those structurally rather than only shipping a Mermaid string. It is best-effort and must never gate, retry, or fail a build.
 14. **Metro lifecycle is project-local** — template `metro.config.js` delegates to `createPowerAppsMetroConfig`, whose host implementation writes sanitized `.powernative/metro-logs/` output during normal `npm run dev`; `/debug-app` locates and tails those files directly, with its cursor, health, and audit state under `.powernative/debug-app/`. Do not restore required `BashOutput`/terminal-ID behavior or host-specific project state directories. Host terminal APIs may be optional conveniences only. Never write unsanitized Metro output to disk. Runtime monitoring requires a live logged PID/port; bounded startup diagnosis may use correlated failed-launch output as historical evidence, never as a live runtime session.
 15. **First-party native package defects are reported, not patched in customer projects** — a `node_modules/@microsoft/power-apps-native-*` frame alone is not proof of package ownership; first rule out invalid app usage against the package's public contract. Once a defect is confirmed inside one of these packages, do not edit `node_modules/`, generate `patch-package` or postinstall rewrites, vendor or fork the package, replace it with a git/tarball/local dependency, or shadow it through resolver aliases. Capture sanitized reproduction evidence and route to `/report-issue`.
 16. **Custom events are Application Insights-specific and opt-in** — Each generated app targets one customer-owned, workspace-based Application Insights resource. `app.json` → `expo.extra.appInsightsConfig` defaults to disabled and stores its connection string, matching the Power Apps canvas-app model. Treat the value as sensitive project configuration: do not print it, write it to `memory-bank.md`, or include it in summaries. Keep `includeUserId` false unless explicitly approved.
@@ -177,10 +223,10 @@ Mobile Apps bundles the canonical stdlib-only telemetry helpers from the repo-ro
 - ✅ Connection model: per-environment connections, with platform-specific auth (`expo-msal-intune` on native, `expo-auth-session` on web)
 - ✅ Auth: `/create-mobile-app` resolves the tenant from the selected Power Platform environment (`scripts/resolve-environment.js`), lists every tenant app registration visible to the signed-in Azure CLI user, evaluates the native runtime permission profile as one boolean, shows passing registrations first, and paginates the rest. The baseline requires Dynamics CRM `user_impersonation` and Power Platform API `PowerApps.Apps.Read`; when the approved plan contains non-Dataverse connectors, the checker also requires Azure API Connections `Runtime.All` plus the four Power Platform API connector read/write/user-consent scopes. The list uses self-contained `✓ All required permissions configured` / `✗ Missing required permissions` labels; missing details appear after selection. Discovery is best-effort: any CLI, Graph, tenant, response, or permission-check failure immediately falls back to the original pasted-client-ID flow with status unavailable. `/set-app-registration-native` infers connector use from the persisted plan or nonempty `power.config.json.connectionReferences` and provides the same read-only discovery, verification, ranking, pagination, and fallback behavior. Power Apps Wrap remains the final authority for redirect platforms, packaging permissions, third-party-app allowlisting, and admin consent.
 - ✅ `/add-native` v0 scope: camera, location, push, biometrics, secure-store (already in template)
-- ✅ Build documentation: every run writes `docs/create-app-plan.html` - environment, requirements, architecture, a colour-coded Dataverse ER diagram, screen plan, design system, and live phase progress - in the Power Pages plan format. The page also carries a phone frame that advances from a building state to the generated screens to the device QR code. The folder survives the run so the app carries its own design record.
+- ✅ Build documentation: every run writes `docs/create-app-plan.html` - environment, requirements, architecture, a colour-coded Dataverse ER diagram, screen plan, design system, and live phase progress - in the Power Pages plan format. The page also carries a phone frame that advances from a building state to the live preview, where the user tries the app, to the device QR code. The folder survives the run so the app carries its own design record.
 - ✅ Cross-host Metro diagnostics: user-owned `npm run dev`, port-probe liveness and stale-PID protection, sanitized project-local logs, a durable debug cursor, and read-only `status` plus foreground-loop `stop` commands
 - ✅ Template is supplied as a fresh `microsoft/power-platform-skills/plugins/mobile-apps/template#main` folder before `/create-mobile-app` runs; users materialize it with `degit`, run `npm install`, then invoke the skill from that folder. The skill validates/prepares the folder and runs `pa app init`.
-- ✅ `brand/` directory convention: `/design-system` (Step 6.75) writes `brand/design-system.md` (spec), `brand/tokens.ts` (importable Tamagui tokens), and `brand/design-system.html` (visual gallery). Screen-builders MUST read `brand/design-system.md` if present; `## Negatives` = HARD RULES. `/create-mobile-app` Step 9b imports `brand/tokens.ts` via `skills/design-system/references/tamagui-integration.md`. Projects without `brand/` fall back to `## Design Direction` only — no breakage.
+- ✅ `brand/` directory convention: `/design-system` (`/create-mobile-app` Step 9) writes `brand/design-system.md` (spec), `brand/tokens.ts` (importable Tamagui tokens), and `brand/design-system.html` (visual gallery). Screen-builders MUST read `brand/design-system.md` if present; `## Negatives` = HARD RULES. `/create-mobile-app` Step 9.2 imports `brand/tokens.ts` via `skills/design-system/references/tamagui-integration.md`. Projects without `brand/` fall back to `## Design Direction` only — no breakage.
 - ✅ Offline profile creation is **configuration-only in v0.1** —
   `/setup-offline-profile` and `/enable-tables-offline` POST
   `mobileofflineprofile` / `mobileofflineprofileitem` /

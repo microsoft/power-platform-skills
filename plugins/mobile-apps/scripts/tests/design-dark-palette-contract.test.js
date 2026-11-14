@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
+const { createSkillDataModelFirst, createSkillWorkflow } = require('./helpers/create-skill');
 
 const root = path.resolve(__dirname, '../..');
 const read = (file) => fs.readFileSync(path.join(root, file), 'utf8').replace(/\r\n?/g, '\n');
@@ -13,7 +14,8 @@ const design = read('skills/design-system/SKILL.md');
 const refresh = read('skills/design-system/references/refresh-flow.md');
 const inputs = read('skills/design-system/references/input-modes.md');
 const schema = read('skills/design-system/references/design-system-schema.md');
-const create = read('skills/create-mobile-app/SKILL.md');
+const create = createSkillWorkflow();
+const createDataModelFirst = createSkillDataModelFirst();
 const branch = integration.slice(
   integration.indexOf('## Approved dark palette (conditional)'),
   integration.indexOf('## Restored dark state'),
@@ -73,8 +75,10 @@ test('ordinary brand integration keeps its prior defaults without requiring a da
 
 test('both creation and edit apply custom-dark wiring before using the resolved provider theme', () => {
   const edit = read('skills/edit-app/SKILL.md');
-  assert.match(create, /\*\*Approved dark palette\*\* branch first: import `darkTokens`/);
-  assert.match(create, /derive `appDarkTheme` from\n`darkTokens\.color`/);
+  for (const flow of [create, createDataModelFirst]) {
+    assert.match(flow, /\*\*Approved dark palette\*\* branch first: import `darkTokens`/);
+    assert.match(flow, /derive `appDarkTheme` from\n`darkTokens\.color`/);
+  }
   assert.match(edit, /\*\*Approved dark\n\s+palette\*\* branch: wire `darkTokens\.color` into `appDarkTheme`/);
   assert.match(edit, /provider's `brandedDarkTheme`/);
   assert.match(integration, /darkTheme=\{brandedDarkTheme\}/);
@@ -161,14 +165,19 @@ test('schema and creation guidance defer to the authoritative default and approv
   }
   assert.match(schema, /After rollback, choose the\n\s+branch from the restored approved state/);
   assert.doesNotMatch(schema, /export const appDarkTheme|createPowerAppsTamaguiConfig\(/);
-  const explanation = create.slice(
-    create.indexOf('Without an approved custom dark palette, the exported dark app theme'),
-    create.indexOf('### Step 10 — Add connectors'),
-  );
-  assert.match(explanation, /Without an approved custom dark palette/);
-  assert.match(explanation, /Config v5 dark surfaces and text/);
-  assert.match(explanation, /With an approved custom dark palette, `appDarkTheme` instead resolves the full\n`darkTokens\.color` palette, including its surfaces and text/);
-  assert.doesNotMatch(create, /The generated schema has one brand palette, so the exported dark app theme/);
+  for (const [flow, next] of [
+    [create, '### Step 13.1 — Add connectors'],
+    [createDataModelFirst, '### Step 10 — Add connectors'],
+  ]) {
+    const start = flow.indexOf('Without an approved custom dark palette, the exported dark app theme');
+    const end = flow.indexOf(next, start);
+    assert.ok(start >= 0 && end > start, `missing dark-theme explanation before ${next}`);
+    const explanation = flow.slice(start, end);
+    assert.match(explanation, /Without an approved custom dark palette/);
+    assert.match(explanation, /Config v5 dark surfaces and text/);
+    assert.match(explanation, /With an approved custom dark palette, `appDarkTheme` instead resolves the full\n`darkTokens\.color` palette, including its surfaces and text/);
+    assert.doesNotMatch(flow, /The generated schema has one brand palette, so the exported dark app theme/);
+  }
   assert.match(integration, /This default dark branch keeps Config v5/);
   assert.match(integration, /When custom dark is approved, apply the conditional branch below instead/);
 });

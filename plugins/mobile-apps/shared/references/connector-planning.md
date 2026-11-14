@@ -1,7 +1,7 @@
 # Connector Planning Reference
 
 Shared logic for inferring and confirming Power Platform connectors from app
-requirements. Used by `native-app-planner`, `setup-datamodel`, and the read-only
+requirements. Used by `native-app-planner`, `architecture-planner`, `setup-datamodel`, and the read-only
 planning phase of `/edit-app`. Discovery and proposal are not implementation.
 
 ---

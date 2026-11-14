@@ -36,6 +36,15 @@ const SHARED_FILES = [
   ['tokens/index.ts', 'src/tokens/index.ts'],
 ];
 
+// The preview data layer's shared contract, copied only for the screens-first build order
+// (`--screens-first`). Its screens are built against `@/hooks/data` before any data source
+// exists, so it must be present before the first screen skeleton is written. A data-model-first
+// app must not get it: `screen-builder` and `/edit-app` read an existing `src/hooks/data/` as a
+// data-layer app and would stop importing the generated services those screens are built on.
+const DATA_LAYER_FILES = [
+  ['hooks/data/core.ts', 'src/hooks/data/core.ts'],
+];
+
 const LEGACY_EXAMPLE_FILES = [
   'src/hooks/useContacts.ts',
   'src/hooks/useAccounts.ts',
@@ -99,6 +108,21 @@ function assertFreshTemplate(projectRoot) {
   }
 
   verifyHostTsconfig(projectRoot);
+  verifyLifecycleScripts(projectRoot);
+}
+
+// `npm run dev` is the development entry point, and npm runs `predev` before it. The
+// template owns both command bodies and may change them as the native host evolves, so
+// check only that each is a non-empty string: comparing or rewriting them would pin a
+// host version. Failing here, before `pa app init`, beats discovering it at the end of
+// a run when the dev server will not start.
+function verifyLifecycleScripts(projectRoot) {
+  const pkg = readJson(path.join(projectRoot, 'package.json'));
+  for (const scriptName of ['dev', 'predev']) {
+    if (typeof pkg.scripts?.[scriptName] !== 'string' || pkg.scripts[scriptName].trim() === '') {
+      throw new Error(`Expected package.json scripts.${scriptName} to be a non-empty command.`);
+    }
+  }
 }
 
 function updateIdentity(projectRoot, displayName, slug) {
@@ -120,6 +144,44 @@ function updateIdentity(projectRoot, displayName, slug) {
   const packageJson = readJson(packagePath);
   packageJson.name = slug;
   writeJson(packagePath, packageJson);
+}
+
+const WEB_PREVIEW_ENV = 'POWER_APPS_WEB_PREVIEW';
+
+// Inserted at the top of the template's `customizeExpoConfig(config)` hook, the one place the
+// template reserves for Expo config overrides. The native host sets `web.output: 'static'`, and in
+// development that makes the Expo dev server render every page request on the server. Measured
+// against Expo SDK 55: each render kept roughly 30 MB, so the build plan's live phone frame, which
+// reloads every 10 seconds during a run, exhausted a 4 GB heap within the hour. `single` serves the
+// client-rendered shell with no per-request render and stayed flat over the same load. The
+// override applies only when `/create-mobile-app` starts its sample-data preview with
+// POWER_APPS_WEB_PREVIEW=1, so `npm run web`, `bundle:web`, and native builds keep the host default.
+const WEB_PREVIEW_OVERRIDE = `
+  // Sample-data web preview started by /create-mobile-app: serve a client-rendered shell instead
+  // of server-rendering every request, which grows the dev server's memory on each reload.
+  if (process.env.${WEB_PREVIEW_ENV} === '1') {
+    config.web = { ...config.web, output: 'single' };
+  }
+`;
+
+/**
+ * Returns `present` when the override already exists, `added` after inserting it, or `unsupported`
+ * when the hook is not in its template shape. Unsupported is not an error: the preview still runs,
+ * only with per-request server rendering.
+ */
+function ensureWebPreviewOutput(projectRoot) {
+  const appConfigPath = path.join(projectRoot, 'app.config.js');
+  const appConfig = fs.readFileSync(appConfigPath, 'utf8');
+  if (appConfig.includes(WEB_PREVIEW_ENV)) return 'present';
+  // Accept CRLF as well as LF after the brace: a Windows checkout with core.autocrlf gives the
+  // template CRLF line endings, and the override must still go in. The inserted lines take the
+  // file's own line ending, so the edit does not leave app.config.js with mixed endings.
+  const hook = /function customizeExpoConfig\(config\)\s*\{(\r?\n)/;
+  const match = hook.exec(appConfig);
+  if (!match) return 'unsupported';
+  const override = WEB_PREVIEW_OVERRIDE.slice(1).replace(/\n/g, match[1]);
+  fs.writeFileSync(appConfigPath, appConfig.replace(hook, (opening) => `${opening}${override}`));
+  return 'added';
 }
 
 function removeEmptyPowerConfig(projectRoot) {
@@ -146,14 +208,36 @@ function removeLegacyExamples(projectRoot) {
   return removed;
 }
 
-function copySharedFiles(projectRoot, samplesRoot) {
-  for (const directory of ['components', 'hooks', 'utils', 'tokens', 'native']) {
-    fs.mkdirSync(path.join(projectRoot, 'src', directory), { recursive: true });
+const HELPER_DIRECTORIES = ['components', 'hooks', 'utils', 'tokens', 'native'].map((directory) => path.join('src', directory));
+
+/**
+ * Every directory preparation can create, shallowest first: the helper folders made up front, the
+ * folder of every copied file (the data layer's core.ts sits one level deeper, in hooks/data), and
+ * their ancestors (a fresh template has no src/ at all). Rollback removes the ones that did not
+ * exist before, deepest first. A leftover src/hooks/data/ is not harmless: screen-builder and
+ * /edit-app read its presence as "this app has a data layer".
+ */
+function preparationDirectories() {
+  const directories = new Set();
+  const add = (relativePath) => {
+    for (let directory = path.normalize(relativePath); directory && directory !== '.'; directory = path.dirname(directory)) {
+      directories.add(directory);
+    }
+  };
+  HELPER_DIRECTORIES.forEach(add);
+  [...SHARED_FILES, ...DATA_LAYER_FILES].forEach(([, destination]) => add(path.dirname(destination)));
+  const depth = (directory) => directory.split(path.sep).length;
+  return [...directories].sort((a, b) => depth(a) - depth(b) || a.localeCompare(b));
+}
+
+function copySharedFiles(projectRoot, samplesRoot, files = SHARED_FILES) {
+  for (const directory of HELPER_DIRECTORIES) {
+    fs.mkdirSync(path.join(projectRoot, directory), { recursive: true });
   }
 
   const copied = [];
   const preserved = [];
-  for (const [sampleRelativePath, destinationRelativePath] of SHARED_FILES) {
+  for (const [sampleRelativePath, destinationRelativePath] of files) {
     const sourcePath = path.join(samplesRoot, sampleRelativePath);
     const destinationPath = path.join(projectRoot, destinationRelativePath);
     if (!fs.existsSync(sourcePath)) {
@@ -163,6 +247,8 @@ function copySharedFiles(projectRoot, samplesRoot) {
       preserved.push(destinationRelativePath);
       continue;
     }
+    // Some helpers live below the top-level source folders (for example `hooks/data/`).
+    fs.mkdirSync(path.dirname(destinationPath), { recursive: true });
     fs.copyFileSync(sourcePath, destinationPath);
     copied.push(destinationRelativePath);
   }
@@ -548,6 +634,7 @@ function capturePreparationState(projectRoot) {
     ...GUIDANCE_FILES,
     ...LEGACY_EXAMPLE_FILES,
     ...SHARED_FILES.map(([, destinationRelativePath]) => destinationRelativePath),
+    ...DATA_LAYER_FILES.map(([, destinationRelativePath]) => destinationRelativePath),
   ];
   const files = new Map();
 
@@ -569,8 +656,7 @@ function capturePreparationState(projectRoot) {
     });
   }
 
-  const directories = ['components', 'hooks', 'utils', 'tokens', 'native']
-    .map((directory) => path.join('src', directory))
+  const directories = preparationDirectories()
     .map((relativePath) => ({
       relativePath,
       existed: fs.existsSync(path.join(projectRoot, relativePath)),
@@ -638,13 +724,21 @@ function prepareMobileTemplate(options) {
   let removedPowerConfig;
   let removedLegacyFiles;
   let sharedFiles;
+  let webPreviewOutput;
   let guidanceFiles;
   let writtenFiles;
   try {
     updateIdentity(projectRoot, options.displayName, options.slug);
+    // The data-model-first order never starts the sample-data web preview, so its app.config.js
+    // stays exactly as the template ships it.
+    webPreviewOutput = options.screensFirst ? ensureWebPreviewOutput(projectRoot) : 'not-requested';
     removedPowerConfig = removeEmptyPowerConfig(projectRoot);
     removedLegacyFiles = removeLegacyExamples(projectRoot);
-    sharedFiles = copySharedFiles(projectRoot, samplesRoot);
+    sharedFiles = copySharedFiles(
+      projectRoot,
+      samplesRoot,
+      options.screensFirst ? [...SHARED_FILES, ...DATA_LAYER_FILES] : SHARED_FILES,
+    );
     guidanceFiles = copyMissingGuidance(projectRoot, originalState);
     prepareRootLayout(projectRoot);
     assertNoDanglingLegacyImports(projectRoot);
@@ -675,6 +769,7 @@ function prepareMobileTemplate(options) {
     removedLegacyFiles,
     copiedSharedFiles: sharedFiles.copied,
     preservedSharedFiles: sharedFiles.preserved,
+    webPreviewOutput,
     copiedGuidanceFiles: guidanceFiles.copied,
     preservedGuidanceFiles: guidanceFiles.preserved,
     skippedGuidanceFiles: guidanceFiles.skipped,
@@ -689,6 +784,7 @@ function parseArgs(argv) {
     else if (argument === '--display-name') options.displayName = argv[++index];
     else if (argument === '--slug') options.slug = argv[++index];
     else if (argument === '--samples-root') options.samplesRoot = argv[++index];
+    else if (argument === '--screens-first') options.screensFirst = true;
     else throw new Error(`Unknown argument: ${argument}`);
   }
   if (!options.workingDir) throw new Error('--working-dir is required');
@@ -701,12 +797,16 @@ if (require.main === module) {
 }
 
 module.exports = {
+  DATA_LAYER_FILES,
   HOST_TSCONFIG,
   SHARED_FILES,
   assertFreshTemplate,
   copySharedFiles,
+  WEB_PREVIEW_ENV,
   ensureProviderProps,
+  ensureWebPreviewOutput,
   ensureSafeAreaProviderWrapper,
+  parseArgs,
   prepareMobileTemplate,
   prepareRootLayout,
   removeEmptyPowerConfig,

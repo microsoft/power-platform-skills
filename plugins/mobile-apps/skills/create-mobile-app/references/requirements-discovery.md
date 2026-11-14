@@ -1,10 +1,10 @@
 # Requirements Discovery Reference
 
-Use this only for Step 2b.1 of `/create-mobile-app` when prompt richness selects the `walk-through` path.
+Use this only for the `features` question in `/create-mobile-app`'s setup question (`SKILL.md` Step 0, before the build-order choice), asked when the prompt scores 2 or less.
 
 ## Infer Options From The Brief
 
-Scan the user's description and wizard answers for these signals, then confirm inferred items with one `AskUserQuestion`.
+Scan the user's description for these signals, then offer the inferred items as the `features` question.
 
 | Signal in description | Infer |
 |---|---|
@@ -44,7 +44,7 @@ PDF/pen rules:
 
 ## Ask Shape
 
-Ask exactly one structured question. Inferred items are `recommended: true`; plausible extras are unselected. Keep 2-6 options total and allow freeform input.
+The `features` question rides in the single setup `AskUserQuestion`, beside the name, environment, and look questions. Inferred items are `recommended: true`; plausible extras are unselected. Keep 2-6 options total and allow freeform input.
 
 ```json
 {
@@ -67,6 +67,5 @@ Ask exactly one structured question. Inferred items are `recommended: true`; pla
 Rules:
 - Use the `header` field as a stable answer key, such as `features`.
 - Never include `[x]` or `[ ]` checkbox markdown in the `question` field; it produces invalid tool parameters.
-- Ask no unrelated questions in this call.
 
-After the answer, summarize the confirmed requirements brief in 4-8 bullets covering what users can do, tracked data, and integrations. Confirm once with `Look right? (yes / adjust)`, then store the result as `<requirements_brief>`.
+After the answer, `SKILL.md` writes the requirements brief from the selected features and the description, and opens the build-order question with it. Choosing an order confirms the brief, and a typed answer changes it, so nothing asks to confirm the brief separately.

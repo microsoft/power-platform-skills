@@ -1,6 +1,6 @@
 # Design Planning Reference
 
-Shared logic for inferring and planning the visual design system for a Power Apps mobile app. Used by `native-app-planner` (Step 3c) and `setup-datamodel`.
+Shared logic for inferring and planning the visual design system for a Power Apps mobile app. Used by `/create-mobile-app` (screens first: Step 4.1, before screen planning), `native-app-planner` (data model first: Step 3c), and `setup-datamodel`.
 
 Mobile-first rules apply throughout — no CSS variables, no Google Fonts, no keyframes. Everything maps to Tamagui tokens, `expo-font`, and `react-native-reanimated`.
 
@@ -188,7 +188,7 @@ Default stack — no customization needed.
 - tamagui-design-system: add-aliases
 ```
 
-> **`add-aliases` mode** — on the default path, Step 9b verifies that
+> **`add-aliases` mode** — on the default path, `/create-mobile-app` Step 9.2 (screens first) or Step 9b (data model first) verifies that
 > `tamagui.config.ts` uses the native host's
 > `createPowerAppsTamaguiConfig`. The host factory already provides
 > `$surface0`–`$surface3`, `$accentBase`, `$accentSoft`, `$accentDeep`, and
@@ -270,12 +270,12 @@ per-screen specs so the builder knows which sections to apply.
 
 ## Execution Mapping
 
-| `## Design` says | Step 9b action |
+| `## Design` says | `/create-mobile-app` Step 9.2 / Step 9b action |
 |---|---|
 | `tamagui-design-system: add-aliases` | Verify that `tamagui.config.ts` calls `createPowerAppsTamaguiConfig`. The host already supplies the semantic aliases. |
 | `tamagui-design-system: required` | Apply `skills/design-system/references/tamagui-integration.md` with brand tokens + theme from the `## Design` section. |
 | Custom font only (no design-system line) | `npx --no-install expo install expo-font` + `useFonts()` in `app/_layout.tsx`, preserving the host Tamagui factory. |
 
-**There is no unchecked Step 9b path.** Every plan includes a
+**There is no unchecked Step 9.2 / Step 9b path.** Every plan includes a
 `tamagui-design-system` line. `add-aliases` verifies host ownership; `required`
 applies generated brand tokens.

@@ -7,6 +7,7 @@ const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
+const { createSkillDataModelFirst, createSkillWorkflow } = require('./helpers/create-skill');
 
 function caretVersionAtLeast(value, minimum) {
   const match = /^\^(\d+)\.(\d+)\.(\d+)$/.exec(value);
@@ -73,7 +74,7 @@ test('template uses the host Metro factory that installs project-local logging',
 
 test('skill contracts read logs and persist host-neutral state under .powernative', () => {
   const pluginRoot = path.resolve(__dirname, '..', '..');
-  const createSkill = fs.readFileSync(path.join(pluginRoot, 'skills', 'create-mobile-app', 'SKILL.md'), 'utf8');
+  const createSkill = createSkillWorkflow();
   const debugSkill = fs.readFileSync(path.join(pluginRoot, 'skills', 'debug-app', 'SKILL.md'), 'utf8');
   const deploySkill = fs.readFileSync(path.join(pluginRoot, 'skills', 'deploy', 'SKILL.md'), 'utf8');
   const reportIssueSkill = fs.readFileSync(path.join(pluginRoot, 'skills', 'report-issue', 'SKILL.md'), 'utf8');
@@ -83,23 +84,46 @@ test('skill contracts read logs and persist host-neutral state under .powernativ
   assert.match(createFrontmatter, /allowed-tools:.*\bSkill\b/);
   assert.match(createSkill, /\.powernative\/metro-logs/);
   assert.match(createSkill, /npm run dev/);
-  assert.match(createSkill, /^### Step 12 [^\r\n]*Metro writes project-local logs/m);
-  assert.match(createSkill, /createPowerAppsMetroConfig/);
+  assert.match(createSkill, /^### Step 16 [^\r\n]*Metro writes project-local logs/m);
+  // Screens first has run one `npm run dev` since Step 3.5; Step 16 confirms it through Metro's
+  // own health endpoint and must not start a second server beside it.
+  const reuse = createSkill.slice(createSkill.indexOf('**Screens first: reuse the running server.**'),
+    createSkill.indexOf('**Launch command:**'));
+  assert.match(reuse, /Do not start a second one/);
+  assert.match(reuse, /\/status'[\s\S]*packager-status:running/);
+  assert.match(reuse, /fell back to `--localhost`: stop that server/);
+  // Template preparation's explanation of each fix lives beside SKILL.md, read when a fix fails.
+  const templatePreparation = fs.readFileSync(path.join(pluginRoot, 'skills', 'create-mobile-app', 'references', 'template-preparation.md'), 'utf8');
+  assert.match(templatePreparation, /createPowerAppsMetroConfig/);
   assert.match(createSkill, /template owns the `dev` and `predev` command bodies/);
   assert.match(createSkill, /does not require either script to expand to a particular command/);
-  assert.match(createSkill, /for \(const scriptName of \['dev', 'predev'\]\)/);
-  assert.match(createSkill, /typeof pkg\.scripts\?\.\[scriptName\] !== 'string'/);
-  assert.match(createSkill, /pkg\.scripts\[scriptName\]\.trim\(\) === ''/);
+  // Preparation, not the model, checks the lifecycle scripts exist (and only that).
+  const prepareScript = fs.readFileSync(path.join(pluginRoot, 'scripts', 'prepare-mobile-template.js'), 'utf8');
+  assert.match(prepareScript, /for \(const scriptName of \['dev', 'predev'\]\)/);
+  assert.match(prepareScript, /typeof pkg\.scripts\?\.\[scriptName\] !== 'string'/);
+  assert.match(prepareScript, /pkg\.scripts\[scriptName\]\.trim\(\) === ''/);
+  assert.match(templatePreparation, /verifyLifecycleScripts/);
   assert.match(createSkill, /always receives a scannable code even when Metro runs in a background terminal/);
   assert.match(createSkill, /Do not rely on Expo's terminal-rendered QR as the only presentation path/);
   // The QR generator must come from the template's pinned devDependency, never a registry fetch.
   assert.match(createSkill, /npx --no-install qrcode -o "\$METRO_QR"/);
   assert.doesNotMatch(createSkill, /npx --yes|npm_config_registry=/);
-  assert.match(createSkill, /continue through the optional Step 12\.5 debug handoff and print the Step 13 summary/);
-  assert.doesNotMatch(createSkill, /stops after Step 12/);
+  assert.match(createSkill, /continue through the optional debug handoff and print the summary/);
+  assert.doesNotMatch(createSkill, /stops after Step 16/);
   assert.doesNotMatch(createSkill, /npx expo start|without rerunning the `predev` schema hook/);
   assert.doesNotMatch(createSkill, /delegates Metro terminal output.*power-apps-native-host\/metro-logger/);
   assert.doesNotMatch(createSkill, /scripts\/metro-session\.js|dev:expo|copy the plugin wrapper/i);
+
+  // The data-model-first order launches Metro at its own Step 12 through the same shared
+  // dev-server step, and checks the lifecycle scripts inline, as it always has.
+  const dataModelFirst = createSkillDataModelFirst();
+  assert.match(dataModelFirst, /^### Step 12 [^\r\n]*Metro writes project-local logs/m);
+  assert.match(dataModelFirst, /createPowerAppsMetroConfig/);
+  assert.match(dataModelFirst, /template owns the `dev` and `predev` command bodies/);
+  assert.match(dataModelFirst, /for \(const scriptName of \['dev', 'predev'\]\)/);
+  assert.match(dataModelFirst, /npx --no-install qrcode -o "\$METRO_QR"/);
+  assert.match(dataModelFirst, /continue through the optional debug handoff and print the summary/);
+  assert.doesNotMatch(dataModelFirst, /npx --yes|npm_config_registry=|npx expo start/);
   assert.match(debugSkill, /\.powernative\/metro-logs/);
   assert.match(debugSkill, /\.powernative\/debug-app/);
   assert.doesNotMatch(debugSkill, /\.claude\/debug-app/);

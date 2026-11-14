@@ -5,6 +5,9 @@ const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 const { isInvocable, readInvocationMetadata } = require('../lib/mobileapp-hook-utils');
+const {
+  createSkillDataModelFirst, createSkillEntry, createSkillWorkflow,
+} = require('./helpers/create-skill');
 
 const pluginRoot = path.resolve(__dirname, '../..');
 // Windows checkouts can use CRLF; the prose contracts should not depend on Git's EOL setting.
@@ -16,7 +19,9 @@ const removal = read('shared/references/data-source-removal.md');
 const pluginGuidance = read('AGENTS.md');
 const templateGuidance = read('template/AGENTS.md');
 const edit = skill('edit-app');
-const create = skill('create-mobile-app');
+// SKILL.md owns routing for both build orders, and each flow file starts at its Step 1.
+const create = createSkillWorkflow();
+const createFlows = [['screens-first', create], ['data-model-first', createSkillDataModelFirst()]];
 const pluginCheck = '> **Plugin check**: Run `node "${PLUGIN_ROOT}/scripts/check-version.js"` - if it outputs a message, show it to the user before proceeding.';
 
 function section(text, start, end) {
@@ -28,7 +33,7 @@ function section(text, start, end) {
 }
 
 function creationStateRow(content, state) {
-  const routing = section(content, '## Fresh-template working-directory mode', '## TypeScript Gate Policy');
+  const routing = section(content, '## Fresh-template working-directory mode', '### Step 0 ');
   const row = routing.split('\n').find(line => line.startsWith(`| ${state} |`));
   assert.ok(row, `Missing creation state: ${state}`);
   const [, , detection, action] = row.split('|').map(cell => cell.trim());
@@ -283,9 +288,9 @@ test('plugin maintenance guidance preserves natural existing-app routing', () =>
 
 test('create-mobile-app redirects existing-app change requests without re-scaffolding', () => {
   const freshMode = section(
-    create,
+    createSkillEntry(),
     '## Fresh-template working-directory mode',
-    '## TypeScript Gate Policy',
+    '### Step 0 ',
   );
   assert.match(freshMode, /Already-created app[\s\S]*never re-scaffold it/);
   assert.match(freshMode, /Do not send\s+an existing-app edit request to a new folder/);
@@ -296,7 +301,7 @@ test('create-mobile-app redirects existing-app change requests without re-scaffo
   assert.match(freshMode, /original request, absolute `working_dir`, and\s+`entry_choice: full-integration`/);
   assert.match(freshMode, /Reported\s+problems still route to `\/debug-app`/);
   assert.match(freshMode, /dependency\/template upgrades route to\s+`\/check-updates`/);
-  assertCreationStateRouting(create);
+  for (const [, flow] of createFlows) assertCreationStateRouting(flow);
 });
 
 test('creation routing rejects marker-only freshness and contradictory resume rules', () => {
@@ -318,10 +323,16 @@ test('creation routing rejects marker-only freshness and contradictory resume ru
 });
 
 test('creation progress is not resumed or mutated for existing-app routing exits', () => {
-  const protocol = section(create, '## Build documentation protocol', '### Step 0 ');
-  assert.match(protocol, /after Step 0 selects fresh creation or an approved\s+creation continuation/);
-  assert.match(protocol, /does not create, reopen, or reset the\s+creation plan or change its phase status/);
-  assert.match(protocol, /Step 0 routing exits leave existing creation history untouched/);
+  // Each build order keeps its own build-plan protocol, and both honour Step 0's routing exits.
+  for (const [order, flow, heading] of [
+    ['screens-first', create, '## Build plan'],
+    ['data-model-first', createSkillDataModelFirst(), '## Build documentation protocol'],
+  ]) {
+    const protocol = section(flow, heading, '### Step 1 ');
+    assert.match(protocol, /after Step 0 selects fresh creation or an approved\s+creation continuation/, order);
+    assert.match(protocol, /does not create, reopen, or reset the\s+creation plan or change its phase status/, order);
+    assert.match(protocol, /Step 0 routing exits leave existing creation history untouched/, order);
+  }
   const memory = section(shared, '## Memory Bank', '## Preferred Environment');
   assert.match(memory, /Resume on explicit continuation/);
   assert.match(memory, /bank presence\s+alone is not resume intent/);
@@ -404,7 +415,7 @@ test('create calls native and data leaves without routing its partial app into e
   for (const [start, end, expected] of [
     ['Invoke skill: /add-native', 'Run sequentially.', /approved capability row/],
     ['Invoke skill: /add-dataverse', '`/add-dataverse` validates', /bound operation-manifest artifacts/],
-    ['### Step 10 — Add connectors', '### Step 10b', /connector row and supplied/],
+    ['### Step 13.1 — Add connectors', '### Step 14 ', /connector row and supplied/],
   ]) {
     const handoff = section(create, start, end);
     assert.match(handoff, /MOBILE_APP_ORCHESTRATING=1/);
@@ -808,7 +819,9 @@ test('scoped feature context preserves the separate upstream browser suppression
   assert.match(routing, /MOBILE_APP_ORCHESTRATING=1/);
   assert.match(routing, /CODE_APPS_NATIVE_ORCHESTRATING=1/);
   assert.match(routing, /suppresses browser openers/);
-  const creation = section(create, '### Step 6.75', '#### Branch A');
+  const creation = section(create, '### Step 9 — Design system', '### Step 9.2');
+  // The live preview context travels with the same handoff, so /design-system skips its mockups.
+  assert.match(creation, /live_preview: http:\/\/localhost:<port>/);
   assert.match(creation, /Environment:\s+CODE_APPS_NATIVE_ORCHESTRATING=1/);
   assert.match(creation, /Context:\s+MOBILE_APP_ORCHESTRATING=1/);
   assert.match(edit, /CODE_APPS_NATIVE_ORCHESTRATING=1[\s\S]*suppress intermediate browser tabs/);

@@ -133,11 +133,30 @@ function getTrackedSkillFromPrompt(prompt) {
 function getTelemetryCheckpointNames(skillName) {
   const normalized = trackedName(skillName);
   if (!normalized || normalized === 'telemetry') return new Set();
+  const skillDir = path.join(SKILLS_DIR, normalized);
   let source;
   try {
-    source = fs.readFileSync(path.join(SKILLS_DIR, normalized, 'SKILL.md'), 'utf8');
+    source = fs.readFileSync(path.join(skillDir, 'SKILL.md'), 'utf8');
   } catch {
     return new Set();
+  }
+  // A long skill keeps later phases in `references/*.md` so its SKILL.md stays small enough to
+  // load quickly (create-mobile-app moved Steps 9-17 to references/make-it-real.md). Checkpoints
+  // marked there are as registered as those in SKILL.md, so an emitted event stays known.
+  let references = [];
+  try {
+    references = fs.readdirSync(path.join(skillDir, 'references'))
+      .filter((name) => name.endsWith('.md'))
+      .sort();
+  } catch {
+    // No references folder: SKILL.md is the whole workflow.
+  }
+  for (const name of references) {
+    try {
+      source += `\n${fs.readFileSync(path.join(skillDir, 'references', name), 'utf8')}`;
+    } catch {
+      // An unreadable reference cannot register checkpoints; SKILL.md's still count.
+    }
   }
   return new Set(
     [...source.matchAll(/\*\*Telemetry checkpoint: `([^`]+)`\*\*/g)]

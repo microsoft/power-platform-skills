@@ -505,7 +505,7 @@ Before showing the impact question, mark `inspect: done`, set `impact: waiting`,
 `impact` to `done`, set `plan: active`, clear `waiting`, and run it again. A cancellation sets the
 top-level status to `done` with all unstarted operations `skipped`.
 
-Before spawning architects or mutating files, show a rough impact preview and ask for proceed/edit/cancel. This mirrors `/create-mobile-app` Step 2c at edit scale.
+Before spawning architects or mutating files, show a rough impact preview and ask for proceed/edit/cancel. This mirrors the rough plan preview (Step 2c) of `/create-mobile-app`'s data-model-first build order, at edit scale.
 
 Compute:
 
@@ -569,18 +569,21 @@ before asking. Restore it to `active` after the answer.
 
 Reuse the same planning primitives as `/create-mobile-app`, but only for the affected surfaces:
 
+Step numbers below are `/create-mobile-app`'s screens-first build order: Steps 1-8 are in [screens-first.md](../create-mobile-app/references/screens-first.md) and Steps 9-17 in [make-it-real.md](../create-mobile-app/references/make-it-real.md).
+
 | Surface | Reuse from create flow | Edit-app scope |
 |---|---|---|
-| Dataverse schema | `data-model-architect` + `/add-dataverse` Step 8 | New/changed tables, columns, lookups, calculated fields, generated services |
+| Dataverse schema | `data-model-architect` + `/add-dataverse` (create flow Step 12) | New/changed tables, columns, lookups, calculated fields, generated services |
 | Connector choice | `/add-datasource`, `/add-sharepoint`, `/add-connector` | New or changed external data/action surface |
-| Native capability | `/add-native` Step 9 | New wrappers/controls needed by edited screens |
+| Native capability | `/add-native` (create flow Step 13) | New wrappers/controls needed by edited screens |
 | JavaScript dependency | `screen-planner` + `shared/references/javascript-dependency-planning.md` | Explicit package requests or established JS libraries needed by edited screens |
-| Design | `/design-system` Step 9b | Token refresh, reskin, density/component rules |
-| Navigation | `/create-mobile-app` Step 10b | Changed tabs, stacks, route groups, modal/formSheet presentation |
-| Service snapshot | `/create-mobile-app` Step 10.7 | Refresh after any data source/schema change before builders run |
-| Shared code + skeletons | `/create-mobile-app` Step 10.8 | New screens, changed data imports, new shared row/card/hooks |
-| Screen implementation | `/create-mobile-app` Step 11 | Only affected screens, via `mobile-app:screen-builder` waves |
-| Quality sweep | `/create-mobile-app` Step 11.4 | Changed screen files and route layouts |
+| Design | `/design-system` + `/create-mobile-app` Step 9.2 | Token refresh, reskin, density/component rules |
+| Navigation | [navigation-and-skeletons.md](../create-mobile-app/references/navigation-and-skeletons.md) section 1 | Changed tabs, stacks, route groups, modal/formSheet presentation |
+| Service snapshot | `/create-mobile-app` Step 14.1 | Refresh after any data source/schema change before builders run |
+| Data layer | [`preview-data-layer.md`](../../shared/references/preview-data-layer.md) **Wiring** | Apps with `src/hooks/data/`: new entities, fields, queries, or device actions, wired straight to their real source |
+| Shared code + skeletons | Apps with `src/hooks/data/`: [navigation-and-skeletons.md](../create-mobile-app/references/navigation-and-skeletons.md) section 2. Apps without it: [data-model-first.md](../create-mobile-app/references/data-model-first.md) Step 10.8 | New screens, changed data imports, new shared row/card/hooks |
+| Screen implementation | Step 6.1 below | Only affected screens, via `mobile-app:screen-builder` waves |
+| Quality sweep | `/create-mobile-app` Step 15 | Changed screen files and route layouts |
 
 Read each affected section verbatim from `native-app-plan.md` and pass it as input to the relevant read-only agent. Use the plugin namespace for every `Task` invocation.
 
@@ -955,11 +958,12 @@ Before spawning builders:
 - Pass the approved retiring service/source list to every affected builder.
   Still-present generated files are transitional dependencies, not permission
   to keep or introduce usages that the edit is meant to remove.
-- Update route layout files using the `/create-mobile-app` Step 10b layout rules if navigation changed.
+- Update route layout files using the layout rules in [navigation-and-skeletons.md](../create-mobile-app/references/navigation-and-skeletons.md) section 1 if navigation changed.
 - Create missing route folders for new screens.
-- Refresh the `## Generated Services` table using `/create-mobile-app` Step 10.7 rules if any data source/schema changed.
-- Generate or refresh app-specific shared code from `/create-mobile-app` Step 10.8a when two or more affected screens share an entity row/card, choice map, cursor hook, or save helper.
-- For brand-new screens, write typed skeleton files using `/create-mobile-app` Step 10.8b patterns before calling builders.
+- Refresh the `## Generated Services` table using `/create-mobile-app` Step 14.1 rules if any data source/schema changed.
+- **Apps with `src/hooks/data/`** (created by the preview-first flow): screens reach data and device features only through `@/hooks/data`. `screen-planner` marks each Data Contract addition `(new)`; add each one to the data layer first (entity module, hook, field, query, or device action), wired directly to its real source by the **Wiring** rules in [`preview-data-layer.md`](../../shared/references/preview-data-layer.md) (no sample-data stage), then run `node "${PLUGIN_ROOT}/scripts/check-data-layer.js" --project-root '<working_dir>' --require-wired`. Apps without that folder keep importing generated services in screens.
+- Generate or refresh app-specific shared code when two or more affected screens share an entity row/card, choice map, cursor hook, or save helper: per [navigation-and-skeletons.md](../create-mobile-app/references/navigation-and-skeletons.md) section 2.1 for apps with `src/hooks/data/`, or per [data-model-first.md](../create-mobile-app/references/data-model-first.md) Step 10.8a for apps without it. Section 2.1 types shared components with the domain types from `@/hooks/data`, and an app without that folder has nothing to import them from; Step 10.8a builds them on its generated services and models instead.
+- For brand-new screens, write typed skeleton files before calling builders: [navigation-and-skeletons.md](../create-mobile-app/references/navigation-and-skeletons.md) section 2.2 for apps with `src/hooks/data/`, [data-model-first.md](../create-mobile-app/references/data-model-first.md) Step 10.8b for apps without it.
 - For existing screens, do not overwrite with skeletons. Pass the current file content and the change request to the builder in edit mode. If imports/data hooks changed, update them surgically before the builder fills or revises JSX.
 - For removed screens, delete route files and remove layout entries only when the user approved deletion in Step 3.
 
@@ -977,7 +981,7 @@ Shared scaffold algorithm:
 
 - If `src/components/index.tsx`, `src/hooks/index.ts`, `src/utils/index.ts`, or `src/tokens/index.ts` is missing, copy the missing file from `shared/samples/src/`. Never overwrite an existing shared file.
 - If affected screens share an entity card/row, choice map, cursor hook, detail hook, or save helper, create or update a focused app-specific shared file before spawning builders.
-- For brand-new screens, write a typed skeleton at the `target_file` using the relevant `/create-mobile-app` Step 10.8b template. The skeleton must compile with `return null` before screen-builder runs.
+- For brand-new screens, write a typed skeleton at the `target_file` using the relevant [navigation-and-skeletons.md](../create-mobile-app/references/navigation-and-skeletons.md) section 2.2 template (apps with `src/hooks/data/`) or [data-model-first.md](../create-mobile-app/references/data-model-first.md) Step 10.8b template (apps without it). The skeleton must compile with `return null` before screen-builder runs.
 - For existing screens, never replace the whole file with a skeleton. Patch imports/hooks only when the approved edit changes the data/native surface, then ask the builder to preserve existing behavior.
 
 Run the navigation/skeleton gate before screen-builder work:
@@ -1080,7 +1084,7 @@ Treat validator findings like create-flow gate failures: capture once, batch by 
 
 #### Step 7.1 — Targeted style-quality sweep
 
-When screen files changed, run a focused version of `/create-mobile-app` Step 11.4 against the changed screen files plus any route layouts changed by this edit.
+When screen files changed, run a focused version of `/create-mobile-app` Step 15 against the changed screen files plus any route layouts changed by this edit.
 
 Rules:
 

@@ -21,6 +21,7 @@ const {
 const { ensureAppInstanceId, findAppInstanceId } = require('../lib/app-identity');
 const { TRACKED_SKILL_NAMES } = require('../lib/mobileapp-hook-utils');
 const { readProcessScope } = require('../lib/mobile-telemetry-session');
+const { createSkillDataModelFirst, createSkillWorkflow, sharedStepFiles } = require('./helpers/create-skill');
 
 const PLUGIN_ROOT = path.resolve(__dirname, '..', '..');
 const TELEMETRY_CLI = path.join(
@@ -464,10 +465,8 @@ test('shared instructions own checkpoint execution and lifecycle rules', () => {
 
 test('create-mobile-app uses precise checkpoint names at major workflow boundaries', () => {
   const shared = fs.readFileSync(path.join(PLUGIN_ROOT, 'shared', 'shared-instructions.md'), 'utf8');
-  const workflow = fs.readFileSync(
-    path.join(PLUGIN_ROOT, 'skills', 'create-mobile-app', 'SKILL.md'),
-    'utf8',
-  );
+  // Phase A (SKILL.md) then Phase B (references/make-it-real.md), in run order.
+  const workflow = createSkillWorkflow();
 
   assert.match(shared, /node "\$\{PLUGIN_ROOT\}\/scripts\/emit-telemetry-checkpoint\.js"/);
   assert.doesNotMatch(shared, /node "\$\{CLAUDE_SKILL_DIR\}/);
@@ -475,10 +474,45 @@ test('create-mobile-app uses precise checkpoint names at major workflow boundari
   assert.deepEqual(
     [...workflow.matchAll(/\*\*Telemetry checkpoint: `([^`]+)`\*\*/g)]
       .map((match) => match[1]),
+    // Preview-first order: the screens are planned, built on sample data, and previewed
+    // before any architecture, auth, or data-source work. The data layer is written while the
+    // screens build, and JavaScript packages wait until after the preview, which needs none.
     [
       'validate_fresh_template',
-      'validate_development_toolchain',
+      // SKILL.md gathers the requirements for both orders before the build-order question.
       'gather_app_requirements',
+      'validate_development_toolchain',
+      'select_app_environment',
+      'prepare_template_files',
+      'initialize_power_apps_project',
+      'validate_scaffold_typescript',
+      'plan_app_screens',
+      'wire_app_navigation',
+      'build_and_validate_screens',
+      'generate_preview_data_layer',
+      'launch_web_preview',
+      'install_approved_javascript_dependencies',
+      'plan_app_architecture',
+      'configure_native_authentication',
+      'apply_dataverse_data_model',
+      'configure_native_capabilities',
+      'generate_connector_data_sources',
+      'connect_real_data_sources',
+      'validate_screen_design_quality',
+      'launch_metro_dev_server',
+    ],
+  );
+
+  // The data-model-first order is the original workflow and keeps its original checkpoints:
+  // architecture is planned before the template is touched, and screens are built last.
+  assert.deepEqual(
+    [...createSkillDataModelFirst().matchAll(/\*\*Telemetry checkpoint: `([^`]+)`\*\*/g)]
+      .map((match) => match[1]),
+    [
+      'validate_fresh_template',
+      // SKILL.md gathers the requirements for both orders before the build-order question.
+      'gather_app_requirements',
+      'validate_development_toolchain',
       'plan_app_architecture',
       'select_app_environment',
       'prepare_template_files',
@@ -498,12 +532,35 @@ test('create-mobile-app uses precise checkpoint names at major workflow boundari
   );
 });
 
+// The reference files each alternative run reads after SKILL.md, for skills whose references
+// hold more than one flow.
+// A flow's shared steps (references/<step>.md files it includes) are part of its run too.
+const createRunFlow = (...files) => {
+  const dir = path.join(PLUGIN_ROOT, 'skills', 'create-mobile-app');
+  const shared = files.flatMap((file) => sharedStepFiles(fs.readFileSync(path.join(dir, file), 'utf8')));
+  return [...files, ...[...new Set(shared)].map((file) => path.join('references', file))];
+};
+const RUN_FLOWS = {
+  'create-mobile-app': [
+    createRunFlow('references/screens-first.md', 'references/make-it-real.md'),
+    createRunFlow('references/data-model-first.md'),
+  ],
+};
+
 test('every tracked operational skill has precise checkpoint markers', () => {
   for (const skillName of TRACKED_SKILL_NAMES) {
-    const workflow = fs.readFileSync(
-      path.join(PLUGIN_ROOT, 'skills', skillName, 'SKILL.md'),
-      'utf8',
-    );
+    // A skill may keep later phases in references/*.md, which the checkpoint emitter also
+    // reads (getTelemetryCheckpointNames), so their markers obey the same rules. SKILL.md
+    // comes first: its shared-instructions link precedes every marker in the skill.
+    const skillDir = path.join(PLUGIN_ROOT, 'skills', skillName);
+    const referencesDir = path.join(skillDir, 'references');
+    const references = fs.existsSync(referencesDir)
+      ? fs.readdirSync(referencesDir).filter((name) => name.endsWith('.md')).sort()
+      : [];
+    const workflow = [
+      path.join(skillDir, 'SKILL.md'),
+      ...references.map((name) => path.join(referencesDir, name)),
+    ].map((file) => fs.readFileSync(file, 'utf8')).join('\n');
     const matches = [...workflow.matchAll(/\*\*Telemetry checkpoint: `([^`]+)`\*\*/g)];
 
     if (CHECKPOINT_EXEMPT_SKILLS.has(skillName)) {
@@ -517,8 +574,16 @@ test('every tracked operational skill has precise checkpoint markers', () => {
       `${skillName} must reference shared instructions before its first checkpoint`);
     assert.doesNotMatch(workflow, /\*\*Checkpoint execution:\*\*|emit-telemetry-checkpoint\.js/,
       `${skillName} must inherit checkpoint execution from shared instructions`);
-    const names = matches.map((match) => match[1]);
-    assert.equal(new Set(names).size, names.length, `${skillName} checkpoint names must be unique`);
+    // Names are unique per run. A skill with alternative flows (create-mobile-app's two build
+    // orders) repeats a name once per flow, so each run still emits it at most once and both
+    // orders report comparable steps.
+    const runs = (RUN_FLOWS[skillName] || [references.map((name) => path.join('references', name))])
+      .map((files) => [path.join(skillDir, 'SKILL.md'), ...files.map((file) => path.join(skillDir, file))]
+        .map((file) => fs.readFileSync(file, 'utf8')).join('\n'));
+    for (const run of runs) {
+      const names = [...run.matchAll(/\*\*Telemetry checkpoint: `([^`]+)`\*\*/g)].map((match) => match[1]);
+      assert.equal(new Set(names).size, names.length, `${skillName} checkpoint names must be unique within a run`);
+    }
 
     for (const match of matches) {
       const checkpointName = match[1];
