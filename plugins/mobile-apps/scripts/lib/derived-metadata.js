@@ -1,7 +1,9 @@
 'use strict';
 
 function normalizedSourceType(value) {
-  return value === null || value === undefined ? 0 : Number(value);
+  // Explicit null denotes a non-specializable column; missing evidence does not.
+  // https://learn.microsoft.com/en-us/dotnet/api/microsoft.xrm.sdk.metadata.attributemetadata.sourcetype
+  return value === null ? 0 : value;
 }
 
 function normalizeOptions(options) {
@@ -59,9 +61,14 @@ function compareOptions(expectedOptions, actualOptions, requireBooleanPair = fal
 function compareDerivedColumn(expected, actual) {
   const reasons = [];
   for (const field of ['table', 'logicalName', 'kind', 'type', 'sourceType']) {
-    if (!Object.prototype.hasOwnProperty.call(expected, field) || expected[field] === '') {
+    if (!Object.prototype.hasOwnProperty.call(expected, field)
+      || expected[field] === undefined || expected[field] === '') {
       reasons.push(`expected metadata ${field} is missing`);
     }
+  }
+  if (expected.sourceType !== null && expected.sourceType !== undefined
+    && !Number.isInteger(expected.sourceType)) {
+    reasons.push('expected metadata sourceType is malformed');
   }
   if (expected.kind === 'lookup' && !expected.lookupTarget) {
     reasons.push('expected lookupTarget is missing');
@@ -81,12 +88,12 @@ function compareDerivedColumn(expected, actual) {
   if (typeof actual.type !== 'string' || !actual.type) {
     reasons.push('live metadata type is missing or malformed');
   }
-  if (!Object.prototype.hasOwnProperty.call(actual, 'sourceType')) {
+  if (!Object.prototype.hasOwnProperty.call(actual, 'sourceType')
+    || actual.sourceType === undefined) {
     reasons.push('live metadata sourceType is missing');
   } else if (
     actual.sourceType !== null
-    && actual.sourceType !== undefined
-    && !Number.isFinite(Number(actual.sourceType))
+    && !Number.isInteger(actual.sourceType)
   ) {
     reasons.push('live metadata sourceType is malformed');
   }
@@ -125,12 +132,12 @@ function compareDerivedColumn(expected, actual) {
   if (expected.kind === 'computed') {
     if (!Object.prototype.hasOwnProperty.call(actual, 'sourceTypeMask')) {
       reasons.push('live computed metadata sourceTypeMask is missing');
-    } else if (!Number.isInteger(Number(actual.sourceTypeMask))) {
+    } else if (!Number.isInteger(actual.sourceTypeMask) || actual.sourceTypeMask < 0) {
       reasons.push('live computed metadata sourceTypeMask is malformed');
     } else {
-      const expectedMask = Number(expected.sourceTypeMask);
-      const actualMask = Number(actual.sourceTypeMask);
-      if (!Number.isInteger(expectedMask)) {
+      const expectedMask = expected.sourceTypeMask;
+      const actualMask = actual.sourceTypeMask;
+      if (!Number.isInteger(expectedMask) || expectedMask < 0) {
         reasons.push('expected computed metadata sourceTypeMask is malformed');
       } else if ((actualMask & 32) !== 0) {
         reasons.push('live computed metadata SourceTypeMask contains the Invalid bit');

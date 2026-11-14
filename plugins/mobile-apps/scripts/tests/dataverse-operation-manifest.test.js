@@ -16,6 +16,7 @@ const {
   rollForwardPublishCheckpoint,
   sha256,
   stableJson,
+  validateContract,
   validateManifest,
 } = require('../build-dataverse-operation-manifest');
 const { operationFingerprint } = require('../dataverse-request');
@@ -1360,6 +1361,134 @@ test('semantic validation rejects recomputed-hash tampering across executable co
     const validation = validateManifest(candidate, inputs);
     assert.equal(validation.valid, false);
     assert.match(validation.errors.join('; '), /semantic content/);
+  }
+});
+
+test('ordinary type aliases use the same validated creation payloads', () => {
+  for (const [canonical, alias] of [
+    ['string', 'text'],
+    ['memo', 'multiline'],
+    ['integer', 'whole number'],
+    ['double', 'float'],
+    ['money', 'currency'],
+    ['choice', 'picklist'],
+    ['choice', 'Pick List'],
+  ]) {
+    const phases = (type) => {
+      const contract = {
+        schemaVersion: 1, publisherPrefix: 'cr1',
+        tables: [contractTable('cr1_item', 'create', 0, [
+          contractColumn('cr1_name', 'string', 'create', { primaryName: true }),
+          contractColumn('cr1_value', type, 'create', canonical === 'choice'
+            ? { options: [{ value: 1, label: 'Open' }, { value: 2, label: 'Closed' }] }
+            : {}),
+        ])],
+      };
+      const manifest = buildManifest(buildInputs(contract, snapshot({ proposedMissing: ['cr1_item'] })));
+      assert.equal(manifest.executable, true, type);
+      return manifest.execution.phases;
+    };
+    assert.deepEqual(phases(alias), phases(canonical), alias);
+  }
+});
+
+test('picklist aliases require and verify the same options as choice', () => {
+  const options = [{ value: 1, label: 'Open' }, { value: 2, label: 'Closed' }];
+  for (const type of ['choice', 'picklist', 'Pick List']) {
+    const contract = {
+      schemaVersion: 1, publisherPrefix: 'cr1',
+      tables: [contractTable('cr1_item', 'reuse', 0, [
+        contractColumn('cr1_status', type, 'reuse', { options }),
+      ])],
+    };
+    for (const { choices, liveType = 'Picklist', expected } of [
+      { choices: options, expected: true },
+      { choices: [...options, { value: 3, label: 'Archived' }], expected: true },
+      { choices: [], expected: false },
+      { choices: [options[0]], expected: false },
+      { choices: [options[0], { value: 2, label: 'Renamed' }], expected: false },
+      { choices: options, liveType: 'State', expected: false },
+      { choices: options, liveType: 'Status', expected: false },
+    ]) {
+      const manifest = buildManifest(buildInputs(contract, snapshot({
+        tables: [table('cr1_item', [column('cr1_status', liveType, { choices })])],
+      })));
+      assert.equal(manifest.executable, expected, `${type}: ${liveType} ${JSON.stringify(choices)}`);
+      assert.equal(manifest.summary.metadataOperationCount, 0);
+    }
+    for (const invalidOptions of [undefined, [], [options[0], options[0]]]) {
+      const invalid = structuredClone(contract);
+      invalid.tables[0].columns[0].options = invalidOptions;
+      const validation = validateContract(invalid);
+      assert.equal(validation.valid, false, `${type}: ${JSON.stringify(invalidOptions)}`);
+      assert.match(validation.errors.join('; '), /options.*non-empty|duplicated/);
+    }
+  }
+});
+
+async function computedColumnDetail(typedEvidence) {
+  return loadDetailedEntity(async (method, apiPath) => {
+    assert.equal(method, 'GET');
+    if (apiPath.includes('/Attributes?$select=')) {
+      return { status: 200, data: { value: [{
+        MetadataId: 'computed-id', LogicalName: 'cr1_total', SchemaName: 'cr1_total',
+        AttributeType: 'Decimal', AttributeTypeName: { Value: 'DecimalType' },
+        RequiredLevel: { Value: 'None' }, SourceType: 1,
+      }] } };
+    }
+    if (apiPath.includes('/Attributes(computed-id)')) {
+      return { status: 200, data: {
+        LogicalName: 'cr1_total', SourceType: 1,
+        FormulaDefinition: 'cr1_amount * 2', ...typedEvidence,
+      } };
+    }
+    return { status: 200, data: { value: [] } };
+  }, {
+    LogicalName: 'cr1_order', SchemaName: 'cr1_order', EntitySetName: 'cr1_orders',
+    PrimaryIdAttribute: 'cr1_orderid', PrimaryNameAttribute: 'cr1_name',
+    OwnershipType: 'UserOwned', IsCustomEntity: true,
+    IsCustomizable: { Value: true }, CanCreateAttributes: { Value: true },
+  });
+}
+
+function computedColumnContract(sourceTypeMask) {
+  return {
+    schemaVersion: 1, publisherPrefix: 'cr1',
+    tables: [contractTable('cr1_order', 'reuse', 0, [
+      contractColumn('cr1_total', 'computed', 'reuse', {
+        attributeType: 'Decimal', sourceType: 1, sourceTypeMask,
+        formulaDefinition: 'cr1_amount * 2',
+      }),
+    ])],
+  };
+}
+
+test('computed reuse uses verified typed metadata rather than an absent common mask', async () => {
+  for (const mask of [0, 4, '4']) {
+    const live = await computedColumnDetail({ SourceTypeMask: mask });
+    assert.equal(live.columns[0].sourceTypeMask, null);
+    assert.equal(live.columns[0].computed.metadataStatus, 'available');
+    const manifest = buildManifest(buildInputs(computedColumnContract(Number(mask)), snapshot({
+      tables: [live],
+    })));
+    assert.equal(manifest.executable, true, `mask ${mask}`);
+    assert.equal(manifest.summary.metadataOperationCount, 0);
+  }
+});
+
+test('computed reuse rejects unavailable or malformed typed evidence after fresh reconciliation', async () => {
+  for (const typedEvidence of [
+    {},
+    ...[null, '', false, true, [], {}, -64, 32].map((SourceTypeMask) => ({ SourceTypeMask })),
+    { SourceType: 2, SourceTypeMask: 0 },
+    { SourceTypeMask: 0, FormulaDefinition: 'cr1_amount + 2' },
+  ]) {
+    const manifest = buildManifest(buildInputs(computedColumnContract(0), snapshot({
+      tables: [await computedColumnDetail(typedEvidence)],
+    })));
+    assert.equal(manifest.executable, false, JSON.stringify(typedEvidence));
+    assert.equal(manifest.summary.metadataOperationCount, 0);
+    assert.equal(manifest.decisions.find((decision) => decision.itemType === 'column').verificationStatus, 'conflict');
   }
 });
 
