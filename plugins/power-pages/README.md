@@ -309,6 +309,7 @@ Generates web role YAML files in your `.powerpages-site` directory for managing 
 Adds login/logout functionality and role-based authorization to your site.
 
 - Auth service with anti-forgery token handling
+- Read-only portal governance preflight before IdP setup or custom login provider additions; disabled requirements are listed, and unverifiable checks stop setup without changing policies
 - Login/logout UI component
 - Role-based UI patterns (show/hide elements by role)
 - Framework-specific implementation (hooks, composables, services)
