@@ -43,7 +43,7 @@ function watchPlan(options) {
     message.textContent = 'Auto-refresh paused while waiting for input. Reload the browser after answering.';
     return;
   }
-  if (!options.active || count >= MAX_UNCHANGED_RELOADS) {
+  if (count >= MAX_UNCHANGED_RELOADS) {
     message.textContent = 'Auto-refresh paused: no new progress. Reload the browser to check or resume.';
     return;
   }

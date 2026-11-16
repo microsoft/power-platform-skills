@@ -104,6 +104,37 @@ test('create and edit plans bound unchanged reloads, even without browser storag
   }
 });
 
+test('initial and between-phase plans keep polling within the unchanged-reload budget', () => {
+  const root = project('docs-refresh-between-phases');
+  try {
+    const state = initState(root, { appName: 'App' });
+    for (const betweenPhases of [false, true]) {
+      if (betweenPhases) applyStep(state, { id: 'requirements', status: 'done' });
+      save(root, state);
+      const html = fs.readFileSync(outputPath(root), 'utf8');
+      let href = 'file:///app/docs/plan.html';
+      for (let attempt = 0; attempt < 30; attempt += 1) {
+        const page = refreshPage(html, href);
+        page.tick();
+        assert.equal(page.navigations.length, 1,
+          `${betweenPhases ? 'between-phase' : 'initial'} plan must pick up the next update`);
+        href = page.navigations[0];
+      }
+      assert.equal(refreshPage(html, href).intervals.length, 0,
+        'a plan with no active phase must still stop if progress never changes');
+      applyStep(state, { id: 'architecture', status: 'active', note: 'Planning' });
+      save(root, state);
+      const resumed = refreshPage(fs.readFileSync(outputPath(root), 'utf8'), href);
+      resumed.tick();
+      assert.equal(new URL(resumed.navigations[0]).searchParams.get('planReloads'), '1',
+        'the next phase renews the budget');
+      applyStep(state, { id: 'architecture', status: 'pending' });
+    }
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('input gates, terminal plans and reader activity do not trigger automatic reloads', () => {
   const root = project('docs-refresh-states');
   try {
@@ -114,6 +145,10 @@ test('input gates, terminal plans and reader activity do not trigger automatic r
           id: 'requirements', status: status === 'waiting' ? 'active' : status,
           note: status === 'waiting' ? 'Gate 1 - awaiting your approval' : '',
         });
+        if (!edit && status === 'done') {
+          // Completing one phase is a between-phase snapshot, not a finished run.
+          for (const phase of state.phases) applyStep(state, { id: phase.id, status: 'done' });
+        }
         const file = edit
           ? writeEditProgress(root, { status, waiting: status === 'waiting' })
           : save(root, state) && outputPath(root);

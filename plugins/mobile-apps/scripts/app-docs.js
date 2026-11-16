@@ -463,7 +463,6 @@ function render(projectRoot, state) {
         sectionStates: state.sectionStates,
         phone: state.phone,
       }, {
-        active: state.phases.some((phase) => phase.status === 'active'),
         waiting: Boolean(summary.awaitingInput),
         settled: summary.settled,
         reloadMs: 10000,
@@ -968,7 +967,6 @@ function writeEditProgress(projectRoot, options = {}) {
   const autoRefresh = planRefreshScript({
     phase, note, status, waiting, items, changes, phone,
   }, {
-    active: status === 'active',
     waiting: waiting || status === 'waiting',
     settled,
     reloadMs: 2500,

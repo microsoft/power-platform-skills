@@ -219,7 +219,7 @@ What happens:
 
 End state: a working app you can iterate on with hot reload. ~5–12 minutes for the planning gates, then scaffolding runs.
 
-The build and edit plan pages refresh while the run is active.
+The build and edit plan pages automatically check for new progress.
 They pause when waiting for your input or after 30 consecutive reloads without a progress change.
 Reload the browser after answering a question or resuming an interrupted run.
 Render timestamps do not reset the limit; new progress does.
