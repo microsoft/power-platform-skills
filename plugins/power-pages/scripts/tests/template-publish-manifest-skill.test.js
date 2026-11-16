@@ -30,3 +30,15 @@ test('template install has no second publication phase', () => {
   assert.doesNotMatch(skill, /Publish template customizations/);
   assert.doesNotMatch(skill, /publication-scope|publication-failed/);
 });
+
+test('template prerequisites require consent and verification before import or provisioning', () => {
+  const consent = skill.indexOf('List every application in `SELECTED_TEMPLATE.prerequisiteApplications`');
+  const install = skill.indexOf('pac application install --environment "<environmentUrl>" --application-name "<name>"');
+  const verify = skill.indexOf('pac application list --environment "<environmentUrl>" --installState Installed');
+  const pack = skill.indexOf('node "${PLUGIN_ROOT}/scripts/pack-template-solution.js"');
+  const provision = skill.indexOf('node "${PLUGIN_ROOT}/scripts/provision-template-site.js"');
+  assert.ok(consent !== -1 && install > consent && verify > install && pack > verify && provision > pack);
+  assert.match(skill, /PowerPages_PartnerPortal_V2/);
+  assert.match(skill, /stop before solution import, site creation, or seed data/);
+  assert.match(skill, /do not automatically retry or undo it/);
+});

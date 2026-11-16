@@ -355,13 +355,13 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
 
    7. If the language preflight passed but `.js` was blocked and the user approved/verification passed, mark **Validate JavaScript unblock requirement** as `completed`. Then mark **Confirm template install** as `in_progress`, present the template and environment, and ask:
 
-      List any supporting solution whose manifest metadata has `publishChanges: true`.
+      List every application in `SELECTED_TEMPLATE.prerequisiteApplications` (if present); installing or updating these applications changes the target environment and may take time. List any supporting solution whose manifest metadata has `publishChanges: true`.
       Explain that those solutions use `pac solution import --publish-changes` so imported forms, views, and other customizations become visible immediately after import.
       Disclose that PAC's publication step can also publish other pending customizations in the target environment.
 
       | Question | Header | Options |
       |----------|--------|---------|
-      | Install **`<SELECTED_TEMPLATE.displayName>`** into **`<environmentUrl>`**? This imports any required unmanaged supporting solutions, runs PAC's publish-changes step for solutions that declare it in the template manifest, clones and builds the website code, and uploads the new code site. The publication step can include other pending customizations in this environment. Seed data is applied before activation when available. | Install Template | Yes, install this template (Recommended), No, start from scratch, Cancel |
+      | Install **`<SELECTED_TEMPLATE.displayName>`** into **`<environmentUrl>`**? This installs the listed prerequisite applications, imports any required unmanaged supporting solutions, runs PAC's publish-changes step for solutions that declare it in the template manifest, clones and builds the website code, and uploads the new code site. The publication step can include other pending customizations in this environment. Seed data is applied before activation when available. | Install Template | Yes, install this template (Recommended), No, start from scratch, Cancel |
 
       - **No, start from scratch**: set `CREATION_PATH = "from-scratch"` and continue to the deferred framework/location questions.
       - **Cancel**: stop; no org mutation has happened. Do not emit `template_import_failure` because no import was attempted; `template_used` was already emitted when the template path was selected.
@@ -460,6 +460,14 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
       For legacy `previewImages` only, name device-specific captures `desktop-<page>.<ext>` and `mobile-<page>.<ext>` so the status page can pair them.
       Unprefixed legacy images count as desktop previews; the Mobile control appears when the selected page has a mobile image.
       The server command returns only after the listener is ready. It removes the temporary status directory after a successful redirect, after the browser stops polling, or when the maximum lifetime expires.
+
+      Before importing solutions or creating the site, install each entry of `SELECTED_TEMPLATE.prerequisiteApplications` in manifest order. If the field is absent or empty, skip this step. Otherwise append **Install prerequisite applications** (active form **Installing prerequisite applications**), mark it `in_progress`, update the status JSON to `{ "state": "running", "phase": "solution", "message": "Installing prerequisite application <name>" }`, and show the application name in the conversation. For each name, run against the confirmed environment:
+      ```bash
+      pac application install --environment "<environmentUrl>" --application-name "<name>"
+      ```
+      For example, a Partner Portal template declares `"prerequisiteApplications": ["PowerPages_PartnerPortal_V2"]`. The identifiers must come from the pinned catalog, not the user's free text. `pac application install` can install or update an application; do not assume an already-installed application needs an update without the consent above.
+
+      Wait for each command to finish and verify its installed state in the same environment with `pac application list --environment "<environmentUrl>" --installState Installed`. Continue only when the exact application is reported installed. After a successful install command, if it is not yet listed, recheck every 30 seconds for up to 10 minutes, showing progress; do not rerun the install. If a command fails or times out, or the installed state cannot be confirmed within that limit, surface the output, write `{ "state": "error", "phase": "solution", "message": "Prerequisite application <name> could not be verified; see the conversation" }` to the status JSON, and stop before solution import, site creation, or seed data. A timeout does not prove that the server-side operation stopped; do not automatically retry or undo it. Tell the user that earlier applications or a partial installation may remain in the environment. Mark **Install prerequisite applications** as `completed` only after all applications are verified.
    7. Unless `SKIP_TEMPLATE_SOLUTION_IMPORT = true`, mark **Import template supporting solutions** as `in_progress`. Process `TEMPLATE_SOLUTIONS_TO_IMPORT` sequentially in its existing case-insensitive lexical unique-name order. For each entry, set `CURRENT_TEMPLATE_SOLUTION` and prepare its unmanaged solution for import:
       ```bash
       # Update the status JSON:
@@ -469,7 +477,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
       ```
       Set `PACKED_TEMPLATE_SOLUTION_ZIP = <result.zipPath>`, `PACKED_TEMPLATE_SOLUTION_WORK_DIRECTORY = <result.workDirectory>`, `PACKED_TEMPLATE_SOLUTION_CLEANUP_MARKER = <result.cleanupMarker>`, and `PACKED_TEMPLATE_SOLUTION_CLEANUP_TOKEN = <result.cleanupToken>` for the current solution. The packer creates the ZIP only in a token-owned OS temporary directory. Never write a packed ZIP into the downloaded template cache or another repository path.
 
-      If packing fails, do not call Dataverse and do not emit `template_import_failure` because no import was attempted. The packer removes partial output automatically.
+      If packing fails, do not import the current solution or emit `template_import_failure` for it because its import was not attempted. The packer removes partial output automatically. Tell the user about any prerequisite applications and earlier supporting solutions already installed in this run.
 
       <!-- gate: create-site:1.5.pack-failed | category=progress | cancel-leaves=template-cache -->
 
@@ -477,8 +485,8 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
       >
       > **Trigger:** Phase 1.5 when local validation or `pac solution pack` fails for one discovered solution.
       > **Loop behavior:** Fires per failed iteration of `TEMPLATE_SOLUTIONS_TO_IMPORT`; an answer applies only to `CURRENT_TEMPLATE_SOLUTION`.
-      > **Why we ask:** No environment mutation has happened, but template installation cannot continue without a valid temporary solution ZIP.
-      > **Cancel leaves:** `template-cache` — downloaded template source remains in the private SHA-keyed template cache; partial pack output has been removed.
+      > **Why we ask:** Template installation cannot continue without a valid temporary solution ZIP.
+      > **Cancel leaves:** `template-cache` — downloaded template source remains in the private SHA-keyed template cache; partial pack output has been removed. Any prerequisite applications and earlier imported solutions remain in the environment.
 
       Use `AskUserQuestion`:
 

@@ -298,6 +298,19 @@ function validateCatalogShape(catalog) {
     if (!Array.isArray(template.keywords)) return `template ${template.id} keywords must be an array`;
     const solutionSettingsError = validateSolutionSettings(template.solutions, template.id);
     if (solutionSettingsError) return solutionSettingsError;
+    if (template.prerequisiteApplications !== undefined) {
+      if (template.kind !== 'spa' || !Array.isArray(template.prerequisiteApplications)) {
+        return `template ${template.id} prerequisiteApplications must be an array on SPA templates`;
+      }
+      const names = new Set();
+      for (const name of template.prerequisiteApplications) {
+        if (typeof name !== 'string' || !IDENTIFIER_PATTERN.test(name)) {
+          return `template ${template.id} prerequisite application must be an application unique name`;
+        }
+        if (names.has(name.toLowerCase())) return `template ${template.id} has duplicate prerequisite application: ${name}`;
+        names.add(name.toLowerCase());
+      }
+    }
     if (template.responsivePreviews !== undefined) {
       const error = validateResponsivePreviews(template.responsivePreviews, `template ${template.id}`);
       if (error) return error;
@@ -342,6 +355,9 @@ function validateCatalogShape(catalog) {
         }
         if (variant.solutions !== undefined) {
           return `template ${template.id} solution settings must be defined at the family level`;
+        }
+        if (variant.prerequisiteApplications !== undefined) {
+          return `template ${template.id} prerequisiteApplications must be defined at the family level`;
         }
         if (variant.previewImages !== undefined && !Array.isArray(variant.previewImages)) {
           return `template ${template.id} variant ${framework} previewImages must be an array`;
@@ -454,6 +470,7 @@ function normalizeCatalogFamilies(catalog = {}) {
         ...effectivePreviewFields(template),
         ...(template.seedDataPath ? { seedDataPath: template.seedDataPath } : {}),
         ...(template.solutions?.length ? { solutions: template.solutions } : {}),
+        ...(template.prerequisiteApplications?.length ? { prerequisiteApplications: template.prerequisiteApplications } : {}),
         author: template.author,
         variants: [{
           familyId: template.id,
@@ -484,6 +501,7 @@ function normalizeCatalogFamilies(catalog = {}) {
       ...effectivePreviewFields(template),
       ...(template.seedDataPath ? { seedDataPath: template.seedDataPath } : {}),
       ...(template.solutions?.length ? { solutions: template.solutions } : {}),
+      ...(template.prerequisiteApplications?.length ? { prerequisiteApplications: template.prerequisiteApplications } : {}),
       author: template.author,
       variants: Object.entries(template.variants).map(([framework, variant]) => {
         const variantKey = framework.toLowerCase();
