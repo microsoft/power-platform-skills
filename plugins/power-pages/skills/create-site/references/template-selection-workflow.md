@@ -95,7 +95,7 @@
 7. Branch on the user's selection:
    - **Non-SPA template selected**: set `PRESELECTED_NON_SPA_TEMPLATE_NAME` to its exact `name`,
      retain its pinned catalog coordinates, read
-     `${PLUGIN_ROOT}/skills/create-site/workflows/non-spa-site.md`, and follow that workflow.
+     [the non-SPA workflow](non-spa-site-workflow.md), and follow that workflow.
      Do not continue into the SPA template or from-scratch phases.
    - **Template family and framework variant selected**:
      1. Set `SELECTED_TEMPLATE` to the family entry and `SELECTED_TEMPLATE_VARIANT` to the exact framework variant. Resolve the selected template assets once from the pinned catalog SHA. The result combines the family's supporting solutions with the selected variant's website code:

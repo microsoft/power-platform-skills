@@ -11,7 +11,7 @@ const plugin = path.resolve(root, '../..');
 const read = (file) => fs.readFileSync(path.join(root, file), 'utf8');
 const entry = read('SKILL.md');
 const references = fs.readdirSync(path.join(root, 'references')).map((file) => `references/${file}`);
-const instructions = ['SKILL.md', 'workflows/non-spa-site.md', ...references];
+const instructions = ['SKILL.md', ...references];
 const links = [...entry.matchAll(/\]\(([^)#]+)(?:#[^)]*)?\)/g)].map((match) => match[1]);
 
 test('create-site retains its original argument hint and bounded activation context', () => {
@@ -32,11 +32,25 @@ test('all instruction resources and template inputs are directly reachable insid
     assert.ok(target.startsWith(plugin + path.sep), `link escapes the plugin: ${link}`);
     assert.ok(fs.existsSync(target), `missing installed resource: ${link}`);
   }
-  for (const file of [...references, 'workflows/non-spa-site.md', 'assets/plan-labels.example.json']) {
+  for (const file of [...references, 'assets/plan-labels.example.json']) {
     assert.ok(links.includes(file), `resource requires a chained lookup: ${file}`);
   }
   for (const directory of ['react', 'vue', 'angular', 'astro', 'shared']) {
     assert.ok(links.includes(`assets/${directory}/`), directory);
+  }
+});
+
+test('non-SPA router links resolve from the entry and both SPA branches', () => {
+  const router = 'references/non-spa-site-workflow.md';
+  assert.ok(links.includes(router));
+  assert.ok(!fs.existsSync(path.join(root, 'workflows', 'non-spa-site.md')));
+  for (const file of ['references/from-scratch-workflow.md', 'references/template-selection-workflow.md']) {
+    const text = read(file);
+    const link = [...text.matchAll(/\]\(([^)#]+)(?:#[^)]*)?\)/g)]
+      .map((match) => match[1]).find((target) => target === 'non-spa-site-workflow.md');
+    assert.ok(link, `missing sibling router link in ${file}`);
+    assert.equal(path.resolve(root, path.dirname(file), link), path.join(root, router));
+    assert.ok(fs.statSync(path.resolve(root, path.dirname(file), link)).isFile());
   }
 });
 

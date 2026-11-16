@@ -232,8 +232,8 @@ references/                    ← Shared reference docs used by multiple skills
 skills/
   create-site/
     SKILL.md                   ← Routes SPA and Enhanced-only non-SPA creation
-    workflows/non-spa-site.md ← Non-SPA disclosure, invariants and ordered-stage router
-    references/*-workflow.md ← Focused SPA and non-SPA stages, loaded from the entry's resource map
+    references/non-spa-site-workflow.md ← Non-SPA disclosure, invariants and ordered-stage router
+    references/*-workflow.md ← Router and focused SPA/non-SPA stages, loaded from the entry's resource map
     assets/plan-labels.example.json ← Complete localizable HTML-plan label dictionary
     assets/{react,vue,angular,astro}/  ← Framework templates with __PLACEHOLDER__ tokens
     references/design-aesthetics.md  ← Compatibility pointer to the shared principles and SPA adapter

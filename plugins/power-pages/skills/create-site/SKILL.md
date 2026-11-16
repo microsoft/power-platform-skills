@@ -22,7 +22,7 @@ Relative links below start at this skill directory.
 
 - Support static React, Vue, Angular and Astro SPAs, and Enhanced-model non-SPA sites with Bootstrap 5.
   Do not scaffold Next.js, Nuxt.js, Remix or SvelteKit.
-- **Non-SPA route:** A selection of **Non-SPA (Liquid + Web Template)** or a non-SPA template goes to [the non-SPA workflow](workflows/non-spa-site.md).
+- **Non-SPA route:** A selection of **Non-SPA (Liquid + Web Template)** or a non-SPA template goes to [the non-SPA workflow](references/non-spa-site-workflow.md).
   Do not continue into SPA scaffolding, SPA design critique or SPA deployment.
   Non-SPA sites need no dev server or live preview.
 - Keep cloud mutations behind their documented approval gates.
@@ -175,7 +175,7 @@ Telemetry uses only the existing fixed taxonomy, never user text or identifiers;
 
 ## Non-SPA resource map
 
-Read [the non-SPA router](workflows/non-spa-site.md) first, including its preview disclosure and invariants.
+Read [the non-SPA router](references/non-spa-site-workflow.md) first, including its preview disclosure and invariants.
 Its ordered stages use these directly linked resources; do not load them for a SPA.
 
 | Stage | Resource |

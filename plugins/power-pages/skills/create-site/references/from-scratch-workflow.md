@@ -12,7 +12,7 @@
    | Where should the project be created? | Location | Current directory, New folder in current directory (Recommended), Any other directory |
 
    If the user selects **Non-SPA (Liquid + Web Template)**, read and follow
-   `${PLUGIN_ROOT}/skills/create-site/workflows/non-spa-site.md` and stop the SPA workflow.
+   [the non-SPA workflow](non-spa-site-workflow.md) and stop the SPA workflow.
 
 10. Determine the site's single content language independently of whether the
    purpose was supplied in the user's current request.

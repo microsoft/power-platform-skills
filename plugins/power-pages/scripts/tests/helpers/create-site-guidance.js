@@ -19,7 +19,7 @@ const read = (file) => fs.readFileSync(path.join(root, file), 'utf8').replace(/\
 function readCreateSiteGuidance(branch) {
   if (branch !== 'spa' && branch !== 'non-spa') throw new Error(`Unknown creation branch: ${branch}`);
   const stages = branch === 'spa' ? spaStages : nonSpaStages;
-  const entry = branch === 'spa' ? 'SKILL.md' : 'workflows/non-spa-site.md';
+  const entry = branch === 'spa' ? 'SKILL.md' : 'references/non-spa-site-workflow.md';
   // Follow execution order, not alphabetical filesystem order: lifecycle assertions must
   // still reject import-before-pack, activation-before-import and success-before-validation.
   return [read(entry), ...stages.map((stage) => read(`references/${stage}-workflow.md`))].join('\n\n');

@@ -472,7 +472,7 @@ When **removing** a gate, also remove its catalog row in the same PR.
 ### 6.13 `create-site` (21 gates)
 
 Gate markers now live in the focused `skills/create-site/references/*-workflow.md` resources linked directly from its entry.
-The non-SPA compatibility router retains disclosure, invariants and stage order; its six gates are owned by the corresponding non-SPA reference workflows.
+The non-SPA router at `skills/create-site/references/non-spa-site-workflow.md` retains disclosure, invariants and stage order; its six gates are owned by the corresponding non-SPA reference workflows.
 
 | ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
 |---|---|---|---|---|---|

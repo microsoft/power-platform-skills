@@ -10,6 +10,7 @@ Run the setup-auth validator explicitly with `--complete` from the site root rat
 Completion mode requires finished artifacts and the report; the hook still permits instruction-loading and in-progress runs.
 For `create-site`, use the existing direct validator arguments: canonical expected locale/direction for SPAs, or explicit project and downloaded-site evidence for non-SPAs.
 Keep cloud approval gates, accepted-operation resume behavior, single-owner status and join-before-activation semantics when splitting its workflows.
+The create-site non-SPA router lives at `skills/create-site/references/non-spa-site-workflow.md`.
 Where background workers are unavailable, execute sequentially without changing these dependencies.
 Other skills retain their current conventions until converted.
 
