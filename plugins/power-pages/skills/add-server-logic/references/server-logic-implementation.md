@@ -52,6 +52,7 @@ Repeat this step for each approved server logic item. Create or update `<PROJECT
 - Validate every required query/body value before coercing it, building a URL, or making a request. In JavaScript, `Number("")` and `Number("   ")` are `0`; reject blank values as missing before numeric conversion, then check type, format, and allowed range.
 - For external `HttpClient` calls, check any returned HTTP status before accepting the body. Treat non-2xx responses as failures even when their bodies contain parseable success-shaped data. Confirm the body exists, parse its supported representation, and validate every required response field and type before returning success.
 - Define each endpoint's success and error JSON shapes, property names, and value types in the approved plan. Return a string on every path, keep `status: "success"` and `status: "error"` distinct, and preserve the planned success fields across later edits. If an existing endpoint is updated, preserve its public response contract unless the user approves an API change; update its callers in the same approved scope.
+- Tie each success value to the data source in the approved plan. Do not replace requested live or configured data with a placeholder or demo value; resolve an unknown source before presenting the endpoint as complete.
 - Keep error messages useful without returning credentials, secret values, or sensitive request data. Log only the context needed to diagnose failures.
 
 #### Prohibited Script Patterns

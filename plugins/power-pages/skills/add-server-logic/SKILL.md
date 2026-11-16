@@ -196,7 +196,8 @@ On yes, read [the frontend integration reference](references/frontend-integratio
 
 - Reuse the site's existing service layer and CSRF handling.
 - Connect the endpoint to the relevant UI flow, not only a new helper.
-- Replace mocks only when they represent the approved behavior; retain loading, success, empty, and error states.
+- Replace placeholder data, mock handlers, or temporary actions when they are meant to be backed by an endpoint. Keep each success value tied to the approved data source; do not move placeholder or demo values into the endpoint as a substitute for the requested behavior.
+- Retain loading, success, empty, and error states.
 - For validate-and-execute operations, call the server endpoint for the protected write. Do not send a separate Web API update for the same field.
 - Match response parsing to the approved response contract and the documented envelope casing. If either is unknown, ask before using a live endpoint test to inspect it.
 

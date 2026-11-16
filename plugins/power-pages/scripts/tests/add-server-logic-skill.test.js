@@ -122,6 +122,8 @@ test('implementation guidance validates inputs and upstream responses before suc
   assert.match(implementation, /Treat non-2xx responses as failures/i);
   assert.match(implementation, /Define each endpoint's success and error JSON shapes/i);
   assert.match(implementation, /preserve the planned success fields/i);
+  assert.match(implementation, /Tie each success value to the data source in the approved plan/i);
+  assert.match(implementation, /Do not replace requested live or configured data with a placeholder or demo value/i);
   assert.match(implementation, /status:\s*"success"/);
   assert.match(implementation, /status:\s*"error"/);
   assert.match(skill, /success\/error response shapes with their property names and types/);
