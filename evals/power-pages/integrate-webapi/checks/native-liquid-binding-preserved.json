@@ -1,0 +1,47 @@
+{
+  "files": [
+    {
+      "path": "reports/native-liquid-binding-preserved.md",
+      "type": "text",
+      "requiredText": [
+        "shell.safeAjax",
+        "bookings-page",
+        "en-US"
+      ],
+      "minTextLength": 200
+    },
+    {
+      "path": "results/native-liquid-binding-preserved.json",
+      "type": "json",
+      "requiredKeys": [
+        "decision"
+      ],
+      "requiredValues": {
+        "remoteExecuted": false
+      },
+      "requiredPatterns": [
+        "\"decision\"\\s*:\\s*\"(?:proposed|blocked|no-op)\""
+      ]
+    },
+    {
+      "path": "proposals/page.html",
+      "type": "text",
+      "requiredText": [
+        "{% include 'entity_list' key: 'Bookings' %}",
+        "{{ user.fullname | escape }}",
+        "Refresh bookings",
+        "shell.safeAjax"
+      ]
+    }
+  ],
+  "unchanged": [
+    {
+      "path": "inputs/snapshot.json",
+      "source": "fixtures/native-liquid-binding-preserved.json"
+    }
+  ],
+  "absent": [
+    ".solution-manifest.json",
+    "docs/alm/last-deployment.json"
+  ]
+}

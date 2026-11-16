@@ -1,0 +1,11 @@
+{
+  "package": {
+    "file": "contoso_portal.zip",
+    "managed": false,
+    "version": "1.2.0.0"
+  },
+  "target": "Production",
+  "policy": "managed only",
+  "currentVersion": "1.3.0.0",
+  "approval": "none"
+}

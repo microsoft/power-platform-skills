@@ -1,0 +1,37 @@
+{
+  "files": [
+    {
+      "path": "reports/existing-stage-reuse.md",
+      "type": "text",
+      "requiredText": [
+        "Contoso release",
+        "Staging",
+        "Production"
+      ],
+      "minTextLength": 200
+    },
+    {
+      "path": "results/existing-stage-reuse.json",
+      "type": "json",
+      "requiredKeys": [
+        "decision"
+      ],
+      "requiredValues": {
+        "remoteExecuted": false
+      },
+      "requiredPatterns": [
+        "\"decision\"\\s*:\\s*\"(?:proposed|blocked|no-op)\""
+      ]
+    }
+  ],
+  "unchanged": [
+    {
+      "path": "inputs/snapshot.json",
+      "source": "fixtures/existing-stage-reuse.json"
+    }
+  ],
+  "absent": [
+    ".solution-manifest.json",
+    "docs/alm/last-deployment.json"
+  ]
+}

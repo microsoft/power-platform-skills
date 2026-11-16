@@ -1,0 +1,11 @@
+{
+  "mode": "detect-only",
+  "sourceBinding": "host-a",
+  "resolved": {
+    "id": "host-a",
+    "name": "Contoso custom host",
+    "environmentSku": "Production",
+    "pipelinesInstalled": true
+  },
+  "tenantDefault": "host-b"
+}

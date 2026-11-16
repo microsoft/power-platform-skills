@@ -1,0 +1,28 @@
+{
+  "siteType": "Enhanced",
+  "solution": "contoso_portal",
+  "stage": "Staging",
+  "plan": {
+    "status": "Approved",
+    "current": true
+  },
+  "settings": [
+    {
+      "name": "Contoso/ApiBase",
+      "classification": "promoteToEnvVar",
+      "schemaName": "cts_ApiBase",
+      "targetValue": "https://api.example.invalid/staging"
+    },
+    {
+      "name": "Authentication/OpenIdConnect/Partner/ClientSecret",
+      "classification": "authNoValue"
+    },
+    {
+      "name": "Contoso/Theme",
+      "classification": "keepAsIs"
+    }
+  ],
+  "existingDefinitions": [
+    "cts_ApiBase"
+  ]
+}

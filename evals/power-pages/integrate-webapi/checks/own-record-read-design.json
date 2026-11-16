@@ -1,0 +1,47 @@
+{
+  "files": [
+    {
+      "path": "reports/own-record-read-design.md",
+      "type": "text",
+      "requiredText": [
+        "contoso_booking",
+        "contoso_bookings",
+        "getCsrfToken"
+      ],
+      "minTextLength": 200
+    },
+    {
+      "path": "results/own-record-read-design.json",
+      "type": "json",
+      "requiredKeys": [
+        "decision"
+      ],
+      "requiredValues": {
+        "remoteExecuted": false
+      },
+      "requiredPatterns": [
+        "\"decision\"\\s*:\\s*\"(?:proposed|blocked|no-op)\""
+      ]
+    },
+    {
+      "path": "proposals/bookings.js",
+      "type": "text",
+      "requiredText": [
+        "contoso_bookings",
+        "contoso_title",
+        "getCsrfToken"
+      ],
+      "minTextLength": 100
+    }
+  ],
+  "unchanged": [
+    {
+      "path": "inputs/snapshot.json",
+      "source": "fixtures/own-record-read-design.json"
+    }
+  ],
+  "absent": [
+    ".solution-manifest.json",
+    "docs/alm/last-deployment.json"
+  ]
+}

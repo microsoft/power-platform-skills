@@ -1,0 +1,36 @@
+{
+  "files": [
+    {
+      "path": "reports/existing-runtime-translations.md",
+      "type": "text",
+      "requiredText": [
+        "i18next",
+        "/bookings/:id"
+      ],
+      "minTextLength": 200
+    },
+    {
+      "path": "results/existing-runtime-translations.json",
+      "type": "json",
+      "requiredKeys": [
+        "decision"
+      ],
+      "requiredValues": {
+        "remoteExecuted": false
+      },
+      "requiredPatterns": [
+        "\"decision\"\\s*:\\s*\"(?:proposed|blocked|no-op)\""
+      ]
+    }
+  ],
+  "unchanged": [
+    {
+      "path": "inputs/snapshot.json",
+      "source": "fixtures/existing-runtime-translations.json"
+    }
+  ],
+  "absent": [
+    ".solution-manifest.json",
+    "docs/alm/last-deployment.json"
+  ]
+}

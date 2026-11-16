@@ -1,0 +1,36 @@
+{
+  "files": [
+    {
+      "path": "reports/multiple-unbound-hosts.md",
+      "type": "text",
+      "requiredText": [
+        "host-a",
+        "host-b"
+      ],
+      "minTextLength": 200
+    },
+    {
+      "path": "results/multiple-unbound-hosts.json",
+      "type": "json",
+      "requiredKeys": [
+        "decision"
+      ],
+      "requiredValues": {
+        "remoteExecuted": false
+      },
+      "requiredPatterns": [
+        "\"decision\"\\s*:\\s*\"(?:proposed|blocked|no-op)\""
+      ]
+    }
+  ],
+  "unchanged": [
+    {
+      "path": "inputs/snapshot.json",
+      "source": "fixtures/multiple-unbound-hosts.json"
+    }
+  ],
+  "absent": [
+    ".solution-manifest.json",
+    "docs/alm/last-deployment.json"
+  ]
+}

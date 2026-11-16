@@ -1,0 +1,36 @@
+{
+  "files": [
+    {
+      "path": "reports/failed-run-is-not-success.md",
+      "type": "text",
+      "requiredText": [
+        "contoso_notifications",
+        "Staging"
+      ],
+      "minTextLength": 200
+    },
+    {
+      "path": "results/failed-run-is-not-success.json",
+      "type": "json",
+      "requiredKeys": [
+        "decision"
+      ],
+      "requiredValues": {
+        "remoteExecuted": false
+      },
+      "requiredPatterns": [
+        "\"decision\"\\s*:\\s*\"(?:proposed|blocked|no-op)\""
+      ]
+    }
+  ],
+  "unchanged": [
+    {
+      "path": "inputs/snapshot.json",
+      "source": "fixtures/failed-run-is-not-success.json"
+    }
+  ],
+  "absent": [
+    ".solution-manifest.json",
+    "docs/alm/last-deployment.json"
+  ]
+}

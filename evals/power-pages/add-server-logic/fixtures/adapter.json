@@ -1,0 +1,40 @@
+{
+  "scope": "Synthetic, pinned offline test double, not live SDK verification or a universal preview API contract.",
+  "server": {
+    "handler": "get() returns a string (JSON for this feature), or throws on failure",
+    "context": "Server.Context.QueryParameters is a string-keyed object; missing keys are undefined.",
+    "loggerMethods": [
+      "Log",
+      "Info",
+      "Error",
+      "Warn"
+    ],
+    "provider": "await Server.Connector.HttpClient.GetAsync(url) returns {StatusCode:number, IsSuccessStatusCode:boolean, Content:string}. Content is JSON or malformed text.",
+    "providerUrl": "https://weather.example.invalid/current?latitude=<value>&longitude=<value>",
+    "providerBody": {
+      "current": {
+        "temperature_2m": 7.25
+      }
+    },
+    "configuration": "Server.Sitesetting.get(name) returns https://weather.example.invalid/current for this fixture."
+  },
+  "platform": {
+    "envelope": {
+      "success": true,
+      "data": "handler return string",
+      "error": null,
+      "requestId": "synthetic-request"
+    },
+    "failure": {
+      "success": false,
+      "data": null,
+      "error": "Endpoint failed"
+    }
+  },
+  "frontend": {
+    "interface": "async function loadResult(query) in a plain script (not an ES module). Returns the parsed feature object or rejects on error.",
+    "endpoint": "/_api/serverlogics/<endpoint-name> with URL-encoded query fields",
+    "csrf": "/_layout/tokenhtml returns an input named __RequestVerificationToken; send that token as the __RequestVerificationToken header.",
+    "runtime": "Standard browser globals and fetch; no packages. The test fetch is injected; do not shadow it."
+  }
+}

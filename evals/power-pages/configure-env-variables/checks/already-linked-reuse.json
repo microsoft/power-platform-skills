@@ -1,0 +1,36 @@
+{
+  "files": [
+    {
+      "path": "reports/already-linked-reuse.md",
+      "type": "text",
+      "requiredText": [
+        "cts_ApiBase",
+        "Production"
+      ],
+      "minTextLength": 200
+    },
+    {
+      "path": "results/already-linked-reuse.json",
+      "type": "json",
+      "requiredKeys": [
+        "decision"
+      ],
+      "requiredValues": {
+        "remoteExecuted": false
+      },
+      "requiredPatterns": [
+        "\"decision\"\\s*:\\s*\"(?:proposed|blocked|no-op)\""
+      ]
+    }
+  ],
+  "unchanged": [
+    {
+      "path": "inputs/snapshot.json",
+      "source": "fixtures/already-linked-reuse.json"
+    }
+  ],
+  "absent": [
+    ".solution-manifest.json",
+    "docs/alm/last-deployment.json"
+  ]
+}

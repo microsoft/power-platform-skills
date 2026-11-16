@@ -1,0 +1,19 @@
+{
+  "package": {
+    "file": "contoso_portal_managed.zip",
+    "uniqueName": "contoso_portal",
+    "version": "1.2.0.0",
+    "managed": true
+  },
+  "target": "Staging",
+  "settings": {
+    "contoso_ApiBase": "https://api.example.invalid/staging"
+  },
+  "connectionReferences": [
+    {
+      "name": "contoso_notifications",
+      "targetBinding": "owner must supply"
+    }
+  ],
+  "approval": "preflight only"
+}

@@ -1,0 +1,10 @@
+{
+  "run": {
+    "stage": "Staging",
+    "status": "Failed",
+    "error": "Missing connection reference contoso_notifications",
+    "packageVersion": "1.2.0.0"
+  },
+  "production": "NotStarted",
+  "approval": "none"
+}

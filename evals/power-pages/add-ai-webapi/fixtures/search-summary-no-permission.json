@@ -1,0 +1,11 @@
+{
+  "requestedApi": "Search Summary",
+  "target": "SearchResults",
+  "searchEnabled": false,
+  "aiEnabled": "unknown",
+  "currentUserRole": "Authenticated Users",
+  "dataPermissionEvidence": "missing",
+  "observedResponse": {
+    "status": 403
+  }
+}

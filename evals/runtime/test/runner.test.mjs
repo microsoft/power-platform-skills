@@ -11,9 +11,14 @@ import { evaluate, outcomeRecord, parseArgs } from '../run.mjs';
 import { loadSuites, repoRoot, trialGraders } from '../suites.mjs';
 import { DEFAULT_MODELS } from '../models.mjs';
 
-test('only the skills being improved have Vally suites; legacy-only skills remain unselected', async () => {
+test('all 19 slimming targets have Vally suites; out-of-scope legacy skills remain unselected', async () => {
   const suites = await loadSuites();
-  assert.deepEqual(suites.map(suite => suite.name), ['create-site', 'setup-auth']);
+  assert.deepEqual(suites.map(suite => suite.name), [
+    'add-ai-webapi', 'add-cloud-flow', 'add-localization', 'add-server-logic', 'audit-permissions',
+    'configure-env-variables', 'create-site', 'deploy-pipeline', 'deploy-site', 'edit-site',
+    'ensure-pipelines-host', 'import-solution', 'integrate-backend', 'integrate-webapi', 'plan-alm',
+    'setup-auth', 'setup-pipeline', 'setup-solution', 'test-site',
+  ]);
   assert.ok(suites.every(suite => suite.stimuli.length >= 4));
   assert.ok(suites.every(suite => !suite.stimuli.some(stimulus =>
     stimulus.environment?.files?.some(file => file.src.startsWith('checks/')))));
@@ -58,7 +63,7 @@ test('manual workflow selects available suites and rejects skills without one', 
   const command = workflow.jobs.select.steps.find(step => step.id === 'select').run;
   const script = /node --input-type=module <<'JS'\n([\s\S]+)\nJS\s*$/.exec(command)?.[1];
   assert.ok(script, 'the matrix selector must be executable without model dependencies');
-  for (const [selected, expected] of [['all', ['create-site', 'setup-auth']], ['create-site', ['create-site']]]) {
+  for (const [selected, expected] of [['all', (await loadSuites()).map(suite => suite.name)], ['create-site', ['create-site']]]) {
     const output = path.join(root, selected);
     execFileSync(process.execPath, ['--input-type=module', '-'], {
       input: script, cwd: repoRoot,

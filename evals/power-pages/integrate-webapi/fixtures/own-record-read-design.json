@@ -1,0 +1,14 @@
+{
+  "framework": "React",
+  "component": "BookingList",
+  "tableLogicalName": "contoso_booking",
+  "entitySetName": "contoso_bookings",
+  "fields": [
+    "contoso_bookingid",
+    "contoso_title"
+  ],
+  "ownerRelationship": "contoso_booking_contact",
+  "existingTokenHelper": "getCsrfToken",
+  "apiEnabled": false,
+  "permissionsConfigured": false
+}

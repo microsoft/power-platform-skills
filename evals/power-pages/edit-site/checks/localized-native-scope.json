@@ -1,0 +1,46 @@
+{
+  "files": [
+    {
+      "path": "reports/localized-native-scope.md",
+      "type": "text",
+      "requiredText": [
+        "fr-FR",
+        "Mes reservations",
+        "bookings-page"
+      ],
+      "minTextLength": 200
+    },
+    {
+      "path": "results/localized-native-scope.json",
+      "type": "json",
+      "requiredKeys": [
+        "decision"
+      ],
+      "requiredValues": {
+        "remoteExecuted": false
+      },
+      "requiredPatterns": [
+        "\"decision\"\\s*:\\s*\"(?:proposed|blocked|no-op)\""
+      ]
+    },
+    {
+      "path": "proposals/fr.html",
+      "type": "text",
+      "requiredText": [
+        "Mes reservations",
+        "{% include 'entity_list' key: 'Bookings' %}",
+        "{{ user.fullname | escape }}"
+      ]
+    }
+  ],
+  "unchanged": [
+    {
+      "path": "inputs/snapshot.json",
+      "source": "fixtures/localized-native-scope.json"
+    }
+  ],
+  "absent": [
+    ".solution-manifest.json",
+    "docs/alm/last-deployment.json"
+  ]
+}

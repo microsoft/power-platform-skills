@@ -1,0 +1,36 @@
+{
+  "files": [
+    {
+      "path": "reports/reuse-bound-custom-host.md",
+      "type": "text",
+      "requiredText": [
+        "host-a",
+        "host-b"
+      ],
+      "minTextLength": 200
+    },
+    {
+      "path": "results/reuse-bound-custom-host.json",
+      "type": "json",
+      "requiredKeys": [
+        "decision"
+      ],
+      "requiredValues": {
+        "remoteExecuted": false
+      },
+      "requiredPatterns": [
+        "\"decision\"\\s*:\\s*\"(?:proposed|blocked|no-op)\""
+      ]
+    }
+  ],
+  "unchanged": [
+    {
+      "path": "inputs/snapshot.json",
+      "source": "fixtures/reuse-bound-custom-host.json"
+    }
+  ],
+  "absent": [
+    ".solution-manifest.json",
+    "docs/alm/last-deployment.json"
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "siteType": "Enhanced non-SPA",
+  "websiteRecordId": "00000000-0000-0000-0000-000000000101",
+  "solution": null,
+  "strategy": "manual",
+  "stages": [
+    "Dev",
+    "Staging",
+    "Production"
+  ],
+  "settings": [
+    {
+      "name": "Contoso/ApiBase",
+      "classification": "promoteToEnvVar"
+    },
+    {
+      "name": "Authentication/OpenIdConnect/Partner/ClientSecret",
+      "classification": "authNoValue"
+    }
+  ],
+  "approval": "draft only"
+}

@@ -1,0 +1,37 @@
+{
+  "files": [
+    {
+      "path": "reports/embedded-ai-error.md",
+      "type": "text",
+      "requiredText": [
+        "200",
+        "400",
+        "SearchResults"
+      ],
+      "minTextLength": 200
+    },
+    {
+      "path": "results/embedded-ai-error.json",
+      "type": "json",
+      "requiredKeys": [
+        "decision"
+      ],
+      "requiredValues": {
+        "remoteExecuted": false
+      },
+      "requiredPatterns": [
+        "\"decision\"\\s*:\\s*\"(?:proposed|blocked|no-op)\""
+      ]
+    }
+  ],
+  "unchanged": [
+    {
+      "path": "inputs/snapshot.json",
+      "source": "fixtures/embedded-ai-error.json"
+    }
+  ],
+  "absent": [
+    ".solution-manifest.json",
+    "docs/alm/last-deployment.json"
+  ]
+}

@@ -1,0 +1,9 @@
+{
+  "target": "BookingDetails",
+  "current": {
+    "detailView": "working",
+    "aiIntegration": null
+  },
+  "ownerDecision": "No AI now",
+  "pendingRequest": "Fix page title only"
+}

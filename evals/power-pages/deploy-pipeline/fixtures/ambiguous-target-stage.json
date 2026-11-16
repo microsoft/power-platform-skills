@@ -1,0 +1,14 @@
+{
+  "requestedStage": "test",
+  "stages": [
+    {
+      "id": "stage-a",
+      "name": "Test East"
+    },
+    {
+      "id": "stage-b",
+      "name": "Test West"
+    }
+  ],
+  "approval": "no stage chosen"
+}

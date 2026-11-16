@@ -1,0 +1,18 @@
+{
+  "captures": [
+    {
+      "path": "/_api/serverlogics/bookings",
+      "status": 200,
+      "body": {
+        "success": true,
+        "data": "{\"StatusCode\":200,\"Body\":\"{\\\"value\\\":[{\\\"contoso_title\\\":\\\"Morning\\\"}]}\"}"
+      }
+    },
+    {
+      "path": "/private",
+      "status": 302,
+      "location": "/SignIn"
+    }
+  ],
+  "authenticatedCapture": "not supplied"
+}

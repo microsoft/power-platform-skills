@@ -1,0 +1,13 @@
+{
+  "type": "React SPA",
+  "build": {
+    "command": "npm run build",
+    "output": "dist",
+    "status": "not run"
+  },
+  "configEnvironment": "https://contoso-dev.crm.dynamics.com",
+  "activeProfileEnvironment": "https://contoso-staging.crm.dynamics.com",
+  "intendedTarget": "Dev",
+  "website": "Contoso reservations",
+  "approval": "preflight only"
+}

@@ -1,0 +1,37 @@
+{
+  "files": [
+    {
+      "path": "reports/managed-staging-import-preflight.md",
+      "type": "text",
+      "requiredText": [
+        "contoso_portal_managed.zip",
+        "Staging",
+        "contoso_notifications"
+      ],
+      "minTextLength": 200
+    },
+    {
+      "path": "results/managed-staging-import-preflight.json",
+      "type": "json",
+      "requiredKeys": [
+        "decision"
+      ],
+      "requiredValues": {
+        "remoteExecuted": false
+      },
+      "requiredPatterns": [
+        "\"decision\"\\s*:\\s*\"(?:proposed|blocked|no-op)\""
+      ]
+    }
+  ],
+  "unchanged": [
+    {
+      "path": "inputs/snapshot.json",
+      "source": "fixtures/managed-staging-import-preflight.json"
+    }
+  ],
+  "absent": [
+    ".solution-manifest.json",
+    "docs/alm/last-deployment.json"
+  ]
+}

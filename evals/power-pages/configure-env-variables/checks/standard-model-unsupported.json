@@ -1,0 +1,36 @@
+{
+  "files": [
+    {
+      "path": "reports/standard-model-unsupported.md",
+      "type": "text",
+      "requiredText": [
+        "Standard",
+        "Contoso/ApiBase"
+      ],
+      "minTextLength": 200
+    },
+    {
+      "path": "results/standard-model-unsupported.json",
+      "type": "json",
+      "requiredKeys": [
+        "decision"
+      ],
+      "requiredValues": {
+        "remoteExecuted": false
+      },
+      "requiredPatterns": [
+        "\"decision\"\\s*:\\s*\"(?:proposed|blocked|no-op)\""
+      ]
+    }
+  ],
+  "unchanged": [
+    {
+      "path": "inputs/snapshot.json",
+      "source": "fixtures/standard-model-unsupported.json"
+    }
+  ],
+  "absent": [
+    ".solution-manifest.json",
+    "docs/alm/last-deployment.json"
+  ]
+}

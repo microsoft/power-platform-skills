@@ -1,0 +1,36 @@
+{
+  "files": [
+    {
+      "path": "reports/failed-api-amid-healthy-pages.md",
+      "type": "text",
+      "requiredText": [
+        "500",
+        "/_api/contoso_bookings"
+      ],
+      "minTextLength": 200
+    },
+    {
+      "path": "results/failed-api-amid-healthy-pages.json",
+      "type": "json",
+      "requiredKeys": [
+        "decision"
+      ],
+      "requiredValues": {
+        "remoteExecuted": false
+      },
+      "requiredPatterns": [
+        "\"decision\"\\s*:\\s*\"(?:proposed|blocked|no-op)\""
+      ]
+    }
+  ],
+  "unchanged": [
+    {
+      "path": "inputs/snapshot.json",
+      "source": "fixtures/failed-api-amid-healthy-pages.json"
+    }
+  ],
+  "absent": [
+    ".solution-manifest.json",
+    "docs/alm/last-deployment.json"
+  ]
+}

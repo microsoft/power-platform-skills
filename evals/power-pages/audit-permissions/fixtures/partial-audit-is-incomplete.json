@@ -1,0 +1,18 @@
+{
+  "siteType": "Enhanced non-SPA",
+  "exported": {
+    "webRoles": [
+      "Authenticated Users"
+    ],
+    "tablePermissions": []
+  },
+  "missing": [
+    "column permissions",
+    "page permissions",
+    "table relationship metadata"
+  ],
+  "permissionsQuery": {
+    "status": 403,
+    "message": "Forbidden"
+  }
+}

@@ -1,0 +1,37 @@
+{
+  "files": [
+    {
+      "path": "reports/two-stage-pipeline-proposal.md",
+      "type": "text",
+      "requiredText": [
+        "Staging",
+        "Production",
+        "contoso_portal"
+      ],
+      "minTextLength": 200
+    },
+    {
+      "path": "results/two-stage-pipeline-proposal.json",
+      "type": "json",
+      "requiredKeys": [
+        "decision"
+      ],
+      "requiredValues": {
+        "remoteExecuted": false
+      },
+      "requiredPatterns": [
+        "\"decision\"\\s*:\\s*\"(?:proposed|blocked|no-op)\""
+      ]
+    }
+  ],
+  "unchanged": [
+    {
+      "path": "inputs/snapshot.json",
+      "source": "fixtures/two-stage-pipeline-proposal.json"
+    }
+  ],
+  "absent": [
+    ".solution-manifest.json",
+    "docs/alm/last-deployment.json"
+  ]
+}

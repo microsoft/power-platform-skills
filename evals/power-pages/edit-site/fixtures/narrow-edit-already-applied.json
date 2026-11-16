@@ -1,0 +1,11 @@
+{
+  "siteType": "React SPA",
+  "file": "src/Bookings.tsx",
+  "source": "<main><h1>My bookings</h1><BookingList /></main>",
+  "requestedHeading": "My bookings",
+  "localization": [
+    "en",
+    "fr"
+  ],
+  "unrelatedNavigation": "must remain"
+}

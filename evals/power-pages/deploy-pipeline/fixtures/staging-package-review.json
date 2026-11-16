@@ -1,0 +1,20 @@
+{
+  "solution": "contoso_portal",
+  "packageVersion": "1.2.0.0",
+  "host": "Contoso host",
+  "stages": [
+    {
+      "name": "Staging",
+      "target": "https://contoso-staging.crm.dynamics.com"
+    },
+    {
+      "name": "Production",
+      "target": "https://contoso-prod.crm.dynamics.com"
+    }
+  ],
+  "requestedStage": "Staging",
+  "settings": {
+    "contoso_ApiBase": "https://api.example.invalid/staging"
+  },
+  "approval": "preflight only"
+}

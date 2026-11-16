@@ -70,7 +70,7 @@ const blockedResource = name => name.split('/').some(part => {
   return ['skill.md', 'agents.md', 'claude.md', '.git', '.copilot', '.claude', 'node_modules'].includes(canonical);
 });
 
-export function createOfflineTools(workDir, pluginRoot) {
+export function createOfflineTools(workDir, pluginRoot, onRead = () => {}) {
   const runLocal = async (scriptName, args, signal) => {
     const script = await confinedPath(pluginRoot, scriptName);
     try {
@@ -112,6 +112,7 @@ export function createOfflineTools(workDir, pluginRoot) {
       handler: async ({ root, path: name }) => {
         const content = await readFile(await locate(root, name), 'utf8');
         if (Buffer.byteLength(content) > 512_000) throw new Error('File exceeds the 512 KB read limit');
+        onRead({ root, path: name, bytes: Buffer.byteLength(content) });
         return content;
       },
     }),
@@ -254,6 +255,7 @@ export class OfflineExecutor {
     options.registerCleanup(() => rm(home, { recursive: true, force: true }));
     const adapter = new CopilotAdapter();
     const usageEvents = [];
+    const resourceReads = [];
     const startedAt = new Date();
     const client = this.clientFactory({
       // Local runs opt into the SDK's normal sign-in; Actions use only their
@@ -275,7 +277,7 @@ export class OfflineExecutor {
         ...offlineSessionConfig({
           home, workDir: options.workDir, pluginRoot: this.pluginRoot,
           skills: options.skills ?? [], model: options.model, reasoningEffort: options.reasoningEffort,
-          tools: createOfflineTools(options.workDir, this.pluginRoot),
+          tools: createOfflineTools(options.workDir, this.pluginRoot, read => resourceReads.push(read)),
         }),
         onEvent: event => {
           // Vally substitutes zero for absent SDK input/output fields, so retain
@@ -301,6 +303,7 @@ export class OfflineExecutor {
         metrics: {
           ...computeMetrics(adapter.events),
           reportedTokenUsage: reportedTokenUsage(usageEvents),
+          resourceReads,
           wallTimeMs: completedAt.getTime() - startedAt.getTime(),
         },
       };

@@ -1,0 +1,36 @@
+{
+  "files": [
+    {
+      "path": "reports/native-existing-site-routing.md",
+      "type": "text",
+      "requiredText": [
+        "modelVersion",
+        "web-pages/bookings"
+      ],
+      "minTextLength": 200
+    },
+    {
+      "path": "results/native-existing-site-routing.json",
+      "type": "json",
+      "requiredKeys": [
+        "decision"
+      ],
+      "requiredValues": {
+        "remoteExecuted": false
+      },
+      "requiredPatterns": [
+        "\"decision\"\\s*:\\s*\"(?:proposed|blocked|no-op)\""
+      ]
+    }
+  ],
+  "unchanged": [
+    {
+      "path": "inputs/snapshot.json",
+      "source": "fixtures/native-existing-site-routing.json"
+    }
+  ],
+  "absent": [
+    ".solution-manifest.json",
+    "docs/alm/last-deployment.json"
+  ]
+}

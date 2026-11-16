@@ -1,0 +1,36 @@
+{
+  "files": [
+    {
+      "path": "reports/list-scope-before-summary.md",
+      "type": "text",
+      "requiredText": [
+        "WorkOrderList",
+        "contoso_workorders"
+      ],
+      "minTextLength": 200
+    },
+    {
+      "path": "results/list-scope-before-summary.json",
+      "type": "json",
+      "requiredKeys": [
+        "decision"
+      ],
+      "requiredValues": {
+        "remoteExecuted": false
+      },
+      "requiredPatterns": [
+        "\"decision\"\\s*:\\s*\"(?:proposed|blocked|no-op)\""
+      ]
+    }
+  ],
+  "unchanged": [
+    {
+      "path": "inputs/snapshot.json",
+      "source": "fixtures/list-scope-before-summary.json"
+    }
+  ],
+  "absent": [
+    ".solution-manifest.json",
+    "docs/alm/last-deployment.json"
+  ]
+}

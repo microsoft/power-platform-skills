@@ -1,0 +1,11 @@
+{
+  "operation": "SPA upload",
+  "status": "Failed",
+  "error": "Attachment extension .js is blocked",
+  "blockedExtensions": [
+    "js",
+    "exe"
+  ],
+  "approval": "none",
+  "retry": "not run"
+}

@@ -1,0 +1,36 @@
+{
+  "files": [
+    {
+      "path": "reports/ambiguous-target-stage.md",
+      "type": "text",
+      "requiredText": [
+        "Test East",
+        "Test West"
+      ],
+      "minTextLength": 200
+    },
+    {
+      "path": "results/ambiguous-target-stage.json",
+      "type": "json",
+      "requiredKeys": [
+        "decision"
+      ],
+      "requiredValues": {
+        "remoteExecuted": false
+      },
+      "requiredPatterns": [
+        "\"decision\"\\s*:\\s*\"(?:proposed|blocked|no-op)\""
+      ]
+    }
+  ],
+  "unchanged": [
+    {
+      "path": "inputs/snapshot.json",
+      "source": "fixtures/ambiguous-target-stage.json"
+    }
+  ],
+  "absent": [
+    ".solution-manifest.json",
+    "docs/alm/last-deployment.json"
+  ]
+}

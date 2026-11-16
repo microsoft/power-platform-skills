@@ -1,0 +1,20 @@
+{
+  "solutionUniqueName": "contoso_portal",
+  "publisherPrefix": "cts",
+  "components": [
+    {
+      "type": "website",
+      "id": "site-a"
+    },
+    {
+      "type": "table",
+      "name": "contoso_booking"
+    }
+  ],
+  "requested": {
+    "website": "site-a",
+    "tables": [
+      "contoso_booking"
+    ]
+  }
+}

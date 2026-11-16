@@ -1,0 +1,15 @@
+{
+  "files": [
+    {
+      "path": "results/total.json",
+      "type": "json",
+      "requiredValues": {
+        "total": 24
+      }
+    }
+  ],
+  "absent": [
+    "powerpages.config.json",
+    ".solution-manifest.json"
+  ]
+}

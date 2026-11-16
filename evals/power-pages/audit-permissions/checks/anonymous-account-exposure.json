@@ -1,0 +1,37 @@
+{
+  "files": [
+    {
+      "path": "reports/anonymous-account-exposure.md",
+      "type": "text",
+      "requiredText": [
+        "contoso_invoice",
+        "Anonymous Users",
+        "contoso_privatecomment"
+      ],
+      "minTextLength": 200
+    },
+    {
+      "path": "results/anonymous-account-exposure.json",
+      "type": "json",
+      "requiredKeys": [
+        "decision"
+      ],
+      "requiredValues": {
+        "remoteExecuted": false
+      },
+      "requiredPatterns": [
+        "\"decision\"\\s*:\\s*\"(?:proposed|blocked|no-op)\""
+      ]
+    }
+  ],
+  "unchanged": [
+    {
+      "path": "inputs/snapshot.json",
+      "source": "fixtures/anonymous-account-exposure.json"
+    }
+  ],
+  "absent": [
+    ".solution-manifest.json",
+    "docs/alm/last-deployment.json"
+  ]
+}

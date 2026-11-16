@@ -1,0 +1,36 @@
+{
+  "files": [
+    {
+      "path": "reports/stale-approved-source.md",
+      "type": "text",
+      "requiredText": [
+        "synthetic-source-a",
+        "synthetic-source-b"
+      ],
+      "minTextLength": 200
+    },
+    {
+      "path": "results/stale-approved-source.json",
+      "type": "json",
+      "requiredKeys": [
+        "decision"
+      ],
+      "requiredValues": {
+        "remoteExecuted": false
+      },
+      "requiredPatterns": [
+        "\"decision\"\\s*:\\s*\"(?:proposed|blocked|no-op)\""
+      ]
+    }
+  ],
+  "unchanged": [
+    {
+      "path": "inputs/snapshot.json",
+      "source": "fixtures/stale-approved-source.json"
+    }
+  ],
+  "absent": [
+    ".solution-manifest.json",
+    "docs/alm/last-deployment.json"
+  ]
+}

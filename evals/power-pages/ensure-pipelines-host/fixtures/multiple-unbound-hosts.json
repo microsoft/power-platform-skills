@@ -1,0 +1,15 @@
+{
+  "mode": "detect-only",
+  "sourceBinding": null,
+  "discoveredCustomHosts": [
+    {
+      "id": "host-a",
+      "name": "Contoso East"
+    },
+    {
+      "id": "host-b",
+      "name": "Contoso West"
+    }
+  ],
+  "tenantDefault": null
+}

@@ -1,0 +1,11 @@
+{
+  "manifest": {
+    "solutionUniqueName": "contoso_portal",
+    "websiteRecordId": "site-a",
+    "environmentUrl": "https://contoso.crm.dynamics.com"
+  },
+  "downloaded": {
+    "websiteRecordId": "site-b"
+  },
+  "intendedWebsite": "not confirmed"
+}

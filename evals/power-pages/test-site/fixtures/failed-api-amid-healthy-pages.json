@@ -1,0 +1,24 @@
+{
+  "pages": [
+    {
+      "path": "/",
+      "status": 200
+    },
+    {
+      "path": "/bookings",
+      "status": 200
+    }
+  ],
+  "api": [
+    {
+      "path": "/_api/contoso_bookings",
+      "status": 500,
+      "body": {
+        "error": {
+          "message": "Synthetic server error"
+        }
+      }
+    }
+  ],
+  "loginAvailable": false
+}

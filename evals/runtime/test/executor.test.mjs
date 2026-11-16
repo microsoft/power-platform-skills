@@ -47,6 +47,20 @@ test('root confinement rejects symlinks before following their target', async t 
   await assert.rejects(() => confinedPath(root, 'link/secret'), /Symbolic links/);
 });
 
+test('explicit resource exposure counts actual UTF-8 reads including repeats, not file size estimates', async t => {
+  const root = await workspace(t);
+  const reads = [];
+  await writeFile(path.join(root, 'reference.txt'), 'Arabic: \u0639');
+  const tools = createOfflineTools(root, root, entry => reads.push(entry));
+  for (let index = 0; index < 2; index++) {
+    await tool(tools, 'eval_read')({ root: 'plugin', path: 'reference.txt' });
+  }
+  await assert.rejects(() => tool(tools, 'eval_read')({ root: 'plugin', path: 'SKILL.md' }));
+  assert.deepEqual(reads, Array.from({ length: 2 }, () => ({
+    root: 'plugin', path: 'reference.txt', bytes: Buffer.byteLength('Arabic: \u0639'),
+  })));
+});
+
 test('real local renderer produces a document while inherited credentials and cloud operations are excluded', async t => {
   const root = await workspace(t);
   const tools = createOfflineTools(root, pluginRoot);

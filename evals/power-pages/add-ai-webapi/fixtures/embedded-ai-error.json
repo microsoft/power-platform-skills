@@ -1,0 +1,12 @@
+{
+  "target": "SearchResults",
+  "response": {
+    "status": 200,
+    "body": {
+      "Code": 400,
+      "Message": "Gen AI feature is not enabled for this site"
+    }
+  },
+  "summary": null,
+  "makerToggleEvidence": "unknown"
+}

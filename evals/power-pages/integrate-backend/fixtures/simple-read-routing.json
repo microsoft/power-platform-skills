@@ -1,0 +1,11 @@
+{
+  "request": "Show my bookings",
+  "fields": [
+    "contoso_title",
+    "contoso_start"
+  ],
+  "dataSource": "Dataverse",
+  "customRules": false,
+  "externalApis": false,
+  "permissions": "not configured"
+}

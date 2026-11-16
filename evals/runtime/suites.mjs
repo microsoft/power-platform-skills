@@ -42,18 +42,18 @@ export function createRegistry(llmClient = unavailableJudge) {
   return registry;
 }
 
-export async function loadSuites({ skill } = {}) {
-  const directories = (await readdir(path.join(pluginRoot, 'skills'), { withFileTypes: true }))
+export async function loadSuites({ skill, sourcePluginRoot = pluginRoot } = {}) {
+  const directories = (await readdir(path.join(sourcePluginRoot, 'skills'), { withFileTypes: true }))
     .filter(entry => entry.isDirectory()).map(entry => entry.name).sort();
   const names = [];
   for (const name of directories) {
-    try { await access(path.join(pluginRoot, 'skills', name, 'SKILL.md')); names.push(name); }
+    try { await access(path.join(sourcePluginRoot, 'skills', name, 'SKILL.md')); names.push(name); }
     catch (error) { if (error.code !== 'ENOENT') throw error; }
   }
   if (skill && !names.includes(skill)) throw new Error(`Unknown Power Pages skill: ${skill}`);
   const available = listSuiteNames(evalRoot);
   for (const name of available) {
-    if (!names.includes(name)) throw new Error(`Evaluation suite has no Power Pages skill: ${name}`);
+    if ((!skill || name === skill) && !names.includes(name)) throw new Error(`Evaluation suite has no Power Pages skill: ${name}`);
   }
   if (skill && !available.includes(skill)) throw new Error(`No evaluation suite for Power Pages skill: ${skill}`);
   const registry = createRegistry();
@@ -127,7 +127,7 @@ export async function loadSuites({ skill } = {}) {
     }
     suites.push({
       name, spec, evalFile, suiteDir, stimuli,
-      skill: await parseSkill(path.join(pluginRoot, 'skills', name, 'SKILL.md')),
+      skill: await parseSkill(path.join(sourcePluginRoot, 'skills', name, 'SKILL.md')),
     });
   }
   if (!suites.length) throw new Error('No evaluation suites selected');

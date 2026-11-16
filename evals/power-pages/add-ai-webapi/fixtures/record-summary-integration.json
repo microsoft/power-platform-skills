@@ -1,0 +1,13 @@
+{
+  "framework": "React",
+  "target": "BookingDetails",
+  "entity": "contoso_booking",
+  "recordIdSource": "route bookingId",
+  "requestedApi": "Data Summarization",
+  "selectedColumns": [
+    "contoso_title",
+    "contoso_start"
+  ],
+  "existingTokenHelper": "getCsrfToken",
+  "apiEnabled": false
+}

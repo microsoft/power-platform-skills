@@ -1,0 +1,36 @@
+{
+  "files": [
+    {
+      "path": "reports/unsupported-flow-trigger.md",
+      "type": "text",
+      "requiredText": [
+        "Nightly reminder",
+        "Recurrence"
+      ],
+      "minTextLength": 200
+    },
+    {
+      "path": "results/unsupported-flow-trigger.json",
+      "type": "json",
+      "requiredKeys": [
+        "decision"
+      ],
+      "requiredValues": {
+        "remoteExecuted": false
+      },
+      "requiredPatterns": [
+        "\"decision\"\\s*:\\s*\"(?:proposed|blocked|no-op)\""
+      ]
+    }
+  ],
+  "unchanged": [
+    {
+      "path": "inputs/snapshot.json",
+      "source": "fixtures/unsupported-flow-trigger.json"
+    }
+  ],
+  "absent": [
+    ".solution-manifest.json",
+    "docs/alm/last-deployment.json"
+  ]
+}

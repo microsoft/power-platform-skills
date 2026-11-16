@@ -1,0 +1,48 @@
+{
+  "files": [
+    {
+      "path": "reports/stage-value-classification.md",
+      "type": "text",
+      "requiredText": [
+        "cts_ApiBase",
+        "authNoValue",
+        "Contoso/Theme"
+      ],
+      "minTextLength": 200
+    },
+    {
+      "path": "results/stage-value-classification.json",
+      "type": "json",
+      "requiredKeys": [
+        "decision"
+      ],
+      "requiredValues": {
+        "remoteExecuted": false
+      },
+      "requiredPatterns": [
+        "\"decision\"\\s*:\\s*\"(?:proposed|blocked|no-op)\""
+      ]
+    },
+    {
+      "path": "proposals/deployment-settings.json",
+      "type": "json",
+      "requiredText": [
+        "cts_ApiBase",
+        "https://api.example.invalid/staging"
+      ],
+      "forbiddenText": [
+        "ClientSecret"
+      ]
+    }
+  ],
+  "unchanged": [
+    {
+      "path": "inputs/snapshot.json",
+      "source": "fixtures/stage-value-classification.json"
+    }
+  ],
+  "absent": [
+    ".solution-manifest.json",
+    "docs/alm/last-deployment.json"
+  ]
+}

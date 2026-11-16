@@ -1,0 +1,36 @@
+{
+  "files": [
+    {
+      "path": "reports/conflicting-solution-manifest.md",
+      "type": "text",
+      "requiredText": [
+        "site-a",
+        "site-b"
+      ],
+      "minTextLength": 200
+    },
+    {
+      "path": "results/conflicting-solution-manifest.json",
+      "type": "json",
+      "requiredKeys": [
+        "decision"
+      ],
+      "requiredValues": {
+        "remoteExecuted": false
+      },
+      "requiredPatterns": [
+        "\"decision\"\\s*:\\s*\"(?:proposed|blocked|no-op)\""
+      ]
+    }
+  ],
+  "unchanged": [
+    {
+      "path": "inputs/snapshot.json",
+      "source": "fixtures/conflicting-solution-manifest.json"
+    }
+  ],
+  "absent": [
+    ".solution-manifest.json",
+    "docs/alm/last-deployment.json"
+  ]
+}

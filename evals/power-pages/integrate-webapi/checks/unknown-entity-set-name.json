@@ -1,0 +1,36 @@
+{
+  "files": [
+    {
+      "path": "reports/unknown-entity-set-name.md",
+      "type": "text",
+      "requiredText": [
+        "Bookings",
+        "entity"
+      ],
+      "minTextLength": 200
+    },
+    {
+      "path": "results/unknown-entity-set-name.json",
+      "type": "json",
+      "requiredKeys": [
+        "decision"
+      ],
+      "requiredValues": {
+        "remoteExecuted": false
+      },
+      "requiredPatterns": [
+        "\"decision\"\\s*:\\s*\"(?:proposed|blocked|no-op)\""
+      ]
+    }
+  ],
+  "unchanged": [
+    {
+      "path": "inputs/snapshot.json",
+      "source": "fixtures/unknown-entity-set-name.json"
+    }
+  ],
+  "absent": [
+    ".solution-manifest.json",
+    "docs/alm/last-deployment.json"
+  ]
+}

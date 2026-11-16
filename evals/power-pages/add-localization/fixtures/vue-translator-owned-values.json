@@ -1,0 +1,13 @@
+{
+  "framework": "Vue",
+  "requestedLibrary": "stable vue-i18n",
+  "sourceLocale": "en",
+  "targetLocale": "es-MX",
+  "messages": {
+    "heading": "Bookings",
+    "greeting": "Hello {name}",
+    "count": "{count} bookings"
+  },
+  "translationOwner": "human translators",
+  "fallback": "en"
+}

@@ -1,0 +1,10 @@
+{
+  "framework": "Angular 19.1",
+  "requestedMode": "static",
+  "languages": [
+    "en-US",
+    "fr-FR"
+  ],
+  "approvedRuntimeReconfiguration": false,
+  "approval": "review only"
+}

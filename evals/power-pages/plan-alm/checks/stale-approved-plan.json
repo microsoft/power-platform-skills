@@ -1,0 +1,36 @@
+{
+  "files": [
+    {
+      "path": "reports/stale-approved-plan.md",
+      "type": "text",
+      "requiredText": [
+        "contoso_reservation",
+        "Approved"
+      ],
+      "minTextLength": 200
+    },
+    {
+      "path": "results/stale-approved-plan.json",
+      "type": "json",
+      "requiredKeys": [
+        "decision"
+      ],
+      "requiredValues": {
+        "remoteExecuted": false
+      },
+      "requiredPatterns": [
+        "\"decision\"\\s*:\\s*\"(?:proposed|blocked|no-op)\""
+      ]
+    }
+  ],
+  "unchanged": [
+    {
+      "path": "inputs/snapshot.json",
+      "source": "fixtures/stale-approved-plan.json"
+    }
+  ],
+  "absent": [
+    ".solution-manifest.json",
+    "docs/alm/last-deployment.json"
+  ]
+}

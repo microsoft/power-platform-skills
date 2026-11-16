@@ -1,0 +1,16 @@
+{
+  "flow": {
+    "name": "Request booking approval",
+    "id": "00000000-0000-0000-0000-000000000401"
+  },
+  "association": {
+    "name": "booking-approval",
+    "roles": [
+      "Booking managers"
+    ]
+  },
+  "requestedRoles": [
+    "Booking managers"
+  ],
+  "clientAlreadyWired": true
+}

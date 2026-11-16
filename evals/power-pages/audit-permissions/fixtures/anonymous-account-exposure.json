@@ -1,0 +1,21 @@
+{
+  "siteType": "SPA",
+  "table": "contoso_invoice",
+  "settings": {
+    "Webapi/contoso_invoice/enabled": "true",
+    "Webapi/contoso_invoice/fields": "*"
+  },
+  "permissions": [
+    {
+      "role": "Anonymous Users",
+      "scope": "Global",
+      "read": true,
+      "write": true
+    }
+  ],
+  "columns": [
+    "contoso_amount",
+    "contoso_privatecomment"
+  ],
+  "requested": "Signed-in users should see only their own invoices"
+}

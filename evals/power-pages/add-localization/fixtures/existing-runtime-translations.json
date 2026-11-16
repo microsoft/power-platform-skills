@@ -1,0 +1,16 @@
+{
+  "framework": "React",
+  "library": "i18next",
+  "resources": {
+    "en": {
+      "heading": "Bookings"
+    },
+    "fr": {
+      "heading": "Reservations"
+    }
+  },
+  "route": "/bookings/:id",
+  "localePreference": "fr",
+  "customInitialization": "already configured and working",
+  "requested": "Keep existing English and French headings"
+}

@@ -5,6 +5,7 @@ import { lstat, readFile } from 'node:fs/promises';
 import { assertKeys, assertObject, confinedPath, relativePath } from './paths.mjs';
 import { inspectDocument, inspectSite } from './browser-checks.mjs';
 import { buildSite } from './site-build.mjs';
+import { inspectServerLogic } from './server-logic-checks.mjs';
 
 const textFields = ['requiredText', 'forbiddenText', 'requiredPatterns', 'forbiddenPatterns', 'minTextLength'];
 const fileFields = ['path', 'type', ...textFields, 'headings', 'requiredKeys', 'requiredValues', 'diagram', 'responsive'];
@@ -27,7 +28,7 @@ function validateText(spec) {
   }
 }
 export function validateContract(contract) {
-  assertKeys(contract, ['files', 'site', 'output', 'unchanged', 'absent'], 'contract');
+  assertKeys(contract, ['files', 'site', 'serverLogic', 'output', 'unchanged', 'absent'], 'contract');
   if (!Object.values(contract).some(value =>
     Array.isArray(value) ? value.length : value && Object.keys(value).length)) {
     throw new Error('A contract must assert an outcome');
@@ -36,6 +37,12 @@ export function validateContract(contract) {
     if (contract[key] !== undefined && !Array.isArray(contract[key])) throw new Error(`${key} must be an array`);
   }
   const seen = new Set();
+  if (contract.serverLogic !== undefined) {
+    assertKeys(contract.serverLogic, ['server', 'client', 'exercise'], 'serverLogic');
+    relativePath(contract.serverLogic.server);
+    relativePath(contract.serverLogic.client);
+    if (!['sum', 'weather'].includes(contract.serverLogic.exercise)) throw new Error('Unknown server logic exercise');
+  }
   for (const file of contract.files ?? []) {
     assertKeys(file, fileFields, 'file');
     relativePath(file.path);
@@ -194,6 +201,16 @@ export async function gradeArtifacts({ contract, workDir, suiteDir, output = '',
   validateContract(contract);
   const checks = [];
   const add = (name, passed) => checks.push({ name, passed: Boolean(passed) });
+  if (contract.serverLogic) {
+    try {
+      for (const check of await inspectServerLogic({ spec: contract.serverLogic, workDir, signal })) {
+        add(`server logic: ${check.name}`, check.passed);
+      }
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+      add('server logic: implementation files exist', false);
+    }
+  }
   for (const spec of contract.files ?? []) {
     signal?.throwIfAborted();
     let source;

@@ -1,0 +1,36 @@
+{
+  "files": [
+    {
+      "path": "reports/deferred-plan-cancel.md",
+      "type": "text",
+      "requiredText": [
+        ".alm-deferred",
+        "Draft"
+      ],
+      "minTextLength": 200
+    },
+    {
+      "path": "results/deferred-plan-cancel.json",
+      "type": "json",
+      "requiredKeys": [
+        "decision"
+      ],
+      "requiredValues": {
+        "remoteExecuted": false
+      },
+      "requiredPatterns": [
+        "\"decision\"\\s*:\\s*\"(?:proposed|blocked|no-op)\""
+      ]
+    }
+  ],
+  "unchanged": [
+    {
+      "path": "inputs/snapshot.json",
+      "source": "fixtures/deferred-plan-cancel.json"
+    }
+  ],
+  "absent": [
+    ".solution-manifest.json",
+    "docs/alm/last-deployment.json"
+  ]
+}

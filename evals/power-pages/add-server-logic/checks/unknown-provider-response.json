@@ -1,0 +1,23 @@
+{
+  "files": [
+    {
+      "path": "reports/unknown-provider-response.md",
+      "type": "text",
+      "requiredText": [
+        "response",
+        "offline"
+      ],
+      "minTextLength": 200
+    }
+  ],
+  "unchanged": [
+    {
+      "path": "inputs/snapshot.json",
+      "source": "fixtures/unknown-provider-response.json"
+    }
+  ],
+  "absent": [
+    ".powerpages-site/site-settings/serverlogic-enabled.sitesetting.yml",
+    "docs/alm/last-deployment.json"
+  ]
+}

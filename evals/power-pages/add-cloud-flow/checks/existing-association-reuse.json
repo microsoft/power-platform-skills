@@ -1,0 +1,36 @@
+{
+  "files": [
+    {
+      "path": "reports/existing-association-reuse.md",
+      "type": "text",
+      "requiredText": [
+        "booking-approval",
+        "Booking managers"
+      ],
+      "minTextLength": 200
+    },
+    {
+      "path": "results/existing-association-reuse.json",
+      "type": "json",
+      "requiredKeys": [
+        "decision"
+      ],
+      "requiredValues": {
+        "remoteExecuted": false
+      },
+      "requiredPatterns": [
+        "\"decision\"\\s*:\\s*\"(?:proposed|blocked|no-op)\""
+      ]
+    }
+  ],
+  "unchanged": [
+    {
+      "path": "inputs/snapshot.json",
+      "source": "fixtures/existing-association-reuse.json"
+    }
+  ],
+  "absent": [
+    ".solution-manifest.json",
+    "docs/alm/last-deployment.json"
+  ]
+}

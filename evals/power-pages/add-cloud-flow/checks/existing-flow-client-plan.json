@@ -1,0 +1,46 @@
+{
+  "files": [
+    {
+      "path": "reports/existing-flow-client-plan.md",
+      "type": "text",
+      "requiredText": [
+        "bookingId",
+        "requestId",
+        "Booking managers"
+      ],
+      "minTextLength": 200
+    },
+    {
+      "path": "results/existing-flow-client-plan.json",
+      "type": "json",
+      "requiredKeys": [
+        "decision"
+      ],
+      "requiredValues": {
+        "remoteExecuted": false
+      },
+      "requiredPatterns": [
+        "\"decision\"\\s*:\\s*\"(?:proposed|blocked|no-op)\""
+      ]
+    },
+    {
+      "path": "proposals/request.js",
+      "type": "text",
+      "requiredText": [
+        "bookingId",
+        "getCsrfToken"
+      ],
+      "minTextLength": 100
+    }
+  ],
+  "unchanged": [
+    {
+      "path": "inputs/snapshot.json",
+      "source": "fixtures/existing-flow-client-plan.json"
+    }
+  ],
+  "absent": [
+    ".solution-manifest.json",
+    "docs/alm/last-deployment.json"
+  ]
+}

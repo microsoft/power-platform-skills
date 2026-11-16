@@ -1,0 +1,45 @@
+{
+  "files": [
+    {
+      "path": "reports/record-summary-integration.md",
+      "type": "text",
+      "requiredText": [
+        "BookingDetails",
+        "contoso_booking",
+        "getCsrfToken"
+      ],
+      "minTextLength": 200
+    },
+    {
+      "path": "results/record-summary-integration.json",
+      "type": "json",
+      "requiredKeys": [
+        "decision"
+      ],
+      "requiredValues": {
+        "remoteExecuted": false
+      },
+      "requiredPatterns": [
+        "\"decision\"\\s*:\\s*\"(?:proposed|blocked|no-op)\""
+      ]
+    },
+    {
+      "path": "proposals/summary.js",
+      "type": "text",
+      "requiredText": [
+        "getCsrfToken"
+      ],
+      "minTextLength": 100
+    }
+  ],
+  "unchanged": [
+    {
+      "path": "inputs/snapshot.json",
+      "source": "fixtures/record-summary-integration.json"
+    }
+  ],
+  "absent": [
+    ".solution-manifest.json",
+    "docs/alm/last-deployment.json"
+  ]
+}

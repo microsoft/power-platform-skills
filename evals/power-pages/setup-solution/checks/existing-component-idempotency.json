@@ -1,0 +1,36 @@
+{
+  "files": [
+    {
+      "path": "reports/existing-component-idempotency.md",
+      "type": "text",
+      "requiredText": [
+        "contoso_portal",
+        "site-a"
+      ],
+      "minTextLength": 200
+    },
+    {
+      "path": "results/existing-component-idempotency.json",
+      "type": "json",
+      "requiredKeys": [
+        "decision"
+      ],
+      "requiredValues": {
+        "remoteExecuted": false
+      },
+      "requiredPatterns": [
+        "\"decision\"\\s*:\\s*\"(?:proposed|blocked|no-op)\""
+      ]
+    }
+  ],
+  "unchanged": [
+    {
+      "path": "inputs/snapshot.json",
+      "source": "fixtures/existing-component-idempotency.json"
+    }
+  ],
+  "absent": [
+    ".solution-manifest.json",
+    "docs/alm/last-deployment.json"
+  ]
+}

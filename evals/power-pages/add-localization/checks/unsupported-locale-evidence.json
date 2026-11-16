@@ -1,0 +1,37 @@
+{
+  "files": [
+    {
+      "path": "reports/unsupported-locale-evidence.md",
+      "type": "text",
+      "requiredText": [
+        "Angular",
+        "static",
+        "fr-FR"
+      ],
+      "minTextLength": 200
+    },
+    {
+      "path": "results/unsupported-locale-evidence.json",
+      "type": "json",
+      "requiredKeys": [
+        "decision"
+      ],
+      "requiredValues": {
+        "remoteExecuted": false
+      },
+      "requiredPatterns": [
+        "\"decision\"\\s*:\\s*\"(?:proposed|blocked|no-op)\""
+      ]
+    }
+  ],
+  "unchanged": [
+    {
+      "path": "inputs/snapshot.json",
+      "source": "fixtures/unsupported-locale-evidence.json"
+    }
+  ],
+  "absent": [
+    ".solution-manifest.json",
+    "docs/alm/last-deployment.json"
+  ]
+}

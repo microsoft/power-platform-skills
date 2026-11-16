@@ -1,0 +1,58 @@
+{
+  "files": [
+    {
+      "path": "reports/vue-translator-owned-values.md",
+      "type": "text",
+      "requiredText": [
+        "vue-i18n",
+        "es-MX"
+      ],
+      "minTextLength": 200
+    },
+    {
+      "path": "results/vue-translator-owned-values.json",
+      "type": "json",
+      "requiredKeys": [
+        "decision"
+      ],
+      "requiredValues": {
+        "remoteExecuted": false
+      },
+      "requiredPatterns": [
+        "\"decision\"\\s*:\\s*\"(?:proposed|blocked|no-op)\""
+      ]
+    },
+    {
+      "path": "proposals/en.json",
+      "type": "json",
+      "requiredKeys": [
+        "heading",
+        "greeting",
+        "count"
+      ],
+      "requiredText": [
+        "{name}",
+        "{count}"
+      ]
+    },
+    {
+      "path": "proposals/es-MX.json",
+      "type": "json",
+      "requiredValues": {
+        "heading": "",
+        "greeting": "",
+        "count": ""
+      }
+    }
+  ],
+  "unchanged": [
+    {
+      "path": "inputs/snapshot.json",
+      "source": "fixtures/vue-translator-owned-values.json"
+    }
+  ],
+  "absent": [
+    ".solution-manifest.json",
+    "docs/alm/last-deployment.json"
+  ]
+}

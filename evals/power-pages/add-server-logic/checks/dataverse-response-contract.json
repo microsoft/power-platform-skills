@@ -1,0 +1,40 @@
+{
+  "files": [
+    {
+      "path": "reports/dataverse-response-contract.md",
+      "type": "text",
+      "requiredText": [
+        "StatusCode",
+        "Body",
+        "Morning"
+      ],
+      "minTextLength": 200
+    },
+    {
+      "path": "proposals/server.js",
+      "type": "text",
+      "requiredText": [
+        "RetrieveMultipleRecords"
+      ],
+      "minTextLength": 100
+    },
+    {
+      "path": "proposals/client.js",
+      "type": "text",
+      "requiredText": [
+        "data"
+      ],
+      "minTextLength": 100
+    }
+  ],
+  "unchanged": [
+    {
+      "path": "inputs/snapshot.json",
+      "source": "fixtures/dataverse-response-contract.json"
+    }
+  ],
+  "absent": [
+    ".powerpages-site/site-settings/serverlogic-enabled.sitesetting.yml",
+    "docs/alm/last-deployment.json"
+  ]
+}

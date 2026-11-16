@@ -1,0 +1,9 @@
+{
+  "siteType": "Enhanced non-SPA",
+  "pageId": "bookings-page",
+  "locale": "en-US",
+  "pageCopy": "<h1>Bookings</h1>{% include 'entity_list' key: 'Bookings' %}<p>{{ user.fullname | escape }}</p>",
+  "button": "Refresh bookings",
+  "tokenPattern": "shell.safeAjax",
+  "entitySetName": "contoso_bookings"
+}

@@ -1,0 +1,18 @@
+{
+  "pipeline": "Contoso release",
+  "stages": [
+    {
+      "name": "Staging",
+      "previous": null
+    },
+    {
+      "name": "Production",
+      "previous": "Staging"
+    }
+  ],
+  "requestedStages": [
+    "Staging",
+    "Production"
+  ],
+  "hostVerifiedInSnapshot": true
+}

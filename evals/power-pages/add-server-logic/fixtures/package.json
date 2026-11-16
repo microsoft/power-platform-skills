@@ -1,0 +1,7 @@
+{
+  "name": "contoso-offline-portal",
+  "private": true,
+  "dependencies": {
+    "react": "19.3.1"
+  }
+}

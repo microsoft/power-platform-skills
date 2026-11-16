@@ -1,0 +1,9 @@
+{
+  "submitExitCode": 0,
+  "asyncJob": {
+    "state": "Completed",
+    "status": "Failed",
+    "message": "Missing dependency contoso_booking"
+  },
+  "target": "Staging"
+}

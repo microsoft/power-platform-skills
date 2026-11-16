@@ -1,0 +1,10 @@
+{
+  "target": "WorkOrderList",
+  "table": "contoso_workorder",
+  "entitySetName": "contoso_workorders",
+  "pageKind": "list",
+  "selectedRecord": null,
+  "request": "Summarize these work orders",
+  "visibleFilter": "Open orders",
+  "approvedCrossRecordScope": false
+}

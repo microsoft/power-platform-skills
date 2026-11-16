@@ -1,0 +1,20 @@
+{
+  "framework": "React",
+  "siteDeployed": true,
+  "flow": {
+    "id": "00000000-0000-0000-0000-000000000401",
+    "name": "Request booking approval",
+    "trigger": "When Power Pages calls a flow",
+    "inputs": [
+      "bookingId"
+    ],
+    "outputs": [
+      "requestId"
+    ]
+  },
+  "roles": [
+    "Booking managers"
+  ],
+  "existingTokenHelper": "getCsrfToken",
+  "button": "Request approval"
+}

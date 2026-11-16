@@ -1,0 +1,7 @@
+{
+  "localProject": "Contoso reservations",
+  "deployed": false,
+  "siteUrl": null,
+  "requested": "Check production login",
+  "approval": "no deployment, no login"
+}

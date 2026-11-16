@@ -1,0 +1,15 @@
+{
+  "siteType": "Enhanced non-SPA",
+  "websiteRecordId": "00000000-0000-0000-0000-000000000301",
+  "solutionUniqueName": "contoso_portal",
+  "publisher": {
+    "uniqueName": "contoso",
+    "prefix": "cts",
+    "exists": true
+  },
+  "include": [
+    "website",
+    "contoso_booking"
+  ],
+  "approval": "proposal only"
+}

@@ -1,0 +1,9 @@
+{
+  "mode": "auto-platform",
+  "sourceBinding": null,
+  "discoveredHosts": [],
+  "tenantDisplayName": "Contoso synthetic tenant",
+  "tenantId": "00000000-0000-0000-0000-000000000201",
+  "tenantConfirmation": false,
+  "adminRole": "unverified"
+}

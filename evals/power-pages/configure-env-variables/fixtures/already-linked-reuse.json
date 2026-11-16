@@ -1,0 +1,16 @@
+{
+  "siteType": "Enhanced",
+  "setting": {
+    "name": "Contoso/ApiBase",
+    "source": 1,
+    "schemaName": "cts_ApiBase"
+  },
+  "definitionExists": true,
+  "solutionIncludesDefinition": true,
+  "stage": "Staging",
+  "currentTargetValue": "https://api.example.invalid/staging",
+  "requestedTargetValue": "https://api.example.invalid/staging",
+  "otherStages": [
+    "Production"
+  ]
+}

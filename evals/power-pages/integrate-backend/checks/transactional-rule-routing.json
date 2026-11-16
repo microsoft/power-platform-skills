@@ -1,0 +1,37 @@
+{
+  "files": [
+    {
+      "path": "reports/transactional-rule-routing.md",
+      "type": "text",
+      "requiredText": [
+        "Dataverse",
+        "capacity",
+        "booking"
+      ],
+      "minTextLength": 200
+    },
+    {
+      "path": "results/transactional-rule-routing.json",
+      "type": "json",
+      "requiredKeys": [
+        "decision"
+      ],
+      "requiredValues": {
+        "remoteExecuted": false
+      },
+      "requiredPatterns": [
+        "\"decision\"\\s*:\\s*\"(?:proposed|blocked|no-op)\""
+      ]
+    }
+  ],
+  "unchanged": [
+    {
+      "path": "inputs/snapshot.json",
+      "source": "fixtures/transactional-rule-routing.json"
+    }
+  ],
+  "absent": [
+    ".solution-manifest.json",
+    "docs/alm/last-deployment.json"
+  ]
+}

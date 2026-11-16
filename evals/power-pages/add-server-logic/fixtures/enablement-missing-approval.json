@@ -1,0 +1,12 @@
+{
+  "setting": "ServerLogic/Enabled",
+  "currentValue": false,
+  "desiredValue": true,
+  "approvedLocalCode": true,
+  "approvedSettingChange": false,
+  "approvedDeployment": false,
+  "existingEndpoints": [
+    "booking-list"
+  ],
+  "permissionChanges": "not approved"
+}

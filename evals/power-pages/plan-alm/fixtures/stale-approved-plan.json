@@ -1,0 +1,13 @@
+{
+  "planStatus": "Approved",
+  "generatedAt": "2026-01-01T10:00:00Z",
+  "solutionModifiedAt": "2026-01-02T10:00:00Z",
+  "oldComponents": [
+    "website"
+  ],
+  "newComponents": [
+    "website",
+    "contoso_reservation"
+  ],
+  "approver": "not supplied"
+}

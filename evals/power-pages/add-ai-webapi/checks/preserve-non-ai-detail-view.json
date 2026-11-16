@@ -1,0 +1,35 @@
+{
+  "files": [
+    {
+      "path": "reports/preserve-non-ai-detail-view.md",
+      "type": "text",
+      "requiredText": [
+        "BookingDetails"
+      ],
+      "minTextLength": 200
+    },
+    {
+      "path": "results/preserve-non-ai-detail-view.json",
+      "type": "json",
+      "requiredKeys": [
+        "decision"
+      ],
+      "requiredValues": {
+        "remoteExecuted": false
+      },
+      "requiredPatterns": [
+        "\"decision\"\\s*:\\s*\"(?:proposed|blocked|no-op)\""
+      ]
+    }
+  ],
+  "unchanged": [
+    {
+      "path": "inputs/snapshot.json",
+      "source": "fixtures/preserve-non-ai-detail-view.json"
+    }
+  ],
+  "absent": [
+    ".solution-manifest.json",
+    "docs/alm/last-deployment.json"
+  ]
+}

@@ -1,0 +1,10 @@
+{
+  "siteType": "Standard non-SPA",
+  "websiteRecordId": "00000000-0000-0000-0000-000000000501",
+  "modelVersion": 1,
+  "source": ".powerpages-site",
+  "contentChanged": [
+    "web-pages/bookings"
+  ],
+  "existingSite": true
+}

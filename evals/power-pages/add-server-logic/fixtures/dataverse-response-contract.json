@@ -1,0 +1,16 @@
+{
+  "endpoint": "booking-list",
+  "connector": "Server.Connector.Dataverse.RetrieveMultipleRecords",
+  "connectorResult": "{\"StatusCode\":200,\"Body\":\"{\\\"value\\\":[{\\\"contoso_title\\\":\\\"Morning\\\"}]}\",\"Headers\":{}}",
+  "platformEnvelope": {
+    "success": true,
+    "data": "<handler return string>"
+  },
+  "existingClient": "const rows = response.data.value;",
+  "acceptedOptions": [
+    "raw connector passthrough",
+    "wrapped connector passthrough",
+    "normalized feature response"
+  ],
+  "instruction": "Do not choose a new public response contract without coordinating both sides."
+}

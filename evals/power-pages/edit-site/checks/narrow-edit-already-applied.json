@@ -1,0 +1,36 @@
+{
+  "files": [
+    {
+      "path": "reports/narrow-edit-already-applied.md",
+      "type": "text",
+      "requiredText": [
+        "My bookings",
+        "BookingList"
+      ],
+      "minTextLength": 200
+    },
+    {
+      "path": "results/narrow-edit-already-applied.json",
+      "type": "json",
+      "requiredKeys": [
+        "decision"
+      ],
+      "requiredValues": {
+        "remoteExecuted": false
+      },
+      "requiredPatterns": [
+        "\"decision\"\\s*:\\s*\"(?:proposed|blocked|no-op)\""
+      ]
+    }
+  ],
+  "unchanged": [
+    {
+      "path": "inputs/snapshot.json",
+      "source": "fixtures/narrow-edit-already-applied.json"
+    }
+  ],
+  "absent": [
+    ".solution-manifest.json",
+    "docs/alm/last-deployment.json"
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "approvedPlan": {
+    "hash": "synthetic-plan-a",
+    "sourceHash": "synthetic-source-a",
+    "operation": "replace booking heading"
+  },
+  "currentSourceHash": "synthetic-source-b",
+  "receipt": {
+    "approved": true
+  },
+  "ownerApprovedNewSource": false
+}

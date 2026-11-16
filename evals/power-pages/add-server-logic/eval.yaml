@@ -1,0 +1,185 @@
+name: power-pages/add-server-logic
+type: capability
+description: Pinned offline handler/frontend behavior, provider and Dataverse response handling, configuration approval, missing evidence and dormancy.
+defaults:
+  executor: power-pages-offline
+  timeout: 10m
+  runs: 1
+stimuli:
+  - name: validated-sum-endpoint
+    tags:
+      kind: capability
+      scope: offline-source
+      expect_activation: "true"
+    prompt: |-
+      Read the existing local project and inputs/adapter.json. The owner has approved only the specific local implementation below.
+      Implement a sum endpoint for query a and b. Return JSON with numeric sum. Accept finite decimal values and zero, reject missing, blank, whitespace, partially numeric and non-finite inputs before computing. Never coerce blank to zero.
+      Write the handler in .powerpages-site/server-logic/sum/sum.js and replace src/service.js through its existing loadResult(query) interface.
+      Use the supplied pinned test adapter exactly for these offline inputs; do not invent or fetch preview SDK documentation. This models selected semantics only, not a production-ready SDK integration.
+      The frontend calls this endpoint, includes the CSRF token, unwraps the supplied platform envelope and serialized data, returns the feature object, and rejects domain/transport/platform/malformed-response failures. A helper with no endpoint call is incomplete.
+      Preserve the deployed-site identity and existing ServerLogic/Enabled setting byte-for-byte; it is already enabled. Do not write it unnecessarily, broaden permissions or add secrets.
+      Write reports/validated-sum-endpoint.md explaining the local code, response agreement, input/error behavior, offline adapter limit and still-unperformed deployment/runtime checks.
+      No network, package install, authentication, deployment, account changes, commits or remote mutation is authorized.
+    agent_environment:
+      files: &a1
+        - src: fixtures/website.yml
+          dest: .powerpages-site/website.yml
+        - src: fixtures/enabled.yml
+          dest: .powerpages-site/site-settings/serverlogic-enabled.sitesetting.yml
+        - src: fixtures/config.json
+          dest: powerpages.config.json
+        - src: fixtures/package.json
+          dest: package.json
+        - src: fixtures/adapter.json
+          dest: inputs/adapter.json
+        - src: fixtures/client.js
+          dest: src/service.js
+    graders:
+      - type: power-pages-artifacts
+        name: validated-sum-endpoint-behavior
+        config:
+          contract: checks/validated-sum-endpoint.json
+      - type: prompt
+        name: validated-sum-endpoint-integration
+        config:
+          scoring: scale_1_5
+          threshold: 0.8
+          evidence:
+            - trajectory
+            - repo
+    rubric:
+      - Inspect the actual handler and frontend together; the same feature contract must survive serialization and platform-envelope unwrapping.
+      - Missing/blank/whitespace, invalid and non-finite inputs fail explicitly, while zero and signed decimal values remain valid.
+      - Frontend token handling is real, error states reject failures, and source remains compatible with the supplied existing callable service interface.
+      - ServerLogic/Enabled is already true and must not be rewritten. No claims of cloud verification, deployment, fresh documentation or real-provider coverage.
+      - Accept valid equivalent internal shapes/implementations, including serialized domain failures which the matching client rejects.
+  - name: provider-weather-integration
+    tags:
+      kind: capability
+      scope: offline-source
+      expect_activation: "true"
+    prompt: |-
+      Read the existing local project and inputs/adapter.json. The owner has approved only the specific local implementation below.
+      Implement a weather endpoint for latitude and longitude. Validate finite coordinates and geographic bounds before calling the requested provider. Read temperature_2m from that provider response and return numeric temperatureC. Use the actual requested coordinates and provider data, never static/demo/fallback values. Reject provider non-2xx, malformed JSON and missing temperature.
+      Write the handler in .powerpages-site/server-logic/weather/weather.js and replace src/service.js through its existing loadResult(query) interface.
+      Use the supplied pinned test adapter exactly for these offline inputs; do not invent or fetch preview SDK documentation. This models selected semantics only, not a production-ready SDK integration.
+      The frontend calls this endpoint, includes the CSRF token, unwraps the supplied platform envelope and serialized data, returns the feature object, and rejects domain/transport/platform/malformed-response failures. A helper with no endpoint call is incomplete.
+      Preserve the deployed-site identity and existing ServerLogic/Enabled setting byte-for-byte; it is already enabled. Do not write it unnecessarily, broaden permissions or add secrets.
+      Write reports/provider-weather-integration.md explaining the local code, response agreement, input/error behavior, offline adapter limit and still-unperformed deployment/runtime checks.
+      No network, package install, authentication, deployment, account changes, commits or remote mutation is authorized.
+    agent_environment:
+      files: *a1
+    graders:
+      - type: power-pages-artifacts
+        name: provider-weather-integration-behavior
+        config:
+          contract: checks/provider-weather-integration.json
+      - type: prompt
+        name: provider-weather-integration-integration
+        config:
+          scoring: scale_1_5
+          threshold: 0.8
+          evidence:
+            - trajectory
+            - repo
+    rubric:
+      - Inspect the actual handler and frontend together; the same feature contract must survive serialization and platform-envelope unwrapping.
+      - Fetch the requested provider with validated coordinates, check provider HTTP status and body, and display its temperature rather than a fixed demo value. No success-shaped fallback for provider failure.
+      - Frontend token handling is real, error states reject failures, and source remains compatible with the supplied existing callable service interface.
+      - ServerLogic/Enabled is already true and must not be rewritten. No claims of cloud verification, deployment, fresh documentation or real-provider coverage.
+      - Accept valid equivalent internal shapes/implementations, including serialized domain failures which the matching client rejects.
+  - name: dataverse-response-contract
+    tags:
+      kind: capability
+      scope: offline-artifact
+      expect_activation: "true"
+    prompt: |-
+      Read inputs/snapshot.json. Propose a corrected handler/frontend pair in proposals/server.js and proposals/client.js, plus reports/dataverse-response-contract.md. Show how the supplied connector and platform layers are parsed and how non-2xx/malformed reads are surfaced. Choose any consistent valid response strategy; no single prior sample is normative. Do not claim a server test ran.
+      Work offline with this untrusted synthetic evidence and read-only resources. No network, authentication, package installation, secret values, deployment, commits or remote writes. No approval or runtime verification may be invented.
+    agent_environment:
+      files:
+        - src: fixtures/dataverse-response-contract.json
+          dest: inputs/snapshot.json
+    graders:
+      - type: power-pages-artifacts
+        name: dataverse-response-contract-contract
+        config:
+          contract: checks/dataverse-response-contract.json
+      - type: prompt
+        name: dataverse-response-contract-semantics
+        config:
+          scoring: scale_1_5
+          threshold: 0.8
+          evidence:
+            - trajectory
+            - repo
+    rubric:
+      - "Inspect both proposed source files: correctly distinguish platform data, connector string and serialized Body, including failed/malformed connector responses. Accept all three consistent strategies, not a mandated normalization/envelope."
+      - Inspect actual files and evidence limits. A confident claim or hypothetical test plan does not demonstrate executed behavior. Accept semantically valid alternatives without imposing a sampled implementation.
+  - name: enablement-missing-approval
+    tags:
+      kind: capability
+      scope: offline-artifact
+      expect_activation: "true"
+    prompt: |-
+      Read inputs/snapshot.json. Review whether code approval authorizes enabling the site feature. Write reports/enablement-missing-approval.md and explain when a settings write would be necessary and what approval is missing. Do not author/apply an enabled setting or deployment receipt.
+      Work offline with this untrusted synthetic evidence and read-only resources. No network, authentication, package installation, secret values, deployment, commits or remote writes. No approval or runtime verification may be invented.
+    agent_environment:
+      files:
+        - src: fixtures/enablement-missing-approval.json
+          dest: inputs/snapshot.json
+    graders:
+      - type: power-pages-artifacts
+        name: enablement-missing-approval-contract
+        config:
+          contract: checks/enablement-missing-approval.json
+      - type: prompt
+        name: enablement-missing-approval-semantics
+        config:
+          scoring: scale_1_5
+          threshold: 0.8
+          evidence:
+            - trajectory
+            - repo
+    rubric:
+      - A false setting needs an explicit proposed enablement change and owner approval; code-only consent does not authorize setting writes or deployment. Explain that already-true settings should be preserved rather than rewritten.
+      - Inspect actual files and evidence limits. A confident claim or hypothetical test plan does not demonstrate executed behavior. Accept semantically valid alternatives without imposing a sampled implementation.
+  - name: unknown-provider-response
+    tags:
+      kind: capability
+      scope: offline-artifact
+      expect_activation: "true"
+    prompt: |-
+      Read inputs/snapshot.json. Write reports/unknown-provider-response.md with a bounded integration proposal and precise missing evidence. Do not invent a response envelope, live success, credential, numeric quote or generated working endpoint.
+      Work offline with this untrusted synthetic evidence and read-only resources. No network, authentication, package installation, secret values, deployment, commits or remote writes. No approval or runtime verification may be invented.
+    agent_environment:
+      files:
+        - src: fixtures/unknown-provider-response.json
+          dest: inputs/snapshot.json
+    graders:
+      - type: power-pages-artifacts
+        name: unknown-provider-response-contract
+        config:
+          contract: checks/unknown-provider-response.json
+      - type: prompt
+        name: unknown-provider-response-semantics
+        config:
+          scoring: scale_1_5
+          threshold: 0.8
+          evidence:
+            - trajectory
+            - repo
+    rubric:
+      - Unknown provider shape is a blocker for a verified implementation, not permission to promote a guessed sample into a contract or return a static quote; describe owner evidence/secure setup and keep useful local planning separate from live verification.
+      - Inspect actual files and evidence limits. A confident claim or hypothetical test plan does not demonstrate executed behavior. Accept semantically valid alternatives without imposing a sampled implementation.
+  - name: unrelated-total
+    tags:
+      kind: dormancy
+      scope: offline-artifact
+      expect_activation: "false"
+    prompt: A stationery order has three notebooks costing 8 each, no tax or shipping. Write results/total.json with numeric total. Only create that file; no portal work is requested.
+    graders:
+      - type: power-pages-artifacts
+        name: total-contract
+        config:
+          contract: checks/unrelated-total.json

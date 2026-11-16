@@ -1,0 +1,36 @@
+{
+  "files": [
+    {
+      "path": "reports/failed-async-import.md",
+      "type": "text",
+      "requiredText": [
+        "contoso_booking",
+        "Failed"
+      ],
+      "minTextLength": 200
+    },
+    {
+      "path": "results/failed-async-import.json",
+      "type": "json",
+      "requiredKeys": [
+        "decision"
+      ],
+      "requiredValues": {
+        "remoteExecuted": false
+      },
+      "requiredPatterns": [
+        "\"decision\"\\s*:\\s*\"(?:proposed|blocked|no-op)\""
+      ]
+    }
+  ],
+  "unchanged": [
+    {
+      "path": "inputs/snapshot.json",
+      "source": "fixtures/failed-async-import.json"
+    }
+  ],
+  "absent": [
+    ".solution-manifest.json",
+    "docs/alm/last-deployment.json"
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "framework": "React",
+  "languages": [
+    "en",
+    "ar"
+  ],
+  "default": "en",
+  "persistedPreference": "ar",
+  "route": "/bookings/:id",
+  "messages": {
+    "heading": "Bookings",
+    "greeting": "Hello {name}",
+    "count": "{count} bookings"
+  },
+  "approved": "local proposal only"
+}

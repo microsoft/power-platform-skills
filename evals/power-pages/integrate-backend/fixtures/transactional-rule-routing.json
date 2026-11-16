@@ -1,0 +1,11 @@
+{
+  "request": "Only confirm a booking when capacity remains; atomically update booking and capacity",
+  "current": {
+    "framework": "React",
+    "directWebApiWrites": true,
+    "serverLogic": []
+  },
+  "dataSource": "Dataverse",
+  "backgroundWork": false,
+  "approval": "recommendation only"
+}

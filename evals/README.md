@@ -1,7 +1,7 @@
 # Skill evaluations
 
-Power Pages has offline [Vally](https://www.npmjs.com/package/@microsoft/vally) suites for `setup-auth` and `create-site`.
-Add suites as individual skills are improved rather than requiring coverage for every skill at once.
+Power Pages has offline [Vally](https://www.npmjs.com/package/@microsoft/vally) suites for the 19 skills in the instruction-slimming rollout.
+The [coverage and revision-comparison guide](power-pages/COVERAGE.md) lists the fixed cases and reproducible baseline commands.
 Other skills and plugins appear in the [evaluation dashboard](https://microsoft.github.io/power-platform-skills/evaluations/) as untested until they have their own measured evidence.
 Existing `evals.json` files for other skills are preserved but are not run or counted as measured evidence by this runtime.
 
@@ -43,6 +43,7 @@ node evals/runtime/run.mjs run --skill setup-auth --runs 1 --local-auth \
 Add `--case <case-name>` to run one pair.
 Omit `--skill` to run all available Vally suites; requesting a skill without a suite fails explicitly.
 The manual workflow's `all` option selects the same available suites.
+With 19 suites, `all` is a substantial model run; use a named skill and case for initial calibration.
 Output directories must be new so a partial run cannot overwrite earlier evidence.
 Keep local output under ignored `evals/reports/`.
 Local authentication does not copy credential files into the trial and is disallowed in Actions.
@@ -70,6 +71,14 @@ These are offline artifact, analysis and planning tests.
 They never connect to a Power Pages environment, authenticate to Dataverse, deploy a site, or claim a live operation succeeded.
 They do not measure unrestricted CLI behavior, interactive approval handling, parent-skill routing or production readiness.
 An isolated helper skill can pass without proving that its parent would select it.
+Approval cases measure whether the output respects a supplied consent boundary, not a real interactive approval exchange.
+
+The `add-server-logic` suite also executes generated handler/frontend pairs in isolated Chromium.
+It checks numeric input validation, zero handling, provider data changes, provider non-2xx/malformed/missing-data errors, CSRF and response unwrapping.
+The fixture specifies the synthetic callable interfaces and provider adapter explicitly.
+Those interfaces are test inputs, not claims about every version of the preview Server Logic SDK.
+The checker never executes generated source in Node.js or allows real provider calls.
+Other source proposals use structural checks and artifact-aware rubrics; they are not reported as executed integrations.
 
 ## Documents and ER diagrams
 
@@ -129,6 +138,10 @@ Judge usage records the counts returned by Vally and the number of judge calls w
 Vally can substitute zero for a missing judge counter, so judge totals are lower bounds.
 Cache values may overlap input tokens, and judge cache counts are unavailable.
 These counts are not billing figures.
+Private trajectories also retain successful explicit `eval_read` resource reads and byte counts.
+The private review index sums plugin-resource bytes, counting repeated reads.
+This excludes automatic skill injection, native skill-tool reads, tool listings, and other prompt context, so it is partial exposure rather than total instruction tokens.
+No new paths or raw content are added to public summaries.
 
 After an evaluation completes, the existing showcase workflow fetches retained summaries from the latest 20 trusted default-branch dispatch runs.
 It validates the schema and matches the commit, workflow URL, skill and model to each matrix artifact before building the site's `/evaluations/` page.

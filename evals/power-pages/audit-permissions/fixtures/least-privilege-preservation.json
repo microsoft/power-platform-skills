@@ -1,0 +1,17 @@
+{
+  "table": "contoso_case",
+  "permission": {
+    "role": "Case agents",
+    "scope": "Contact",
+    "relationship": "contoso_case_contact",
+    "read": true,
+    "write": false,
+    "create": false,
+    "delete": false
+  },
+  "fields": [
+    "contoso_title",
+    "contoso_status"
+  ],
+  "request": "Retain read-only access to own cases"
+}

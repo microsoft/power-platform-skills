@@ -1,0 +1,54 @@
+{
+  "files": [
+    {
+      "path": ".powerpages-site/server-logic/sum/sum.js",
+      "type": "text",
+      "requiredPatterns": [
+        "function\\s+get\\s*\\("
+      ]
+    },
+    {
+      "path": "src/service.js",
+      "type": "text",
+      "requiredPatterns": [
+        "function\\s+loadResult\\s*\\("
+      ]
+    },
+    {
+      "path": "reports/validated-sum-endpoint.md",
+      "type": "text",
+      "requiredText": [
+        "offline",
+        "ServerLogic/Enabled"
+      ],
+      "minTextLength": 100
+    }
+  ],
+  "serverLogic": {
+    "server": ".powerpages-site/server-logic/sum/sum.js",
+    "client": "src/service.js",
+    "exercise": "sum"
+  },
+  "unchanged": [
+    {
+      "path": ".powerpages-site/website.yml",
+      "source": "fixtures/website.yml"
+    },
+    {
+      "path": ".powerpages-site/site-settings/serverlogic-enabled.sitesetting.yml",
+      "source": "fixtures/enabled.yml"
+    },
+    {
+      "path": "powerpages.config.json",
+      "source": "fixtures/config.json"
+    },
+    {
+      "path": "package.json",
+      "source": "fixtures/package.json"
+    },
+    {
+      "path": "inputs/adapter.json",
+      "source": "fixtures/adapter.json"
+    }
+  ]
+}

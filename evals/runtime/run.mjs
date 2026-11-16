@@ -11,18 +11,20 @@ import { closeBrowser } from './browser-checks.mjs';
 import { OfflineExecutor } from './offline-executor.mjs';
 import { validateModelPair } from './models.mjs';
 import { createRegistry, loadSuites, pluginRoot, repoRoot, trialGraders } from './suites.mjs';
+import { pairedInputIdentity, snapshotPlugin } from './revisions.mjs';
 
 const require = createRequire(import.meta.url);
 const { hashFile, hashTree } = require('../../scripts/lib/eval-evidence.js');
 
 export function parseArgs(args) {
   const [command = 'validate', ...rest] = args;
-  if (!['validate', 'run'].includes(command)) throw new Error('Usage: node run.mjs validate|run [--skill NAME] [--case NAME] [--runs N] [--model ID] [--judge-model ID] [--reasoning-effort LEVEL] [--judge-reasoning-effort LEVEL] [--local-auth] [--out DIR]');
+  if (!['validate', 'run', 'compare'].includes(command)) throw new Error('Usage: node run.mjs validate|run|compare [--skill NAME] [--case NAME] [--runs N] [--model ID] [--judge-model ID] [--reasoning-effort LEVEL] [--judge-reasoning-effort LEVEL] [--local-auth] [--out DIR] [--before REF --after REF]');
   const options = { command, runs: 1, reasoningEffort: 'medium', judgeReasoningEffort: 'medium' };
   const keys = new Map([
     ['--skill', 'skill'], ['--case', 'case'], ['--runs', 'runs'],
     ['--model', 'model'], ['--judge-model', 'judgeModel'], ['--out', 'out'],
     ['--reasoning-effort', 'reasoningEffort'], ['--judge-reasoning-effort', 'judgeReasoningEffort'],
+    ['--before', 'before'], ['--after', 'after'],
   ]);
   const seen = new Set();
   for (let index = 0; index < rest.length; index++) {
@@ -42,13 +44,17 @@ export function parseArgs(args) {
   options.runs = Number(options.runs);
   if (!Number.isInteger(options.runs) || options.runs < 1 || options.runs > 10) throw new Error('--runs must be between 1 and 10');
   if (options.case && !options.skill) throw new Error('--case requires --skill');
-  if (command === 'run' && (!options.model || !options.judgeModel)) {
+  if (command !== 'validate' && (!options.model || !options.judgeModel)) {
     throw new Error('Run requires explicit --model and --judge-model for reproducible evidence');
   }
   if ([options.model, options.judgeModel].some(model => model?.toLowerCase() === 'auto')) {
     throw new Error('Use explicit model IDs, not auto, to keep measurements attributable');
   }
-  if (command === 'run') validateModelPair(options);
+  if (command === 'compare' && (!options.before || !options.after || !options.skill || !options.out)) {
+    throw new Error('Compare requires --before, --after, --skill and --out');
+  }
+  if (command !== 'compare' && (options.before || options.after)) throw new Error('Revision options require compare');
+  if (command !== 'validate') validateModelPair(options);
   return options;
 }
 
@@ -114,7 +120,8 @@ export async function evaluate(options, dependencies = {}) {
   options = { reasoningEffort: 'medium', judgeReasoningEffort: 'medium', ...options };
   validateModelPair(options);
   if (options.localAuth && process.env.GITHUB_ACTIONS === 'true') throw new Error('--local-auth is not allowed in GitHub Actions');
-  const suites = await loadSuites({ skill: options.skill });
+  const sourcePluginRoot = options.sourcePluginRoot ?? pluginRoot;
+  const suites = await loadSuites({ skill: options.skill, sourcePluginRoot });
   if (options.case && !suites[0].stimuli.some(stimulus => stimulus.name === options.case)) throw new Error('Unknown case');
   const token = options.localAuth ? undefined : process.env.GITHUB_TOKEN;
   if (!token && !options.localAuth && !dependencies.executor) {
@@ -127,7 +134,7 @@ export async function evaluate(options, dependencies = {}) {
   await mkdir(out, { recursive: false });
   const scratch = await mkdtemp(path.join(tmpdir(), 'pp-eval-run-'));
   const executor = dependencies.executor ?? new OfflineExecutor({
-    pluginRoot, token, useLoggedInUser: options.localAuth === true,
+    pluginRoot: sourcePluginRoot, token, useLoggedInUser: options.localAuth === true,
     judgeModel: options.judgeModel, judgeReasoningEffort: options.judgeReasoningEffort,
   });
   let judge;
@@ -135,10 +142,10 @@ export async function evaluate(options, dependencies = {}) {
     .map(key => [key, process.env[key]]));
   const summary = {
     schemaVersion: 3, plugin: 'power-pages',
-    commit: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repoRoot, encoding: 'utf8' }).trim(),
+    commit: options.sourceCommit ?? execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repoRoot, encoding: 'utf8' }).trim(),
     generatedAt: new Date().toISOString(), model: options.model, judgeModel: options.judgeModel,
     reasoningEffort: options.reasoningEffort, judgeReasoningEffort: options.judgeReasoningEffort,
-    runUrl: actionRunUrl(process.env), pluginHash: await hashTree(pluginRoot),
+    runUrl: options.sourcePluginRoot ? null : actionRunUrl(process.env), pluginHash: await hashTree(sourcePluginRoot),
     runtimeHash: await hashTree(path.join(repoRoot, 'evals/runtime')), suites: [],
   };
   const review = { schemaVersion: 1, scope: 'offline', cases: [] };
@@ -223,6 +230,9 @@ export async function evaluate(options, dependencies = {}) {
             review.cases.push({
               skill: suite.name, name: stimulus.name, variant, trial,
               evidence: `private/${id}`, feedback: null,
+              observedPluginReadBytes: Array.isArray(result?.trajectory?.metrics?.resourceReads)
+                ? result.trajectory.metrics.resourceReads.filter(read => read.root === 'plugin')
+                  .reduce((sum, read) => sum + read.bytes, 0) : null,
             });
             await persist();
             console.log(`${id}: ${record.status}`);
@@ -250,8 +260,100 @@ export async function evaluate(options, dependencies = {}) {
   }
 }
 
+export async function compareRevisions(options, dependencies = {}) {
+  options = { runs: 1, reasoningEffort: 'medium', judgeReasoningEffort: 'medium', ...options };
+  validateModelPair(options);
+  const out = path.resolve(options.out);
+  await mkdir(path.dirname(out), { recursive: true });
+  await mkdir(out, { recursive: false });
+  const scratch = await mkdtemp(path.join(tmpdir(), 'pp-eval-revisions-'));
+  const settings = Object.fromEntries(['model', 'judgeModel', 'reasoningEffort', 'judgeReasoningEffort', 'runs', 'case']
+    .map(key => [key, options[key] ?? (key.includes('Effort') ? 'medium' : null)]));
+  const comparison = { schemaVersion: 1, mode: 'revision-pair', settings, arms: [], pairs: [], complete: false };
+  const persist = () => writeFile(path.join(out, 'comparison.json'), `${JSON.stringify(comparison, null, 2)}\n`);
+  try {
+    // Resolve BOTH immutable sources before any inference. Suites, fixtures,
+    // graders, and runtime always come from this checkout, never from either ref.
+    for (const label of ['before', 'after']) {
+      const root = path.join(scratch, label);
+      const commit = await snapshotPlugin(repoRoot, options[label], root);
+      const [suite] = await loadSuites({ skill: options.skill, sourcePluginRoot: root });
+      if (options.case) suite.stimuli = suite.stimuli.filter(stimulus => stimulus.name === options.case);
+      if (!suite.stimuli.length) throw new Error('Unknown case');
+      const source = await readFile(suite.skill.path);
+      comparison.arms.push({
+        label, commit, pluginHash: await hashTree(root), skillHash: await hashFile(suite.skill.path),
+        suiteHash: await hashTree(suite.suiteDir), runtimeHash: await hashTree(path.join(repoRoot, 'evals/runtime')),
+        pairedInputHash: await pairedInputIdentity(suite, settings),
+        mainFileBytes: source.length,
+        mainFileLines: source.toString('utf8').split('\n').length - (source.at(-1) === 10 ? 1 : 0),
+        expectedTrials: suite.stimuli.length * options.runs * 2,
+      });
+    }
+    if (['pairedInputHash', 'suiteHash', 'runtimeHash'].some(key =>
+      comparison.arms[0][key] !== comparison.arms[1][key])) {
+      throw new Error('Revision pair input mismatch');
+    }
+    await persist();
+    const summaries = [];
+    for (const arm of comparison.arms) {
+      const { summary } = await (dependencies.evaluate ?? evaluate)({
+        ...options, sourcePluginRoot: path.join(scratch, arm.label), sourceCommit: arm.commit,
+        out: path.join(out, arm.label),
+      });
+      if (summary.pluginHash !== arm.pluginHash || summary.runtimeHash !== arm.runtimeHash ||
+          summary.suites[0].suiteHash !== arm.suiteHash || summary.suites[0].skillHash !== arm.skillHash ||
+          await hashTree(path.join(scratch, arm.label)) !== arm.pluginHash ||
+          await hashTree(path.join(repoRoot, 'evals/power-pages', options.skill)) !== arm.suiteHash ||
+          await hashTree(path.join(repoRoot, 'evals/runtime')) !== arm.runtimeHash) {
+        throw new Error('Source changed during revision comparison');
+      }
+      summaries.push(summary.suites[0]);
+      if (summary.suites[0].results.length !== arm.expectedTrials ||
+          new Set(summary.suites[0].results.map(result => `${result.name}/${result.variant}/${result.trial}`)).size !== arm.expectedTrials) {
+        throw new Error('Incomplete or duplicate revision trials');
+      }
+    }
+    comparison.pairs = summaries[0].results.map(before => {
+      const after = summaries[1].results.find(result =>
+        result.name === before.name && result.variant === before.variant && result.trial === before.trial);
+      if (!after) throw new Error('Missing paired result');
+      return {
+        name: before.name, kind: before.kind, variant: before.variant, trial: before.trial,
+        before: { status: before.status, tokens: before.tokens, durationMs: before.durationMs },
+        after: { status: after.status, tokens: after.tokens, durationMs: after.durationMs },
+        regression: before.status === 'passed' && after.status === 'failed',
+        tokenDelta: before.tokens === null || after.tokens === null ? null : after.tokens - before.tokens,
+        durationDeltaMs: before.durationMs === null || after.durationMs === null ? null : after.durationMs - before.durationMs,
+      };
+    });
+    comparison.complete = comparison.pairs.length > 0 &&
+      comparison.pairs.every(pair => ![pair.before.status, pair.after.status].includes('error'));
+    comparison.behavior = Object.fromEntries(['before', 'after'].map(arm => {
+      const outcomes = comparison.pairs.filter(pair => pair.kind === 'capability' && pair.variant === 'skilled');
+      const measured = outcomes.filter(pair => pair[arm].status !== 'error');
+      const passed = measured.filter(pair => pair[arm].status === 'passed').length;
+      return [arm, {
+        expected: outcomes.length, measured: measured.length, errors: outcomes.length - measured.length, passed,
+        passRate: measured.length ? passed / measured.length : null,
+      }];
+    }));
+    await persist();
+    return { comparison, out };
+  } finally {
+    await rm(scratch, { recursive: true, force: true });
+  }
+}
+
 async function main() {
   const options = parseArgs(process.argv.slice(2));
+  if (options.command === 'compare') {
+    const { comparison, out } = await compareRevisions(options);
+    console.log(`Saved local revision comparison to ${out}`);
+    if (!comparison.complete) process.exitCode = 2;
+    else if (comparison.pairs.some(pair => pair.variant === 'skilled' && pair.after.status === 'failed')) process.exitCode = 1;
+    return;
+  }
   if (options.command === 'validate') {
     const suites = await loadSuites({ skill: options.skill });
     console.log(`Validated ${suites.length} suites and ${suites.reduce((count, suite) => count + suite.stimuli.length, 0)} cases with Vally 0.21.0.`);

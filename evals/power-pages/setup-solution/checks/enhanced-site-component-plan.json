@@ -1,0 +1,37 @@
+{
+  "files": [
+    {
+      "path": "reports/enhanced-site-component-plan.md",
+      "type": "text",
+      "requiredText": [
+        "contoso_portal",
+        "cts",
+        "contoso_booking"
+      ],
+      "minTextLength": 200
+    },
+    {
+      "path": "results/enhanced-site-component-plan.json",
+      "type": "json",
+      "requiredKeys": [
+        "decision"
+      ],
+      "requiredValues": {
+        "remoteExecuted": false
+      },
+      "requiredPatterns": [
+        "\"decision\"\\s*:\\s*\"(?:proposed|blocked|no-op)\""
+      ]
+    }
+  ],
+  "unchanged": [
+    {
+      "path": "inputs/snapshot.json",
+      "source": "fixtures/enhanced-site-component-plan.json"
+    }
+  ],
+  "absent": [
+    ".solution-manifest.json",
+    "docs/alm/last-deployment.json"
+  ]
+}

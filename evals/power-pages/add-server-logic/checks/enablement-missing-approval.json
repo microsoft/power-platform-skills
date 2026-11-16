@@ -1,0 +1,23 @@
+{
+  "files": [
+    {
+      "path": "reports/enablement-missing-approval.md",
+      "type": "text",
+      "requiredText": [
+        "ServerLogic/Enabled",
+        "approval"
+      ],
+      "minTextLength": 200
+    }
+  ],
+  "unchanged": [
+    {
+      "path": "inputs/snapshot.json",
+      "source": "fixtures/enablement-missing-approval.json"
+    }
+  ],
+  "absent": [
+    ".powerpages-site/site-settings/serverlogic-enabled.sitesetting.yml",
+    "docs/alm/last-deployment.json"
+  ]
+}

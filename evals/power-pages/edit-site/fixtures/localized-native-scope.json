@@ -1,0 +1,9 @@
+{
+  "siteType": "Enhanced non-SPA",
+  "page": "bookings-page",
+  "locale": "fr-FR",
+  "currentCopy": "<h1>Reservations</h1>{% include 'entity_list' key: 'Bookings' %}<p>{{ user.fullname | escape }}</p>",
+  "requestedHeading": "Mes reservations",
+  "english": "<h1>Bookings</h1>",
+  "approvedScope": "French heading only"
+}

@@ -1,0 +1,37 @@
+{
+  "files": [
+    {
+      "path": "reports/manual-promotion-plan.md",
+      "type": "text",
+      "requiredText": [
+        "Staging",
+        "Production",
+        "Contoso/ApiBase"
+      ],
+      "minTextLength": 200
+    },
+    {
+      "path": "results/manual-promotion-plan.json",
+      "type": "json",
+      "requiredKeys": [
+        "decision"
+      ],
+      "requiredValues": {
+        "remoteExecuted": false
+      },
+      "requiredPatterns": [
+        "\"decision\"\\s*:\\s*\"(?:proposed|blocked|no-op)\""
+      ]
+    }
+  ],
+  "unchanged": [
+    {
+      "path": "inputs/snapshot.json",
+      "source": "fixtures/manual-promotion-plan.json"
+    }
+  ],
+  "absent": [
+    ".solution-manifest.json",
+    "docs/alm/last-deployment.json"
+  ]
+}

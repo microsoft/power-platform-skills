@@ -1,0 +1,18 @@
+{
+  "strategy": "Power Platform Pipelines",
+  "host": {
+    "name": "Contoso custom host",
+    "ready": true
+  },
+  "source": "Dev",
+  "targets": [
+    "Staging",
+    "Production"
+  ],
+  "requestedOrder": [
+    "Staging",
+    "Production"
+  ],
+  "existingPipelines": [],
+  "solution": "contoso_portal"
+}

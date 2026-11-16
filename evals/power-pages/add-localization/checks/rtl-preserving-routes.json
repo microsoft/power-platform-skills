@@ -1,0 +1,66 @@
+{
+  "files": [
+    {
+      "path": "reports/rtl-preserving-routes.md",
+      "type": "text",
+      "requiredText": [
+        "Arabic",
+        "/bookings/:id",
+        "{name}"
+      ],
+      "minTextLength": 200
+    },
+    {
+      "path": "results/rtl-preserving-routes.json",
+      "type": "json",
+      "requiredKeys": [
+        "decision"
+      ],
+      "requiredValues": {
+        "remoteExecuted": false
+      },
+      "requiredPatterns": [
+        "\"decision\"\\s*:\\s*\"(?:proposed|blocked|no-op)\""
+      ]
+    },
+    {
+      "path": "proposals/en.json",
+      "type": "json",
+      "requiredKeys": [
+        "heading",
+        "greeting",
+        "count"
+      ],
+      "requiredText": [
+        "{name}",
+        "{count}"
+      ]
+    },
+    {
+      "path": "proposals/ar.json",
+      "type": "json",
+      "requiredKeys": [
+        "heading",
+        "greeting",
+        "count"
+      ],
+      "requiredText": [
+        "{name}",
+        "{count}"
+      ],
+      "requiredPatterns": [
+        "[\\u0600-\\u06ff]"
+      ]
+    }
+  ],
+  "unchanged": [
+    {
+      "path": "inputs/snapshot.json",
+      "source": "fixtures/rtl-preserving-routes.json"
+    }
+  ],
+  "absent": [
+    ".solution-manifest.json",
+    "docs/alm/last-deployment.json"
+  ]
+}

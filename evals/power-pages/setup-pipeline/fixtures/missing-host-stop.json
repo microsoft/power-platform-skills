@@ -1,0 +1,9 @@
+{
+  "source": "Dev",
+  "target": "Staging",
+  "hostDiscovery": {
+    "status": "NoHost",
+    "candidates": []
+  },
+  "approval": "none"
+}

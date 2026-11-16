@@ -1,0 +1,37 @@
+{
+  "files": [
+    {
+      "path": "reports/search-summary-no-permission.md",
+      "type": "text",
+      "requiredText": [
+        "Search Summary",
+        "403",
+        "SearchResults"
+      ],
+      "minTextLength": 200
+    },
+    {
+      "path": "results/search-summary-no-permission.json",
+      "type": "json",
+      "requiredKeys": [
+        "decision"
+      ],
+      "requiredValues": {
+        "remoteExecuted": false
+      },
+      "requiredPatterns": [
+        "\"decision\"\\s*:\\s*\"(?:proposed|blocked|no-op)\""
+      ]
+    }
+  ],
+  "unchanged": [
+    {
+      "path": "inputs/snapshot.json",
+      "source": "fixtures/search-summary-no-permission.json"
+    }
+  ],
+  "absent": [
+    ".solution-manifest.json",
+    "docs/alm/last-deployment.json"
+  ]
+}
