@@ -141,12 +141,16 @@ Set to `null` when the server logic does not require any secrets. When the user 
 | `vaultName` | *(Optional)* Name of the selected/created Key Vault — shown in the plan if known |
 | `secrets[].name` | Descriptive name for the secret (e.g., `ExchangeRateApiKey`) |
 | `secrets[].purpose` | Why the secret is needed |
-| `secrets[].siteSetting` | The site setting name the server logic reads via `Server.Sitesetting.Get()` |
+| `secrets[].siteSetting` | The site setting name the server logic reads via `Server.SiteSetting.Get()` |
 | `secrets[].serverLogicId` | The `id` (or `name`) of the server logic item that uses this secret — links the secret to the correct card in the plan |
 
 When `useKeyVault` is `true`, the plan HTML renders a prominent banner in the Overview tab explaining that secrets are stored in Azure Key Vault and why it matters (centralized access control, audit logging, rotation support, secrets never in code). Each server logic card also shows the secrets it depends on.
 
 When `SECRETS_DATA` is `null` or `useKeyVault` is `false`, the banner and per-card secrets sections are hidden.
+
+## Verify the rendered plan
+
+After rendering, inspect the HTML before asking for approval. Confirm the displayed server logic count matches `SERVER_LOGICS_DATA.length`, then verify every planned endpoint appears with the intended name, status, functions, and web roles. A zero count or missing card means the source data is incomplete; fix the JSON and render a new output file. Never ask for approval on an incomplete plan.
 
 ## Render the HTML File
 

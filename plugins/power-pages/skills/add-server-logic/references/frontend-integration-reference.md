@@ -45,6 +45,8 @@ Server logic endpoints return responses in a standard JSON envelope:
 
 All frontend helpers and service wrappers should unwrap `.data` from this envelope rather than treating the entire response body as the function's return value.
 
+Every request to a server logic endpoint, including GET, needs the `__RequestVerificationToken` header. Confirm an existing wrapper adds the token for every method; extend it if it only handles writes. See [Author server logic](https://learn.microsoft.com/power-pages/configure/author-server-logic#call-server-logic-from-client-script).
+
 ## Dataverse Connector Response Format
 
 When a server logic function returns the raw result of a `Server.Connector.Dataverse.*` method, the shape that reaches the client is **double-wrapped**. This is the most common source of bugs in client integration code.
@@ -220,7 +222,7 @@ return JSON.stringify({ status: "success", id: newId });
 
 ### When the response shape is unknown
 
-If the frontend integration is failing because the exact Dataverse response shape is unclear for a specific operation (custom actions, bound actions, non-standard query options), invoke `/test-site` against the deployed site. The test-site skill captures live `/_api/serverlogics/` responses and reports the exact `envelope.data` and (when present) `outer.Body` shapes so the frontend integration can be written against the real response, not a guessed one.
+If the frontend integration is failing because the exact Dataverse response shape is unclear for a specific operation (custom actions, bound actions, non-standard query options), ask before using the live endpoint testing workflow against the deployed site. That workflow captures `/_api/serverlogics/` responses and reports the exact `envelope.data` and (when present) `outer.Body` shapes so the frontend integration can use the observed response.
 
 ### Key points for Dataverse-backed server logic
 
@@ -327,10 +329,7 @@ export async function callServerLogic<T = unknown>(
         'Content-Type': 'application/json',
     };
 
-    // CSRF token is required for non-GET requests only
-    if (method !== 'GET') {
-        headers['__RequestVerificationToken'] = await getCsrfToken();
-    }
+    headers['__RequestVerificationToken'] = await getCsrfToken();
 
     const response = await fetch(url, {
         method,
