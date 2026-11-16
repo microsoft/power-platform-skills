@@ -1293,17 +1293,17 @@ test('the plan reloads only when it changed, and never over someone using the li
     const page = await runPage(planPath);
     assert.deepEqual(page.thrown.map((error) => error.message), []);
     assert.equal(page.intervals.length, 1, 'a run in progress schedules its check');
-    assert.equal(page.elements.get('refreshStatus').textContent, 'Auto-refresh on while progress changes.');
+    assert.equal(page.elements.get('refreshStatus').textContent, 'Auto-refresh on: this page updates when the plan changes.');
     const [frame] = findAll(page.elements.get('deviceScreen'), (n) => n.tagName === 'IFRAME');
     const version = fs.readFileSync(planPath, 'utf8').match(/"version":"([0-9a-f]+)"/)[1];
     const probes = () => findAll(page.document.body, (n) => n.tagName === 'SCRIPT');
-    // What the sidecar does when it loads: report the version app-docs.js last rendered.
+    // What the version file does when it loads: report the version app-docs.js last rendered.
     const report = (v) => page.window.__planVersion(v);
     return { page, frame, tick: page.intervals[0], version, probes, report };
   };
 
   // Every reload restarts the app in the phone on its first screen, so an unchanged plan must
-  // never reload. A tick only asks the sidecar for the current version.
+  // never reload. A tick only asks the version file for the current version.
   const unchanged = await open();
   unchanged.tick();
   unchanged.report(unchanged.version);
@@ -1312,46 +1312,52 @@ test('the plan reloads only when it changed, and never over someone using the li
   const [probe] = unchanged.probes();
   assert.match(probe.src, /^create-app-plan\.version\.js\?t=\d+$/, 'a fresh URL, so a cached copy is never read');
 
-  // A newer render, and nobody using the page: the next tick reloads through a fresh URL.
+  // A newer render, and nobody using the page: the check that finds it reloads through a fresh URL.
   const changed = await open();
   changed.report('a-newer-render');
-  changed.tick();
-  assert.equal(changed.page.reloads.length, 1, 'a changed plan refreshes itself');
+  assert.equal(changed.page.reloads.length, 1, 'a changed plan refreshes itself at once');
   const reloaded = new URL(changed.page.reloads[0]);
   assert.match(reloaded.pathname, /create-app-plan\.html$/);
   assert.match(reloaded.searchParams.get('t'), /^\d+$/, 'a fresh URL, so the cached page is never shown');
 
-  // A plan rendered before the sidecar existed, or a browser that blocks file scripts: fall back
-  // to the timed refresh rather than leave the page stale.
+  // A browser that blocks file scripts: fall back to the timed refresh rather than leave the page stale.
   const blocked = await open();
   blocked.tick();
   blocked.probes()[0].dispatch('error');
   blocked.tick();
-  assert.equal(blocked.page.reloads.length, 1, 'no sidecar means the old timed refresh');
+  assert.equal(blocked.page.reloads.length, 1, 'no version file means the old timed refresh');
 
-  // Clicks inside a cross-origin frame never reach this page's listeners, so the frame's own
-  // pointer and focus state is all the page can go on - and a change still waits for the reader.
+  // Clicks inside a cross-origin frame never reach this page's listeners, so the pointer over the
+  // frame is all the page can go on - and a change waits for the reader.
   const hovered = await open();
-  hovered.report('a-newer-render');
   hovered.frame.dispatch('pointerenter');
+  hovered.report('a-newer-render');
   hovered.tick();
   hovered.tick();
   assert.deepEqual(hovered.page.reloads, [], 'the pointer is over the preview');
 
   // Leaving restarts the quiet window rather than letting the next tick reload.
   const left = await open();
-  left.report('a-newer-render');
   left.frame.dispatch('pointerenter');
   left.frame.dispatch('pointerleave');
+  left.report('a-newer-render');
   left.tick();
   assert.deepEqual(left.page.reloads, [], 'the reader only just left the preview');
 
-  // Keyboard focus in the frame counts as using it, even with the pointer elsewhere.
+  // Keyboard focus stays in the frame after the reader goes to the terminal to answer, so it is not
+  // a sign of use. Counting it held off every update until the browser was reloaded by hand.
   const focused = await open();
-  focused.report('a-newer-render');
   focused.page.document.activeElement = focused.frame;
-  focused.tick();
-  assert.deepEqual(focused.page.reloads, [], 'focus is inside the preview');
+  focused.report('a-newer-render');
+  assert.equal(focused.page.reloads.length, 1, 'focus left in the preview does not freeze the plan');
+
+  // Switching to the terminal fires no pointerleave, so the pointer still reads as over the frame.
+  // A window without focus means the reader is elsewhere, and the update goes ahead.
+  const elsewhere = await open();
+  elsewhere.frame.dispatch('pointerenter');
+  elsewhere.page.document.hasFocus = () => false;
+  elsewhere.report('a-newer-render');
+  assert.equal(elsewhere.page.reloads.length, 1, 'the reader is in another app');
 });
 
 test('a preview without screen blocks reports the problem instead of silently showing an animation', async () => {

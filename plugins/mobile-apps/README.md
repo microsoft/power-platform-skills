@@ -233,11 +233,10 @@ Your first screen runs in the build plan's phone about five minutes after the pr
 
 End state: a working app you can iterate on with hot reload.
 
-The build and edit plan pages automatically check for new progress.
-The build plan reloads only when the plan changes, so the live preview in its phone keeps its place, and it keeps checking while it waits for your answer.
-The edit plan pauses while waiting for your input; reload the browser after answering.
-Both stop after 30 consecutive checks without a progress change; reload the browser to resume an interrupted run.
-Render timestamps do not reset the limit; new progress does.
+The build and edit plan pages automatically check for new progress and reload only when the plan changes, so the live preview in the build plan's phone keeps its place.
+They keep checking while they wait for your answer and through long steps, and update as soon as you come back to the page.
+They hold an update while you are using the page, and skip that wait once you have switched to another app such as the terminal.
+If your browser blocks the check, the pages fall back to reloading on a timer, which pauses while waiting for your input or after 30 reloads without a progress change; reload the browser to resume.
 
 ### 2. Add Dataverse tables to an existing app
 

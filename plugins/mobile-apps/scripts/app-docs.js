@@ -40,7 +40,7 @@ const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 
 const { publishAtomic, renderTemplate } = require('./lib/render-template');
-const { planRefreshScript } = require('./lib/plan-refresh');
+const { planRefreshScript, progressVersion, versionScript } = require('./lib/plan-refresh');
 
 /**
  * The plan's state file is read by one process and rewritten by another as the run advances, so
@@ -66,6 +66,7 @@ const STATE_FILE = '.run-plan.json';
 const OUTPUT_FILE = 'create-app-plan.html';
 // Beside the page: the open plan loads it to learn whether it is stale (see `render`).
 const VERSION_FILE = 'create-app-plan.version.js';
+const EDIT_VERSION_FILE = 'edit-app-progress.version.js';
 const TEMPLATE_PATH = path.join(__dirname, '..', 'assets', 'run-plan.html');
 
 const STATUSES = new Set(['pending', 'active', 'done', 'skipped', 'failed']);
@@ -646,12 +647,7 @@ function render(projectRoot, state) {
     },
   });
   // Published after the page, so a reader that sees the new version reloads into the new page.
-  // A file:// page may load a classic script but not fetch, which is why this is JavaScript.
-  publishAtomic(
-    path.join(docsDir(projectRoot), VERSION_FILE),
-    `// Written by app-docs.js on every render. create-app-plan.html loads it to see if it is stale.\n`
-      + `window.__planVersion && window.__planVersion(${JSON.stringify(summary.version)});\n`,
-  );
+  publishAtomic(path.join(docsDir(projectRoot), VERSION_FILE), versionScript(summary.version, 'create-app-plan.html'));
   return published;
 }
 
@@ -1147,13 +1143,17 @@ function writeEditProgress(projectRoot, options = {}) {
       + `<button type="button" class="input-banner-close" id="inputBannerClose" aria-label="Dismiss">&times;</button>`
       + `</div>`
     : '';
-  const autoRefresh = planRefreshScript({
-    phase, note, status, waiting, items, changes, phone,
-  }, {
+  // Everything the page shows that can change, minus the render time and the CSP nonce.
+  const editProgress = { appName, phase, note, status, waiting, items, changes, phone };
+  const editVersion = progressVersion(editProgress);
+  const autoRefresh = planRefreshScript(editProgress, {
     waiting: waiting || status === 'waiting',
     settled,
     reloadMs: 2500,
     quietMs: 10000,
+    // Reload only when this version changes: see the version mode in lib/plan-refresh.js.
+    versionFile: EDIT_VERSION_FILE,
+    version: editVersion,
   });
 
   const html = `<!DOCTYPE html>
@@ -1606,6 +1606,8 @@ function writeEditProgress(projectRoot, options = {}) {
 </html>`;
 
   publishAtomic(filePath, html);
+  // After the page, so a reader that sees the new version reloads into the new page.
+  publishAtomic(path.join(path.dirname(filePath), EDIT_VERSION_FILE), versionScript(editVersion, 'edit-app-progress.html'));
   return filePath;
 }
 
@@ -1866,6 +1868,7 @@ module.exports = {
   DOCS_DIR,
   OUTPUT_FILE,
   VERSION_FILE,
+  EDIT_VERSION_FILE,
   BUILD_ORDERS,
   DEFAULT_BUILD_ORDER,
   PHASES_BY_BUILD_ORDER,

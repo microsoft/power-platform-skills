@@ -38,8 +38,9 @@ function seeded(root) {
 // `docs` is the folder the page was opened from. The create plan loads its version file from
 // there; given the folder, a probe runs the real file app-docs.js wrote, and without it every
 // probe fails, as in a browser that blocks file scripts, so the page uses the timed refresh.
+// `focused: false` models a reader in another app, such as the terminal, with the page visible.
 function refreshPage(html, href, {
-  hidden = false, storageUnavailable = false, navigationType = 'navigate', docs,
+  hidden = false, focused = true, storageUnavailable = false, navigationType = 'navigate', docs,
 } = {}) {
   const script = html.match(/<script[^>]*id="planRefreshScript"[^>]*>([\s\S]*?)<\/script>/);
   assert.ok(script, 'the generated plan must include its refresh controller');
@@ -66,6 +67,8 @@ function refreshPage(html, href, {
     location: { href, replace: (fresh) => navigations.push(fresh) },
     document: {
       hidden,
+      hasFocus: () => focused,
+      addEventListener: (event, callback) => { handlers[event] = callback; },
       getElementById: (id) => id === 'refreshStatus' ? message : null,
       createElement: () => ({
         listeners: {},
@@ -206,44 +209,81 @@ test('input gates, terminal plans and reader activity do not trigger automatic r
   }
 });
 
-test('the create plan reloads only when its version changes, and keeps checking at input gates', () => {
-  // The create plan's phone runs the live app, and a reload restarts it on its first screen, so the
-  // page asks the version file app-docs.js writes beside it and reloads only on a change. A check
-  // reloads nothing, so it continues at a gate: the preview gate draws the QR code while waiting,
-  // and the phone must go live after the user answers the screen graph gate in the terminal.
+test('both plans reload only when they change, keep checking, and update for a reader who left', () => {
+  // Each page loads the version file written beside it and reloads only on a change. Two earlier
+  // rules left both pages stale until a manual reload, and this test pins their replacements:
+  // polling stopped for good after 30 unchanged checks (75 s on the edit plan), and a recent
+  // interaction held off the update even after the reader had gone to the terminal to answer.
   const root = project('docs-refresh-version');
   try {
-    const docs = path.join(root, 'docs');
     const state = initState(root, { appName: 'App', ...SCREENS_FIRST });
-    applyStep(state, { id: 'requirements', status: 'active', note: 'Working' });
-    save(root, state);
-    const active = refreshPage(fs.readFileSync(outputPath(root), 'utf8'), 'file:///app/plan.html', { docs });
-    assert.match(active.message.textContent, /Auto-refresh on/);
-    for (let attempt = 0; attempt < 40; attempt += 1) active.tick();
-    assert.deepEqual(active.navigations, [], 'an unchanged plan never reloads');
-    assert.equal(active.probes.length, 30, 'unchanged checks spend the same budget as unchanged reloads');
-    assert.match(active.message.textContent, /no new progress/);
+    const pages = [
+      {
+        name: 'create',
+        write: (note, waiting) => {
+          applyStep(state, { id: 'requirements', status: 'active', note: waiting ? `${note} - waiting for you` : note });
+          save(root, state);
+          return outputPath(root);
+        },
+      },
+      {
+        name: 'edit',
+        write: (note, waiting) => writeEditProgress(root, { status: waiting ? 'waiting' : 'active', waiting, note }),
+      },
+    ];
+    for (const { name, write } of pages) {
+      const file = write('Working');
+      const docs = path.dirname(file);
+      const open = () => refreshPage(fs.readFileSync(file, 'utf8'), 'file:///app/plan.html', { docs });
 
-    applyStep(state, { id: 'requirements', status: 'active', note: 'Preview gate - waiting for you to try the app' });
-    save(root, state);
-    const gate = refreshPage(fs.readFileSync(outputPath(root), 'utf8'), 'file:///app/plan.html', { docs });
-    assert.match(gate.message.textContent, /Waiting for your input\. This page updates when the run continues\./);
-    gate.tick();
-    gate.tick();
-    assert.deepEqual(gate.navigations, [], 'waiting is not a change');
-    // The run moves on while the page is open: the next check sees the new version and reloads.
-    setPhone(state, { qrImage: 'data:image/png;base64,iVBORw0KGgo=', qrUrl: 'http://192.168.1.4:8082/' });
-    save(root, state);
-    gate.tick();
-    assert.deepEqual(gate.navigations, [], 'the check that finds the change does not reload in the same tick');
-    gate.tick();
-    assert.equal(gate.navigations.length, 1, 'the changed plan reloads at the gate');
-    assert.equal(new URL(gate.navigations[0]).searchParams.get('planReloads'), '1');
+      const idle = open();
+      assert.match(idle.message.textContent, /Auto-refresh on: this page updates when the plan changes\./, name);
+      for (let attempt = 0; attempt < 40; attempt += 1) idle.tick();
+      assert.deepEqual(idle.navigations, [], `${name}: an unchanged plan never reloads`);
+      assert.equal(idle.probes.length, 41, `${name}: checks continue past the old 30-check stop`);
+      assert.match(idle.message.textContent, /No new progress for a while\. Still checking/, name);
+      write('Next step');
+      idle.tick();
+      assert.equal(idle.navigations.length, 1, `${name}: a change long after the last one still shows`);
 
-    // A browser that cannot load the version file gets main's timed refresh, which pauses at gates.
-    const blocked = refreshPage(fs.readFileSync(outputPath(root), 'utf8'), 'file:///app/plan.html');
-    assert.equal(blocked.intervals.length, 0);
-    assert.match(blocked.message.textContent, /paused while waiting for input/);
+      write('Approve the plan', true);
+      const gate = open();
+      assert.match(gate.message.textContent, /Waiting for your input\. This page updates when the run continues\./, name);
+      gate.tick();
+      assert.deepEqual(gate.navigations, [], `${name}: waiting is not a change`);
+      write('Building');
+      gate.tick();
+      assert.equal(gate.navigations.length, 1, `${name}: the check that finds the change reloads at once`);
+
+      // A reader who just used the page holds the reload off; one who has since gone to another app
+      // does not, because nothing they are doing here can be interrupted.
+      write('Step one');
+      const reading = open();
+      reading.handlers.pointerdown();
+      write('Step two');
+      // Check without moving the clock: a tick is longer than the edit plan's quiet window.
+      reading.handlers.focus();
+      assert.deepEqual(reading.navigations, [], `${name}: a reader using the page is not interrupted`);
+      write('Step three');
+      const elsewhere = refreshPage(fs.readFileSync(file, 'utf8'), 'file:///app/plan.html', { docs, focused: false });
+      elsewhere.handlers.pointerdown();
+      write('Step four');
+      elsewhere.tick();
+      assert.equal(elsewhere.navigations.length, 1, `${name}: a reader in the terminal gets the update`);
+
+      // Coming back to the page checks at once rather than on the next tick.
+      write('Step five');
+      const back = open();
+      write('Step six');
+      back.handlers.visibilitychange();
+      assert.equal(back.navigations.length, 1, `${name}: returning to the page shows the change`);
+
+      // A browser that cannot load the version file gets the timed refresh, which pauses at gates.
+      write('Approve again', true);
+      const blocked = refreshPage(fs.readFileSync(file, 'utf8'), 'file:///app/plan.html');
+      assert.equal(blocked.intervals.length, 0, name);
+      assert.match(blocked.message.textContent, /paused while waiting for input/, name);
+    }
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -1835,12 +1875,13 @@ test('the plan never reloads over a reader, and never resets their place', () =>
   assert.match(controller, /Date\.now\(\) - lastInteraction < QUIET_MS/);
   assert.match(controller, /if \(document\.hidden\) return;/);
   // So does using the live preview, whose events never reach this page: it is a cross-origin
-  // frame, so its pointer entry and focus are the only signals. The page reports them through
-  // planRefreshBusy, and run-plan-page.test.js drives the whole exchange.
+  // frame, so pointer entry is the only signal. The page reports it through planRefreshBusy, and
+  // run-plan-page.test.js drives the whole exchange. Focus in the frame is deliberately not a
+  // signal: it outlasts use, and counting it froze the page once the reader went to the terminal.
   assert.match(template, /liveFrame\.addEventListener\('pointerenter'/);
   assert.match(template, /liveFrame\.addEventListener\('pointerleave'/);
-  assert.match(template, /document\.activeElement === liveFrame/);
-  assert.match(controller, /window\.planRefreshBusy\(\)\) \{\s*lastInteraction = Date\.now\(\);/);
+  assert.doesNotMatch(template, /document\.activeElement === liveFrame/);
+  assert.match(controller, /typeof window\.planRefreshBusy === 'function' && Boolean\(window\.planRefreshBusy\(\)\)/);
   // And it stops altogether once the build is finished.
   assert.match(controller, /if \(options\.settled\)/);
 
