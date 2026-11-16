@@ -172,8 +172,16 @@ test('localized plan example retains the complete renderer label contract', () =
   }
 });
 
+const validationCommand = /validate-site\.js" \\\r?\n\s+--expectedLocale "<SITE_LOCALE>" --expectedDirection "<SITE_DIRECTION>"/;
+
+test('completion validation command is recognized with LF and CRLF', () => {
+  for (const text of [entry.replace(/\r\n/g, '\n'), entry.replace(/\r?\n/g, '\r\n')]) {
+    assert.match(text, validationCommand);
+  }
+});
+
 test('completion remains explicit without depending on host lifecycle hooks', () => {
-  assert.match(entry, /validate-site\.js" \\\n\s+--expectedLocale "<SITE_LOCALE>" --expectedDirection "<SITE_DIRECTION>"/);
+  assert.match(entry, validationCommand);
   assert.match(read('references/review-workflow.md'), /validate-site-integrity\.js/);
   assert.match(read('references/verification-workflow.md'), /Chosen Google Fonts verified loaded by the font check/);
   assert.match(read('references/localization-workflow.md'), /\[FROM_CREATE_SITE\]/);
