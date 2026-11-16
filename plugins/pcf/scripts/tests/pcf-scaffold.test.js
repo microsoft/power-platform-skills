@@ -86,7 +86,7 @@ test('listRecipes and renderRecipesTable handle an empty recipe catalog', () => 
       '',
     ].join('\n'));
   } finally {
-    fs.rmSync(recipesRoot, { recursive: true, force: true });
+    fs.rmSync(recipesRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
 
@@ -379,7 +379,7 @@ test('listRecipes rejects malformed recipe metadata with clear validation errors
 
     assert.throws(() => listRecipes({ recipesRoot: root }), /recipe\.json: id must equal directory name 'broken'; title must be a non-empty string; summary must be a non-empty string; template must be an existing template id; hosts must be a non-empty array containing only template hosts; whyWanted must be a non-empty string; certified\.model\.field must be YYYY-MM-DD; certified\.pages must be an object; configuration must be a non-empty string; properties\[0\]\.name must be a non-empty string; properties\[0\]\.displayNameKey must be a non-empty string; properties\[0\]\.descriptionKey must be a non-empty string; properties\[0\]\.ofType must be a non-empty string; properties\[0\]\.usage must be bound, input, or output; properties\[0\]\.required must be boolean/);
   } finally {
-    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
 
@@ -405,7 +405,7 @@ test('listRecipes rejects planned recipe metadata without explicit certification
       /recipe\.json: certified must be \{ "model": \{\}, "pages": \{\} \} or host journey date maps/,
     );
   } finally {
-    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
 
@@ -510,7 +510,7 @@ test('listTemplates rejects malformed template metadata before exposing the cata
 
     assert.throws(() => listTemplates({ root }), /template\.json.*controlType/);
   } finally {
-    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
 
@@ -766,7 +766,7 @@ test('writeScaffold refuses a non-empty output directory', () => {
     fs.writeFileSync(path.join(dir, 'keep.txt'), 'existing');
     assert.throws(() => writeScaffold(renderFieldPlan(), dir), /exists and is not empty/);
   } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
 
@@ -777,7 +777,7 @@ test('writeScaffold reports an existing PCF project before the generic non-empty
     fs.writeFileSync(path.join(dir, 'package.json'), '{}');
     assert.throws(() => writeScaffold(renderFieldPlan(), dir), /already contains a PCF project/);
   } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
 
@@ -789,7 +789,7 @@ test('writeScaffold rejects unsafe planned relative paths', () => {
     try {
       assert.throws(() => writeScaffold({ files: [{ relPath, content: 'bad' }], warnings: [] }, dir), /unsafe scaffold path/);
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   }
 });
@@ -803,7 +803,7 @@ test('writeScaffold allows safe nested planned relative paths', () => {
     assert.deepEqual(result.written, [path.join(dir, 'nested', 'ok.txt')]);
     assert.equal(fs.readFileSync(path.join(dir, 'nested', 'ok.txt'), 'utf8'), 'ok');
   } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
 
@@ -817,7 +817,7 @@ test('writeScaffold writes a complete project into an empty directory', () => {
     assert.ok(fs.existsSync(path.join(dir, 'StarRating', 'index.ts')));
     assert.ok(fs.existsSync(path.join(dir, 'test', 'pcf-context.ts')));
   } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
 
@@ -866,7 +866,7 @@ test('CLI scaffolds and threads --npm-cli into --install', () => {
     // macOS resolves /var to /private/var. Native realpath matches both; JS realpath keeps 8.3 names.
     assert.deepEqual(JSON.parse(fs.readFileSync(log, 'utf8')), { argv: ['ci'], cwd: fs.realpathSync.native(outDir) });
   } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
 
@@ -903,7 +903,7 @@ test('writeScaffold reports info and writes through a directory link to the phys
     assert.match(finding.message, new RegExp(escapeRegExp(path.resolve(requested))));
     assert.match(finding.message, new RegExp(escapeRegExp(physical)));
   } finally {
-    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
 
@@ -931,7 +931,7 @@ test('writeScaffold refuses a non-empty physical directory reached through a lin
     assert.equal(fs.existsSync(path.join(physical, 'StarRating.pcfproj')), false);
     assert.equal(fs.readFileSync(path.join(physical, 'keep.txt'), 'utf8'), 'existing');
   } finally {
-    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
 
@@ -955,7 +955,7 @@ test('writeScaffold has no redirect finding for native canonicalization without 
     assert.equal(fs.readFileSync(path.join(result.resolvedOutDir, 'marker.txt'), 'utf8'), 'ok');
     assert.equal(fs.existsSync(path.join(outDir, 'marker.txt')), false, 'writes must still use native realpath');
   } finally {
-    fs.rmSync(parent, { recursive: true, force: true });
+    fs.rmSync(parent, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
 
@@ -970,7 +970,7 @@ test('writeScaffold has no redirect finding when the output path is already phys
     assert.deepEqual(result.findings, []);
     assert.equal(fs.readFileSync(path.join(outDir, 'marker.txt'), 'utf8'), 'ok');
   } finally {
-    fs.rmSync(parent, { recursive: true, force: true });
+    fs.rmSync(parent, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
 
@@ -1010,6 +1010,6 @@ test('CLI reports resolvedOutDir and redirect info when --out goes through a lin
     assert.match(finding.message, new RegExp(escapeRegExp(physicalOut)));
     assert.equal(fs.existsSync(path.join(physicalOut, 'StarRating.pcfproj')), true);
   } finally {
-    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });

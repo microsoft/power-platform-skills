@@ -80,19 +80,36 @@ function buildModel({ templateName, templateDescription, statusPath, outputPath,
   const statusUrl = path.dirname(path.resolve(statusPath)) === path.dirname(path.resolve(outputPath))
     ? path.basename(statusPath)
     : pathToFileURL(path.resolve(statusPath)).href;
-  const previews = previewImages.map((image, index) => {
+  const previewGroups = new Map();
+  for (let index = 0; index < previewImages.length; index++) {
+    const image = previewImages[index];
     const url = previewImageUrl(image, index, path.dirname(path.resolve(outputPath)));
-    if (!url) return null;
+    if (!url) continue;
     const sourcePath = /^(?:https?|file):\/\//i.test(image)
       ? decodeURIComponent(new URL(image).pathname)
       : image;
-    return {
-      name: `preview-${index + 1}`,
-      displayName: sourcePath.split(/[\\/]/).pop(),
-      desktop: url,
-      mobile: url,
-    };
-  }).filter(Boolean);
+    // `desktop-home.png` and `mobile-home.png` are device-specific captures of one
+    // page; unprefixed catalog images remain desktop previews for compatibility.
+    const filename = sourcePath.split(/[\\/]/).pop();
+    const deviceMatch = filename.match(/^(desktop|mobile)-(.+)$/i);
+    const displayName = deviceMatch ? deviceMatch[2] : filename;
+    const key = deviceMatch
+      ? `device:${path.parse(displayName).name.toLowerCase()}`
+      : `image:${index}`;
+    let preview = previewGroups.get(key);
+    if (!preview) {
+      preview = {
+        name: `preview-${previewGroups.size + 1}`,
+        displayName,
+        desktop: null,
+        mobile: null,
+      };
+      previewGroups.set(key, preview);
+    }
+    const device = deviceMatch ? deviceMatch[1].toLowerCase() : 'desktop';
+    preview[device] = url;
+  }
+  const previews = [...previewGroups.values()];
   const pluralSolutions = solutionCount > 1;
   const pluginRoot = path.resolve(__dirname, '..');
 
@@ -187,8 +204,9 @@ function renderTemplateImportStatus({
   // remote preview origins, while retaining default-src 'none' and nonce scripts.
   // https://www.w3.org/TR/CSP3/#directive-connect-src
   const imageOrigins = [...new Set(model.template.previews
-    .filter(({ desktop }) => /^https?:\/\//i.test(desktop))
-    .map(({ desktop }) => new URL(desktop).origin))];
+    .flatMap(({ desktop, mobile }) => [desktop, mobile])
+    .filter((url) => /^https?:\/\//i.test(url))
+    .map((url) => new URL(url).origin))];
   renderTemplate({
     templatePath,
     outputPath,

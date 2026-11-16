@@ -189,6 +189,8 @@ const useStyles = makeStyles({
         gap: tokens.spacingVerticalM,
         padding: tokens.spacingHorizontalXL,
         width: '100%',
+        height: '100%',
+        overflowY: 'auto',
         boxSizing: 'border-box',
     },
     header: {

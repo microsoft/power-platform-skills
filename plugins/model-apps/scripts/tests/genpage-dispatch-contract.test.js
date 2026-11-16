@@ -420,6 +420,105 @@ test('the paths that re-upload a page after a browser-verify fix or a hand edit 
   assert.match(agents, /the build's pages phase halts as `pages-griffel-shorthand` in its pre-write scan/);
 });
 
+// The scroll-context check (AB#6793599) rides on the same command, so every flow above that checks a page gets it. These pins hold the one thing the command line cannot show: which
+// flows judge a page as generated (a missing scroll context is a problem: exit 3) and which as existing (`--existing`: it is a note for the maker). A generation flow that gained
+// `--existing` would ship clipped pages again with no error; an edit flow that lost it would refuse a maker's small edit over a layout they chose. page-scroll.test.js runs the rule.
+test('the generation flows judge a page\'s scroll context, and the flows that change an existing page report it as a note to offer the maker', () => {
+  const docs = griffelDocs();
+  const full = (text, target, name) => {
+    const at = text.indexOf(`node "\${PLUGIN_ROOT}/scripts/check-griffel-styles.js" --file ${target}`);
+    assert.ok(at >= 0, `${name} runs the checker`);
+    assert.doesNotMatch(text.slice(at, text.indexOf('\n', at)), /--existing/, `${name} judges a generated page in full`);
+  };
+  const skill = docs['create flow'];
+  const fastPath = skill.split(/#### 5b\. Single-page fast path/)[1].split(/#### 5c\. Multi-page/)[0];
+  full(fastPath, "'<working-dir>/<filename>.tsx'", 'single-page generation');
+  assert.match(squash(fastPath), /The same command checks that the page establishes a scroll context \(`references\/rules\.md`, \*\*Page Layout\*\*\)[^.]*\. `no-scroll-context`, `scroll-context-unproven` and `scroll-context-padding` are problems like any other, each with the edit that fixes it: apply it and run the check again\./);
+  const multiPage = skill.split(/#### 5c\. Multi-page/)[1].split(/### Phase 6: Deploy/)[0];
+  full(multiPage, "'<working-dir>/<filename>.tsx'", 'multi-page generation');
+  assert.match(squash(multiPage), /its scroll context included \(step 9\)/);
+  assert.match(squash(skill), /The upload does not check a page's scroll context: only `check-griffel-styles\.js` does \(Phase 5b step 9\)\./, 'the upload gate is not mistaken for this one');
+  const fix = readDoc(path.join(PLUGIN, 'skills', 'genpage', 'verify-flow.md')).split('## 7.5 Fix and Re-deploy')[1];
+  full(fix, "'<working-dir>/<file>.tsx'", 'the browser-verify fix');
+  assert.match(squash(fix), /The same command checks that the fixed page still establishes a scroll context/);
+  // The same fix step is also reached from the edit flow, for a page that was downloaded: there it keeps `--existing`, and the edit flow says so on the way in. Without it, a fix
+  // after an edit would be refused over a layout the maker chose (or the maker would be told to rewrite it).
+  assert.ok(fix.includes(`node "\${PLUGIN_ROOT}/scripts/check-griffel-styles.js" --file '<working-dir>/<page-id>/page.tsx' --existing`), 'a fix reached from the edit flow checks an existing page');
+  assert.match(squash(fix), /If you came from \*\*Edit Phase 7\*\*, the page was downloaded, not generated, so check it as Edit Phase 5 does — with `--existing`/);
+  assert.match(squash(fix), /Handle each note as Edit Phase 5 says: When the maker's requested edit/);
+  const appBuilder = docs['app-builder'];
+  full(appBuilder, '<working-dir>/<file>', 'app-builder generation');
+  assert.match(squash(appBuilder), /The same command checks that each page establishes a scroll context/);
+
+  const edit = docs['edit flow'];
+  assert.ok(edit.includes(`node "\${PLUGIN_ROOT}/scripts/check-griffel-styles.js" --file '<working-dir>/<page-id>/page.tsx' --existing`), 'an edited page is an existing one');
+  const editVerify = edit.split('## Edit Phase 7')[1].split('## Edit Phase 8')[0];
+  assert.match(squash(editVerify), /check the fix with the `--existing` command that 7\.5 gives for the edit flow, not the command for a generated page/, 'the edit flow enters the browser-verify fix as an existing page');
+  // A downloaded page's scroll note is the maker's to accept, with one exception: a layout the maker asked to rewrite is new code written in this run, so it follows the rule, and the
+  // maker is told. Both flows state it in the same words, and neither may read as leave to change a layout nobody asked to change.
+  const ruling = (text) => {
+    const s = squash(text);
+    const at = s.indexOf("When the maker's requested edit itself rewrites the page's top-level layout");
+    assert.ok(at >= 0, 'the ruling is stated');
+    return s.slice(at, s.indexOf('to change.', at) + 'to change.'.length);
+  };
+  const [inEdit, inFix] = [ruling(edit), ruling(fix)];
+  assert.equal(inFix, inEdit, 'the edit flow and the browser-verify fix state the ruling in the same words');
+  assert.match(inEdit, /^When the maker's requested edit itself rewrites the page's top-level layout, that layout is new code written in this run and must follow the scroll rule: apply the remedy as part of that edit, and tell the maker in one sentence that you did\./, 'a rewrite the maker asked for: the remedy is applied, and the maker is told');
+  assert.match(inEdit, /Any other scroll note on a downloaded page is offer-only: tell the maker that content below the fold may be cut off, offer the edit its message gives, and apply it only if they agree\./, 'any other note: offered, applied only on agreement');
+  assert.match(inEdit, /A note is never a reason to change a layout the maker did not ask to change\.$/);
+  for (const [name, text] of [['edit flow', edit], ['browser-verify fix', fix]]) {
+    assert.doesNotMatch(squash(text), /(?:note|remedy|layout|scroll)[^.]*without asking/, `${name} never applies a scroll note without asking`);
+    assert.doesNotMatch(text, /apply the\s+edit the note gives without asking/);
+    assert.doesNotMatch(text, /only if they agree[\s\S]{0,80}unless the fix itself rewrites/, `${name} gives no exception to agreement beyond the maker's own rewrite`);
+  }
+  const editing = appBuilder.split('## Editing a deployed app')[1].split('## What the builder does')[0];
+  assert.ok(editing.includes('node "${PLUGIN_ROOT}/scripts/check-griffel-styles.js" --file <page.tsx> --existing'), 'a page edited by hand is an existing one');
+  assert.match(squash(editing), /`--existing` reports the page's scroll context \(`references\/rules\.md`, \*\*Page Layout\*\*\) in `notes` without changing the exit code/);
+
+  // The rule the page builder writes from, and the worker's own instruction.
+  const rules = squash(docs.rules);
+  assert.match(rules, /\*\*The page must establish its own scroll context\.\*\*/);
+  assert.match(rules, /`height: "100%"` \(bounded by the host's container\), `overflowY: "auto"` \(it scrolls\) and `boxSizing: "border-box"`/);
+  assert.match(rules, /6\. \*\*A page with no scroll context is cut off below the fold, with no error\.\*\*/);
+  assert.match(squash(docs['page-builder']), /- \*\*A scroll context\*\* — [^]*`height: "100%"`, `overflowY: "auto"` and `boxSizing: "border-box"`[^]*The orchestrator's `check-griffel-styles\.js` refuses a page without one\./);
+});
+
+// In the host nothing above the page scrolls (the window stays at the top), so a check that scrolls the window or reads the document's height sees a clipped page as a short one,
+// and a snapshot lists cut-off elements too. These pins hold the browser check to the page's own scroller and to a measured proof that the last content can be seen.
+test('browser verify finds the page\'s own scroller and proves the last content is inside the visible area', () => {
+  const verify = readDoc(path.join(PLUGIN, 'skills', 'genpage', 'verify-flow.md'));
+  const structural = verify.split('## 7.2 ')[1].split('## 7.3 ')[0];
+  const visual = verify.split('## 7.4 ')[1].split('## 7.5 ')[0];
+  for (const [name, text] of [['7.2', structural], ['7.4', visual]]) {
+    assert.doesNotMatch(text, /window\.scroll(To|By)\(|document\.documentElement\.scrollHeight/, `${name} must not scroll or measure the window`);
+  }
+  assert.match(structural, /getComputedStyle\(el\)\.overflowY\)[^]*el\.scrollHeight > el\.clientHeight \+ 1/, 'the scroller is an element that scrolls and holds more than it shows');
+  assert.match(structural, /el\.scrollTop = el\.scrollHeight;/, 'it is scrolled to the end');
+  assert.match(structural, /lastContentVisible: lastContentBottom <= visibleBottom \+ 1/, 'the last content is measured against the lowest visible point');
+  assert.match(structural, /if \(a === el \|\| getComputedStyle\(a\)\.overflowY !== 'visible'\)/, 'the visible area is cut by every clipping ancestor (a padded root overhangs the host)');
+  assert.match(squash(structural), /A `browser_snapshot` is not proof that content can be seen/);
+  assert.match(squash(structural), /Any entry is content below the visible area that nothing can scroll to: the page has no scroll context\./);
+  assert.match(structural, /document\.querySelector\('\[data-verify-scroller\]'\)\.scrollTop = 0/, 'the reset scrolls the same element back');
+  // A scroll region inside the page's scroller (a list in a fixed-height panel) is not cut off until its own end is: its content is left out of the page's last content, and each
+  // region is scrolled to its end and measured the same way, so a padded region that overhangs its panel is still caught.
+  const scripts = [...structural.matchAll(/```javascript\n([^]*?)```/g)].map((m) => m[1]);
+  assert.equal(scripts.length, 6, 'find, cut-off, end of the scroller, its regions, one screen at a time, reset');
+  const [, , end, regions] = scripts;
+  const own = "const own = (d) => { for (let a = d.parentElement; a && a !== el; a = a.parentElement) if (scrolls(a)) return false; return true; };";
+  for (const [name, script] of [['the end of the scroller', end], ['each region', regions]]) {
+    assert.ok(script.includes(own), `${name} leaves out what a region of its own holds`);
+    assert.match(script, /\.querySelectorAll\('\*'\)\]\.filter\(own\)/, `${name} measures only its own content`);
+    assert.match(script, /lastContentVisible: lastContentBottom <= visibleBottom \+ 1/);
+    assert.match(script, /if \(a === el \|\| getComputedStyle\(a\)\.overflowY !== 'visible'\)/);
+  }
+  assert.match(end, /regions \};/, 'the end proof says how many regions to check');
+  assert.match(regions, /return regions\.map\(\(el\) => \{\s*el\.scrollTop = el\.scrollHeight;/, 'each region is scrolled to its own end');
+  assert.match(squash(structural), /Every entry's `lastContentVisible` must be `true`/);
+  assert.match(structural, /document\.querySelectorAll\('\[data-verify-scroller\] \*'\)\.forEach\(\(el\) => \{ if \(el\.scrollTop\) el\.scrollTop = 0; \}\)/, 'the reset scrolls the regions back too');
+  assert.match(squash(visual), /scrolling the page's scroller \(7\.2\), not the window/);
+});
+
 // A page deployed by an earlier release can already hold a key Griffel drops (its only guard was a grep for `borderWidth`), and it renders without it today. Sending the same bytes again
 // ships nothing new, and refusing them stops a rebuild over a page nobody touched — whose way through, the longhands, CHANGES how the page renders. So the gates hold a page to what a run
 // would ADD, and say what each way out does. These are instructions nothing executes, so a document that drops the distinction — or the advice that goes with it — is invisible until

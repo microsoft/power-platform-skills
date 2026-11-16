@@ -182,8 +182,9 @@ export async function forgotPassword(email: string): Promise<void> {
     redirect: 'follow',
   });
 
-  // The server always returns 200 with a confirmation page (even if the email doesn't exist,
-  // for security - it doesn't reveal whether an account exists). Parse for errors just in case.
+  if (!response.ok) throw new Error(`Password reset email request failed: ${response.status}`);
+  // A successful request shows the same confirmation for unknown accounts, so
+  // account existence stays private. HTTP failures must not show that confirmation.
   const html = await response.text();
   const errors = parseServerErrors(html);
   if (errors.length > 0) {
@@ -227,6 +228,8 @@ export async function resetPassword(
     credentials: 'same-origin',
     redirect: 'follow',
   });
+
+  if (!response.ok) throw new Error(`Password reset failed: ${response.status}`);
 
   if (response.redirected) {
     window.location.href = '/login?message=password_reset_success';

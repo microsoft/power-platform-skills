@@ -313,7 +313,7 @@ function PageBody(props: GeneratedComponentProps) {
     ];
 
     return (
-        <div style={{ width: "100%", margin: "0 auto", minHeight: "100%", display: "flex", flexDirection: "column", boxSizing: "border-box", padding: "10px" }}>
+        <div style={{ width: "100%", margin: "0 auto", height: "100%", overflowY: "auto", display: "flex", flexDirection: "column", boxSizing: "border-box", padding: "10px" }}>
             {/* Header */}
             <header style={{ padding: "10px", textAlign: "center" }}>
                 <Text as="h1" size={800} weight="semibold">

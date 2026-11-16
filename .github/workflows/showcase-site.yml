@@ -1,0 +1,130 @@
+name: showcase-site
+
+# Publishes the repository's one GitHub Pages site, which holds:
+#   - the plugin showcase built from site/, at the site root, with the video and poster that
+#     site/media.json pins, fetched from the site-media branch. They are kept off main because
+#     every marketplace install clones main (see site/lib/media.js).
+#   - the GitHub Repo Stats report, copied read-only from the github-repo-stats branch into
+#     microsoft/, so its existing URLs (for example microsoft/power-platform-skills/latest-report/
+#     report.html) keep working
+# Pages deploys one artifact, so every deploy must carry both; deploying the site alone would
+# take the stats report offline. The github-repo-stats branch is only read here, never written.
+#
+# Pull requests only test and build. The path filter lists every input the build or its tests
+# read, so a change that could break the site (a renamed skill, a new marketplace plugin, a README
+# link) runs this workflow.
+
+on:
+    pull_request:
+        branches:
+            - main
+        paths:
+            - "site/**"
+            - "marketplace.json"
+            - "plugins/*/.plugin/plugin.json"
+            - "plugins/*/skills/**"
+            - "README.md"
+            - "scripts/install.js"
+            - ".github/workflows/showcase-site.yml"
+            - ".github/workflows/github-repo-stats.yml"
+    push:
+        branches:
+            - main
+        paths:
+            - "site/**"
+            - "marketplace.json"
+            - "plugins/*/.plugin/plugin.json"
+            - "plugins/*/skills/**"
+            - "README.md"
+            - "scripts/install.js"
+            - ".github/workflows/showcase-site.yml"
+            - ".github/workflows/github-repo-stats.yml"
+    # Republish after the daily stats run so the report stays current.
+    workflow_run:
+        workflows:
+            - github-repo-stats
+        types:
+            - completed
+        branches:
+            - main
+    workflow_dispatch:
+
+permissions:
+    contents: read
+
+concurrency:
+    group: showcase-site-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.ref }}
+    # Superseded pull request runs are cancelled. Runs on main are never cancelled here, because
+    # that would also cancel a Pages deployment halfway; the deploy job's own group queues them.
+    cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+    build:
+        name: build-showcase-site
+        # A failed stats run has nothing new to publish, and the live site keeps the last report.
+        if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+        runs-on: ubuntu-latest
+        timeout-minutes: 10
+        steps:
+            - name: checkout
+              uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+              with:
+                  persist-credentials: false
+
+            - name: setup-node
+              uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+              with:
+                  node-version: 22
+
+            - name: test
+              run: node --test site/tests/site.test.js
+
+            # Pull requests fetch the media too, so a change to site/media.json that pins a file the
+            # site-media branch does not have fails here rather than at deploy.
+            - name: fetch media
+              run: node site/fetch-media.js
+
+            - name: build
+              run: node site/build.js --require-media
+
+            - name: checkout repo stats
+              if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+              uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+              with:
+                  ref: github-repo-stats
+                  path: repo-stats
+                  sparse-checkout: microsoft
+                  persist-credentials: false
+
+            - name: add repo stats to site
+              if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+              run: cp -R repo-stats/microsoft site/dist/microsoft
+
+            - name: upload pages artifact
+              if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+              uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+              with:
+                  path: site/dist
+
+    deploy:
+        name: deploy-showcase-site
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        needs: build
+        runs-on: ubuntu-latest
+        timeout-minutes: 10
+        # Only this job can publish. Pages deployments authenticate with an OIDC token.
+        # https://docs.github.com/pages/getting-started-with-github-pages/using-custom-workflows-with-github-pages
+        permissions:
+            pages: write
+            id-token: write
+        environment:
+            name: github-pages
+            url: ${{ steps.deployment.outputs.page_url }}
+        # Never cancel a deployment halfway; a newer run waits for the current one instead.
+        concurrency:
+            group: showcase-site-pages
+            cancel-in-progress: false
+        steps:
+            - name: deploy
+              id: deployment
+              uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1

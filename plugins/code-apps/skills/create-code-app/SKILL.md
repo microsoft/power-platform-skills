@@ -6,7 +6,7 @@ allowed-tools: Read, Edit, Write, Grep, Glob, Bash, LSP, TaskCreate, TaskUpdate,
 model: opus
 ---
 
-**📋 Shared Instructions: [shared-instructions.md](${PLUGIN_ROOT}/shared/shared-instructions.md)** - Cross-cutting concerns.
+**📋 Shared Instructions: [shared-instructions.md](../../shared/shared-instructions.md)** - Cross-cutting concerns.
 
 **References:**
 
@@ -23,7 +23,7 @@ model: opus
 
 ### Step 0: Check Memory Bank
 
-Check for `memory-bank.md` per [shared-instructions.md](${PLUGIN_ROOT}/shared/shared-instructions.md). Skip completed steps.
+Check for `memory-bank.md` per [shared-instructions.md](../../shared/shared-instructions.md). Skip completed steps.
 
 ### Step 1: Validate Prerequisites
 
@@ -86,6 +86,7 @@ Ask the user for a folder name. Default to `powerapps-{app-name-slugified}-{time
 npx degit microsoft/PowerAppsCodeApps/templates/vite {folder} --force
 cd {folder}
 npm install
+npm install --save-dev "@microsoft/power-apps-cli@^1.3.0"
 ```
 
 **Notes:**
@@ -93,12 +94,13 @@ npm install
 - Use `--force` to overwrite if the directory already has files (e.g., `.claude` from a planning session)
 - If targeting an existing directory, use `.` as the folder name: `npx degit microsoft/PowerAppsCodeApps/templates/vite . --force`
 - If `npx degit` fails (network issues, npm not found), retry once, then ask the user to run manually
+- The template doesn't include the Power Apps CLI, so install it into the project as a dev dependency (not globally). Version 1.3.0 or later lets the connector skills find or create connections without asking for a connection ID.
 
-Verify: `package.json` exists, `node_modules/` created.
+Verify: `package.json` exists, `node_modules/` created, and `@microsoft/power-apps-cli` is listed in `devDependencies`. Then resolve the CLI per [cli-binary.md](../../shared/cli-binary.md); it should resolve to `pa` with `PA_INLINE_CONNECTIONS=yes`.
 
 ### Step 5: Initialize
 
-> Resolve the CLI first (see [cli-binary.md](${PLUGIN_ROOT}/shared/cli-binary.md)): run as `$PA app init …` (`npx --no-install pa …`), never a bare `pa`. On `power-apps`-only projects, translate to `power-apps init …` (the `init` verb and its `-n`/`-e` flags are unchanged on both binaries).
+> Resolve the CLI first (see [cli-binary.md](../../shared/cli-binary.md)): run as `$PA app init …` (`npx --no-install pa …`), never a bare `pa`. On `power-apps`-only projects, translate to `power-apps init …` (the `init` verb and its `-n`/`-e` flags are unchanged on both binaries).
 
 ```bash
 pa app init -n '{user-provided-app-name}' -e <environment-id>
@@ -108,7 +110,7 @@ pa app init -n '{user-provided-app-name}' -e <environment-id>
 
 **Authentication:** On first run, a browser window opens for Microsoft sign-in. Complete the login and the command continues. No separate auth setup is needed.
 
-See [preferred-environment.md](${PLUGIN_ROOT}/shared/preferred-environment.md) for environment selection details.
+See [preferred-environment.md](../../shared/preferred-environment.md) for environment selection details.
 
 **`pa app init` failure:**
 
@@ -130,7 +132,7 @@ npm run build
 
 Verify `dist/` folder created with `index.html` and `assets/`.
 
-> Deploy via the resolved CLI: `$PA app push` on `pa`, or `power-apps push` on `power-apps`-only projects (see [cli-binary.md](${PLUGIN_ROOT}/shared/cli-binary.md)).
+> Deploy via the resolved CLI: `$PA app push` on `pa`, or `power-apps push` on `power-apps`-only projects (see [cli-binary.md](../../shared/cli-binary.md)).
 
 ```bash
 pa app push
@@ -165,6 +167,8 @@ Invoke the `/add-*` skills identified in the plan (Step 3). Run each in sequence
 | Search M365 data or get AI-powered answers | `/add-workiq`      |
 | Connect to another service                 | `/add-connector`   |
 
+**Connections:** every connector except Dataverse needs a connection. With the CLI 1.3.0+ installed in Step 4, the connector skills find or create it themselves: they tell the user first that a connection may be created with the user's account, and ask before running `--use-sso` or `pa connection create`. See [connector-reference.md](../../shared/connector-reference.md#connections).
+
 Each `/add-*` skill runs `npm run build` to catch errors. Do NOT deploy yet.
 
 **If no data sources needed:** Skip to Step 8.
@@ -173,7 +177,7 @@ Each `/add-*` skill runs `npm run build` to catch errors. Do NOT deploy yet.
 
 **This is the core step.** Build the actual app features described in the plan from Step 3.
 
-1. **Review generated services**: Use `Grep` to find methods in generated service files (they can be very large -- see [connector-reference.md](${PLUGIN_ROOT}/shared/connector-reference.md#inspecting-large-generated-files)). Do NOT read entire generated files.
+1. **Review generated services**: Use `Grep` to find methods in generated service files (they can be very large -- see [connector-reference.md](../../shared/connector-reference.md#inspecting-large-generated-files)). Do NOT read entire generated files.
 2. **Build components**: Create React components for each screen/feature in the plan
 3. **Connect data**: Wire components to generated services (use `*Service.getAll()`, `*Service.create()`, etc.)
 4. **Apply theme**: Use the user's theme preference (default: dark theme per development standards)
@@ -182,7 +186,7 @@ Each `/add-*` skill runs `npm run build` to catch errors. Do NOT deploy yet.
 **Key rules:**
 
 - Use generated services for all data access -- never use fetch/axios directly
-- Read [dataverse-reference.md](${PLUGIN_ROOT}/skills/add-dataverse/references/dataverse-reference.md) if working with Dataverse (picklist fields, virtual fields, lookups have critical gotchas)
+- Read [dataverse-reference.md](../add-dataverse/references/dataverse-reference.md) if working with Dataverse (picklist fields, virtual fields, lookups have critical gotchas)
 - Remove unused imports before building (TS6133 strict mode)
 - Don't edit files in `src/generated/` unless fixing known issues
 
@@ -251,6 +255,7 @@ node --version   # → v22.4.0
 npx degit microsoft/PowerAppsCodeApps/templates/vite powerapps-task-tracker-20260302 --force
 cd powerapps-task-tracker-20260302
 npm install
+npm install --save-dev "@microsoft/power-apps-cli@^1.3.0"
 
 # Step 5: Initialize (browser login prompt on first run; CLI prompts for env ID if -e omitted)
 pa app init -n 'Task Tracker' -e <environment-id>
@@ -273,13 +278,14 @@ pa app push
 
 | File                                          | Change                                                |
 | --------------------------------------------- | ----------------------------------------------------- |
+| `package.json`                                | Updated — adds `@microsoft/power-apps-cli` to `devDependencies` |
 | `power.config.json`                           | Created by `pa app init` — contains `environmentId` |
-| `src/generated/models/Cr123_taskModel.ts`     | Generated by `pa app add data-source`               |
-| `src/generated/services/Cr123_taskService.ts` | Generated by `pa app add data-source`               |
+| `src/generated/models/Cr123_tasksModel.ts`     | Generated by `pa app add data-source`, named after the table's entity set name (here `cr123_tasks`) |
+| `src/generated/services/Cr123_tasksService.ts` | Generated by `pa app add data-source`               |
 | `src/components/TaskList.tsx`                 | Created — renders task list with status filter        |
 | `src/components/AddTaskForm.tsx`              | Created — form to add new tasks                       |
-| `src/App.tsx`                                 | Updated — wires components to `Cr123_taskService`     |
-| `memory-bank.md`                              | Created in Step 7, updated in Step 11                 |
+| `src/App.tsx`                                 | Updated — wires components to `Cr123_tasksService`    |
+| `memory-bank.md`                              | Created in Step 6, updated at the end                 |
 
 **Final assistant summary (verbatim format):**
 
@@ -315,6 +321,7 @@ What you can add next:
 - App name: Task Tracker
 - Environment: <your-environment-name> (<environment-id>)
 - App URL: https://apps.powerapps.com/play/e/<environment-id>/app/<app-id>
+- CLI: pa 1.3.0
 
 ## Completed Steps
 
@@ -351,20 +358,20 @@ What you can add next:
 **Commands run (in order):**
 
 ```bash
-# Step 6: Get connection ID (via /list-connections)
-pa connection list
-# → ConnectionId: conn-sp-xyz789  (SharePoint Online)
+# Step 6: Get the connection ID (via /list-connections)
+pa connection list --search sharepointonline
+# → one SharePoint connection: conn-sp-xyz789
 
 # Step 7: Discover sites
-pa connector list-datasets --connector sharepointonline -c conn-sp-xyz789
+pa connection list-datasets --connector sharepointonline -c conn-sp-xyz789
 # → https://contoso.sharepoint.com/sites/Projects
 
 # Step 8: Discover tables
-pa connector list-tables --connector sharepointonline -c conn-sp-xyz789 -d 'https://contoso.sharepoint.com/sites/Projects'
+pa connection list-tables --connector sharepointonline -c conn-sp-xyz789 -d 'https://contoso.sharepoint.com/sites/Projects'
 # → Project Milestones, Documents, Team Wiki
 
-# Step 9: Add connector
-pa app add data-source --connector sharepointonline -c conn-sp-xyz789 -d 'https://contoso.sharepoint.com/sites/Projects' --table 'Project Milestones'
+# Step 9: Add the list as a table
+pa app add data-source --connector sharepointonline -c conn-sp-xyz789 -d 'https://contoso.sharepoint.com/sites/Projects' --table 'Project Milestones' --non-interactive
 
 # Step 11: Build to verify
 npm run build   # → success
@@ -372,12 +379,13 @@ npm run build   # → success
 
 **Files changed:**
 
-| File                                                | Change                                            |
-| --------------------------------------------------- | ------------------------------------------------- |
-| `src/generated/services/SharePointOnlineService.ts` | Generated — contains `GetItems`, `PostItem`, etc. |
-| `src/generated/models/SharePointOnlineModel.ts`     | Generated — TypeScript interfaces                 |
-| `.power/schemas/sharepointonline/`                  | Generated schema files                            |
-| `memory-bank.md`                                    | Updated — connector recorded                      |
+| File                                                 | Change                                                                  |
+| ---------------------------------------------------- | ----------------------------------------------------------------------- |
+| `src/generated/services/ProjectMilestonesService.ts` | Generated — `getAll`, `get`, `create`, `update`, `delete` for the list  |
+| `src/generated/models/ProjectMilestonesModel.ts`     | Generated — `ProjectMilestonesRead` / `ProjectMilestonesWrite` types    |
+| `.power/schemas/sharepointonline/`                   | Generated schema files                                                  |
+| `power.config.json`                                  | Updated — the new data source and its connection reference              |
+| `memory-bank.md`                                     | Updated — connector recorded (no connection ID)                         |
 
 **Final assistant summary (verbatim format):**
 
@@ -390,11 +398,8 @@ List: Project Milestones
 Build: Passed ✓
 
 Usage:
-  const result = await SharePointOnlineService.GetItems({
-    dataset: "https://contoso.sharepoint.com/sites/Projects",
-    table: "Project Milestones"
-  });
-  const milestones = result.data?.value || [];
+  const result = await ProjectMilestonesService.getAll({ top: 50 });
+  const milestones = result.data ?? [];
 
 Next: Implement your UI components using the generated service, then run /deploy when ready.
 ```

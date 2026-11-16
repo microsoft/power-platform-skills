@@ -30,7 +30,13 @@ export async function getMyProfile(contactId: string): Promise<ProfileContact> {
   }
 
   const url = `/_api/contacts(${encodeURIComponent(contactId)})?$select=${PROFILE_FIELDS}`;
-  const response = await fetch(url, { credentials: 'same-origin' });
+  const token = await fetchAntiForgeryToken();
+  // Power Pages requires the CSRF token on Web API calls, including reads.
+  // https://learn.microsoft.com/power-pages/configure/web-api-overview#authenticating-portal-web-api-requests
+  const response = await fetch(url, {
+    headers: { '__RequestVerificationToken': token },
+    credentials: 'same-origin',
+  });
   if (!response.ok) {
     throw new Error(`Failed to load profile (status ${response.status}).`);
   }

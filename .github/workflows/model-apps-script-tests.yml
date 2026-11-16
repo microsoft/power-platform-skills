@@ -66,9 +66,10 @@ jobs:
     test-model-apps-scripts:
         name: test-model-apps-scripts (${{ matrix.os }}, node ${{ matrix.node }})
         runs-on: ${{ matrix.os }}
-        # The suite takes about a minute on every runner. A test that hangs (a child process waiting on
-        # stdin, say) would otherwise hold the job for the six-hour default.
-        timeout-minutes: 20
+        # The suite takes 8-15 minutes on Linux and macOS and up to about 20 on Windows, where Node 20 is the
+        # slowest and has been cancelled at a 20-minute limit while passing. A test that hangs (a child
+        # process waiting on stdin, say) would otherwise hold the job for the six-hour default.
+        timeout-minutes: 30
         # Defense-in-depth: opt this CI job out of telemetry transmission so a test
         # that forgets to isolate emission can never POST to a real collector. The
         # plugin's committed ikey.json ships live (`disabled: false`) with real

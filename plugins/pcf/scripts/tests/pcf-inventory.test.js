@@ -23,7 +23,7 @@ async function run(argv, stubs) {
 }
 
 test.after(() => {
-  for (const dir of workspaceDirs) fs.rmSync(dir, { recursive: true, force: true });
+  for (const dir of workspaceDirs) fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
 test('pcf-inventory excludes managed and first-party controls by default, and --include-managed lifts both filters', async () => {

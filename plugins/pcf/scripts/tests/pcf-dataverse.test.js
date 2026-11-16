@@ -76,7 +76,7 @@ test('makePcfSdk initializes the vendored SDK with the provided workspace and cl
     assert.equal(typeof sdk.dataverse.get, 'function');
     assert.equal(fs.existsSync(dir), true);
   } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
 

@@ -117,7 +117,7 @@ test('pcf-gates refuses an escaping outDir before a test preparation build can r
     assert.equal(fs.readFileSync(path.join(outside, 'sentinel.txt'), 'utf8'), 'keep');
     assert.equal(fs.existsSync(path.join(project, 'Control', 'generated', 'ManifestTypes.d.ts')), false);
   } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
 

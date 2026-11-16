@@ -1158,11 +1158,11 @@ function reportUnknownAppShellKeys(node, level, where, errors) {
 // The keys the build READS on a `views[]` entry (viewDef in sdk-build.js; compileViewIntent in view-reconcile.js, which also reads `key`,
 // `viewId` and `linkEntities` of a declared view; `description` is written to the view by both) and on each of its filter items
 // (`attr`, `op`, `value`, `values`; `relatedEntity` scopes a condition to a declared join). Any other key is dropped without a trace,
-// so a view written with `filter` instead of `filters` was built WITHOUT its filter and listed every active row (#799). Frozen, in the
+// so a view written with `filter` instead of `filters` was built WITHOUT its filter and listed every active row (#799, #827). Frozen, in the
 // order the messages list them.
 const VIEW_KEYS = Object.freeze(['entity', 'name', 'description', 'columns', 'sort', 'filters', 'activeOnly', 'reconcile', 'key', 'viewId', 'linkEntities']);
 const VIEW_FILTER_KEYS = Object.freeze(['attr', 'op', 'value', 'values', 'relatedEntity']);
-// Keys no code reads that are nevertheless accepted without a warning, because the docs and samples of earlier releases showed them
+// Keys no code reads that are nevertheless accepted without a message, because the docs and samples of earlier releases showed them
 // and they never changed what is built. Frozen: the list is closed, a new entry needs the same reason.
 const IGNORED_VIEW_KEYS = Object.freeze(['type']);
 
@@ -1170,10 +1170,9 @@ const IGNORED_VIEW_KEYS = Object.freeze(['type']);
 // and `activeonly` are caught by the single-edit matcher). Prototype-less for the reason ENTITY_KEY_HINTS is: the lookup key comes from the
 // spec.
 //
-// `type` is deliberately not warned about (see IGNORED_VIEW_KEYS): older docs and the shipped
-// samples put it on a view, it never had an effect (a view is always a public view of its table), and a spec written from them must keep
-// passing `lint-app-spec.js --strict`, which fails on any warning. The keys that DO warn are the ones whose silent loss changes the view
-// (a misspelled `filters` drops the filter), so `--strict` failing on those is intended.
+// `type` is deliberately not reported (see IGNORED_VIEW_KEYS): older docs and the shipped samples put it on a view, it never had an effect
+// (a view is always a public view of its table), and a spec written from them must keep validating. The keys that ARE reported are the
+// ones whose silent loss changes the view (a misspelled `filters` drops the filter).
 const VIEW_KEY_HINTS = Object.assign(Object.create(null), {
   where: " — did you mean 'filters'?",
   conditions: " — did you mean 'filters'?",
@@ -1194,12 +1193,14 @@ const VIEW_FILTER_KEY_HINTS = Object.assign(Object.create(null), {
   entity: " — did you mean 'relatedEntity'? Only a condition on a declared join takes one",
 });
 
-// The warnings for the keys of one `views[]` entry and of its filter items (`filters[]`, and the `filters[]` of each `linkEntities[]` join, which are
+// The findings for the keys of one `views[]` entry and of its filter items (`filters[]`, and the `filters[]` of each `linkEntities[]` join, which are
 // the same shape), each with `vlabel` in front: one per unknown key, naming the key it most likely meant (a written hint first, then the shared
-// single-edit matcher, which also settles a casing slip). A WARNING, not an error: the build has always ignored such a key, so a spec that
-// carries one still builds as before, and one a release before this check validated clean must keep validating. Only a plain object is
-// inspected — a non-object entry or filter is reported by the shape checks — and enumeration is guarded because the spec comes from the caller.
-function viewKeyWarnings(v, vlabel) {
+// single-edit matcher, which also settles a casing slip). The caller decides whether they are errors or warnings (see `viewKeyFindings`): every
+// profile that builds or plans a build refuses them. They were warnings (#799), but a key the build drops silently changes what is built — a view
+// written with `filter` listed every active row while the author told the maker it was filtered — and a warning among the advisory ones was not
+// acted on, so the build now stops before it writes anything (#827), as it does for an unknown key of a form's `fieldOptions` entry. Only a plain
+// object is inspected — a non-object entry or filter is reported by the shape checks — and enumeration is guarded because the spec comes from the caller.
+function viewKeyProblems(v, vlabel) {
   const unknown = (obj, allowed, hints, where, accepted = []) => {
     if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return [];
     let keys;
@@ -1215,7 +1216,7 @@ function viewKeyWarnings(v, vlabel) {
         const meant = near && allowed.find((a) => a.toLowerCase() === near);
         hint = meant ? ` — did you mean '${meant}'?` : '';
       }
-      return `${vlabel}: ${where ? `${where}: ` : ''}unknown key '${k}'${hint}; the build ignores it (allowed: ${allowed.join(', ')})`;
+      return `${vlabel}: ${where ? `${where}: ` : ''}unknown key '${k}'${hint}; the build does not read it, so it is refused rather than built without it (allowed: ${allowed.join(', ')})`;
     });
   };
   const out = unknown(v, VIEW_KEYS, VIEW_KEY_HINTS, '', IGNORED_VIEW_KEYS);
@@ -2104,6 +2105,9 @@ const APP_THEME_MIN_VERSION = '2.21.0';
 // createIdentity: "stable-v1" (stable create ids for declared views and charts) first shipped in 2.21.0.
 const CREATE_IDENTITY_MIN_VERSION = '2.21.0';
 const CREATE_IDENTITY_STABLE = 'stable-v1';
+// configurationIdentity: "stable-v1" (exact ids and a binding store for declared environment variables, connection references,
+// Custom APIs and duplicate detection rules) first ships in 2.23.0. It takes the same one value as createIdentity.
+const CONFIGURATION_IDENTITY_MIN_VERSION = '2.23.0';
 const isPluginVersion = (value) => typeof value === 'string' && /^\d+(?:\.\d+)*(?:[-+][0-9A-Za-z.-]+)?$/.test(value);
 // Declared reconciliation (views, charts and web resources with reconcile: "declared", a view's viewId pin and joins, a chart title, command
 // keys and row pins, a table's quickFind): an older plugin ignores these fields (or, for quickFind, refuses the table), so a
@@ -2287,6 +2291,10 @@ function appMembershipWarnings(spec) {
   if (Object.prototype.hasOwnProperty.call(spec, 'createIdentity')
     && (!isPluginVersion(floor) || compareVersions(floor, CREATE_IDENTITY_MIN_VERSION) < 0)) {
     warnings.push(`set minimumPluginVersion to '${CREATE_IDENTITY_MIN_VERSION}' or newer when using createIdentity — older plugins ignore it and create with fresh ids`);
+  }
+  if (Object.prototype.hasOwnProperty.call(spec, 'configurationIdentity')
+    && (!isPluginVersion(floor) || compareVersions(floor, CONFIGURATION_IDENTITY_MIN_VERSION) < 0)) {
+    warnings.push(`set minimumPluginVersion to '${CONFIGURATION_IDENTITY_MIN_VERSION}' or newer when using configurationIdentity — older plugins ignore it, keep no binding store for configuration and find it by name`);
   }
   if (app.tables === undefined && app.mainForms === undefined) return warnings;
   if (!isPluginVersion(floor) || compareVersions(floor, APP_MEMBERSHIP_MIN_VERSION) < 0) {
@@ -2775,6 +2783,11 @@ function validateAppSpec(spec, opts = {}) {
   // accepted and built a spec carrying one — so the structural profile and read-only verification (`primaryAttributeKeys: 'warn'`) take it
   // as a warning in the same words.
   const primaryAttributeKeyFindings = profile === 'structural' || opts.primaryAttributeKeys === 'warn' ? warnings : errors;
+  // Where an unknown key of a `views[]` entry or of one of its filter items goes (viewKeyProblems), by the same arrangement again: the build
+  // drops such a key, so every profile that builds or plans a build keeps it an error, while a release before the check accepted and built a
+  // spec carrying one (the view without its filter) — so the structural profile and read-only verification (`viewKeys: 'warn'`) take it as a
+  // warning in the same words, and an app built from such a spec can still be torn down, previewed and verified.
+  const viewKeyFindings = profile === 'structural' || opts.viewKeys === 'warn' ? warnings : errors;
   if (!VALIDATION_PROFILES.includes(profile)) {
     return { ok: false, errors: [`unknown validation profile '${profile}' (valid: ${VALIDATION_PROFILES.join(', ')})`], warnings };
   }
@@ -2807,6 +2820,12 @@ function validateAppSpec(spec, opts = {}) {
     // Checked here rather than through creates-identity.js readCreateIdentityMode, which says the same: a default build must not load
     // the stable-identity modules, and creates-identity.js requires this module. A test pins the two to one value.
     errors.push(`create-identity-invalid: createIdentity must be "${CREATE_IDENTITY_STABLE}" or absent; got ${JSON.stringify(spec.createIdentity)}`);
+  }
+  // configurationIdentity: absent, or exactly "stable-v1" (exact ids and a binding store for the declared environment variables,
+  // connection references, Custom APIs and duplicate detection rules). Like createIdentity, any other value is refused and never
+  // read as absent: a typo must not fall back to name lookups on the build that was meant to keep exact ids.
+  if (Object.prototype.hasOwnProperty.call(spec, 'configurationIdentity') && spec.configurationIdentity !== CREATE_IDENTITY_STABLE) {
+    errors.push(`create-identity-invalid: configurationIdentity must be "${CREATE_IDENTITY_STABLE}" or absent; got ${JSON.stringify(spec.configurationIdentity)}`);
   }
   if (spec.minimumPluginVersion !== undefined) {
     const want = spec.minimumPluginVersion;
@@ -3450,7 +3469,7 @@ function validateAppSpec(spec, opts = {}) {
       else v.filters.forEach((f, i) => attrRef(f && f.attr, `filters[${i}].attr`));
     }
     if (v && v.reconcile !== undefined && v.reconcile !== 'declared') errors.push(`${vlabel}: reconcile must be "declared" (or left out)`);
-    warnings.push(...viewKeyWarnings(v, vlabel));
+    viewKeyFindings.push(...viewKeyProblems(v, vlabel));
     if (isDeclaredView(v)) {
       // compileViewIntent walks columns, sort, filters and joins as lists; a non-list one is already reported above (or by
       // the shape normalization), so it is not walked again into a TypeError.
@@ -3518,6 +3537,12 @@ function validateAppSpec(spec, opts = {}) {
     } else {
       checkCmdAction(`command '${c.label}' on ${c.entity}`, c.library, c.function);
     }
+  }
+  // commandStates (2.24.0): the hidden / disabled state of existing modern command rows, by row id (lib/command-state-contract.js). Loaded only for a
+  // spec that has the key, so every other spec validates exactly as before. Nothing here touches commands[] above: the two never share an entry.
+  // The structural profile (teardown, preview) reads a spec only for what it names, so there the findings are warnings, as for configuration.
+  if (Object.prototype.hasOwnProperty.call(spec, 'commandStates')) {
+    (profile === 'structural' ? warnings : errors).push(...require('./command-state-contract.js').validateCommandStates(spec).errors);
   }
   // Declared reconciliation (2.21.0). Command keys and row pins, a table's Quick Find columns, and the kinds that do NOT take
   // `reconcile` in this release. Every field is optional; a spec that uses none of them gets no finding from this block.
@@ -5006,6 +5031,7 @@ module.exports = {
   APP_THEME_MIN_VERSION,
   CREATE_IDENTITY_MIN_VERSION,
   CREATE_IDENTITY_STABLE,
+  CONFIGURATION_IDENTITY_MIN_VERSION,
   isPluginVersion,
   sitemapEntityTables,
   appMembershipWarnings,

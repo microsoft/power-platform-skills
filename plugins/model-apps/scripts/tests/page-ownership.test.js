@@ -8,6 +8,7 @@ const { reconcilePageIds } = require('../lib/page-manifest.js');
 const { runTeardown: realRunTeardown } = require('../lib/sdk-teardown.js');
 const { runSdkBuild } = require('../lib/sdk-build.js');
 const { loadCli } = require('./helpers/cli-harness.js');
+const { shortRenameWait } = require('./helpers/short-rename-wait.js');
 const { fakeGenpage } = require('./helpers/fake-genpage.js');
 const { withPageType } = require('./helpers/page-component-type.js');
 const { isFormScan, noFormRows } = require('./helpers/form-scan.js');
@@ -873,6 +874,7 @@ test('no workspace refuses app deletion when navigation proof cannot be preserve
 });
 
 test('a failed ownership-record write leaves the app and its pages intact', async (t) => {
+  shortRenameWait(t);
   const workspaceDir = workspace();
   const rename = fs.renameSync;
   t.mock.method(fs, 'renameSync', (from, to) => {

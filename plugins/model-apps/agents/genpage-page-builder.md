@@ -448,6 +448,15 @@ export default GeneratedComponent;
   });
   ```
 - **Responsive design** — flexbox, relative units, never `100vh`/`100vw`
+- **A scroll context** — the host shows the page in a container of fixed height and never scrolls
+  it, so a page that is taller than the container is cut off below the fold, with no error. Give the
+  page's top element (the first element your default export renders, through any error boundary or
+  body component) `height: "100%"`, `overflowY: "auto"` and `boxSizing: "border-box"` in its
+  `makeStyles` slot, or use the fixed-header layout or the themed two-div wrapper of
+  `references/rules.md` **Page Layout**; in a bounded flex column, give a `Card` `flexShrink: 0`.
+  Join classes with `mergeClasses`, not a string or a template, so the check can read them. Before
+  returning, follow the page from its default export to that element and confirm it. The orchestrator's
+  `check-griffel-styles.js` refuses a page without one.
 - **WCAG AA accessibility** — ARIA labels, keyboard navigation, semantic HTML
 - **Error handling** — every failed data operation goes through the page's one `reportPageError`
   with its five required arguments — `reportPageError(PAGE_NAME, '<operation>', code, error, '<kind>')`,

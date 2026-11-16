@@ -1,0 +1,17 @@
+{
+  "branch": "site-media",
+  "files": [
+    {
+      "path": "assets/video/plugins-and-skills.mp4",
+      "source": "video/plugins-and-skills-51f78cf58fab.mp4",
+      "sha256": "51f78cf58fab51b69255f296c6fc3f7577f6eb6dda54d3ee25e7800ae9ecffb3",
+      "bytes": 3187458
+    },
+    {
+      "path": "assets/video/plugins-and-skills-poster.webp",
+      "source": "video/plugins-and-skills-poster-cc5c724f70e7.webp",
+      "sha256": "cc5c724f70e7a6523edca52e0a55f669d020fb79a6b7d0d6bb306f317640487a",
+      "bytes": 28710
+    }
+  ]
+}

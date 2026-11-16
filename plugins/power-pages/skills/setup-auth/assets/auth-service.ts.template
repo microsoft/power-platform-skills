@@ -115,7 +115,7 @@ export function getTenantId(): string | undefined {
 }
 
 /**
- * Fetches the anti-forgery token required for login form POSTs.
+ * Fetches the anti-forgery token required for login form posts and Power Pages Web API calls.
  * The token is embedded in an HTML response from /_layout/tokenhtml.
  */
 export async function fetchAntiForgeryToken(): Promise<string> {
@@ -290,8 +290,9 @@ const AUTH_ERROR_MESSAGES: Record<string, string> = {
 export function getAuthError(): string | undefined {
   if (typeof window === 'undefined') return undefined;
   const params = new URLSearchParams(window.location.search);
-  const message = params.get('message') || params.get('error');
+  const message = params.get('error') || params.get('message');
   if (!message) return undefined;
+  if (!params.get('error') && message === 'password_reset_success') return undefined;
   return AUTH_ERROR_MESSAGES[message] || 'An authentication error occurred. Please try again.';
 }
 

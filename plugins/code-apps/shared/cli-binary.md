@@ -1,24 +1,24 @@
 # CLI Binary Resolution (`pa` preferred, `power-apps` fallback)
 
-**This file is the single source of truth for which CLI binary to run and how to translate commands.** Every skill that runs a Power Apps CLI command MUST resolve the binary using the algorithm below **before** running any command, and MUST author commands in the canonical grouped **`pa`** form (see the mapping table).
+**This file is the single source of truth for which CLI binary to run and how to translate commands.** Every skill that runs a Power Apps CLI command MUST resolve the binary using the algorithm below **before** running any command, and MUST author commands in the canonical grouped **`pa`** form (see the mapping table). It also defines `PA_INLINE_CONNECTIONS`, which tells connector skills whether `pa app add data-source` needs a connection ID (see [Inline connection capability](#inline-connection-capability)).
 
 ---
 
 ## Why two binaries
 
-`@microsoft/power-apps-cli` ships two executables from the **same package**:
+`@microsoft/power-apps-cli` has shipped two executables:
 
 | Binary       | Syntax  | Example                                    |
 | ------------ | ------- | ------------------------------------------ |
 | `pa`         | grouped | `pa app add data-source --connector ...`   |
 | `power-apps` | flat    | `power-apps add-data-source -a ...`        |
 
-Both are installed together, so a project's `node_modules/.bin/pa` shim exists **only if** the installed CLI version is new enough to include the grouped `pa` binary. Older projects have only `power-apps`. We therefore **prefer `pa`** and **fall back to `power-apps`**.
+Which ones a project has depends on the installed CLI version: versions before 0.15 ship only the flat `power-apps`, 0.15.x ships both, and 1.0.0 and later ship only `pa`. A project's `node_modules/.bin/pa` shim therefore exists **only if** the installed CLI is 0.15 or later; older projects have only `power-apps`. We therefore **prefer `pa`** and **fall back to `power-apps`**.
 
 **Two things differ between the binaries — the verb structure AND some flags:**
 
 1. **Verb structure** — grouped noun-verb (`pa app push`) vs flat (`power-apps push`). See the command mapping table.
-2. **Flag renames** — the grouped `pa` surface renames several customer-facing selector flags and **drops their short aliases** (the "Phase 2" `grouped_flag_renames` mechanism, now live). The flat `power-apps` surface keeps the original flags byte-identical. See the flag mapping table.
+2. **Flag renames** — the grouped `pa` surface renames several customer-facing selector flags and **drops their short aliases**. The flat `power-apps` surface keeps the original flags byte-identical. See the flag mapping table.
 
 When translating a canonical `pa` command to flat `power-apps`, you must convert **both** the verb path and any renamed flags.
 
@@ -41,8 +41,8 @@ elif [ -e node_modules/.bin/power-apps ] || [ -e node_modules/.bin/power-apps.cm
   PA="npx --no-install power-apps"  # flat syntax     → translate via the mapping table
   PA_KIND="power-apps"
 else
-  # Neither shim present → the CLI is not installed yet.
-  # Run `npm install` in the project root (per the normal scaffold flow), then re-probe.
+  # Neither shim present → the CLI is not installed in this project.
+  # Run `npm install` and re-probe; if still missing, install it as a dev dependency (rule 4).
   PA=""
   PA_KIND="none"
 fi
@@ -50,10 +50,33 @@ fi
 
 Rules:
 
-1. **Probe by file presence only** — do not pin or parse a version. A shim (`.bin/pa` or, on Windows, `.bin/pa.cmd`) existing == the grouped binary is available. This is deterministic and cheaper than spawning `--version`. Always check the `.cmd` variant too: npm/pnpm/yarn/bun create `pa.cmd`/`power-apps.cmd` on Windows and an extensionless-only probe would misclassify a valid install as `none`.
+1. **Pick the binary by file presence only** — do not parse a version to choose between `pa` and `power-apps`. A shim (`.bin/pa` or, on Windows, `.bin/pa.cmd`) existing == the grouped binary is available. This is deterministic and cheaper than spawning `--version`. Always check the `.cmd` variant too: npm/pnpm/yarn/bun create `pa.cmd`/`power-apps.cmd` on Windows and an extensionless-only probe would misclassify a valid install as `none`. (The version is read once afterwards, only for the [inline connection capability](#inline-connection-capability).)
 2. **Always use `npx --no-install`.** Never run a bare `npx pa ...`: if the local shim is missing, npx would try to download and execute an unrelated remote package named `pa`. `--no-install` fails closed instead.
-3. **Cache the result** in the project memory bank (`CLI Binary` row — see `memory-bank.md`) so subsequent skills/commands in the session don't re-probe. Re-probe only after an `npm install` that could have changed the installed CLI.
-4. **`none` → install first.** If neither shim exists, the CLI isn't installed; run the project's `npm install` (already part of the scaffold flow) and re-probe before running any command.
+3. **Cache the result** in the project memory bank (`CLI Binary` and `CLI Version` rows — see `memory-bank.md`) so subsequent skills/commands in the session don't re-probe. Re-probe only after an `npm install` that could have changed the installed CLI.
+4. **`none` → install first.** If neither shim exists, run `npm install` in the project root and re-probe; this restores a CLI the project already declares. If it is still `none`, the project doesn't declare the CLI (the Vite template doesn't include it), so install it into the project as a dev dependency and re-probe:
+
+   ```bash
+   npm install --save-dev "@microsoft/power-apps-cli@^1.3.0"
+   ```
+
+   Install it into the project, not globally — skills always run it through `npx --no-install`.
+
+---
+
+## Inline connection capability
+
+CLI 1.3.0 and later can find or create the connection a connector data source needs, so `pa app add data-source` doesn't require `-c <connection-id>` for connectors. Older CLIs require it. See [connector-reference.md](./connector-reference.md) for both flows.
+
+Determine the capability once, right after resolving `$PA`. When `PA_KIND=pa`, read the installed version:
+
+```bash
+$PA --version   # prints the installed CLI version, e.g. 1.3.0
+```
+
+- `PA_INLINE_CONNECTIONS=yes` when `PA_KIND=pa` and the version is **1.3.0 or later**.
+- Otherwise `PA_INLINE_CONNECTIONS=no`. That includes every `PA_KIND=power-apps` project: the flat binary only exists in CLI versions before 1.0.
+- Record the version in the memory bank (`CLI Version` row) next to `CLI Binary`, and re-check it after any `npm install` that could change the CLI.
+- Don't prompt the user to upgrade an existing project's CLI for this. Projects on older CLIs keep the explicit connection-ID flow.
 
 ---
 
@@ -63,6 +86,7 @@ Rules:
 - Substitute the resolved `$PA` prefix (which already contains `npx --no-install`) for the binary at run time. When `PA_KIND=pa`, run the canonical command as-is: `$PA app push` → `npx --no-install pa app push`. When `PA_KIND=power-apps`, translate the verb path (and renamed flags) per the next rule before running: `$PA push` → `npx --no-install power-apps push`.
 - **If `PA_KIND` is `power-apps`, translate each grouped command to its flat equivalent before running it — convert BOTH the verb path AND any renamed flags.** The flat binary does **not** understand the grouped noun-verb form (`power-apps app push` is invalid — it must become `power-apps push`), and it does **not** accept the renamed long flags (`--connector` must become `--api-id`/`-a`, `--table` must become `--resource-name`/`-t`, etc.).
 - **Most flags are unchanged** — only the selector flags in the flag mapping table are renamed on `pa`. Connection ID (`-c`), dataset (`-d`), environment (`-e`), and display name (`-n` on `init`/`connection create`) are identical on both binaries.
+- **Whether `-c` is required depends on the CLI version.** For connector data sources, `-c <connection-id>` is optional only when `PA_INLINE_CONNECTIONS=yes`; otherwise it's required. Follow [connector-reference.md](./connector-reference.md) instead of deciding per skill.
 
 ---
 
@@ -87,9 +111,9 @@ Rules:
 | List connection refs     | `pa connection list-references`   | `power-apps list-connection-references` |
 | Create connection        | `pa connection create`            | `power-apps create-connection`    |
 | List connectors          | `pa connector list`               | `power-apps list-connectors`      |
-| List datasets            | `pa connector list-datasets`      | `power-apps list-datasets`        |
-| List tables              | `pa connector list-tables`        | `power-apps list-tables`          |
-| List stored procedures   | `pa connector list-procedures`    | `power-apps list-sqlStoredProcedures` |
+| List datasets            | `pa connection list-datasets`     | `power-apps list-datasets`        |
+| List tables              | `pa connection list-tables`       | `power-apps list-tables`          |
+| List stored procedures   | `pa connection list-procedures`   | `power-apps list-sqlStoredProcedures` |
 | Sign in                  | `pa auth login`                   | `power-apps login`                |
 | Sign out                 | `pa auth logout`                  | `power-apps logout`               |
 | Auth status              | `pa auth status`                  | `power-apps auth-status`          |
@@ -108,15 +132,23 @@ The grouped `pa` surface renames these customer-facing selector flags and **drop
 
 | Selector                | Canonical (`pa`)     | Flat (`power-apps`)                | Used by                                             |
 | ----------------------- | -------------------- | ---------------------------------- | --------------------------------------------------- |
-| Connector / API         | `--connector`        | `--api-id` (alias `-a`)            | `add data-source`, `connector list-*`, `connection create` |
+| Connector / API         | `--connector`        | `--api-id` (alias `-a`)            | `add data-source`, `connection list-datasets`, `connection list-tables`, `connection create` |
 | Table / resource        | `--table`            | `--resource-name` (alias `-t`)     | `add data-source`                                   |
 | Data source name        | `--name`             | `--data-source-name` (alias `-n`)  | `add data-source`, `refresh data-source`            |
-| SQL stored procedure     | `--procedure`        | `--sql-stored-procedure` (alias `-sp`) | `connector list-procedures`                      |
+| SQL stored procedure     | `--procedure`        | `--sql-stored-procedure` (alias `-sp`) | `add data-source`                                |
 | Connection reference    | `--connection-ref`   | `--connection-ref` (alias `-cr`)   | `add data-source` (Dataverse) — **alias `-cr` dropped on `pa`, long flag unchanged** |
 
 **Unchanged on both binaries** (do NOT rewrite these): `--connection-id`/`-c`, `--dataset`/`-d`, `--environment-id`/`-e`, `--display-name`/`-n` (on `init` and `connection create`), `--solution-id`, `--search`, `--cloud`.
 
 > ⚠️ **`-n` is context-dependent.** On `add data-source`/`refresh data-source`, `-n` is the (renamed) `data-source-name` → `--name`. On `init` and `connection create`, `-n` is `display-name`, which is **not** renamed. Translate based on the verb, not the letter.
+
+### `pa`-only switch (CLI 1.3.0+)
+
+| Switch      | Used by                                | Meaning |
+| ----------- | -------------------------------------- | ------- |
+| `--use-sso` | `add data-source`, `connection create` | Use a single sign-on (Microsoft Entra ID) connection, even when the connector also offers other sign-in types. `add data-source` reuses the first existing single sign-on connection or creates one silently; `connection create` creates one silently. Fails if the connector doesn't support single sign-on. Ignored with `--connection-id`/`--connection-ref` and for Dataverse. |
+
+The flat `power-apps` binary has no equivalent. Don't translate it; projects with `PA_INLINE_CONNECTIONS=no` use the explicit connection-ID flow in [connector-reference.md](./connector-reference.md).
 
 ---
 

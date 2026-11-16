@@ -337,4 +337,6 @@ module.exports = {
   classifyWorkflowRequest: classify,
   batchParts,
   parseBatch,
+  apiPath,
+  headerValue,
 };

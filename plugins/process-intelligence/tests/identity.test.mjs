@@ -59,7 +59,7 @@ test('plugin CI is path-filtered, read-only and runs the local build and test en
   // Match the complete trigger block, not a stray path in a comment or another event.
   const triggers = /^on:\n([\s\S]*?)(?=^\S)/m.exec(workflow)?.[1].trimEnd();
   const paths = ['plugins/process-intelligence/**', 'LICENSE', workflowFile,
-    'marketplace.json', '.claude-plugin/marketplace.json', 'README.md',
+    'marketplace.json', '.claude-plugin/marketplace.json', 'README.md', 'docs/development.md',
     '.github/ISSUE_TEMPLATE/bug_report.yml', '.github/ISSUE_TEMPLATE/feature_request.yml',
     'shared/telemetry/README.md'];
   assert.equal(triggers, ['pull_request', 'push'].flatMap(event => [
@@ -91,11 +91,13 @@ test('plugin CI is path-filtered, read-only and runs the local build and test en
   }
 });
 
-test('repository README includes installation, local loading and every Process Intelligence skill', async () => {
+test('repository docs include installation, local loading and every Process Intelligence skill', async () => {
   const readme = await fs.readFile(path.join(workspace, 'README.md'), 'utf8');
   assert.match(readme, /\/plugin install process-intelligence@power-platform-skills/);
   assert.doesNotMatch(readme, /\b(?:dev(?:elopment)?[- ]only|unpublished|prototype)\b/i);
-  const localDevelopment = readme.split('## Local Development')[1]?.split('\n## ')[0];
+  // Local loading is for people working on the plugins, so it lives in the developer guide.
+  const development = await fs.readFile(path.join(workspace, 'docs', 'development.md'), 'utf8');
+  const localDevelopment = development.split('## Local Development')[1]?.split('\n## ')[0];
   assert.ok(localDevelopment?.includes('claude --plugin-dir /path/to/power-platform-skills/plugins/process-intelligence'));
   const catalog = readme.split('### [Process Intelligence]')[1]?.split('\n## ')[0];
   assert.ok(catalog, 'Process Intelligence is missing from Available Plugins');

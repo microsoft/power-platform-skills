@@ -119,7 +119,7 @@ test('run-pcf.js reports a smoke case with no registered check, and one with no 
     assert.ok(lines.includes(`ok 3 - ${nameOf(smoke[2])}`), run.stdout);
     assert.deepStrictEqual(lines.filter((line) => /^# (?:fixtures|unscored)/.test(line)), ['# fixtures 8 (pass 6, fail 0)', '# unscored fixtures 2']);
   } finally {
-    fs.rmSync(tmpRoot, { recursive: true, force: true });
+    fs.rmSync(tmpRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
 

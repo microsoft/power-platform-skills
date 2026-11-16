@@ -1430,6 +1430,140 @@ test('check-griffel-styles CLI: a call the checker cannot read for certain fails
   });
 });
 
+// ─── The scroll-context check the CLI also runs (AB#6793599) ────────────────────────────────────────────────────────────────────
+
+// The work item's page: the default export renders a flex column with no bounded height and nothing that scrolls, so the host's
+// fixed-height container cuts it off below the fold.
+const SCROLL_HEAD = "import * as React from 'react';\nimport { makeStyles, tokens, Card, Text } from '@fluentui/react-components';\n";
+const unscrolledPage = (root = "display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL") =>
+  `${SCROLL_HEAD}const useStyles = makeStyles({\n  root: { ${root} },\n});\nexport default function GeneratedComponent() {\n  const styles = useStyles();\n  return (\n    <div className={styles.root}>\n      <Card><Text>One</Text></Card>\n    </div>\n  );\n}\n`;
+
+test('check-griffel-styles CLI: a page with no scroll context fails the check (exit 3) with the scroll problem\'s place and remedy', () => {
+  withPage(unscrolledPage(), (file) => {
+    const res = runCli('--file', file);
+    assert.equal(res.status, 3, res.stderr);
+    const out = JSON.parse(res.stdout);
+    assert.equal(out.ok, false);
+    assert.equal(out.notes, undefined);
+    assert.deepEqual(out.problems.map((p) => Object.keys(p)), [['code', 'line', 'column', 'element', 'message']], 'the lib\'s fix object stays internal');
+    assert.deepEqual(out.problems.map(({ code, line, column, element }) => ({ code, line, column, element })), [{ code: 'no-scroll-context', line: 9, column: 5, element: 'div' }]);
+    assert.ok(out.problems[0].message.includes('Add height: "100%", overflowY: "auto", boxSizing: "border-box" to the "root" slot of useStyles'), out.problems[0].message);
+  });
+});
+
+test('check-griffel-styles CLI: the remedied page passes, and its output is exactly what it was before the scroll check existed', () => {
+  withPage(unscrolledPage("height: '100%', overflowY: 'auto', boxSizing: 'border-box', display: 'flex', flexDirection: 'column'"), (file) => {
+    const res = runCli('--file', file);
+    assert.equal(res.status, 0, res.stdout);
+    assert.deepEqual(JSON.parse(res.stdout), { ok: true, filePath: path.resolve(file), calls: 1, problems: [] });
+  });
+});
+
+test('check-griffel-styles CLI: the Griffel problems come first, then the scroll ones, and either alone fails the page', () => {
+  withPage(unscrolledPage("display: 'flex', flexDirection: 'column', borderWidth: '1px'"), (file) => {
+    const out = JSON.parse(runCli('--file', file).stdout);
+    assert.deepEqual(out.problems.map((p) => p.code), ['unsupported-shorthand', 'no-scroll-context']);
+  });
+});
+
+test('check-griffel-styles CLI: --existing reports a scroll problem as a note — exit 0 — and still fails a Griffel problem', () => {
+  withPage(unscrolledPage(), (file) => {
+    const res = runCli('--file', file, '--existing');
+    assert.equal(res.status, 0, res.stdout);
+    const out = JSON.parse(res.stdout);
+    assert.equal(out.ok, true);
+    assert.deepEqual(out.problems, []);
+    assert.deepEqual(out.notes.map((n) => n.code), ['no-scroll-context']);
+  });
+  withPage(unscrolledPage("display: 'flex', flexDirection: 'column', borderWidth: '1px'"), (file) => {
+    const res = runCli('--existing', '--file', file);
+    assert.equal(res.status, 3);
+    const out = JSON.parse(res.stdout);
+    assert.deepEqual(out.problems.map((p) => p.code), ['unsupported-shorthand']);
+    assert.deepEqual(out.notes.map((n) => n.code), ['no-scroll-context']);
+  });
+});
+
+test('check-griffel-styles CLI: a top element the check cannot read is unproven (exit 3) and says why', () => {
+  const source = `${SCROLL_HEAD}export default function GeneratedComponent() {\n  return <div className="page"><Text>Rows</Text></div>;\n}\n`;
+  withPage(source, (file) => {
+    const res = runCli('--file', file);
+    assert.equal(res.status, 3);
+    const [problem] = JSON.parse(res.stdout).problems;
+    assert.deepEqual({ code: problem.code, reason: problem.reason }, { code: 'scroll-context-unproven', reason: 'string-class' });
+    assert.deepEqual(Object.keys(problem), ['code', 'line', 'column', 'element', 'reason', 'message']);
+  });
+});
+
+test('check-griffel-styles CLI: a padded content-box root reports scroll-context-padding with the border-box remedy', () => {
+  withPage(unscrolledPage("height: '100%', overflowY: 'auto', padding: tokens.spacingHorizontalL"), (file) => {
+    const res = runCli('--file', file);
+    assert.equal(res.status, 3);
+    const [problem] = JSON.parse(res.stdout).problems;
+    assert.equal(problem.code, 'scroll-context-padding');
+    assert.match(problem.message, /boxSizing: "border-box"/);
+  });
+});
+
+test('check-griffel-styles CLI: a failure inside the scroll check is a note and leaves the Griffel result as it was', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'griffel-scroll-throw-'));
+  try {
+    const preload = path.join(dir, 'break-scroll.js');
+    fs.writeFileSync(preload, `require(${JSON.stringify(path.join(__dirname, '..', 'lib', 'page-scroll.js'))}).pageScrollProblems = () => { throw new Error('boom'); };\n`);
+    withPage(unscrolledPage(), (file) => {
+      const res = spawnSync(process.execPath, ['-r', preload, SCRIPT, '--file', file], { encoding: 'utf8' });
+      assert.equal(res.status, 0, res.stdout);
+      const out = JSON.parse(res.stdout);
+      assert.deepEqual(out.problems, []);
+      assert.deepEqual(out.notes.map((n) => n.code), ['scroll-check-failed']);
+      assert.match(out.notes[0].message, /boom/);
+    });
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('check-griffel-styles CLI: a vendored compiler that is missing or corrupt is a visible note, never a silent clean result, and the Griffel exit stands', () => {
+  // A real copy of the CLI, its lib and its vendored compiler, with the compiler damaged on disk the way a broken install would be.
+  const scripts = path.join(__dirname, '..');
+  const damages = [['missing', (file) => fs.rmSync(file)], ['corrupt', (file) => fs.writeFileSync(file, Buffer.from('not a brotli stream'))]];
+  for (const [damage, breakIt] of damages) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'griffel-scroll-compiler-'));
+    try {
+      const cli = path.join(dir, 'check-griffel-styles.js');
+      fs.copyFileSync(SCRIPT, cli);
+      fs.cpSync(path.join(scripts, 'lib'), path.join(dir, 'lib'), { recursive: true });
+      fs.cpSync(path.join(scripts, 'vendor', 'typescript'), path.join(dir, 'vendor', 'typescript'), { recursive: true });
+      breakIt(path.join(dir, 'vendor', 'typescript', 'typescript.min.js.br'));
+      withPage(unscrolledPage(), (file) => {
+        const res = spawnSync(process.execPath, [cli, '--file', file], { encoding: 'utf8' });
+        assert.equal(res.status, 0, `${damage}: ${res.stdout}${res.stderr}`);
+        const out = JSON.parse(res.stdout);
+        assert.equal(out.ok, true, damage);
+        assert.deepEqual(out.notes.map((n) => n.code), ['scroll-check-failed'], damage);
+        assert.match(out.notes[0].message, /vendored TypeScript compiler could not be loaded/, damage);
+      });
+      withPage(`${unscrolledPage()}const useMore = makeStyles({ bad: { borderWidth: 1 } });\n`, (file) => {
+        const res = spawnSync(process.execPath, [cli, '--file', file], { encoding: 'utf8' });
+        assert.equal(res.status, 3, `${damage}: ${res.stdout}${res.stderr}`);
+        const out = JSON.parse(res.stdout);
+        assert.ok(out.problems.some((p) => p.property === 'borderWidth'), damage);
+        assert.deepEqual(out.notes.map((n) => n.code), ['scroll-check-failed'], damage);
+      });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }
+});
+
+test('check-griffel-styles CLI: a file with no default export is not a page, so only the Griffel check speaks', () => {
+  withPage(`${SCROLL_HEAD}export function Panel() {\n  return <div style={{ display: 'flex' }} />;\n}\n`, (file) => {
+    const res = runCli('--file', file);
+    assert.equal(res.status, 0, res.stdout);
+    assert.deepEqual(JSON.parse(res.stdout), { ok: true, filePath: path.resolve(file), calls: 0, problems: [] });
+  });
+});
+
 // ─── Real pages ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 function walk(dir, suffix, out = []) {

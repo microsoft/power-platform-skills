@@ -1168,7 +1168,8 @@ for (const [what, damaged] of [
 // edit that calls the SDK for the app directly — a new path, say — cannot skip it. This reads the engine's source, because that is where a new path would be written.
 // (The request is made once for what it names, so a run in which the app step has made it cannot show that a LATER writer forgot to ask: this is what shows it.)
 test('sdk-build.js reaches the SDK for the app only through appWriters, and each writer sends the request before its first write of the app', () => {
-  const source = fs.readFileSync(path.join(__dirname, '..', 'lib', 'sdk-build.js'), 'utf8');
+  // A checkout may give the file CRLF line endings; every pattern below is written for LF.
+  const source = fs.readFileSync(path.join(__dirname, '..', 'lib', 'sdk-build.js'), 'utf8').replace(/\r\n/g, '\n');
   // Code only: a comment may name what it explains.
   const code = source.split('\n').map((line) => line.replace(/^\s*\/\/.*$/, '').replace(/\s\/\/\s.*$/, '')).join('\n');
   const begin = code.indexOf('const appWriters = {');
@@ -1205,7 +1206,7 @@ test('sdk-build.js reaches the SDK for the app only through appWriters, and each
   assert.ok(/\.pushArtifact\(\s*'app'/.test(methodOf('create')) && !/\.pushArtifact\(\s*'app'/.test(outside), 'the SDK\u2019s push of an app is made nowhere else');
   // The publish phase publishes the app in the envelope of the tables the build has artifacts of, and asks for the request too: a run can reach it without the app step. It adds no form, and applies no Main-form list.
   // A publish of the app the barrier refuses (an app that holds or adds a form of a withheld table) is reported and the tables are published without it.
-  assert.ok(/let appWithheld = false;\s*if \(appTarget\) \{\s*try \{\s*await publishTablesBeforeApp\(result\.created\.app\);\s*\} catch \(err\) \{\s*if \(!\(err && err\.code === 'publication-withheld'\)\) throw err;[\s\S]*?\}\s*\}\s*const publishedTargets = await publishTargets\(provision, runner, concurrency, perEntity, appWithheld \? null : appTarget/.test(code), 'the publish phase sends the request before it publishes the app');
+  assert.ok(/let appWithheld = false;\s*if \(appTarget\) \{\s*try \{\s*await publishTablesBeforeApp\(result\.created\.app\);\s*\} catch \(err\) \{\s*if \(!\(err && err\.code === 'publication-withheld'\)\) throw err;[\s\S]*?\}\s*\}\s*const publishedTargets = await tablePublication\.sdk\(perEntity, appWithheld \? null : appTarget/.test(code), 'the publish phase sends the request before it publishes the app');
   // Only the writers that APPLY the spec's Main-form list — the create and the push, which write the spec's app — look its names up. The others (a publish, the placement, the publish phase) apply none, so a name that
   // went stale on the server is no reason for them to fail, and the placement sends the Main forms of the navigation it pushes, which it reads from the app it fetched.
   for (const name of ['publish', 'publishPinned', 'placeViews']) assert.ok(!/resolvedMainForms/.test(methodOf(name)), `${name} resolves no Main-form list`);

@@ -15,7 +15,7 @@ Confirm the following files were created:
 - `src/utils/authorization.ts` - only when role-based access control is in scope
 - Framework-specific authorization components (e.g., `RequireAuth.tsx`, `RequireRole.tsx` for React) - only when role-based access control is in scope
 - Auth button component (e.g., `src/components/AuthButton.tsx` for React)
-- Registration page when approved registration permits it, including external-only provider selection; no local form without local auth
+- Registration page when local auth is configured and `REGISTRATION_MODE` is not `Registration disabled`
 - Forgot password page (e.g., `src/pages/ForgotPassword.tsx` for React) - only when local auth with reset password is configured
 - Session keepalive hook (e.g., `src/hooks/useSessionKeepAlive.ts` for React) - integrated into Layout
 - Terms page (e.g., `src/pages/Terms.tsx` for React) - only when terms are enabled

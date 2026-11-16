@@ -43,7 +43,7 @@ PCF datasets expose the records on the current loaded page through `sortedRecord
 
 ## Accessibility and localization
 
-The tree uses `role="tree"`, `role="treeitem"`, `aria-expanded`, and `aria-level`. Arrow Left collapses a node, Arrow Right expands it, and Enter opens the record. User-visible strings are in the recipe's `.resx` resource file.
+The tree uses `role="tree"`, `role="treeitem"`, `aria-expanded`, and `aria-level`. Arrow Left collapses a node, Arrow Right expands it, and Enter opens the record. The tree has one roving tab stop: only the focused tree item is in the tab order, the expand and **Open** buttons inside tree items are not, and focus stays on the same item when `updateView` re-renders the tree. The recipe tests pin both. User-visible strings are in the recipe's `.resx` resource file.
 
 ## Learn references confirmed
 

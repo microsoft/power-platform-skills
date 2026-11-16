@@ -147,11 +147,15 @@ Use the complete acceptance-service template listed directly in SKILL.md.
 Add to `authService.ts`:
 
 ```typescript
-// Thrown when the server redirects to the terms page after login/registration.
+// Thrown when the server requires terms after login, registration or external confirmation.
+// External confirmation supplies the query string from the server's terms form.
 export class TermsRequiredError extends Error {
-  constructor() {
+  readonly search: string;
+
+  constructor(search = '') {
     super('Terms and conditions acceptance required.');
     this.name = 'TermsRequiredError';
+    this.search = search;
   }
 }
 ```

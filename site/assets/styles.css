@@ -1,0 +1,2303 @@
+/*
+ * Power Platform Skills showcase site.
+ *
+ * Design thesis: official and calm. The Power Platform ribbon's teal-to-green is the one signal
+ * for "your assistant is working", on navy ink and cool paper. Schibsted Grotesk headlines,
+ * Public Sans text, JetBrains Mono for anything you type, and 10px corners that echo the soft
+ * folds of the logo. Palette values come from the official Power Platform icon's gradient stops.
+ *
+ * Theme: every color token uses light-dark(), so the page follows the system theme by default.
+ * theme.js sets data-theme="light" or "dark" on <html> when a visitor picks one, which pins
+ * color-scheme and with it every light-dark() value.
+ *
+ * Components use tokens only; raw colors, font names, and shadows live in :root.
+ */
+
+@font-face {
+  font-family: "Schibsted Grotesk";
+  src: url("fonts/schibsted-grotesk-latin.woff2") format("woff2");
+  font-weight: 500 800;
+  font-style: normal;
+  font-display: swap;
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: "Public Sans";
+  src: url("fonts/public-sans-latin.woff2") format("woff2");
+  font-weight: 400 700;
+  font-style: normal;
+  font-display: swap;
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: "JetBrains Mono";
+  src: url("fonts/jetbrains-mono-latin.woff2") format("woff2");
+  font-weight: 400 600;
+  font-style: normal;
+  font-display: swap;
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+:root {
+  color-scheme: light dark;
+
+  /* Color roles. Neutrals carry the page; primary is for actions only. */
+  --color-bg: light-dark(#f4f7f7, #08161f);
+  --color-surface: light-dark(#ffffff, #0e212b);
+  --color-surface-strong: light-dark(#e5eeed, #0f2a35);
+  --color-sunken: light-dark(#edf2f2, #061219);
+  --color-text: light-dark(#0b1d2a, #e7f1f1);
+  --color-text-muted: light-dark(#475a65, #a6bac0);
+  --color-border: light-dark(#d3dede, #213c48);
+  --color-border-strong: light-dark(#768b92, #5f7f89);
+  --color-primary: light-dark(#0d6b67, #45d3bd);
+  --color-primary-strong: light-dark(#095450, #7be3d2);
+  --color-on-primary: light-dark(#ffffff, #04211e);
+  --color-primary-wash: light-dark(#ddf1ee, #0f3337);
+  --color-accent: light-dark(#52d17c, #76eb95);
+  --color-accent-text: light-dark(#1b6a3f, #8ff0aa);
+  --color-link: light-dark(#0a5d85, #86caef);
+  --color-focus: light-dark(#0a6aa3, #7cc8f2);
+  --color-success: light-dark(#1b6a3f, #8ff0aa);
+
+  /* Fixed ink for the inverted install band and the button on the brand band. */
+  --color-ink: #071a28;
+  --color-ink-raised: #0f2c3f;
+  --color-on-ink: #e7f3f2;
+  --color-on-ink-muted: #a9c1c6;
+  --color-ink-link: #86caef;
+  --band-bg: light-dark(#071a28, #0b2530);
+
+  /* The ribbon gradient from the Power Platform icon, kept light enough for ink text on it. */
+  --brand-gradient: linear-gradient(110deg, #b0f098 0%, #52d17c 34%, #20ac9d 70%, #1a7f7c 100%);
+  --brand-band: linear-gradient(110deg, #c6f6ab 0%, #74dd92 45%, #34bfaa 100%);
+
+  /* Type */
+  --font-display: "Schibsted Grotesk", "Segoe UI", system-ui, sans-serif;
+  --font-body: "Public Sans", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "Cascadia Mono", Menlo, Consolas, monospace;
+  --text-xs: 0.8125rem;
+  --text-sm: 0.9375rem;
+  --text-base: 1.0625rem;
+  --text-lg: clamp(1.125rem, 0.95rem + 0.6vw, 1.3125rem);
+  --text-h3: clamp(1.1875rem, 1.05rem + 0.5vw, 1.375rem);
+  --text-h2: clamp(2rem, 1.4rem + 2vw, 3rem);
+  --text-hero: clamp(3.1875rem, 2.1rem + 2.8vw, 4.25rem);
+
+  /* Space: 4px base; sections breathe more than components. */
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-6: 1.5rem;
+  --space-8: 2rem;
+  --space-12: 3rem;
+  --space-16: 4rem;
+  --section-space: clamp(4rem, 2.5rem + 5vw, 7.5rem);
+
+  /* Shape and elevation: one corner language, navy-tinted shadows. */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 16px;
+  --radius-pill: 999px;
+  --shadow-sm: 0 1px 2px rgb(7 26 40 / 0.07), 0 1px 1px rgb(7 26 40 / 0.04);
+  --shadow-md: 0 10px 28px -12px rgb(7 26 40 / 0.22);
+  --shadow-lg: 0 30px 70px -28px rgb(7 40 60 / 0.38), 0 8px 20px -12px rgb(7 26 40 / 0.18);
+
+  /* Layout */
+  --container: 76rem;
+  --measure: 68ch;
+  --gutter: clamp(1rem, 0.4rem + 3vw, 2.5rem);
+  --header-height: 4rem;
+
+  /* Motion */
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --duration-fast: 150ms;
+  --duration-base: 250ms;
+  --duration-slow: 600ms;
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+  /* The sticky header must not cover a focused element or an anchor target (WCAG 2.4.11). */
+  scroll-padding-top: calc(var(--header-height) + var(--space-4));
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-family: var(--font-body);
+  font-size: var(--text-base);
+  line-height: 1.6;
+  font-synthesis: none;
+}
+
+h1,
+h2,
+h3,
+h4 {
+  font-family: var(--font-display);
+  font-weight: 700;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+  margin: 0 0 0.5em;
+  text-wrap: balance;
+}
+
+h1 {
+  font-size: var(--text-hero);
+  font-weight: 800;
+  line-height: 1.02;
+  letter-spacing: -0.035em;
+}
+
+h2 {
+  font-size: var(--text-h2);
+  letter-spacing: -0.03em;
+}
+
+h3,
+h4 {
+  font-size: var(--text-h3);
+  letter-spacing: -0.015em;
+}
+
+p {
+  margin: 0 0 1em;
+  text-wrap: pretty;
+}
+
+a {
+  color: var(--color-link);
+  text-underline-offset: 0.2em;
+  text-decoration-thickness: 1px;
+}
+
+a:hover {
+  text-decoration-thickness: 2px;
+}
+
+img {
+  max-width: 100%;
+}
+
+code {
+  font-family: var(--font-mono);
+  font-size: 0.875em;
+  background: var(--color-sunken);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  padding: 0.05em 0.35em;
+}
+
+/* Inline code holds short flags and commands, such as --include-dataverse, that must not split at a hyphen. */
+:not(pre) > code {
+  white-space: nowrap;
+}
+
+:focus-visible {
+  outline: 3px solid var(--color-focus);
+  outline-offset: 3px;
+  border-radius: 4px;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.skip-link {
+  position: absolute;
+  left: var(--space-4);
+  top: -5rem;
+  z-index: 30;
+  padding: var(--space-2) var(--space-4);
+  background: var(--color-surface);
+  color: var(--color-text);
+  border: 2px solid var(--color-focus);
+  border-radius: var(--radius-md);
+}
+
+.skip-link:focus {
+  top: var(--space-4);
+}
+
+.wrap {
+  max-width: var(--container);
+  margin-inline: auto;
+  padding-inline: var(--gutter);
+}
+
+.lede {
+  font-size: var(--text-lg);
+  line-height: 1.5;
+  color: var(--color-text-muted);
+  max-width: 40em;
+}
+
+.fine-print {
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+}
+
+.icon {
+  flex: none;
+  width: 1.25rem;
+  height: 1.25rem;
+}
+
+.section-head {
+  max-width: 44rem;
+  margin-bottom: var(--space-8);
+}
+
+.section-head p {
+  font-size: var(--text-lg);
+  color: var(--color-text-muted);
+  margin: 0;
+}
+
+/* ── Buttons ──────────────────────────────────────────────── */
+
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  min-height: 2.75rem;
+  padding: 0.625rem 1.125rem;
+  border: 1.5px solid transparent;
+  border-radius: var(--radius-md);
+  font: inherit;
+  font-weight: 600;
+  line-height: 1.2;
+  text-align: center;
+  text-decoration: none;
+  cursor: pointer;
+  transition: background-color var(--duration-fast) var(--ease-out), border-color var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out), transform var(--duration-fast) var(--ease-out);
+}
+
+.button:hover {
+  text-decoration: none;
+}
+
+.button:active {
+  transform: scale(0.98);
+}
+
+.button-primary {
+  background: var(--color-primary);
+  color: var(--color-on-primary);
+}
+
+.button-primary:hover {
+  background: var(--color-primary-strong);
+}
+
+.button-secondary {
+  background: var(--color-surface);
+  border-color: var(--color-border-strong);
+  color: var(--color-text);
+}
+
+.button-secondary:hover {
+  border-color: var(--color-text);
+}
+
+.button-ink {
+  background: var(--color-ink);
+  color: var(--color-on-ink);
+}
+
+.button-ink:hover {
+  background: var(--color-ink-raised);
+}
+
+.button-small {
+  min-height: 2.5rem;
+  padding: 0.4rem 0.9rem;
+  font-size: var(--text-sm);
+}
+
+.button-large {
+  min-height: 3.25rem;
+  padding: 0.8rem 1.5rem;
+}
+
+.button-block {
+  display: flex;
+  width: 100%;
+}
+
+.text-link {
+  font-weight: 600;
+}
+
+.copy-button {
+  font: inherit;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  min-height: 2.25rem;
+  padding: 0.3rem 0.8rem;
+  border: 1.5px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-text);
+  cursor: pointer;
+  transition: border-color var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out);
+}
+
+.copy-button:hover {
+  border-color: var(--color-text);
+}
+
+.copy-button[data-copied] {
+  border-color: var(--color-success);
+  color: var(--color-success);
+}
+
+.plugin-actions .button[data-copied] {
+  background: var(--color-success);
+  color: var(--color-on-primary);
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.05rem 0.55rem;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--color-border-strong);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  line-height: 1.5;
+  color: var(--color-text);
+  background: var(--color-surface);
+}
+
+/* ── Header ───────────────────────────────────────────────── */
+
+.site-header {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  background: color-mix(in srgb, var(--color-bg) 86%, transparent);
+  backdrop-filter: saturate(1.4) blur(14px);
+  -webkit-backdrop-filter: saturate(1.4) blur(14px);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.header-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--space-4) var(--space-6);
+  min-height: var(--header-height);
+}
+
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+  color: var(--color-text);
+  text-decoration: none;
+  margin-right: auto;
+}
+
+.brand-mark {
+  width: 2rem;
+  height: 2rem;
+}
+
+.brand-name {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 1.125rem;
+  letter-spacing: -0.02em;
+  white-space: nowrap;
+}
+
+.site-nav {
+  display: flex;
+  align-items: center;
+  gap: var(--space-6);
+}
+
+.nav-list,
+.footer-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-6);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.nav-list a {
+  color: var(--color-text);
+  text-decoration: none;
+  font-weight: 500;
+  font-size: var(--text-sm);
+}
+
+.nav-list a:hover {
+  color: var(--color-primary);
+}
+
+.header-tools {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.nav-theme {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+/* The label only shows in the phone menu, where the switch sits in a list of rows. */
+.nav-theme-label {
+  display: none;
+  font-weight: 500;
+}
+
+.nav-theme:has(.theme-switch[hidden]) {
+  display: none;
+}
+
+.theme-switch {
+  display: inline-flex;
+  padding: 3px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-pill);
+  background: var(--color-sunken);
+}
+
+.theme-switch[hidden] {
+  display: none;
+}
+
+.theme-option {
+  display: grid;
+  place-items: center;
+  width: 2.125rem;
+  height: 2.125rem;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  transition: background-color var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out);
+}
+
+.theme-option .icon {
+  width: 1.125rem;
+  height: 1.125rem;
+}
+
+.theme-option:hover {
+  color: var(--color-text);
+}
+
+.theme-option[aria-pressed="true"] {
+  background: var(--color-surface);
+  color: var(--color-primary);
+  box-shadow: var(--shadow-sm);
+}
+
+.menu-button {
+  display: none;
+  place-items: center;
+  width: 2.75rem;
+  height: 2.75rem;
+  padding: 0;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--color-text);
+  cursor: pointer;
+}
+
+.menu-button .icon-close,
+.menu-button[aria-expanded="true"] .icon-open {
+  display: none;
+}
+
+.menu-button[aria-expanded="true"] .icon-close {
+  display: block;
+}
+
+/*
+ * Below 64rem the navigation collapses behind the menu button. Only when JavaScript runs
+ * (theme.js adds .js), so without it the links stay visible and wrap instead.
+ */
+@media (max-width: 63.99rem) {
+  .js .menu-button {
+    display: grid;
+  }
+
+  .js .site-nav {
+    display: none;
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--space-4);
+    padding: var(--space-4) var(--gutter) var(--space-6);
+    background: var(--color-surface);
+    border-bottom: 1px solid var(--color-border);
+    box-shadow: var(--shadow-md);
+  }
+
+  .js .site-header[data-menu-open] .site-nav {
+    display: flex;
+  }
+
+  .js .nav-list {
+    flex-direction: column;
+    gap: 0;
+  }
+
+  .js .nav-list a {
+    display: block;
+    padding: var(--space-3) 0;
+    font-size: var(--text-base);
+    border-bottom: 1px solid var(--color-border);
+  }
+
+  .js .nav-cta {
+    min-height: 2.75rem;
+  }
+
+  .js .nav-theme {
+    justify-content: space-between;
+  }
+
+  .js .nav-theme-label {
+    display: inline;
+  }
+
+  .header-row {
+    flex-wrap: wrap;
+    padding-block: var(--space-2);
+  }
+
+  html:not(.js) .site-nav {
+    order: 3;
+    width: 100%;
+    flex-wrap: wrap;
+  }
+}
+
+/* ── Footer ───────────────────────────────────────────────── */
+
+.site-footer {
+  background: var(--color-surface);
+  border-top: 1px solid var(--color-border);
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+}
+
+.footer-grid {
+  display: grid;
+  gap: var(--space-6) var(--space-12);
+  padding-block: var(--space-12) var(--space-8);
+}
+
+@media (min-width: 56rem) {
+  .footer-grid {
+    grid-template-columns: 1fr auto;
+  }
+}
+
+.footer-brand p {
+  margin: var(--space-3) 0 0;
+  max-width: 34em;
+}
+
+.footer-links {
+  gap: var(--space-2) var(--space-6);
+}
+
+.footer-links a {
+  color: var(--color-text);
+}
+
+.trademarks {
+  grid-column: 1 / -1;
+  margin: 0;
+  padding-top: var(--space-6);
+  border-top: 1px solid var(--color-border);
+  font-size: var(--text-xs);
+}
+
+/* ── Code ─────────────────────────────────────────────────── */
+
+.code-block {
+  display: grid;
+  justify-items: end;
+  gap: var(--space-2);
+  margin: 0 0 var(--space-4);
+}
+
+.code-block pre {
+  justify-self: stretch;
+  margin: 0;
+  padding: 0.875rem 1rem;
+  background: var(--color-sunken);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  font-family: var(--font-mono);
+  font-size: 0.875rem;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.code-block pre code {
+  background: none;
+  border: 0;
+  padding: 0;
+  font-size: inherit;
+}
+
+.code-line {
+  display: block;
+  padding-left: 1.5em;
+  text-indent: -1.5em;
+}
+
+.code-line + .code-line {
+  margin-top: 0.5em;
+}
+
+.code-word {
+  display: inline-block;
+  max-width: 100%;
+  text-indent: 0;
+  overflow-wrap: break-word;
+}
+
+/* ── Hero ─────────────────────────────────────────────────── */
+
+.hero {
+  position: relative;
+  padding-block: clamp(2rem, 0.75rem + 4.5vw, 4.5rem) var(--space-12);
+  isolation: isolate;
+}
+
+/* A faint dotted canvas, like the grid in the Power Apps and Power Pages studios. */
+.hero::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background-image: radial-gradient(circle at 1px 1px, light-dark(rgb(11 29 42 / 0.13), rgb(231 241 241 / 0.1)) 1px, transparent 0);
+  background-size: 22px 22px;
+  mask-image: radial-gradient(ellipse 80% 70% at 70% 35%, #000 20%, transparent 75%);
+  -webkit-mask-image: radial-gradient(ellipse 80% 70% at 70% 35%, #000 20%, transparent 75%);
+}
+
+.hero-grid {
+  display: grid;
+  gap: var(--space-12);
+  align-items: center;
+}
+
+@media (min-width: 64rem) {
+  .hero {
+    padding-bottom: 0;
+  }
+
+  .hero-grid {
+    grid-template-columns: minmax(0, 7fr) minmax(0, 5.4fr);
+    gap: var(--space-16);
+    align-items: start;
+  }
+
+  .hero-copy {
+    padding-top: var(--space-8);
+  }
+
+  /* The session straddles the boundary into "How it works". */
+  .hero-visual {
+    margin-bottom: calc(var(--space-16) * -1.25);
+  }
+
+  .hero-visual::before {
+    inset: -12% -10% 10% -12%;
+  }
+}
+
+.hero h1 {
+  max-width: 15ch;
+}
+
+.hero-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  margin: var(--space-8) 0 var(--space-8);
+}
+
+.proof-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3) var(--space-6);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+}
+
+.proof-list li {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.proof-list .icon {
+  color: var(--color-accent-text);
+}
+
+/* One orchestrated entrance: headline first, then the supporting lines, done by ~600ms. */
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+}
+
+.hero-copy > * {
+  animation: rise 520ms var(--ease-out) both;
+}
+
+.hero-copy > :nth-child(2) {
+  animation-delay: 70ms;
+}
+
+.hero-copy > :nth-child(3) {
+  animation-delay: 140ms;
+}
+
+.hero-copy > :nth-child(4) {
+  animation-delay: 210ms;
+}
+
+.hero-visual {
+  position: relative;
+  z-index: 2;
+  animation: rise 640ms var(--ease-out) 120ms both;
+}
+
+/* Light behind the session, in the logo's teal and green. */
+.hero-visual::before {
+  content: "";
+  position: absolute;
+  inset: -8% 0 8% 0;
+  z-index: -1;
+  background:
+    radial-gradient(closest-side at 35% 40%, light-dark(rgb(82 209 124 / 0.32), rgb(82 209 124 / 0.18)), transparent),
+    radial-gradient(closest-side at 70% 65%, light-dark(rgb(32 172 157 / 0.3), rgb(32 172 157 / 0.22)), transparent);
+  filter: blur(8px);
+}
+
+/* ── Session (signature moment) ───────────────────────────── */
+
+.session {
+  margin: 0;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+}
+
+.session-bar {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--color-border);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--color-text-muted);
+}
+
+/* The brand ribbon as a progress line: it fills while the session runs. */
+.session-bar::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 3px;
+  background: var(--brand-gradient);
+  transform-origin: left;
+  transform: scaleX(var(--progress, 1));
+  transition: transform var(--duration-slow) var(--ease-out);
+}
+
+.session-body {
+  padding: var(--space-6) var(--space-6) var(--space-4);
+}
+
+.session-who {
+  margin: 0 0 var(--space-2);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--color-text-muted);
+}
+
+.session-prompt {
+  margin: 0 0 var(--space-6);
+  padding: var(--space-4) var(--space-4);
+  min-height: 4.75rem;
+  border-radius: var(--radius-md);
+  background: var(--color-sunken);
+  border: 1px solid var(--color-border);
+  font-size: var(--text-lg);
+  font-weight: 500;
+  line-height: 1.4;
+}
+
+.caret {
+  display: inline-block;
+  width: 2px;
+  height: 1.1em;
+  margin-left: 2px;
+  vertical-align: -0.18em;
+  background: var(--color-primary);
+  opacity: 0;
+}
+
+.session[data-typing] .caret {
+  opacity: 1;
+}
+
+.session-reply {
+  transition: opacity var(--duration-base) var(--ease-out), transform var(--duration-base) var(--ease-out);
+}
+
+.session-reply[data-pending] {
+  opacity: 0;
+  transform: translateY(6px);
+}
+
+.session-plugin {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin: 0 0 var(--space-4);
+  line-height: 1.3;
+}
+
+.session-plugin img {
+  width: 1.75rem;
+  height: 1.75rem;
+}
+
+.session-plugin strong {
+  display: block;
+  font-size: var(--text-sm);
+}
+
+.session-plugin-name {
+  display: block;
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+}
+
+.session-steps {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.step {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-2) 0;
+  font-size: var(--text-sm);
+  line-height: 1.45;
+  transition: opacity var(--duration-base) var(--ease-out), transform var(--duration-base) var(--ease-out);
+}
+
+.step[data-entering] {
+  opacity: 0;
+  transform: translateY(6px);
+}
+
+.step-icon {
+  margin-top: 1px;
+  width: 1.125rem;
+  height: 1.125rem;
+}
+
+.step.is-done .step-icon {
+  color: var(--color-success);
+}
+
+.step.is-waiting {
+  margin-top: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--color-primary);
+  border-radius: var(--radius-md);
+  background: var(--color-primary-wash);
+}
+
+.step.is-waiting .step-icon {
+  color: var(--color-primary);
+}
+
+.step-text {
+  flex: 1;
+}
+
+.step-badge {
+  flex: none;
+  align-self: center;
+  padding: 0.1rem 0.5rem;
+  border-radius: var(--radius-pill);
+  background: var(--color-primary);
+  color: var(--color-on-primary);
+  font-size: var(--text-xs);
+  font-weight: 700;
+}
+
+.session-caption {
+  padding: var(--space-3) var(--space-6) var(--space-4);
+  border-top: 1px solid var(--color-border);
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+}
+
+/* Above the window, so only the window itself crosses into the next section. */
+.scenario-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-bottom: var(--space-4);
+}
+
+.scenario-tabs[hidden] {
+  display: none;
+}
+
+.scenario-tab {
+  display: inline-flex;
+  align-items: center;
+  min-height: 2.5rem;
+  padding: 0.35rem 0.95rem;
+  border: 1.5px solid var(--color-border);
+  border-radius: var(--radius-pill);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font: inherit;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color var(--duration-fast) var(--ease-out), background-color var(--duration-fast) var(--ease-out);
+}
+
+.scenario-tab:hover {
+  border-color: var(--color-border-strong);
+}
+
+.scenario-tab[aria-selected="true"] {
+  border-color: var(--color-primary);
+  background: var(--color-primary-wash);
+}
+
+/* ── How it works ─────────────────────────────────────────── */
+
+.how {
+  background: var(--color-surface-strong);
+  padding-block: var(--section-space);
+}
+
+@media (min-width: 64rem) {
+  .how {
+    padding-top: calc(var(--section-space) + var(--space-8));
+  }
+}
+
+.process {
+  position: relative;
+  display: grid;
+  gap: var(--space-8);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.process li {
+  position: relative;
+}
+
+.process-node {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 2.75rem;
+  height: 2.75rem;
+  margin-bottom: var(--space-4);
+  border-radius: var(--radius-pill);
+  background: var(--color-surface);
+  border: 2px solid var(--color-primary);
+  color: var(--color-primary);
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: 1.125rem;
+}
+
+.process p {
+  margin: 0;
+  color: var(--color-text-muted);
+  max-width: 32ch;
+}
+
+@media (min-width: 48rem) {
+  .process {
+    --process-gap: var(--space-12);
+    grid-template-columns: repeat(3, 1fr);
+    gap: var(--process-gap);
+  }
+
+  /* Side by side, each step is centered in its column, so the line from the first node to the
+     last is centered on the page and ends at the last step instead of running on past it.
+     The heading is centered to match. */
+  .how .section-head {
+    margin-inline: auto;
+    text-align: center;
+  }
+
+  /* Centered lines read badly when the last one holds a single word, so even them out. */
+  .how .section-head p {
+    text-wrap: balance;
+  }
+
+  .process li {
+    text-align: center;
+  }
+
+  .process-node {
+    margin-inline: auto;
+  }
+
+  .process p {
+    margin-inline: auto;
+  }
+
+  /* From the middle of the first column to the middle of the last: half a column in from each
+     edge. */
+  .process::before {
+    content: "";
+    position: absolute;
+    top: 1.375rem;
+    left: calc((100% - 2 * var(--process-gap)) / 6);
+    right: calc((100% - 2 * var(--process-gap)) / 6);
+    height: 3px;
+    border-radius: var(--radius-pill);
+    background: var(--brand-gradient);
+  }
+}
+
+/* ── Plugin catalog ───────────────────────────────────────── */
+
+.plugins {
+  padding-block: var(--section-space);
+}
+
+.catalog-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  justify-content: space-between;
+  gap: var(--space-6);
+  margin-bottom: var(--space-6);
+}
+
+.assistant-picker {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+}
+
+.assistant-picker legend {
+  padding: 0;
+  margin-bottom: var(--space-2);
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+
+.picker-options {
+  display: inline-grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  gap: 3px;
+  padding: 3px;
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  background: var(--color-sunken);
+}
+
+.picker-option {
+  position: relative;
+}
+
+/* On a phone the picker spans the column; long names wrap onto two lines inside each option. */
+@media (max-width: 30rem) {
+  .picker-options {
+    display: grid;
+    width: 100%;
+  }
+
+  .picker-option > span {
+    padding-inline: var(--space-2);
+  }
+}
+
+.picker-option input {
+  position: absolute;
+  opacity: 0;
+  inset: 0;
+  margin: 0;
+  cursor: pointer;
+}
+
+.picker-option {
+  display: flex;
+}
+
+.picker-option > span {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  padding: 0.55rem 0.9rem;
+  border-radius: 9px;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  line-height: 1.25;
+  text-align: center;
+  text-wrap: balance;
+  color: var(--color-text-muted);
+  transition: background-color var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out);
+}
+
+.picker-option input:hover + span {
+  color: var(--color-text);
+}
+
+.picker-option input:checked + span {
+  background: var(--color-surface);
+  color: var(--color-text);
+  box-shadow: var(--shadow-sm), inset 0 0 0 1.5px var(--color-primary);
+}
+
+.picker-option input:focus-visible + span {
+  outline: 3px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+.goal-nav ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+@media (max-width: 47.99rem) {
+  .goal-nav {
+    width: 100%;
+  }
+
+  .goal-nav ul {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    padding-bottom: var(--space-2);
+    scrollbar-width: thin;
+  }
+
+  .goal-nav li {
+    flex: none;
+  }
+}
+
+.goal-nav a {
+  display: inline-block;
+  white-space: nowrap;
+  padding: 0.3rem 0.8rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-pill);
+  font-size: var(--text-sm);
+  color: var(--color-text);
+  text-decoration: none;
+  background: var(--color-surface);
+}
+
+.goal-nav a:hover {
+  border-color: var(--color-border-strong);
+}
+
+/*
+ * Show only the parts that match the chosen assistant. Each element type keeps its own
+ * display value through --shown. Browsers without :has() show every option instead.
+ */
+.button[data-for] {
+  --shown: inline-flex;
+}
+
+.button-block[data-for] {
+  --shown: flex;
+}
+
+.callout[data-for] {
+  --shown: flex;
+}
+
+.install-option[data-for] {
+  --shown: block;
+}
+
+.os-option[data-os] {
+  --shown: block;
+}
+
+@supports selector(:has(*)) {
+  .assistant-scope [data-for] {
+    display: none;
+  }
+
+  .assistant-scope:has(input[value="claude-code"]:checked) [data-for="claude-code"],
+  .assistant-scope:has(input[value="copilot-app"]:checked) [data-for="copilot-app"],
+  .assistant-scope:has(input[value="copilot-cli"]:checked) [data-for="copilot-cli"] {
+    display: var(--shown, block);
+  }
+
+  .os-scope [data-os] {
+    display: none;
+  }
+
+  .os-scope:has(input[value="windows"]:checked) [data-os="windows"],
+  .os-scope:has(input[value="macos"]:checked) [data-os="macos"],
+  .os-scope:has(input[value="linux"]:checked) [data-os="linux"] {
+    display: var(--shown, block);
+  }
+}
+
+.callout {
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3) var(--space-6);
+  margin-bottom: var(--space-4);
+  padding: var(--space-4) var(--space-6);
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  border-radius: var(--radius-md);
+  font-size: var(--text-sm);
+}
+
+.callout p {
+  margin: 0;
+  max-width: 60em;
+}
+
+.goal-group {
+  padding-top: var(--space-12);
+}
+
+.goal-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 var(--space-4);
+  padding-bottom: var(--space-3);
+  border-bottom: 2px solid var(--color-text);
+}
+
+.goal-head h3 {
+  margin: 0;
+}
+
+.goal-head p {
+  margin: 0;
+  color: var(--color-text-muted);
+}
+
+.plugin-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.plugin-row {
+  display: grid;
+  gap: var(--space-3) var(--space-8);
+  padding: var(--space-6) 0;
+  border-bottom: 1px solid var(--color-border);
+}
+
+@media (min-width: 60rem) {
+  .plugin-row {
+    grid-template-columns: 17rem minmax(0, 1fr) 13.5rem;
+    align-items: start;
+  }
+}
+
+.plugin-ident {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+}
+
+.product-icon {
+  flex: none;
+  width: 2.75rem;
+  height: 2.75rem;
+}
+
+.plugin-ident h4 {
+  margin: 0.15rem 0 0.1rem;
+}
+
+.plugin-ident h4 a {
+  color: var(--color-text);
+  text-decoration: none;
+}
+
+.plugin-ident h4 a:hover {
+  text-decoration: underline;
+}
+
+.plugin-product {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+}
+
+.plugin-body p {
+  margin: 0 0 var(--space-2);
+  max-width: 42em;
+}
+
+.sample-prompt,
+.prompt-quote {
+  color: var(--color-text-muted);
+}
+
+.sample-prompt {
+  font-size: var(--text-sm);
+}
+
+.sample-prompt::before,
+.prompt-quote::before {
+  content: "\201C";
+}
+
+.sample-prompt::after,
+.prompt-quote::after {
+  content: "\201D";
+}
+
+.plugin-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+}
+
+.plugin-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-4);
+}
+
+@media (min-width: 60rem) {
+  .plugin-actions {
+    flex-direction: column;
+    align-items: stretch;
+    text-align: center;
+  }
+}
+
+/* ── You stay in control ──────────────────────────────────── */
+
+.control {
+  background: var(--color-surface);
+  border-block: 1px solid var(--color-border);
+  padding-block: var(--section-space);
+}
+
+.control-grid {
+  display: grid;
+  gap: var(--space-8) var(--space-16);
+}
+
+@media (min-width: 60rem) {
+  .control-grid {
+    grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
+  }
+}
+
+.control-intro p {
+  font-size: var(--text-lg);
+  color: var(--color-text-muted);
+  max-width: 30em;
+}
+
+.assurances {
+  display: grid;
+  gap: var(--space-8) var(--space-8);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+@media (min-width: 40rem) {
+  .assurances {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+.assurance-icon {
+  width: 2.5rem;
+  height: 2.5rem;
+  padding: 0.5rem;
+  margin-bottom: var(--space-3);
+  border-radius: var(--radius-md);
+  background: var(--color-primary-wash);
+  color: var(--color-primary);
+}
+
+.assurances h3 {
+  margin-bottom: var(--space-2);
+}
+
+.assurances p {
+  margin: 0;
+  color: var(--color-text-muted);
+}
+
+/* ── Install everything (inverted band) ───────────────────── */
+
+.install-all {
+  background: var(--band-bg);
+  color: var(--color-on-ink);
+  padding-block: var(--section-space);
+}
+
+.install-all a {
+  color: var(--color-ink-link);
+}
+
+.install-all .fine-print,
+.install-copy p {
+  color: var(--color-on-ink-muted);
+}
+
+.install-copy p:first-of-type {
+  font-size: var(--text-lg);
+  color: var(--color-on-ink);
+}
+
+.install-grid {
+  display: grid;
+  gap: var(--space-8) var(--space-16);
+  align-items: start;
+}
+
+@media (min-width: 60rem) {
+  .install-grid {
+    grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
+  }
+}
+
+.terminal {
+  padding: var(--space-6);
+  border: 1px solid rgb(255 255 255 / 0.12);
+  border-radius: var(--radius-lg);
+  background: rgb(255 255 255 / 0.04);
+}
+
+.terminal h3 {
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  letter-spacing: 0;
+  margin-bottom: var(--space-2);
+  color: var(--color-on-ink-muted);
+}
+
+.terminal .code-block pre {
+  background: rgb(0 0 0 / 0.28);
+  border-color: rgb(255 255 255 / 0.12);
+  color: var(--color-on-ink);
+}
+
+.terminal .copy-button {
+  background: transparent;
+  border-color: rgb(255 255 255 / 0.35);
+  color: var(--color-on-ink);
+}
+
+.terminal .copy-button:hover {
+  border-color: var(--color-on-ink);
+}
+
+.terminal .copy-button[data-copied] {
+  border-color: #8ff0aa;
+  color: #8ff0aa;
+}
+
+.install-all :focus-visible {
+  outline-color: #7cc8f2;
+}
+
+/* The segmented picker, restyled for the inverted band. */
+.install-all .picker-options {
+  background: rgb(255 255 255 / 0.06);
+  border-color: rgb(255 255 255 / 0.16);
+}
+
+.install-all .picker-option > span {
+  color: var(--color-on-ink-muted);
+}
+
+.install-all .picker-option input:hover + span {
+  color: var(--color-on-ink);
+}
+
+.install-all .picker-option input:checked + span {
+  background: rgb(255 255 255 / 0.12);
+  color: var(--color-on-ink);
+  box-shadow: inset 0 0 0 1.5px #45d3bd;
+}
+
+.os-picker {
+  margin-bottom: var(--space-3);
+}
+
+.os-hint {
+  margin: 0 0 var(--space-6);
+  font-size: var(--text-sm);
+  color: var(--color-on-ink-muted);
+}
+
+.os-steps {
+  margin: 0;
+  padding-left: 1.4rem;
+}
+
+.os-steps li {
+  margin-bottom: var(--space-4);
+  padding-left: var(--space-1);
+}
+
+.os-steps li::marker {
+  font-family: var(--font-display);
+  font-weight: 800;
+  color: #45d3bd;
+}
+
+.os-steps strong {
+  color: var(--color-on-ink);
+}
+
+kbd {
+  display: inline-block;
+  min-width: 1.6em;
+  padding: 0.05em 0.45em;
+  border: 1px solid var(--color-border-strong);
+  border-bottom-width: 2px;
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-family: var(--font-mono);
+  font-size: 0.82em;
+  font-weight: 600;
+  line-height: 1.5;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.kbd-combo {
+  white-space: nowrap;
+}
+
+.kbd-plus {
+  margin-inline: 0.3em;
+  color: var(--color-text-muted);
+}
+
+.install-all kbd {
+  border-color: rgb(255 255 255 / 0.32);
+  background: rgb(255 255 255 / 0.08);
+  color: var(--color-on-ink);
+}
+
+.install-all .kbd-plus {
+  color: var(--color-on-ink-muted);
+}
+
+.os-steps li {
+  line-height: 1.8;
+}
+
+.os-steps .code-block {
+  margin-top: var(--space-3);
+}
+
+.dataverse-commands {
+  margin-top: var(--space-6);
+  padding-top: var(--space-4);
+  border-top: 1px solid rgb(255 255 255 / 0.12);
+}
+
+.dataverse-commands summary {
+  cursor: pointer;
+  font-weight: 600;
+  margin-bottom: var(--space-4);
+}
+
+/* ── Questions ────────────────────────────────────────────── */
+
+.faq {
+  padding-block: var(--section-space);
+}
+
+.faq-grid {
+  display: grid;
+  gap: var(--space-8) var(--space-16);
+}
+
+@media (min-width: 60rem) {
+  .faq-grid {
+    grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
+  }
+}
+
+.faq-grid > div > p {
+  color: var(--color-text-muted);
+  max-width: 30em;
+}
+
+.faq-answers {
+  display: grid;
+  gap: var(--space-8);
+  align-content: start;
+  min-width: 0;
+}
+
+/* The explainer video answers the first question, so it leads the answers column. */
+.explainer {
+  margin: 0;
+}
+
+.explainer-head {
+  margin-bottom: var(--space-4);
+}
+
+.explainer-head h3 {
+  margin: 0;
+}
+
+/* The film is dark in both themes, so the frame is the film's own navy: no flash of white
+   before the poster loads, and a hairline border keeps its edge on the dark page. */
+.explainer-player {
+  position: relative;
+  /* The play button's text scales with the player's width (cqi), not the viewport's. */
+  container-type: inline-size;
+}
+
+.explainer-video {
+  display: block;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 16 / 9;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--color-border);
+  background: #08161f;
+  box-shadow: var(--shadow-lg);
+}
+
+/* The play button sits in the poster's empty lower-left corner, under "What you install", so
+   it covers none of the poster's labels at any width. It scales with the video (a share of its
+   width) for the same reason. The film is dark in both themes, so the button uses the film's
+   own teal and ink rather than theme tokens. */
+.explainer-play {
+  position: absolute;
+  left: 9.5%;
+  bottom: 4.5%;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5em;
+  padding: 0.5em 1.05em 0.5em 0.8em;
+  font: 700 clamp(0.75rem, 0.45rem + 1.6cqi, 1.0625rem) / 1 var(--font-body);
+  color: #04211e;
+  background: #45d3bd;
+  border: 0;
+  border-radius: var(--radius-pill);
+  box-shadow: 0 0 0 0 rgb(69 211 189 / 0.45), 0 10px 24px -8px rgb(0 0 0 / 0.6);
+  cursor: pointer;
+  transition: transform var(--duration-fast) var(--ease-out), box-shadow var(--duration-base) var(--ease-out);
+}
+
+.explainer-play[hidden] {
+  display: none;
+}
+
+.explainer-play:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 0 0 6px rgb(69 211 189 / 0.25), 0 12px 28px -8px rgb(0 0 0 / 0.6);
+}
+
+.explainer-play:focus-visible {
+  outline: 3px solid #e7f3f2;
+  outline-offset: 3px;
+}
+
+.explainer-play-icon {
+  width: 1.15em;
+  height: 1.15em;
+  fill: currentColor;
+}
+
+.transcript {
+  margin-top: var(--space-4);
+}
+
+.transcript summary {
+  display: inline-block;
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--color-link);
+  padding-block: var(--space-2);
+}
+
+.transcript p {
+  color: var(--color-text-muted);
+  max-width: 44em;
+}
+
+/* What is on screen, set apart from the narration it follows. */
+.transcript-visual {
+  padding-left: var(--space-4);
+  border-left: 2px solid var(--color-border);
+  font-size: var(--text-sm);
+}
+
+.transcript-visual strong {
+  color: var(--color-text);
+}
+
+.faq-list details {
+  border-top: 1px solid var(--color-border);
+}
+
+.faq-list details:last-of-type {
+  border-bottom: 1px solid var(--color-border);
+  margin-bottom: var(--space-6);
+}
+
+.faq-list summary {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-4);
+  cursor: pointer;
+  padding: var(--space-4) 0;
+  font-weight: 600;
+  font-size: var(--text-lg);
+  list-style: none;
+}
+
+.faq-list summary::-webkit-details-marker {
+  display: none;
+}
+
+.faq-list summary::after {
+  content: "+";
+  flex: none;
+  font-family: var(--font-display);
+  font-size: 1.5rem;
+  line-height: 1;
+  color: var(--color-primary);
+  transition: transform var(--duration-base) var(--ease-out);
+}
+
+.faq-list details[open] summary::after {
+  transform: rotate(45deg);
+}
+
+.faq-list details p {
+  color: var(--color-text-muted);
+  max-width: 44em;
+}
+
+/* ── Final call to action (brand band) ────────────────────── */
+
+.final-cta {
+  background: var(--brand-band);
+  color: var(--color-ink);
+  padding-block: var(--space-16);
+}
+
+.final-grid {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-6) var(--space-12);
+}
+
+.final-cta h2 {
+  max-width: 18ch;
+  margin-bottom: var(--space-3);
+}
+
+.final-cta p {
+  margin: 0;
+  font-size: var(--text-lg);
+  max-width: 32em;
+}
+
+.final-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+.button-ink-outline {
+  background: transparent;
+  border-color: var(--color-ink);
+  color: var(--color-ink);
+}
+
+.button-ink-outline:hover {
+  background: rgb(7 26 40 / 0.08);
+}
+
+.final-cta :focus-visible {
+  outline-color: var(--color-ink);
+}
+
+/* ── Plugin page ──────────────────────────────────────────── */
+
+.plugin-page {
+  position: relative;
+  isolation: isolate;
+}
+
+/* The same dotted canvas as the home hero, fading out below the heading. */
+.plugin-page::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto;
+  height: 30rem;
+  z-index: -1;
+  background-image: radial-gradient(circle at 1px 1px, light-dark(rgb(11 29 42 / 0.12), rgb(231 241 241 / 0.09)) 1px, transparent 0);
+  background-size: 22px 22px;
+  mask-image: linear-gradient(to bottom, #000 40%, transparent);
+  -webkit-mask-image: linear-gradient(to bottom, #000 40%, transparent);
+}
+
+.plugin-grid {
+  display: grid;
+  grid-template-areas: "head" "install" "details";
+  gap: var(--space-8);
+  padding-block: var(--space-6) var(--section-space);
+}
+
+.plugin-head {
+  grid-area: head;
+}
+
+.plugin-grid .install-panel {
+  grid-area: install;
+}
+
+.plugin-details {
+  grid-area: details;
+}
+
+@media (min-width: 60rem) {
+  .plugin-grid {
+    grid-template-columns: minmax(0, 1fr) 26rem;
+    grid-template-areas: "head install" "details install";
+    grid-template-rows: auto 1fr;
+    column-gap: var(--space-16);
+    row-gap: var(--space-12);
+    padding-top: var(--space-8);
+  }
+
+  .plugin-grid .install-panel {
+    align-self: start;
+    margin-top: var(--space-12);
+  }
+}
+
+/* Only stick when the whole panel fits on screen; a taller panel would hide its own bottom. */
+@media (min-width: 60rem) and (min-height: 50rem) {
+  .plugin-grid .install-panel {
+    position: sticky;
+    top: calc(var(--header-height) + var(--space-6));
+  }
+}
+
+.breadcrumb ol {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  margin: 0 0 var(--space-6);
+  padding: 0;
+  list-style: none;
+  font-size: var(--text-sm);
+}
+
+.breadcrumb li + li::before {
+  content: "/";
+  margin-right: var(--space-1);
+  color: var(--color-text-muted);
+}
+
+.product-line {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-bottom: var(--space-3);
+  font-weight: 600;
+  color: var(--color-text-muted);
+}
+
+.product-line .product-icon {
+  width: 2.5rem;
+  height: 2.5rem;
+}
+
+.plugin-head h1 {
+  font-size: clamp(2.25rem, 1.5rem + 3vw, 4rem);
+}
+
+.plugin-head .lede {
+  margin-bottom: var(--space-4);
+}
+
+.plugin-facts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-6);
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+}
+
+.install-panel {
+  padding: var(--space-6);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-md);
+}
+
+.install-panel h2 {
+  font-size: var(--text-h3);
+  margin-bottom: var(--space-4);
+}
+
+.install-panel .assistant-picker {
+  margin-bottom: var(--space-4);
+}
+
+.install-panel .picker-options {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  width: 100%;
+}
+
+.install-panel .picker-option > span {
+  padding-inline: var(--space-1);
+  font-size: 0.875rem;
+}
+
+.install-option > p:first-child {
+  margin-bottom: var(--space-3);
+}
+
+.install-option > .button {
+  margin-bottom: var(--space-4);
+}
+
+/* Sized so "microsoft/power-platform-skills" fits on one line inside the panel. */
+.install-panel .code-block pre {
+  padding-inline: 0.75rem;
+  font-size: 0.8125rem;
+}
+
+.install-steps {
+  margin: 0 0 var(--space-4);
+  padding-left: 1.25rem;
+}
+
+.install-steps li {
+  margin-bottom: var(--space-4);
+}
+
+.install-steps p {
+  margin-bottom: var(--space-2);
+}
+
+.plugin-details > section {
+  margin-bottom: var(--space-12);
+}
+
+.plugin-details h2 {
+  font-size: clamp(1.5rem, 1.2rem + 1vw, 2rem);
+  margin-bottom: var(--space-4);
+}
+
+.prompt-list,
+.plain-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.prompt-list li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2) var(--space-4);
+  padding: var(--space-4) 0;
+  border-top: 1px solid var(--color-border);
+}
+
+.prompt-list li:last-child {
+  border-bottom: 1px solid var(--color-border);
+}
+
+.prompt-list .prompt-quote {
+  flex: 1 1 18rem;
+  color: var(--color-text);
+  font-size: var(--text-lg);
+  line-height: 1.4;
+}
+
+.plain-list li {
+  padding: var(--space-3) 0;
+  border-top: 1px solid var(--color-border);
+  max-width: 46em;
+}
+
+.plain-list li:last-child {
+  border-bottom: 1px solid var(--color-border);
+}
+
+.plain-list.numbered {
+  list-style: decimal;
+  padding-left: 1.5rem;
+}
+
+.plain-list.numbered li {
+  border: 0;
+  padding: var(--space-1) 0;
+}
+
+.skill-list {
+  margin: 0;
+}
+
+.skill-list div {
+  display: grid;
+  gap: var(--space-1) var(--space-6);
+  padding: var(--space-3) 0;
+  border-top: 1px solid var(--color-border);
+}
+
+.skill-list div:last-child {
+  border-bottom: 1px solid var(--color-border);
+}
+
+@media (min-width: 40rem) {
+  .skill-list div {
+    grid-template-columns: 17rem 1fr;
+  }
+}
+
+.skill-list dt code {
+  font-size: var(--text-sm);
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.skill-list dd {
+  margin: 0;
+  color: var(--color-text-muted);
+}
+
+.related {
+  background: var(--color-surface-strong);
+  padding-block: var(--space-16);
+}
+
+.related h2 {
+  font-size: clamp(1.5rem, 1.2rem + 1vw, 2rem);
+}
+
+.related-list {
+  display: grid;
+  gap: var(--space-4);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+@media (min-width: 48rem) {
+  .related-list {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
+.related-link {
+  display: flex;
+  gap: var(--space-3);
+  height: 100%;
+  padding: var(--space-4);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--color-text);
+  text-decoration: none;
+  transition: border-color var(--duration-fast) var(--ease-out), box-shadow var(--duration-fast) var(--ease-out);
+}
+
+.related-link:hover {
+  border-color: var(--color-primary);
+  box-shadow: var(--shadow-md);
+}
+
+.related-link img {
+  flex: none;
+  width: 2.25rem;
+  height: 2.25rem;
+}
+
+.related-link strong {
+  display: block;
+  font-family: var(--font-display);
+  font-size: 1.0625rem;
+  margin-bottom: var(--space-1);
+}
+
+.related-link span span {
+  display: block;
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+}
+
+.related-link .related-product {
+  margin: calc(var(--space-1) * -1) 0 var(--space-1);
+  font-size: var(--text-xs);
+  font-weight: 600;
+}
+
+/* ── Launcher and 404 ─────────────────────────────────────── */
+
+.launcher {
+  max-width: 50rem;
+  padding-block: clamp(3rem, 2rem + 5vw, 6rem) var(--section-space);
+}
+
+.launcher h1 {
+  font-size: clamp(2.5rem, 1.8rem + 2.5vw, 3.5rem);
+}
+
+.launcher h2 {
+  font-size: var(--text-h3);
+  margin-top: var(--space-12);
+}
+
+.launcher .code-block pre {
+  font-size: var(--text-sm);
+}
+
+/* ── Motion and contrast preferences ──────────────────────── */
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  .hero-copy > *,
+  .hero-visual {
+    animation: none;
+  }
+
+  .button:active {
+    transform: none;
+  }
+
+  .session-bar::after,
+  .session-reply,
+  .step,
+  .faq-list summary::after {
+    transition: none;
+  }
+}
+
+@media (forced-colors: active) {
+  .button,
+  .picker-option > span,
+  .scenario-tab,
+  .copy-button,
+  .theme-option {
+    border: 1px solid ButtonText;
+  }
+
+  .picker-option input:checked + span,
+  .scenario-tab[aria-selected="true"],
+  .theme-option[aria-pressed="true"] {
+    outline: 2px solid Highlight;
+  }
+}

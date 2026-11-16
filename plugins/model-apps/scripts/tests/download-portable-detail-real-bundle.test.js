@@ -14,7 +14,9 @@ const { validateAppSpec } = require('../lib/app-spec.js');
 // Component type 62 is Site Map:
 // https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/appmodulecomponent
 // The command-bar inventory adds two: the `appaction` entity-set lookup and one `appactions` read for up to 20 of the app's tables.
-const DOWNLOAD_READS = 85;
+// The field security profile report adds one: the app solution's type-70 (Field Security Profile) components. This app secures no
+// column, so it sends no `fieldpermission` read, and the solution holds no profile, so no `fieldsecurityprofiles` read either.
+const DOWNLOAD_READS = 86;
 
 const reason = { label: 'Review', state: 'Active', value: 100000042, color: '#336699' };
 const key = { schemaName: 'contoso_emailkey', displayName: 'Email Key', columns: ['contoso_email'] };

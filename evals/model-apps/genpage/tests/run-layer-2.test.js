@@ -33,7 +33,7 @@ test('runner: exits 0 when fixture passes all assertions', () => {
     // Minimal v2.1-compliant single-file mock page.
     writeFixture(root, '2-mock-clean', {
       'page.tsx': `import { makeStyles, tokens } from '@fluentui/react-components';
-const useStyles = makeStyles({ root: { padding: tokens.spacingHorizontalM } });
+const useStyles = makeStyles({ root: { height: '100%', overflowY: 'auto', boxSizing: 'border-box', padding: tokens.spacingHorizontalM } });
 const data = [{ a: 1, b: 'x' }, { a: 2, b: 'y' }];
 const GeneratedComponent = (props) => {
   const { pageInput } = props;
@@ -99,14 +99,14 @@ test('runner: --tier smoke filters to smoke evals only', () => {
       'page.tsx': `import { makeStyles } from '@fluentui/react-components';
 const useStyles = makeStyles({ r: {} });
 const data = [{ a: 1 }, { a: 2 }];
-const GeneratedComponent = (props) => { const { pageInput } = props; void pageInput; return <div/>; };
+const GeneratedComponent = (props) => { const { pageInput } = props; void pageInput; return <div style={{ height: '100%', overflowY: 'auto' }} />; };
 export default GeneratedComponent;`,
     });
     writeFixture(root, '4-full', {
       'page.tsx': `import { makeStyles } from '@fluentui/react-components';
 const useStyles = makeStyles({ r: {} });
 const data = [{ a: 1 }, { a: 2 }];
-const GeneratedComponent = (props) => { const { pageInput } = props; void pageInput; return <div/>; };
+const GeneratedComponent = (props) => { const { pageInput } = props; void pageInput; return <div style={{ height: '100%', overflowY: 'auto' }} />; };
 export default GeneratedComponent;`,
     });
     const { code, stdout } = runRunner(['--fixtures', root, '--tier', 'smoke']);
@@ -127,7 +127,7 @@ test('runner: --eval <id> runs only that eval id', () => {
       'page.tsx': `import { makeStyles } from '@fluentui/react-components';
 const useStyles = makeStyles({ r: {} });
 const data = [{ a: 1 }, { a: 2 }];
-const GeneratedComponent = (props) => { const { pageInput } = props; void pageInput; return <div/>; };
+const GeneratedComponent = (props) => { const { pageInput } = props; void pageInput; return <div style={{ height: '100%', overflowY: 'auto' }} />; };
 export default GeneratedComponent;`,
     });
     writeFixture(root, '4-y', {
@@ -160,7 +160,7 @@ test('runner: skips folders without numeric prefix', () => {
       'page.tsx': `import { makeStyles } from '@fluentui/react-components';
 const useStyles = makeStyles({ r: {} });
 const data = [{ a: 1 }, { a: 2 }];
-const GeneratedComponent = (props) => { const { pageInput } = props; void pageInput; return <div/>; };
+const GeneratedComponent = (props) => { const { pageInput } = props; void pageInput; return <div style={{ height: '100%', overflowY: 'auto' }} />; };
 export default GeneratedComponent;`,
     });
     const { code, stdout } = runRunner(['--fixtures', root]);
@@ -181,7 +181,7 @@ test('runner: emits TAP version 13 header and aggregate counts', () => {
       'page.tsx': `import { makeStyles } from '@fluentui/react-components';
 const useStyles = makeStyles({ r: {} });
 const data = [{ a: 1 }, { a: 2 }];
-const GeneratedComponent = (props) => { const { pageInput } = props; void pageInput; return <div/>; };
+const GeneratedComponent = (props) => { const { pageInput } = props; void pageInput; return <div style={{ height: '100%', overflowY: 'auto' }} />; };
 export default GeneratedComponent;`,
     });
     const { stdout } = runRunner(['--fixtures', root]);
@@ -205,7 +205,7 @@ test('fixture-loader: excludes RuntimeTypes.ts from check', () => {
       'page.tsx': `import { makeStyles } from '@fluentui/react-components';
 const useStyles = makeStyles({ r: {} });
 const data = [{ a: 1 }, { a: 2 }];
-const GeneratedComponent = (props) => { const { pageInput } = props; void pageInput; return <div/>; };
+const GeneratedComponent = (props) => { const { pageInput } = props; void pageInput; return <div style={{ height: '100%', overflowY: 'auto' }} />; };
 export default GeneratedComponent;`,
       'RuntimeTypes.tsx': `// This file should be excluded from checks - it has TODO`,
     });
@@ -223,7 +223,7 @@ test('runner: the registered Phase-5b column checker executes and can fail the r
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   writeFixture(root, '1-phase-5b', {
     'page.tsx': `import { makeStyles } from '@fluentui/react-components';
-const useStyles = makeStyles({ root: {} });
+const useStyles = makeStyles({ root: { height: '100%', overflowY: 'auto' } });
 const data = [{ name: 'First' }, { name: 'Second' }];
 const GeneratedComponent = (props) => {
   const { pageInput } = props;

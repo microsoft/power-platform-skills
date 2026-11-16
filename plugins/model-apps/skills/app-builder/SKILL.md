@@ -64,7 +64,8 @@ prod-ready** app; don't under-build (a bare table list) or over-build (surfaces 
   `100000003`, because they are assigned per publisher. Resolve by label via `getOptions()`
   (see `references/app-spec-schema-advanced.md` → webResources). Note also that command and web-resource
   **edits do not redeploy on rebuild** — the phases reuse what exists, so changing a button or a
-  script means deleting it first (the build warns, and verify fails, when a web resource's deployed
+  script means deleting it first (only a button's hidden / disabled state can be set in place, with
+  `commandStates[]` below; the build warns, and verify fails, when a web resource's deployed
   content differs from the spec's). This does not apply to recovery of the build's own
   `WEB_RESOURCE_UNVERIFIED` row: keep that row and the same build workspace, then follow its halt.
   When the maker wants a rebuild to keep a web resource's content in step with the spec, mark that
@@ -73,6 +74,23 @@ prod-ready** app; don't under-build (a bare table list) or over-build (surfaces 
   older spec. A rebuild that would change one that exists stops before writing and names its approval
   (`--authorize adopt:webresource:<web resource name>`) with the components that depend on it: show them to the
   maker and let them choose. Emptying its content also needs `--allow-destructive`; the halt says so.
+- **Show or hide an existing button** — `commandStates[]` (`minimumPluginVersion: "2.24.0"`, `app.uniqueName`):
+  only when the maker asks to show, hide, enable or disable a modern button that already exists. **Never invent a
+  row id**: run `node scripts/list-command-states.js --env <envUrl> --app <uniqueName>` and pick the row by `rowId`
+  (never by caption) among `candidate: true` rows; write `scope: "table"` only (app-scoped buttons are refused in
+  this version) and only `hidden` / `disabled` — a normal empty `visibilitytype` on a button `commands[]` built is
+  static and is never a reason to change it. Never write a command `key` in the same spec, and never create a
+  button with `commands[]` and set its state in the same build: create it in one build, add the state in the next.
+  The apply is a full build with `--publish`. Run a dry run first and show the maker every
+  `--authorize overwrite:command-state:…` (one per row change) and `--authorize publish:command-state-table:…`
+  token it prints — the table one publishes **all** saved customizations on that table, for every app that shows it —
+  and pass them exactly as printed. Never replay a row write by hand: on `command-state-write-unknown` or
+  `command-state-version-conflict`, list the row again, dry-run again and get the new approval (an ordinary phase
+  retry of the build re-plans from a fresh read). Report three things separately: the rows saved, the table
+  publication confirmed — or `command-state-publish-unconfirmed` ("saved, not published") — and what the maker sees
+  in the app, which neither the build nor `--verify` (stored flags only) checks. A table publish that was sent can
+  still complete after a halt or after the entry is removed; this release keeps no record of it across runs, and a
+  later publishing run requests the table again only because the spec still names it.
 - **Form logic without code** — `businessRules[]`: show/hide, lock/unlock, set-required and
   set-value, driven by a condition on the record. **Reach for a business rule before form JS** when
   the requirement is field-level and declarative — it is visible in the maker, survives solution
@@ -257,7 +275,8 @@ prod-ready** app; don't under-build (a bare table list) or over-build (surfaces 
   layer holds a change made elsewhere. If the stop says that change is not published, tell the maker to
   publish it in Maker if it should stay, or undo it and save, then run the build again.
 - **Stable create ids** (`minimumPluginVersion: "2.21.0"`) — write `createIdentity: "stable-v1"` on a
-  **new** app; never add it to an existing or downloaded spec. Tell the maker: declared views and charts
+  **new** app; never add it to an existing or downloaded spec (a managed download writes it back itself, only
+  with the declared views and charts it restores). Tell the maker: declared views and charts
   get ids the spec fixes, so a retry after a lost answer binds the same row instead of creating a second;
   configuration items, custom APIs, environment variables, field security, duplicate rules and pages keep
   today's ids; and a local copy with an unsent edit stops the build (`create-completion-required`) —
@@ -272,7 +291,8 @@ prod-ready** app; don't under-build (a bare table list) or over-build (surfaces 
   reference is bound to a connection and the Custom API has an implementation (a plug-in type) — a declared
   Custom API alone is a scaffold; clearing a value, unbinding a reference or removing a parameter or condition
   needs `--authorize <kind>:<key>:<field>` (the refusal names it); a teardown keeps these items and names them;
-  a download does not bring them back into the spec yet; and a whole-build retry after a lost answer can create
+  a plain download does not bring them back into the spec (a managed download of a `configurationIdentity:
+  "stable-v1"` app brings back the ones its store proves, never a value, default, connection, implementation or duplicate rule); and a whole-build retry after a lost answer can create
   a second row, so check the environment before running a failed build again. See
   [`references/app-spec-schema.md`](../../references/app-spec-schema.md) → *Configuration items*.
 - **AI-first features** (admin-gated) — form-fill assist, natural-language grid/view search, NL chart
@@ -554,6 +574,12 @@ After plan-mode approval (before the full build):
    and so is a key computed from an expression (`[key]: …`), whose name it cannot see (a template
    that starts with `--`, `&`, `:` or `@` is read); Fluent's `...shorthands.*(…)` and
    `...typographyStyles.*` may be spread as they are.
+
+   The same command checks that each page establishes a scroll context (`references/rules.md`,
+   **Page Layout**): the host shows a page in a container of fixed height and never scrolls it, so a
+   page with none is cut off below the fold. `no-scroll-context`, `scroll-context-unproven` and
+   `scroll-context-padding` are problems like any other, each with the edit that fixes it: apply it
+   and run the check again.
 
    Review every generated page for iteration that another page compiler can lose as well:
 
@@ -958,7 +984,12 @@ not everything:**
   carrying the deployed view/chart ids), the icon web resources, and the solution.
 - **Does NOT round-trip:** `forms[]`, `views[]`, `charts[]`, `commands[]` — they come back empty
   (a declared form comes back only with `--include-managed --managed-manifest <store file>`; see
-  **Declared form layouts**).
+  **Declared form layouts**; so does a declared view a `createIdentity` build created and the store proves
+  unchanged while the app's solution holds it, with its `viewId` and `createIdentity` (a rebuild writes
+  nothing to it; the rest of the rebuild runs as usual), the rest named in `managedViews.omitted`, and such a
+  declared chart, with no id (only a build from the same folder's store binds it), the rest named in
+  `managedCharts.omitted`). `commandStates[]` is never written either: a button's hidden / disabled
+  state stays on the live row.
   All four **survive on the live app** (a rebuild preserves them by discovery), so a plain edit is
   safe; they just aren't editable through the downloaded spec. Change them in Maker or a fresh spec.
   The download names every one it leaves out — the command-bar buttons of the app's tables included —
@@ -1020,9 +1051,10 @@ Then:
    the folder that pins `languageCode` needs neither). Do not guess it: a spec whose titles were read in the
    wrong language writes them over the right ones on the next build.
 2. Edit `app-spec.json` (and any page `.tsx`) for the requested change. A page you edit by hand is
-   checked like a generated one: run `node "${PLUGIN_ROOT}/scripts/check-griffel-styles.js" --file <page.tsx>`
+   checked like a generated one: run `node "${PLUGIN_ROOT}/scripts/check-griffel-styles.js" --file <page.tsx> --existing`
    on it before you rebuild (the rule and the ten shorthands are in Phase 1.5, step 5) and fix what it
-   reports. A key the page already had when it was downloaded is reported too: the deployed page renders
+   reports. `--existing` reports the page's scroll context (`references/rules.md`, **Page Layout**) in
+   `notes` without changing the exit code: tell the user about each note and offer the edit it gives. A key the page already had when it was downloaded is reported too: the deployed page renders
    without it today, so deleting it keeps the page looking as it does, while writing the longhands makes
    the style start to render — delete it unless the user wants that change. The build runs the same
    check on every page it uploads that is new or that you changed since the last successful apply of this app, and halts as

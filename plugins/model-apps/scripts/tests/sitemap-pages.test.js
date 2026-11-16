@@ -1,7 +1,7 @@
 'use strict';
 const { test } = require('node:test');
 const assert = require('node:assert');
-const { sitemapGenPages, sitemapGenPageIds, navigationGenPageIds, liveNavEntries, fetchSitemap, fetchAppsForPages, decodeXmlEntities, appNavigationMatchesSitemap, navigationProof } = require('../lib/sitemap-pages.js');
+const { sitemapGenPages, sitemapGenPageIds, navigationGenPageIds, liveNavEntries, fetchSitemap, fetchAppsForPages, rescanWhileUnreadable, decodeXmlEntities, appNavigationMatchesSitemap, navigationProof } = require('../lib/sitemap-pages.js');
 
 const GP_OVERVIEW = '13ecbc57-a3a4-4132-b0a2-a6c6b12691e8';
 const GP_DETAIL   = '5c0a4889-45fd-46ea-91a8-ff876914d644';
@@ -444,6 +444,92 @@ function scanEnv(apps, { drafts = [], savedPages, appList, noDataverse } = {}) {
   return { sdk, calls };
 }
 
+// A build halted when another app was unreadable for a moment (another build was changing it), and passed when run again minutes later. The scan is taken again WHOLE —
+// every app read afresh — before the caller gives up on such an app, and the answer is the last complete scan, so no app's answer is older than the wait.
+const appListRows = (apps) => ({ status: 200, body: { value: apps.map((a, i) => ({ appmoduleid: `app-${i}`, appmoduleidunique: layerKey(i), uniquename: a.name, componentstate: 0 })) } });
+
+test('rescanWhileUnreadable: takes the whole scan again after each wait, every app afresh; a scan that fails as a whole is waited out; an app that took the page in DURING a wait is in the answer', async () => {
+  const apps = [
+    { name: 'app-a', published: withPage() },
+    { name: 'app-b', published: '' }, // no XML yet: unreadable for now (sitemap-xml-unreadable)
+    { name: 'app-c', published: withPage(GP_DETAIL) }, // readable, and clear of the page, before the waits
+  ];
+  let listReads = 0;
+  // The second read of the list of apps fails, so the first scan again fails as a whole.
+  const appList = () => (++listReads === 2 ? { status: 503, body: null } : appListRows(apps));
+  const { sdk, calls } = scanEnv(apps, { appList });
+  const marks = [];
+  const sleeps = [];
+  const sleep = async (ms) => {
+    sleeps.push(ms);
+    marks.push(calls.queries.length);
+    // By the second wait the other build has published app-b; and a maker has put the page into app-c, which the first scan read as clear of it.
+    if (sleeps.length === 2) {
+      apps[1].published = withPage(GP_DETAIL);
+      Object.assign(apps[2], { published: withPage(GP_DETAIL), saved: withPage(GP_DETAIL, GP_OVERVIEW) });
+    }
+  };
+  const r = await rescanWhileUnreadable(sdk, [GP_OVERVIEW], { excludeAppUnique: 'app-a' }, { sleep });
+  assert.strictEqual(r.ok, true);
+  assert.deepStrictEqual(sleeps, [5000, 10000], 'the scan that failed as a whole is followed by another; the one that reads every app ends the waits');
+  assert.deepStrictEqual(r.unreadable, []);
+  assert.deepStrictEqual(r.byId.get(GP_OVERVIEW), ['app-c'], 'the app that took the page in during the wait holds it in the answer: the caller halts as shared');
+  assert.deepStrictEqual(r.savedOnly.get(GP_OVERVIEW), ['app-c']);
+  // The last scan sends every request the first one did: every app is read again, not only the one that was unreadable.
+  const firstScan = calls.queries.slice(0, marks[0]);
+  const lastScan = calls.queries.slice(marks[1]);
+  assert.deepStrictEqual(lastScan.slice().sort(), firstScan.slice().sort());
+  assert.strictEqual(lastScan.filter((e) => e === 'sitemap').length, 2, 'both other apps\' sitemaps are read again, the one read before the wait too');
+});
+
+test('rescanWhileUnreadable: the last scan is the answer — still unreadable, or failed as a whole — and a first scan with nothing to wait for is answered as it came, with no request beyond it', async () => {
+  const sleepsOf = () => { const sleeps = []; return { sleeps, sleep: async (ms) => { sleeps.push(ms); } }; };
+  // Unreadable through every wait: three more scans, and the last one names the app.
+  {
+    const { sdk } = scanEnv([{ name: 'app-a', published: withPage() }, { name: 'app-b', published: '' }]);
+    const { sleeps, sleep } = sleepsOf();
+    const r = await rescanWhileUnreadable(sdk, [GP_OVERVIEW], { excludeAppUnique: 'app-a' }, { sleep });
+    assert.deepStrictEqual(sleeps, [5000, 10000, 20000]);
+    assert.strictEqual(r.ok, true);
+    assert.deepStrictEqual(r.unreadable, ['app-b']);
+  }
+  // Every scan after the first fails as a whole: the answer is the failed last one, never the older answers of the first.
+  {
+    const apps = [{ name: 'app-a', published: withPage() }, { name: 'app-b', published: '' }];
+    let listReads = 0;
+    const { sdk } = scanEnv(apps, { appList: () => (++listReads >= 2 ? { status: 503, body: null } : appListRows(apps)) });
+    const { sleeps, sleep } = sleepsOf();
+    const r = await rescanWhileUnreadable(sdk, [GP_OVERVIEW], { excludeAppUnique: 'app-a' }, { sleep });
+    assert.deepStrictEqual(sleeps, [5000, 10000, 20000]);
+    assert.strictEqual(r.ok, false);
+    assert.match(r.error, /^could not /);
+  }
+  // Answered as it came, with no wait and exactly the requests of one scan: nothing unreadable; only malformed apps (only an edit of the app changes them); a first scan
+  // that failed as a whole.
+  const cases = {
+    'nothing unreadable': [{ name: 'app-a', published: withPage() }, { name: 'app-b', published: withPage(GP_DETAIL) }],
+    'only a malformed app': [{ name: 'app-a', published: withPage() }, { name: 'app-b', published: '<SiteMap><Area' }] /* cut off mid-tag */,
+  };
+  for (const [what, apps] of Object.entries(cases)) {
+    const once = scanEnv(apps);
+    const expected = await fetchAppsForPages(once.sdk, [GP_OVERVIEW], { excludeAppUnique: 'app-a' });
+    const { sdk, calls } = scanEnv(apps);
+    const { sleeps, sleep } = sleepsOf();
+    const r = await rescanWhileUnreadable(sdk, [GP_OVERVIEW], { excludeAppUnique: 'app-a' }, { sleep });
+    assert.deepStrictEqual(sleeps, [], what);
+    assert.deepStrictEqual(r, expected, what);
+    assert.deepStrictEqual(calls.queries, once.calls.queries, what);
+    if (what === 'only a malformed app') assert.strictEqual(r.unreadableReasons.get('app-b'), 'malformed');
+  }
+  {
+    const apps = [{ name: 'app-a', published: withPage() }, { name: 'app-b', published: '' }];
+    const { sdk } = scanEnv(apps, { appList: () => ({ status: 503, body: null }) });
+    const { sleeps, sleep } = sleepsOf();
+    const r = await rescanWhileUnreadable(sdk, [GP_OVERVIEW], { excludeAppUnique: 'app-a' }, { sleep });
+    assert.deepStrictEqual(sleeps, [], 'a first scan that failed as a whole: the caller halts on it, with the retry its cause earns');
+    assert.strictEqual(r.ok, false);
+  }
+});
 test('fetchAppsForPages: a page only in another app\'s SAVED navigation is a shared page, and says it is not published', async () => {
   const { sdk } = scanEnv([
     { name: 'app-a', published: withPage() },

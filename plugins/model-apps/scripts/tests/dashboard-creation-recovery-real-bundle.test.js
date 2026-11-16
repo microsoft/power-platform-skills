@@ -28,6 +28,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { makeTempDir } = require('./helpers/temp-dirs.js');
+const { shortRenameWait } = require('./helpers/short-rename-wait.js');
 const { createLifecycleOrg } = require('./helpers/fake-lifecycle-org.js');
 const { createLifecycleHarness } = require('./helpers/lifecycle-harness.js');
 const { createMakerSdk, createNodeWorkspaceStorage } = require('../lib/maker-sdk.js');
@@ -727,6 +728,7 @@ const BAD_RECORDS = [
     fs.linkSync(elsewhere, file);
   }, /could not be read/],
   ['unwritable', (file, env, t) => {
+    shortRenameWait(t);
     const rename = fs.renameSync;
     t.mock.method(fs, 'renameSync', function renameSync(from, to, ...rest) {
       if (path.resolve(String(to)) === path.resolve(file)) throw Object.assign(new Error(`EACCES: permission denied, rename '${from}' -> '${to}'`), { code: 'EACCES' });

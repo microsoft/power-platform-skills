@@ -243,7 +243,7 @@
   1x GET /savedqueries?$select=savedqueryid,layoutxml,fetchxml&$filter=returnedtypecode eq 'contoso_task' and name eq 'My Open Tasks'&$top=1 -> 200
   1x GET /savedqueries?$select=savedqueryid,layoutxml,fetchxml&$filter=returnedtypecode eq 'contoso_task' and name eq 'Open Tasks'&$top=1 -> 200
   1x GET /savedqueryvisualizations?$select=primaryentitytypecode&$filter=savedqueryvisualizationid eq <id>&$top=1 -> 200
-  1x GET /savedqueryvisualizations?$select=savedqueryvisualizationid&$filter=primaryentitytypecode eq 'contoso_project' and name eq 'Projects by Priority'&$top=1 -> 200
+  1x GET /savedqueryvisualizations?$select=savedqueryvisualizationid,primaryentitytypecode,name,description,datadescription,presentationdescription&$filter=primaryentitytypecode eq 'contoso_project' and name eq 'Projects by Priority'&$top=2 -> 200
   1x GET /sitemaps?$select=sitemapxml&$filter=sitemapid eq <id>&$top=1 -> 200
   1x GET /systemforms(<id>)/Microsoft.Dynamics.CRM.RetrieveUnpublished()?$select=formid,name,description,formxml,type,objecttypecode,istabletenabled,iscustomizable,componentstate,versionnumber -> 200
   2x GET /systemforms(<id>)/Microsoft.Dynamics.CRM.RetrieveUnpublished()?$select=formxml -> 200

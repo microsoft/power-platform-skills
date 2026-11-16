@@ -961,6 +961,53 @@ test('the explicit managed download refuses a handler library it cannot prove is
   });
 });
 
+// A download that cannot replace app-spec.json must say so before it writes anything else. With no generative pages there is no page
+// tree to check, so the managed download's pending fragments file is the first thing it could write; it is written only once the spec is known to be replaceable.
+test('a managed download with no generative pages refuses a spec it cannot replace before it writes its fragments file, and a plain one writes nothing before its spec', async () => {
+  await withForms(true, async () => {
+    const org = createFakeBuildOrg({ entities: ENTITIES });
+    const dir = newDir();
+    assert.equal((await build(org, dir, handledSpec(), { phases: ['web-resources', 'forms'] })).err, undefined);
+    // A managed library leaves its form ready to paste: a pending fragment, so the managed download has a fragments file to write.
+    libraryRow(org).ismanaged = true;
+    const flags = ['--include-managed', '--managed-manifest', storeFileOf(org, dir)];
+    const tree = (root) => fs.readdirSync(root, { recursive: true }).sort().map((n) => {
+      const file = path.join(root, n);
+      return fs.lstatSync(file).isDirectory() ? `${n}/` : `${n}=${fs.readFileSync(file, 'utf8')}`;
+    });
+    // Another name for the maker's spec: replacing it would break that link, which the download refuses.
+    const linked = () => {
+      const out = newDir();
+      fs.writeFileSync(path.join(out, 'app-spec.json'), '{"maker":true}');
+      fs.linkSync(path.join(out, 'app-spec.json'), path.join(newDir(), 'spec-twin.json'));
+      return out;
+    };
+
+    const managedOut = linked();
+    const before = tree(managedOut);
+    await assert.rejects(download(org, managedOut, flags), (e) => {
+      assert.deepEqual(tree(managedOut), before, 'no fragments file, no baseline, and the maker\'s spec as it was');
+      assert.equal(e.code, 'UNSAFE_OUTPUT');
+      assert.equal(e.reason, 'hard-link');
+      assert.match(e.message, /The download stopped before replacing anything:/);
+      return true;
+    });
+
+    const plainOut = linked();
+    const plainBefore = tree(plainOut);
+    await assert.rejects(download(org, plainOut, []), (e) => e.code === 'UNSAFE_OUTPUT' && e.reason === 'hard-link' && !/The download stopped before replacing anything/.test(e.message));
+    assert.deepEqual(tree(plainOut), plainBefore, 'the plain download\'s spec write is its first write');
+
+    // The same download over a spec it can replace still writes the fragments file and the spec.
+    const writable = newDir();
+    fs.writeFileSync(path.join(writable, 'app-spec.json'), '{"maker":true}');
+    const ok = await download(org, writable, flags);
+    assert.equal(ok.emitted[0].ok, true, JSON.stringify(ok.emitted) + ok.said);
+    assert.ok(fs.existsSync(ok.emitted[0].payload.managedFragments.file));
+    assert.deepEqual(ok.written.forms, [], 'the form is left to its fragment');
+  });
+});
+
 test('the explicit managed download restores a proved declared form from the named binding store, and names any it cannot restore', async () => {
   await withForms(true, async () => {
     const org = createFakeBuildOrg({ entities: ENTITIES });

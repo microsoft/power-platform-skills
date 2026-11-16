@@ -30,12 +30,19 @@
 // this publisher's own unmanaged script (lib/declared-form-io.js libraryEntry; `managedForms.libraries`).
 // A persona a declared flow's securityRoles name that the downloaded spec lacks is read from its role and written into personas[] only
 // when a rebuild provably leaves that role exactly as it is (lib/persona-restore.js; `managedBpfs.personas`).
+// A declared view (views[].reconcile "declared") a stable build (createIdentity "stable-v1") created, settled and still proves is
+// written into views[] as a declaration inverted from the row, pinned to its id, only when it compiles back to the row exactly and
+// the build's planner answers noChange for it (lib/declared-view-io.js; `managedViews`), and is then no longer named as left out;
+// any other is named in `managedViews.omitted` and stays in the not-round-tripped report.
+// A declared chart a stable build created is restored the same way into charts[], without an id (a chart declaration has none: the
+// store's key selects the row), only when verify's content checks pass on its published row and the planner answers noChange
+// (lib/declared-chart-io.js; `managedCharts`); any other is named in `managedCharts.omitted`.
 // A declared form or flow that is proved but left out only for what the download cannot bring (the script library a form handler
 // calls, the persona a flow's securityRoles name) is written ready to paste, with what it still needs, to
 // a NEW file `<out>/.maker-workspace/managed-fragments-<UTC time>-<random>.json` (`managedFragments.file` in the result;
 // lib/managed-fragments.js). It is created exclusively, so it never replaces, moves or removes a file, and with nothing to write
-// nothing is written. So that a failure to write it leaves the folder as it was, the managed download writes the page tree to a
-// staging folder inside <out> and publishes it only after the restore, the validation and the fragments file have succeeded.
+// nothing is written. So that a failure to write it leaves the folder as it was, the download (every CLI download) writes the
+// page tree to a staging folder inside <out> and publishes it only after the restore, the validation and the fragments file have succeeded.
 // Off by default, so a download without them makes the reads it always made.
 //
 // A page's key is its identity in a rebuild, so a download keeps the key each page already has: the one the app's page manifest binds to it, then the one an
@@ -61,7 +68,8 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
-const { assertSafeOutputDir, assertPlainFileTarget, writeFileSafe, removeTreeWithRetry } = require('./lib/safe-fs.js');
+const { assertSafeOutputDir, assertPlainFileTarget, assertFileReplaceable, writeFileSafe, removeTreeWithRetry } = require('./lib/safe-fs.js');
+const { renameWithRetry } = require('./lib/rename-retry.js');
 const { parseArgs, validateFlags, emitResult, preflightAuth, dataverseOrigin, requireDataverseOrigin, webApiUrl, readOrgLanguageCode, readLanguageCodeFlag } = require('./lib/dataverse-auth.js');
 const { writeBaseline } = require('./lib/deployed-baseline.js');
 const { createAzHttpClient } = require('./lib/sdk-http-client.js');
@@ -73,6 +81,11 @@ const { restoreManagedForms } = require('./lib/declared-form-io.js');
 const { restoreManagedDashboards } = require('./lib/declared-dashboard-io.js');
 const { restoreManagedRules } = require('./lib/declared-rule-io.js');
 const { restoreManagedBpfs } = require('./lib/declared-bpf-io.js');
+const { restoreManagedViews } = require('./lib/declared-view-io.js');
+const { restoreManagedCharts } = require('./lib/declared-chart-io.js');
+const { restoreManagedConfiguration } = require('./lib/declared-configuration-io.js');
+const { readConnections } = require('./list-connections.js');
+const { subtractRestored, storeRevision, assertStoreUnchanged, omission } = require('./lib/managed-restore-report.js');
 const { settleFragments } = require('./lib/managed-fragments.js');
 const { fetchSitemap, sitemapGenPages, appNavigationMatchesSitemap } = require('./lib/sitemap-pages.js');
 const { isRestrictedSolution } = require('./lib/system-solutions.js');
@@ -83,7 +96,7 @@ const { labelsByLcid, pickLabel, sameLabel } = require('./lib/lookup-labels.js')
 const { odataGuid } = require('./lib/ai-app-settings.js');
 const { APP_COMPONENT_ENTITY_SOURCES, appComponentEntities, appComponentRows, currentAppLayer, readAppComponentInventory, downloadAppMainForms, setAppMembershipFloor, setAppThemeFloor } = require('./lib/app-components.js');
 const { mapLimit, DEFAULT_MAX_SIZE_KB } = require('./lib/entity-provision.js');
-const { downloadedChoiceOptions, downloadedColumnFeatures, downloadedTableFlags, readTableFlags, setSchemaFeaturesFloor } = require('./lib/schema-feature-contract.js');
+const { downloadedChoiceOptions, downloadedColumnFeatures, downloadedTableFlags, readTableFlags, setSchemaFeaturesFloor, SYSTEM_ADMIN_PROFILE_ID, SYSTEM_ADMIN_PROFILE_NAME } = require('./lib/schema-feature-contract.js');
 const { readExistingDateBehaviors } = require('./lib/date-behavior.js');
 const { compareText } = require('./lib/compare-text.js');
 const { hostsCustomControl } = require('./lib/dashboard-tiles.js');
@@ -883,7 +896,7 @@ async function readAppShellSettings(sdk, appId) {
   return out;
 }
 
-async function readDescriptionInventory(sdk, appId, solutionScope, referencedGlobalChoices, componentInventory, { tables } = {}) {
+async function readDescriptionInventory(sdk, appId, solutionScope, referencedGlobalChoices, componentInventory, { tables, securedColumns } = {}) {
   // `incomplete[]` records an artifact class whose read FAILED. Without it the whole app-component
   // block shared one broad catch, so a 403 on `systemform` left `forms: []` — indistinguishable from
   // an app with no forms, which is EXACTLY the reported bug (AB#6686423) reappearing inside the fix
@@ -891,7 +904,9 @@ async function readDescriptionInventory(sdk, appId, solutionScope, referencedGlo
   // keys reach `app-spec.json`, so this informs the CLI without changing the spec shape.
   //
   // `tables` are the app's tables, whose command bars are inventoried (readCommandInventory); a caller that names none reads none.
-  const inventory = { views: [], charts: [], forms: [], businessRules: [], globalChoices: [], commands: [], roleRestrictedForms: [], incomplete: [] };
+  // `securedColumns` are the { table, column } logical names the download emits with isSecured, whose field security profiles are
+  // named (readFieldSecurityProfiles); a caller that names none looks for profiles in the app's solution only.
+  const inventory = { views: [], charts: [], forms: [], businessRules: [], globalChoices: [], commands: [], roleRestrictedForms: [], fieldSecurityProfiles: [], incomplete: [] };
   const fail = (kind, err) => inventory.incomplete.push({ kind, reason: (err && err.message) ? String(err.message).slice(0, 200) : 'read failed' });
   try {
     const layer = componentInventory ? componentInventory.layer : await currentAppLayer(sdk.dataverse, appId);
@@ -1078,13 +1093,97 @@ async function readDescriptionInventory(sdk, appId, solutionScope, referencedGlo
     }
   }
 
+  await readFieldSecurityProfiles(sdk, inventory, { solIds, solutionError, securedColumns });
+
   // Ordered here, once, for everything that reads the inventory — the spec's `descriptionInventory`, the not-round-tripped report
   // and the role-restriction warning. The rows are in the order Dataverse answered, which differs between two reads of one app; by
   // table, then name, then id (compareArtifacts) they do not.
   for (const key of ['views', 'charts', 'forms', 'businessRules', 'commands', 'roleRestrictedForms']) inventory[key].sort(compareArtifacts);
   inventory.globalChoices.sort((a, b) => compareText(a.name, b.name));
+  inventory.fieldSecurityProfiles.sort((a, b) => compareText(a.name, b.name) || compareText(a.id, b.id));
   inventory.incomplete.sort((a, b) => compareText(a.kind, b.kind) || compareText(a.reason, b.reason));
   return Object.fromEntries(Object.entries(inventory).filter(([, value]) => value.length));
+}
+
+// Field security profiles: REPORTED, never declared. A profile is environment-wide security policy — its permissions say which
+// secured columns its holders may read or change, and its users and teams say who holds it — and no binding store record proves
+// that this app authored one, so a download that declared it would hand a rebuild the power to rewrite somebody else's grant.
+// The download names the custom profiles it finds instead, in BOTH a plain and a managed download, and leaves fieldSecurityProfiles[]
+// out of the spec: a rebuild then neither changes nor recreates them. The secured columns themselves still round-trip (isSecured).
+//
+// Two ways in, de-duplicated by id:
+//   - the app's own solution(s): solution component type 70 is a Field Security Profile
+//     (https://learn.microsoft.com/power-apps/developer/data-platform/reference/entities/solutioncomponent);
+//   - a field permission on a column the download emits as secured — the profile that opens it, wherever it lives
+//     (https://learn.microsoft.com/power-apps/developer/data-platform/reference/entities/fieldpermission).
+// Only the profile id (`_fieldsecurityprofileid_value`) of a permission is read, and only the id and name of a profile: never a
+// permission's can-read/create/update bits, and never the users or teams a profile is given to, so nothing about who may see what
+// leaves the environment. System Administrator is dropped by its fixed id AND by its name — every org has it, every secured column
+// opens to it, and naming it would only bury the custom profiles the note is for.
+//
+// A failed read is UNKNOWN, never "no profiles": one `incomplete` entry with a FIXED reason (the service's error text can quote the
+// filter, i.e. the column names) — and what the other way in found is kept.
+const FIELD_SECURITY_PROFILES_UNREAD = 'the field security profiles could not be read';
+async function readFieldSecurityProfiles(sdk, inventory, { solIds = [], solutionError = null, securedColumns = [] } = {}) {
+  let failed = false;
+  const ids = [];
+  try {
+    if (solutionError) throw solutionError;
+    for (const solId of solIds) {
+      const comps = await sdk.queryRecords('solutioncomponent', { select: ['objectid'], filter: `_solutionid_value eq ${solId} and componenttype eq 70`, paginate: true });
+      ids.push(...(comps || []).map((r) => r && r.objectid).filter(Boolean));
+    }
+  } catch {
+    failed = true;
+  }
+  // One request per table, naming its secured columns, so the read is bounded by what the download emits.
+  const byTable = new Map();
+  for (const { table, column } of securedColumns || []) {
+    if (!table || !column) continue;
+    const t = String(table).toLowerCase();
+    if (!byTable.has(t)) byTable.set(t, new Set());
+    byTable.get(t).add(String(column).toLowerCase());
+  }
+  const esc = (v) => v.replace(/'/g, "''");
+  for (const table of [...byTable.keys()].sort(compareText)) {
+    try {
+      const columns = [...byTable.get(table)].sort(compareText).map((c) => `attributelogicalname eq '${esc(c)}'`).join(' or ');
+      const rows = await sdk.queryRecords('fieldpermission', { select: ['_fieldsecurityprofileid_value'], filter: `entityname eq '${esc(table)}' and (${columns})`, paginate: true });
+      ids.push(...(rows || []).map((r) => r && r._fieldsecurityprofileid_value).filter(Boolean));
+    } catch {
+      failed = true;
+    }
+  }
+  const isAdmin = (id) => String(id || '').replace(/[{}]/g, '').toLowerCase() === SYSTEM_ADMIN_PROFILE_ID;
+  const custom = ids.filter((id) => !isAdmin(id));
+  if (custom.length) {
+    try {
+      const rows = await rowsByIds(sdk, 'fieldsecurityprofile', 'fieldsecurityprofileid', custom, ['fieldsecurityprofileid', 'name'], (r) => r);
+      const seen = new Set();
+      for (const r of rows) {
+        const id = String((r && r.fieldsecurityprofileid) || '').replace(/[{}]/g, '').toLowerCase();
+        if (!id || seen.has(id) || isAdmin(id)) continue;
+        if (String((r && r.name) || '').trim().toLowerCase() === SYSTEM_ADMIN_PROFILE_NAME.toLowerCase()) continue;
+        seen.add(id);
+        inventory.fieldSecurityProfiles.push({ id, name: r.name });
+      }
+    } catch {
+      failed = true;
+    }
+  }
+  if (failed) inventory.incomplete.push({ kind: 'fieldSecurityProfiles', reason: FIELD_SECURITY_PROFILES_UNREAD });
+}
+
+// The inventory's field security profiles as managed-restore-report omissions (id and name, fixed reason), for the NOTE and the
+// result payload. Ownership-unproven is the honest code: the profile may well be this app's, but nothing binding says so.
+function fieldSecurityProfileOmissions(inventory) {
+  return ((inventory && inventory.fieldSecurityProfiles) || []).map((p) => omission({ kind: 'fieldSecurityProfile', id: p.id, name: p.name, code: 'ownership-unproven' }));
+}
+
+function fieldSecurityProfilesNote(omitted) {
+  if (!omitted || !omitted.length) return '';
+  const n = omitted.length;
+  return `NOTE: ${n} field security profile${n === 1 ? '' : 's'} (${omitted.map((o) => o.name || o.id).join(', ')}) ${n === 1 ? 'is' : 'are'} not declared in fieldSecurityProfiles[]: ${omitted[0].reason}. ${n === 1 ? 'It stays' : 'They stay'} as ${n === 1 ? 'it is' : 'they are'} in this environment, and a rebuild neither changes nor recreates ${n === 1 ? 'it' : 'them'}; the secured columns keep isSecured. Declare a profile only if this app owns it.\n`;
 }
 
 // Read the page tree a download writes (<pagesRoot>/<pageId>/{page.tsx,config.json,prompt.txt}) into
@@ -1102,22 +1201,22 @@ async function readDescriptionInventory(sdk, appId, solutionScope, referencedGlo
 //
 // `unkeptBindings` collects the pages whose config.json holds a list of connector or Custom API bindings the spec cannot state: { pageId, field, reason }. The list is not a list, or an entry is not an object
 // (`pageBindingsProblem`), or an entry holds anything a spec does not state (see the projection below). `reason` names the place and the vetted property, never a value or an unrecognized key.
-function parseDownloadedPages(pagesRoot, outDir, nameById, unreadable, unkeptModels, unkeptBindings) {
+function parseDownloadedPages(pagesRoot, outDir, nameById, unreadable, unkeptModels, unkeptBindings, fsImpl = fs) {
   const pages = [];
-  if (!fs.existsSync(pagesRoot)) return pages;
+  if (!fsImpl.existsSync(pagesRoot)) return pages;
   // Read in the pages' own order (comparePages), not the directory's: `readdirSync` lists in the file system's order, which is
   // not the same on every machine, and this loop decides the order of `pages[]` in the spec and of the unreadable-config and
   // unkept-model reports. It decides no page key: assignPageKeys mints in the order of the pages' ids, whatever order it is given.
   const nameOf = (entry) => (nameById && nameById.get(String(entry).toLowerCase())) || entry;
-  const entries = fs.readdirSync(pagesRoot)
+  const entries = fsImpl.readdirSync(pagesRoot)
     .map((entry) => ({ pageId: entry, name: nameOf(entry) }))
     .sort(comparePages)
     .map((page) => page.pageId);
   for (const entry of entries) {
     const dir = path.join(pagesRoot, entry);
-    if (!fs.statSync(dir).isDirectory()) continue;
+    if (!fsImpl.statSync(dir).isDirectory()) continue;
     const tsx = path.join(dir, 'page.tsx');
-    if (!fs.existsSync(tsx)) continue;
+    if (!fsImpl.existsSync(tsx)) continue;
     let config = {};
     const configPath = path.join(dir, 'config.json');
     // Read DIRECTLY and let ENOENT — and ONLY ENOENT — mean "absent, therefore optional".
@@ -1131,7 +1230,7 @@ function parseDownloadedPages(pagesRoot, outDir, nameById, unreadable, unkeptMod
       // 'utf8' decode keeps that BOM as U+FEFF, and JSON.parse REJECTS a leading U+FEFF — so a
       // perfectly valid downloaded config threw, the old catch substituted `{}`, and the page's
       // table bindings vanished from the emitted spec. A BOM is an encoding marker, not content.
-      config = JSON.parse(fs.readFileSync(configPath, 'utf8').replace(/^\uFEFF/, ''));
+      config = JSON.parse(fsImpl.readFileSync(configPath, 'utf8').replace(/^\uFEFF/, ''));
       if (!config || typeof config !== 'object' || Array.isArray(config)) throw new Error('config.json is not a JSON object');
       if (Object.prototype.hasOwnProperty.call(config, 'dataSources')) {
         if (!Array.isArray(config.dataSources)) throw new Error('config.json dataSources is present but is not an array');
@@ -1139,6 +1238,9 @@ function parseDownloadedPages(pagesRoot, outDir, nameById, unreadable, unkeptMod
         if (bad !== undefined) throw new Error('config.json dataSources must be an array of non-empty table logical names');
       }
     } catch (e) {
+      // A folder of a staged download's staging found replaced by a link is not a page's config that cannot be read: it stops the
+      // download (generatedFolders).
+      if (e && e.code === 'UNSAFE_OUTPUT') throw e;
       config = {};
       // Present but unreadable — report it rather than inventing empty metadata. A genuinely absent
       // config is optional by contract and is NOT reported.
@@ -1152,8 +1254,9 @@ function parseDownloadedPages(pagesRoot, outDir, nameById, unreadable, unkeptMod
     // A file that EXISTS but is blank or unreadable stays explicit, so it still fails closed.
     let prompt;
     try {
-      prompt = fs.readFileSync(path.join(dir, 'prompt.txt'), 'utf8').replace(/^\uFEFF/, '');
+      prompt = fsImpl.readFileSync(path.join(dir, 'prompt.txt'), 'utf8').replace(/^\uFEFF/, '');
     } catch (e) {
+      if (e && e.code === 'UNSAFE_OUTPUT') throw e;
       prompt = (e && e.code === 'ENOENT') ? undefined : '';
     }
     // The model that generated the page, as config.json records it. It has to come back with the page:
@@ -1934,6 +2037,21 @@ function roundTrippedAware(inventory, globalChoiceDecls) {
   const { globalChoices, ...rest } = inventory;
   void globalChoices;
   return remaining.length ? { ...rest, globalChoices: remaining } : rest;
+}
+
+// The not-round-tripped report of a download: its inventory less the global choices the spec declares (roundTrippedAware), with the
+// app-membership notes. One function for the two places that compute it — downloadApp, and main once the managed download has put
+// some of the inventory back into the spec (lib/managed-restore-report.js subtractRestored) — so the two can never disagree.
+//
+// Round-tripped means DECLARED in the emitted spec, so subtract `spec.globalChoices` — not the raw
+// `globalChoiceDecls` candidates, which also hold sets bound only by a filtered attribute or a
+// dropped table. Subtracting those hid a set the spec never re-declares: a silent loss in the one
+// report whose job is naming them.
+function notRoundTrippedReport(inventory, spec, membershipNotes) {
+  const declaredGlobalChoices = new Set((spec.globalChoices || []).map((g) => String(g && g.name).toLowerCase()));
+  const summary = notRoundTrippedSummary(roundTrippedAware(inventory, declaredGlobalChoices));
+  if (!membershipNotes.length) return summary;
+  return { ...(summary || { classes: [], total: 0, entities: [] }), appMembership: membershipNotes };
 }
 
 // Render `notRoundTrippedSummary` as the operator-facing warning. Kept separate from the computation
@@ -2961,26 +3079,27 @@ function downloadPublisherPrefix(recovered, appUnique) {
 // throwing. Unexpected I/O errors propagate as thrown exceptions (caught by main().catch).
 // A link already under pages/ must be refused before the tree is replaced. rm of a real
 // parent drops the link name; that is not the same as leaving the other name untouched.
-function assertNoPlantedPageLinks(pagesRoot) {
+// `fsImpl` is the fs every look goes through (a test seam; production passes none).
+function assertNoPlantedPageLinks(pagesRoot, fsImpl = fs) {
   let entries = [];
-  try { entries = fs.readdirSync(pagesRoot); } catch (e) {
+  try { entries = fsImpl.readdirSync(pagesRoot); } catch (e) {
     if (e && e.code === 'ENOENT') return;
     throw e;
   }
   for (const entry of entries) {
     const child = path.join(pagesRoot, entry);
     let st;
-    try { st = fs.lstatSync(child); } catch (e) {
+    try { st = fsImpl.lstatSync(child); } catch (e) {
       if (e && e.code === 'ENOENT') continue;
       throw e;
     }
     if (st.isSymbolicLink() || st.isDirectory()) {
-      assertSafeOutputDir(child);
+      assertSafeOutputDir(child, { fs: fsImpl });
       if (st.isDirectory() && !st.isSymbolicLink()) {
-        for (const name of fs.readdirSync(child)) assertPlainFileTarget(path.join(child, name));
+        for (const name of fsImpl.readdirSync(child)) assertPlainFileTarget(path.join(child, name), { fs: fsImpl });
       }
     } else {
-      assertPlainFileTarget(child);
+      assertPlainFileTarget(child, { fs: fsImpl });
     }
   }
 }
@@ -2992,45 +3111,348 @@ function assertNoPlantedPageLinks(pagesRoot) {
 // under pages/ is refused first (assertNoPlantedPageLinks), a folder is made only after the name is checked (assertSafeOutputDir), and
 // every file is written by writeFileSafe, which refuses a link at the file's own name. A page id reaches here only after the backend has
 // read it, and the backend reads a GUID and nothing else, so no id can hold a path separator.
-function writePageTree(pagesRoot, pages) {
-  assertSafeOutputDir(pagesRoot, { create: true });
-  assertNoPlantedPageLinks(pagesRoot);
-  fs.rmSync(pagesRoot, { recursive: true, force: true });
-  assertSafeOutputDir(pagesRoot, { create: true });
-  for (const { pageId, files } of pages) {
-    const destDir = path.join(pagesRoot, pageId);
-    assertSafeOutputDir(destDir, { create: true });
-    for (const [name, text] of Object.entries(files)) writeFileSafe(path.join(destDir, name), text, { encoding: 'utf8' });
-  }
-}
-
-// The checks writePageTree makes before it removes anything, made on their own: the managed download asks them before it settles its
-// fragments file, so a page tree that cannot be replaced stops it before that file, the pages or the spec are written.
-function assertPageTreeReplaceable(pagesRoot) {
+//
+// The tree is SWAPPED, never rewritten in place (#814). The folder may hold a maker's page edits that were never uploaded, and the old
+// way (remove pages/, then write each file) lost them to any failure part-way: a full disk, a permission, a locked file, a crash. Now the
+// new tree is written whole beside it first, and the old one is deleted only once the new one has its name:
+//   1. check pages/ (the refusals above), so a planted link is refused before anything is made;
+//   2. make a swap folder `<out>/.pages-replace.<pid>.<random>.tmp` (makeHiddenDir: a name nobody holds, checked to be the plain folder
+//      just made before anything is written under it) and write the new tree to its `new` subfolder. It sits in the same folder as
+//      pages/, so the moves below are renames on one volume, never copies;
+//   3. check the new tree (`new`, each page folder in it and each file written there are still there and still what was made) and pages/ again:
+//      writing took time, and the move below must act on the folders the checks saw;
+//   4. move pages/ to the swap folder's `previous` (skipped when there is no pages/);
+//   5. move `new` to pages/;
+//   6. remove the swap folder, the previous tree in it.
+// What a stop between two steps (a crash, a kill, a power cut) leaves on disk:
+//   before 2:  nothing has changed;
+//   2 to 4:    pages/ as it was, and a swap folder holding all or part of the new tree;
+//   4 to 5:    no pages/; the previous tree whole in `<swap>/previous`, the new tree in `<swap>/new`;
+//   5 to 6:    the new pages/, and the previous tree in `<swap>/previous` (whole, or what is left of it once step 6 has begun);
+//   after 6:   the new pages/ and nothing else.
+// In no state is a page file deleted before the tree that replaces it is whole on disk. A swap folder left by a stopped run is never
+// reused, moved or deleted by a later download (each run makes its own, under a new name). One that holds a `previous` tree may hold the
+// maker's only copy of their edits (a stop between 4 and 5 leaves no pages/ at all), so a later download that replaces this pages/ names
+// it in one warning (warnStrandedPageTrees), and goes on: it is the maker's to look into and delete. One with no `previous` holds only
+// downloaded pages and is not named.
+//
+// A failure of a step is undone, and said:
+//   2 or 3 fails: the swap folder is removed and the error thrown as it came; pages/ is untouched;
+//   4 fails:      nothing moved (a refused rename moves nothing); the swap folder is removed; pages/ is untouched;
+//   5 fails:      the previous tree is moved back to pages/. If that fails too, nothing is removed and the error names both folders;
+//   6 fails:      the download succeeded; a warning names the swap folder, to delete.
+// A failure is cleaned up by removing `new` and then the EMPTY swap folder (rmdir, never recursive), so no clean-up can delete the
+// previous tree, even after a rename that reported a failure and moved it all the same.
+//
+// The folders this run makes are held to being what they were made as, before EVERY fs operation on a path in them: each mkdir, each
+// file write (writeFileSafe's temp file, its rename into place and the removal of a temp file it gives up on), each rename attempt
+// (every retry of the move in and of the move back included), each removal, and each read (a listing, a stat, a file's bytes: a
+// staged download reads its staged tree back, and what it reads is what it states in the spec and publishes into pages/). All of them
+// go through ONE fs, generatedFolders' `fs`, which checks first that the folder made (the swap folder; a staged download's
+// `.download-pages.*` staging folder) and every folder between it and the path are still plain folders at the paths they were made at
+// (ownedDir), and that the path itself is not a link. Something that replaced one of them with a link or junction (or moved it away and
+// put one at its name) would otherwise have a page written, a tree moved into pages/, a clean-up delete recursively, or page bytes read,
+// wherever that link points, outside <out>. Such a replacement is refused (UNSAFE_OUTPUT), and from then on nothing is read, written,
+// moved or removed under the folder replaced (nor a folder that holds it removed or moved): the step that met it fails, a clean-up
+// leaves it and names it, and the previous pages are moved back only while `previous` itself still passes the check. The managed
+// download's staging folder found replaced at any check, its removal after the last read included, refuses the download: nothing read
+// from it is published (runDownload). tests/download-model-app.test.js holds the raw fs calls of writePageTree, the staged readback and
+// their helpers to that one fs. What a check cannot close is the moment between it and the one syscall it guards, read or write (a path
+// is named again by that syscall): no wait sits there, as a retry's wait comes before the next attempt's own check.
+//
+// Windows: a folder rename is refused (EPERM, EACCES, EBUSY) while a scanner or the search indexer holds a file in it. Step 5 and the
+// move back use renameWithRetry (lib/rename-retry.js), which repeats the same rename for a few seconds: the folder moved is one this run
+// made or moved into its own swap folder, under a name nobody else knows, each attempt is checked as above before it is made, and the
+// target is the name pages/ this run has just vacated, so a repeat means what the first attempt meant (if a folder took that name
+// meanwhile, every attempt is refused and the move back or the error that names both folders follows). Step 4 is ONE attempt: it moves
+// the maker's own folder, which an editor, a sync client or the maker can change while a wait goes on, so a wait would let the checks of
+// step 3 go stale, as rename-retry.js forbids. Its refusal leaves pages/ as it was and fails the download, which can simply be run again.
+//
+// `opts`: `fs` (every call goes through it: a staged download passes its staging folder's guarded fs, and tests a faulty one), and,
+// for tests, `warn` (where the warnings go) and `rename` (renameWithRetry's own test options).
+function writePageTree(pagesRoot, pages, opts = {}) {
+  const fsImpl = opts.fs || fs;
+  const warn = opts.warn || ((line) => process.stderr.write(line));
+  // Step 1. The same refusals, made before anything is created, as they always were.
+  assertPageTreeReplaceable(pagesRoot, fsImpl);
+  // The moves go through the checked real folder (an 8.3 short name or a linked ancestor names the same one); messages name the folders
+  // as the caller named pages/.
+  const shownRoot = path.dirname(path.resolve(pagesRoot));
+  const realRoot = assertSafeOutputDir(shownRoot, { create: true, fs: fsImpl });
+  const pagesPath = path.join(realRoot, path.basename(pagesRoot));
+  const shown = (p) => path.join(shownRoot, path.relative(realRoot, p));
+  warnStrandedPageTrees(realRoot, pagesRoot, shown, warn, fsImpl);
+  const guard = generatedFolders(fsImpl, shown);
+  const gfs = guard.fs;
+  // Throws, with nothing to clean up, when the folder just made is not a plain folder at its own path: nothing is written or removed
+  // through a link planted there.
+  const swap = makeHiddenDir(realRoot, '.pages-replace', guard);
+  const fresh = path.join(swap, 'new');
+  const previous = path.join(swap, 'previous');
+  // Removes the new tree, then the swap folder if nothing else is in it. Best-effort: the caller has an error to throw already. Through
+  // the guarded fs, so a clean-up never descends through a link put in place of either.
+  const discard = () => {
+    let held = removeTreeWithRetry(fresh, { fs: gfs });
+    if (!held) {
+      try { gfs.rmdirSync(swap); } catch (e) { held = (e && e.code) || 'UNKNOWN'; }
+    }
+    if (held === 'UNSAFE_OUTPUT') warn(`WARNING: the folder ${shown(swap)} the downloaded pages were written to was not removed: ${NOT_OWNED_LEFT}\n`);
+    else if (held) warn(`WARNING: the folder ${shown(swap)} the downloaded pages were written to could not be removed (${held}): delete it.\n`);
+  };
+  let hadTree;
   try {
-    fs.lstatSync(pagesRoot);
+    // Step 2.
+    gfs.mkdirSync(fresh);
+    for (const { pageId, files } of pages) {
+      const destDir = path.join(fresh, pageId);
+      gfs.mkdirSync(destDir, { recursive: true });
+      for (const [name, text] of Object.entries(files)) writeFileSafe(path.join(destDir, name), text, { encoding: 'utf8', fs: gfs });
+    }
+    // Step 3. `new` once more too, and each page folder made in it and each file written there, so a replacement found now costs no
+    // move of the maker's folder and nothing in its place is moved into pages/. The guarded lstat checks each path as `verify` does
+    // (a link or a folder that is not the one made is refused), but the guard lets a missing path through (an operation that creates it
+    // must be able to run), so each is also required to be there, as what was made: a folder or a file that is gone (removed after it
+    // was written) leaves a tree that is not complete, and it is not published.
+    const present = (p, kind) => {
+      let stat = null;
+      let cause = null;
+      try {
+        stat = gfs.lstatSync(p);
+      } catch (e) {
+        if (e && e.code === 'UNSAFE_OUTPUT') throw e;
+        cause = e;
+      }
+      if (stat && (kind === 'folder' ? stat.isDirectory() : stat.isFile())) return;
+      // Only a missing path shows the entry is gone; any other error (EIO, EACCES, ...) leaves it unknown, and says so.
+      const code = (cause && cause.code) || cause;
+      const gone = cause && (cause.code === 'ENOENT' || cause.code === 'ENOTDIR');
+      const what = stat ? `is no longer a ${kind}` : gone ? `is no longer there (${code})` : `could not be inspected (${code})`;
+      const error = pageTreeError(`could not write the page folder ${pagesRoot}: the ${kind} ${shown(p)} this download wrote ${what}. The page folder is as it was, and the downloaded pages were not moved into it`, cause);
+      error.code = 'IO_ERROR';
+      throw error;
+    };
+    present(fresh, 'folder');
+    for (const { pageId, files } of pages) {
+      const destDir = path.join(fresh, pageId);
+      present(destDir, 'folder');
+      for (const name of Object.keys(files)) present(path.join(destDir, name), 'file');
+    }
+    hadTree = assertPageTreeReplaceable(pagesPath, fsImpl);
   } catch (e) {
-    if (e && e.code === 'ENOENT') return;
+    discard();
     throw e;
   }
-  assertSafeOutputDir(pagesRoot);
-  assertNoPlantedPageLinks(pagesRoot);
-}
-
-// A fresh staging folder for the managed download's page tree, made INSIDE <out> (nothing outside the folder the maker named is written)
-// under a hidden name unique to this process and call. `mkdir` without `recursive` fails on a name that exists, so a folder that is
-// already there (another run's, or the maker's) is never reused or removed: another name is tried.
-function makePageStage(outDir) {
-  const root = assertSafeOutputDir(outDir, { create: true });
-  for (let attempt = 0; ; attempt += 1) {
-    const dir = path.join(root, `.download-pages.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`);
+  // Step 4.
+  if (hadTree) {
     try {
-      fs.mkdirSync(dir);
-      return dir;
+      gfs.renameSync(pagesPath, previous);
     } catch (e) {
-      if (!(e && e.code === 'EEXIST') || attempt >= 4) throw e;
+      discard();
+      throw pageTreeError(`could not replace the page folder ${pagesRoot}: it could not be moved aside (${(e && e.code) || e}). It is as it was, and the downloaded pages were not written`, e);
     }
   }
+  // Step 5.
+  try {
+    renameWithRetry(gfs, fresh, pagesPath, opts.rename);
+  } catch (e) {
+    const code = (e && e.code) || e;
+    if (!hadTree) {
+      discard();
+      throw pageTreeError(`could not write the page folder ${pagesRoot}: the downloaded pages could not be moved into it (${code})`, e);
+    }
+    try {
+      renameWithRetry(gfs, previous, pagesPath, opts.rename);
+    } catch (back) {
+      // `previous`, or a folder above it, is not the folder made: where the previous pages now are is not known here, only where they
+      // were moved to. Nothing more is done through it.
+      if (back && back.code === 'UNSAFE_OUTPUT') {
+        throw pageTreeError(`could not replace the page folder ${pagesRoot}: the downloaded pages could not be moved into it (${code}). The previous pages had been moved to ${shown(previous)}, and that folder or one above it is no longer the folder this download made there (a link or junction was put in its place), so they were not moved back, and nothing more was moved, written or removed through it. Find them where that folder was moved to, and move them back to ${pagesRoot}`, back);
+      }
+      throw pageTreeError(`could not replace the page folder ${pagesRoot}: the downloaded pages could not be moved into it (${code}), and the previous pages could not be moved back (${(back && back.code) || back}). Nothing was deleted: the previous pages are in ${shown(previous)} and the downloaded pages in ${shown(fresh)}. Move the previous pages back to ${pagesRoot}`, e);
+    }
+    discard();
+    throw pageTreeError(`could not replace the page folder ${pagesRoot}: the downloaded pages could not be moved into it (${code}). The previous pages were put back as they were`, e);
+  }
+  // Step 6.
+  const left = removeTreeWithRetry(swap, { fs: gfs });
+  if (left === 'UNSAFE_OUTPUT') warn(`WARNING: the page folder ${pagesRoot} was replaced, but the folder ${shown(swap)} that held the previous pages was not removed: ${NOT_OWNED_LEFT}\n`);
+  else if (left) warn(`WARNING: the page folder ${pagesRoot} was replaced, but the folder ${shown(swap)} that holds the previous pages could not be removed (${left}): delete it.\n`);
+}
+
+// Why a folder this run made is left behind when it is no longer that folder: the end of each warning that names one.
+const NOT_OWNED_LEFT = 'it, or a folder in it, is no longer the folder this download made there (a link or junction was put in its place, or it was moved), and nothing is removed through one. Look into it before you delete anything in it.';
+
+// Names, in one warning each, the swap folders an earlier download left in `realRoot` (it stopped before its step 6) that hold a
+// `previous` tree: the page folder as it was before that download, possibly with edits the maker has nowhere else. Looks, never touches:
+// such a folder is not moved, reused or deleted. A folder that cannot be read is passed over in silence (this is a hint, never a reason
+// to stop a download).
+function warnStrandedPageTrees(realRoot, pagesRoot, shown, warn, fsImpl = fs) {
+  let names = [];
+  // A refusal of a guarded fs (a staged download's staging folder found replaced) is not a folder that cannot be read: it stops.
+  try { names = fsImpl.readdirSync(realRoot); } catch (e) { if (e && e.code === 'UNSAFE_OUTPUT') throw e; return; }
+  for (const name of names.filter((n) => n.startsWith('.pages-replace.')).sort()) {
+    const held = path.join(realRoot, name, 'previous');
+    let st;
+    try { st = fsImpl.lstatSync(held); } catch (e) { if (e && e.code === 'UNSAFE_OUTPUT') throw e; continue; }
+    if (!st.isDirectory()) continue;
+    warn(`WARNING: ${shown(held)} holds the page folder as it was before an earlier download that stopped part-way: if it has page edits you need, copy them back into ${pagesRoot}, then delete ${shown(path.join(realRoot, name))}.\n`);
+  }
+}
+
+// A failure of the swap, with the code of the fs error that caused it, so a caller that tells failures apart by code still can.
+function pageTreeError(message, cause) {
+  const error = new Error(message);
+  if (cause && cause.code) error.code = cause.code;
+  error.cause = cause;
+  return error;
+}
+
+// Whether `dir`, a folder this run made under a real (resolved) parent, is still that folder: 'owned' when it is a plain folder whose
+// real path is the path it was made at, 'missing' when nothing is there, 'unsafe' otherwise. A link or junction put in its place fails
+// assertSafeOutputDir (it refuses a link as the last component); one put in place of a folder above it changes the real path. Never throws.
+function ownedDir(dir, fsImpl = fs) {
+  try { fsImpl.lstatSync(dir); } catch (e) { return e && (e.code === 'ENOENT' || e.code === 'ENOTDIR') ? 'missing' : 'unsafe'; }
+  try { return assertSafeOutputDir(dir, { fs: fsImpl }) === dir ? 'owned' : 'unsafe'; } catch { return 'unsafe'; }
+}
+
+function notOwnedError(shownDir) {
+  return Object.assign(new Error(`refusing to use ${shownDir} as an output directory: it is no longer the folder this download made there (a link or junction was put in its place, or above it, or it was moved), so nothing more is read, written, moved or removed through it`), { code: 'UNSAFE_OUTPUT', reason: 'link' });
+}
+
+// The fs methods that read, write, make, move or remove, and which of their arguments name a path they act on (a file descriptor is not
+// checked: it was opened by a checked call). Reads are held as writes are: what a staged download reads back from its staging folder
+// is what it publishes into pages/ and states in the spec, so a read through a folder replaced by a link would hand on bytes from
+// wherever that link points. realpathSync (and .native) is checked too: see generatedFolders. A method missing here would go through
+// unchecked: tests/download-model-app.test.js fails on a raw call of any such method in writePageTree, the staged readback and their
+// helpers, and checks each one listed is refused under a replaced folder.
+const GUARDED_FS_METHODS = {
+  mkdirSync: [0], mkdtempSync: [0], openSync: [0], writeFileSync: [0], appendFileSync: [0], truncateSync: [0], chmodSync: [0],
+  utimesSync: [0], unlinkSync: [0], rmSync: [0], rmdirSync: [0], renameSync: [0, 1], copyFileSync: [0, 1], cpSync: [0, 1], linkSync: [0, 1],
+  symlinkSync: [1], createWriteStream: [0],
+  readFileSync: [0], readdirSync: [0], opendirSync: [0], statSync: [0], lstatSync: [0], existsSync: [0], accessSync: [0],
+  readlinkSync: [0], createReadStream: [0],
+};
+
+// The fs a guarded fs checks with: the plain one under any number of guards (a staged download's staging guard holds the swap guard
+// writePageTree makes inside it). Each guard's checks (ownedDir) compare real paths, which cover every folder above, so they need not
+// themselves run through another guard; the operation still does.
+const UNGUARDED_FS = Symbol('unguarded fs');
+
+// The ONE way writePageTree, a staged download's staging and readback, and their helpers touch the folders they make. `adopt(dir)`
+// takes a folder just made (refused, and not adopted, unless it is a plain folder at its own path); `fs` is `fsImpl` with every method of
+// GUARDED_FS_METHODS checked before it runs, on any path in an adopted folder: the adopted folder and every folder between it and the path
+// that exists must be owned (ownedDir), and the path itself, if it exists, must not be a link (nor, when a folder, other than owned).
+// A failed check throws UNSAFE_OUTPUT and marks the folder that failed: no later operation runs on a path in it, nor moves or removes a
+// folder that holds it. `verify(path)` makes the same check alone; `refused()` answers whether any check has failed (sticky), so a caller
+// can refuse to use what it read even where a refusal was caught. Paths outside the adopted folders go through as they are.
+function generatedFolders(fsImpl, shown) {
+  const plain = fsImpl[UNGUARDED_FS] || fsImpl;
+  const roots = [];
+  const broken = [];
+  const within = (p, dir) => {
+    const rel = path.relative(dir, p);
+    return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+  };
+  const refuse = (dir) => {
+    if (!broken.includes(dir)) broken.push(dir);
+    throw notOwnedError(shown(dir));
+  };
+  const verify = (target) => {
+    const p = path.resolve(String(target));
+    const hit = broken.find((b) => within(p, b) || within(b, p));
+    if (hit) throw notOwnedError(shown(hit));
+    const root = roots.find((r) => within(p, r));
+    if (!root) return;
+    // The adopted folder down to the path's own folder, top first, so the folder named is the one replaced. Below a missing folder
+    // there is nothing to act through: the syscall fails on its own.
+    const dirs = [];
+    if (p !== root) {
+      dirs.push(root);
+      for (const part of path.relative(root, path.dirname(p)).split(path.sep).filter(Boolean)) dirs.push(path.join(dirs[dirs.length - 1], part));
+    }
+    for (const dir of dirs) {
+      const state = ownedDir(dir, plain);
+      if (state === 'missing') return;
+      if (state !== 'owned') refuse(dir);
+    }
+    let st;
+    try { st = plain.lstatSync(p); } catch (e) { if (e && (e.code === 'ENOENT' || e.code === 'ENOTDIR')) return; refuse(p); }
+    if (st.isSymbolicLink() || (st.isDirectory() && ownedDir(p, plain) !== 'owned')) refuse(p);
+  };
+  const guarded = Object.create(fsImpl);
+  // Defined, not assigned: some of node's fs methods (opendirSync among them) are accessors with a setter, and an assignment through
+  // the prototype would call that setter and replace the method of node's own fs, for every caller, with this guard.
+  const own = (name, value) => Object.defineProperty(guarded, name, { value, writable: true, enumerable: true, configurable: true });
+  own(UNGUARDED_FS, plain);
+  for (const [name, at] of Object.entries(GUARDED_FS_METHODS)) {
+    own(name, function (...args) {
+      for (const i of at) if (typeof args[i] === 'string') verify(args[i]);
+      return fsImpl[name](...args);
+    });
+  }
+  // The read a write is aimed by: writeFileSafe and assertSafeOutputDir resolve a folder to its real path and then write under the
+  // answer, which, through a folder replaced by a link, is a path outside every adopted folder that no later check would see. So the
+  // folder is checked before it is resolved, and an owned folder resolves to itself.
+  const realpathSync = function (p, ...rest) {
+    if (typeof p === 'string') verify(p);
+    return fsImpl.realpathSync(p, ...rest);
+  };
+  realpathSync.native = function (p, ...rest) {
+    if (typeof p === 'string') verify(p);
+    return (fsImpl.realpathSync.native || fsImpl.realpathSync)(p, ...rest);
+  };
+  own('realpathSync', realpathSync);
+  return {
+    fs: guarded,
+    verify,
+    refused: () => broken.length > 0,
+    adopt(dir) {
+      if (ownedDir(dir, plain) !== 'owned') throw notOwnedError(shown(dir));
+      roots.push(dir);
+      return dir;
+    },
+  };
+}
+
+// The checks writePageTree makes before it removes anything, made on their own: main asks them before it settles the
+// managed fragments file and publishes, so a page tree that cannot be replaced stops it before that file, the pages or the spec are written. Answers whether
+// there is a tree to replace.
+function assertPageTreeReplaceable(pagesRoot, fsImpl = fs) {
+  try {
+    fsImpl.lstatSync(pagesRoot);
+  } catch (e) {
+    if (e && e.code === 'ENOENT') return false;
+    throw e;
+  }
+  assertSafeOutputDir(pagesRoot, { fs: fsImpl });
+  assertNoPlantedPageLinks(pagesRoot, fsImpl);
+  return true;
+}
+
+// A fresh folder `<root>/<prefix>.<pid>.<random>.tmp`, hidden, unique to this process and call, adopted by `guard` (generatedFolders).
+// `mkdir` without `recursive` fails on a name that exists, so a folder that is already there (another run's, or the maker's) is never
+// reused or removed: another name is tried. `root` is a real path (assertSafeOutputDir's answer), and the folder made is checked to be a
+// plain folder at its own path before it is answered: one replaced by a link or junction the moment it was made is refused
+// (UNSAFE_OUTPUT) and left alone, so nothing is written into, or removed from, where that link points.
+function makeHiddenDir(root, prefix, guard) {
+  for (let attempt = 0; ; attempt += 1) {
+    const dir = path.join(root, `${prefix}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`);
+    try {
+      guard.fs.mkdirSync(dir);
+    } catch (e) {
+      if (!(e && e.code === 'EEXIST') || attempt >= 4) throw e;
+      continue;
+    }
+    return guard.adopt(dir);
+  }
+}
+
+// A fresh staging folder for a staged download's page tree, made INSIDE <out> (nothing outside the folder the maker named is written)
+// under a hidden name unique to this process and call (makeHiddenDir, which also checks it), and the guarded fs (generatedFolders) every
+// read, write, move and removal in it goes through: { dir, fs, refused } (refused: whether any check of the folder has failed).
+function makePageStage(outDir) {
+  const guard = generatedFolders(fs, (p) => p);
+  return { dir: makeHiddenDir(assertSafeOutputDir(outDir, { create: true }), '.download-pages', guard), fs: guard.fs, refused: guard.refused };
 }
 
 // Reads every page the sitemap names, by id — so nothing outside this app is read — a few at a time, and answers
@@ -3046,28 +3468,37 @@ async function readSitemapPages(genpage, ids, concurrency) {
   return { ok: true, pages: results.map(({ id, page }) => ({ pageId: String(id).toLowerCase(), files: pageFolderFiles(page) })) };
 }
 
-// `stagePages` (the managed download, main): the page tree is written to a staging folder inside <out> (makePageStage) and read
+// `stagePages` (main, for every download it runs): the page tree is written to a staging folder inside <out> (makePageStage) and read
 // back from there exactly as a download writes it — the same files, the same reverse-resolved page.tsx — and the folder is removed.
 // The real pages/ folder is not touched: the result's `stagedPages` publishes it later (`check` makes writePageTree's checks without
 // writing, `publish` writes the tree with writePageTree). main publishes it only after everything that can still stop the download
-// has succeeded, so a refusal there leaves a maker's page edits as they were. Without the option the download is exactly as before.
+// has succeeded, so a refusal there leaves a maker's page edits as they were. Without the option (a library caller) the download
+// writes pages/ itself, as it always did.
 async function runDownload(options = {}) {
   if (!options.stagePages) return downloadApp(options);
-  const stage = { dir: null, pages: null };
+  const stage = { dir: null, fs: null, refused: () => false, pages: null };
+  let result;
+  let left = null;
   try {
-    const result = await downloadApp({ ...options, stage });
-    if (!result.ok || !stage.pages) return result;
-    const pagesRoot = path.join(path.resolve(options.outDir), 'pages');
-    const pages = stage.pages;
-    return { ...result, stagedPages: { check: () => assertPageTreeReplaceable(pagesRoot), publish: () => writePageTree(pagesRoot, pages) } };
+    result = await downloadApp({ ...options, stage });
   } finally {
     // Best-effort: the pages are in memory by now. A folder that stays is named, so the maker can delete it.
-    const left = stage.dir ? removeTreeWithRetry(stage.dir) : null;
-    if (left) process.stderr.write(`WARNING: the download's staging folder ${stage.dir} could not be removed (${left}): delete it.\n`);
+    left = stage.dir ? removeTreeWithRetry(stage.dir, { fs: stage.fs }) : null;
+    if (left === 'UNSAFE_OUTPUT') process.stderr.write(`WARNING: the download's staging folder ${stage.dir} was not removed: ${NOT_OWNED_LEFT}\n`);
+    else if (left) process.stderr.write(`WARNING: the download's staging folder ${stage.dir} could not be removed (${left}): delete it.\n`);
   }
+  if (!result.ok || !stage.pages) return result;
+  // The staging folder found replaced at any check, its removal included (after the last read): what was read from it cannot be told
+  // from what the link supplied, so none of it is published nor reported as the app's pages. Nothing has been written to pages/ yet.
+  if (left === 'UNSAFE_OUTPUT' || stage.refused()) {
+    throw Object.assign(new Error(`refusing to use the pages read back from the download's staging folder ${stage.dir}: it is no longer the folder this download made there (a link or junction was put in its place, or above it, or it was moved), so what was read from it is not used, and pages/ was not written`), { code: 'UNSAFE_OUTPUT', reason: 'link' });
+  }
+  const pagesRoot = path.join(path.resolve(options.outDir), 'pages');
+  const pages = stage.pages;
+  return { ...result, stagedPages: { check: () => assertPageTreeReplaceable(pagesRoot), publish: () => writePageTree(pagesRoot, pages) } };
 }
 
-async function downloadApp({ sdk, genpage, outDir, appId, appUnique, allowLossy = false, resetPageKeys = false, concurrency, languageCode, includeCapabilities = false, captureTheme = includeCapabilities, stage = null }) {
+async function downloadApp({ sdk, genpage, outDir, appId, appUnique, allowLossy = false, resetPageKeys = false, concurrency, languageCode, includeCapabilities = false, captureTheme = includeCapabilities, stage = null, deferReport = false }) {
   concurrency = validatedDownloadConcurrency(concurrency);
   // The caller named this directory. A link at its final component would make every page and
   // the spec land outside it. Ancestors are the caller's choice and are not inspected.
@@ -3239,15 +3670,18 @@ async function downloadApp({ sdk, genpage, outDir, appId, appUnique, allowLossy 
     if (!read.ok) return { ok: false, error: `page download failed: ${read.errors.join('; ')}` };
     // Staged (see runDownload): the tree is written, read back and reverse-resolved under the staging folder, which stands in for
     // <out> so each page's codeFile (relative to it) is the one a direct download gives.
-    if (stage) stage.dir = makePageStage(outDir);
+    if (stage) Object.assign(stage, makePageStage(outDir));
     const treeRoot = stage ? path.join(stage.dir, 'pages') : pagesRoot;
     const writeRoot = stage ? stage.dir : outDir;
-    writePageTree(treeRoot, read.pages);
+    // Every read and write under the staging folder goes through its guarded fs (generatedFolders): what is read back from it is what
+    // is published and stated in the spec. Unstaged (a library caller), the download reads and writes pages/ itself.
+    const pageTreeFs = stage ? stage.fs : fs;
+    writePageTree(treeRoot, read.pages, { fs: pageTreeFs });
 
     const unreadableConfigs = [];
     const unkeptModels = [];
     const unkeptBindings = [];
-    pages = parseDownloadedPages(treeRoot, writeRoot, nameById, unreadableConfigs, unkeptModels, unkeptBindings);
+    pages = parseDownloadedPages(treeRoot, writeRoot, nameById, unreadableConfigs, unkeptModels, unkeptBindings, pageTreeFs);
     // A read error names the file it read; name the one the maker will find.
     if (stage) for (const u of unreadableConfigs) u.reason = String(u.reason).split(stage.dir).join(path.resolve(outDir));
     // Reported, not gated: a page whose model is left out rebuilds exactly as every page did before the spec carried models — an
@@ -3300,17 +3734,17 @@ async function downloadApp({ sdk, genpage, outDir, appId, appUnique, allowLossy 
     // reverseResolveNavIdsReport); the ids it leaves are reported below.
     for (const p of pages) {
       const abs = path.join(writeRoot, p.codeFile);
-      assertPlainFileTarget(abs);                         // FAIL on a planted link (no swallow, no write)
-      const src = fs.readFileSync(abs, 'utf8');           // FAIL on a read error (no swallow)
+      assertPlainFileTarget(abs, { fs: pageTreeFs });     // FAIL on a planted link (no swallow, no write)
+      const src = pageTreeFs.readFileSync(abs, 'utf8');   // FAIL on a read error (no swallow)
       const rev = reverseResolveNavIdsReport(src, idToKey); // structural — nav pageId literals only
-      if (rev.code !== src) writeFileSafe(abs, rev.code, { encoding: 'utf8' }); // FAIL on a write error (no swallow)
+      if (rev.code !== src) writeFileSafe(abs, rev.code, { encoding: 'utf8', fs: pageTreeFs }); // FAIL on a write error (no swallow)
       for (const left of rev.left) navIdsLeft.push({ page: p.name, ...left });
     }
     // The staged tree as it now is on disk, read back whole, for runDownload to publish: the bytes writePageTree will write again.
     if (stage) {
       stage.pages = read.pages.map(({ pageId, files }) => ({
         pageId,
-        files: Object.fromEntries(Object.keys(files).map((name) => [name, fs.readFileSync(path.join(treeRoot, pageId, name), 'utf8')])),
+        files: Object.fromEntries(Object.keys(files).map((name) => [name, pageTreeFs.readFileSync(path.join(treeRoot, pageId, name), 'utf8')])),
       }));
     }
     // Every page id of this app still in a downloaded page is reported, whether a call the checker recognised holds it or not (see
@@ -3704,7 +4138,10 @@ async function downloadApp({ sdk, genpage, outDir, appId, appUnique, allowLossy 
       const scope = solutionUnreadable
         ? new Error(`the solutions this app belongs to could not be read (${solutionUnreadable})`)
         : (solutionCandidates || solution.uniqueName);
-      capturedInventory = await readDescriptionInventory(sdk, appId, scope, referenced, componentInventory, { tables: [...allLogicals, ...appTables] });
+      // The columns this download secures, whose field security profiles the inventory names (readFieldSecurityProfiles).
+      const securedColumns = [];
+      for (const e of entities || []) for (const c of (e && e.columns) || []) if (c && c.isSecured === true && e.schemaName && c.schemaName) securedColumns.push({ table: String(e.schemaName).toLowerCase(), column: String(c.schemaName).toLowerCase() });
+      capturedInventory = await readDescriptionInventory(sdk, appId, scope, referenced, componentInventory, { tables: [...allLogicals, ...appTables], securedColumns });
       return capturedInventory;
     },
   };
@@ -3742,25 +4179,32 @@ async function downloadApp({ sdk, genpage, outDir, appId, appUnique, allowLossy 
   // reported failure was not that they are omitted — that is a documented limitation — but that
   // NOTHING said so, so a second session reading the spec could not tell "this app has no views"
   // from "this download does not carry views".
-  //
-  // Round-tripped means DECLARED in the emitted spec, so subtract `spec.globalChoices` — not the raw
-  // `globalChoiceDecls` candidates, which also hold sets bound only by a filtered attribute or a
-  // dropped table. Subtracting those hid a set the spec never re-declares: a silent loss in the one
-  // report whose job is naming them.
-  const declaredGlobalChoices = new Set((spec.globalChoices || []).map((g) => String(g && g.name).toLowerCase()));
-  let notRoundTripped = notRoundTrippedSummary(roundTrippedAware(capturedInventory, declaredGlobalChoices));
   // The notes come in the order the component rows were read, which Dataverse does not fix (compareNotes).
   const membershipNotes = [...componentInventory.notes, ...mainFormMembership.notes].sort(compareNotes);
-  if (membershipNotes.length) {
-    notRoundTripped = { ...(notRoundTripped || { classes: [], total: 0, entities: [] }), appMembership: membershipNotes };
-  }
-  if (notRoundTripped) process.stderr.write(notRoundTrippedWarning(notRoundTripped));
+  const notRoundTripped = notRoundTrippedReport(capturedInventory, spec, membershipNotes);
+  // `deferReport` (main's managed download, and only it): the report is not printed here but handed back as its parts
+  // (`deferredReport`), because the managed restore may yet put some of what it names back into the spec. main prints it once,
+  // after the restore, without what was restored. Every other caller gets the report printed here, as it always was.
+  if (notRoundTripped && !deferReport) process.stderr.write(notRoundTrippedWarning(notRoundTripped));
   if (relationshipsSkipped.length) process.stderr.write(relationshipsSkippedWarning(relationshipsSkipped));
+  // Printed by every download, plain and managed alike: no restore declares a profile (readFieldSecurityProfiles).
+  const fieldSecurityOmitted = fieldSecurityProfileOmissions(capturedInventory);
+  if (fieldSecurityOmitted.length) process.stderr.write(fieldSecurityProfilesNote(fieldSecurityOmitted));
   const droppedSubareas = typeof spec.droppedSubareas === 'number' ? spec.droppedSubareas : droppedSubareaCount(app, spec);
   const droppedSubareaDetails = Array.isArray(spec.droppedSubareaDetails) ? spec.droppedSubareaDetails : [];
   // `publisher` is internal (main hands it to the managed restore, which downloads a form's handler library only under this
   // publisher's verified prefix); it is not part of the printed result.
-  return { ok: true, spec, pages, entities, webResources, droppedSubareas, droppedSubareaDetails, dashboardReconstructionError, dashboardWarnings, notRoundTripped, relationships, relationshipsSkipped, publisher: { prefix: solution.publisherPrefix, resolved: solution.prefixResolved }, ...(navIdsLeft.length ? { navIdsLeft } : {}), ...(pageBindings ? { pageBindings } : {}), ...(solutionCandidates ? { solutionCandidates } : {}) };
+  return { ok: true, spec, pages, entities, webResources, droppedSubareas, droppedSubareaDetails, dashboardReconstructionError, dashboardWarnings, notRoundTripped, relationships, relationshipsSkipped, publisher: { prefix: solution.publisherPrefix, resolved: solution.prefixResolved }, ...(navIdsLeft.length ? { navIdsLeft } : {}), ...(pageBindings ? { pageBindings } : {}), ...(solutionCandidates ? { solutionCandidates } : {}), ...(fieldSecurityOmitted.length ? { fieldSecurityProfiles: { omitted: fieldSecurityOmitted } } : {}), ...(deferReport ? { deferredReport: { inventory: capturedInventory, membershipNotes } } : {}) };
+}
+
+// `error` with `sequel` (what the refusal or failure means for the app folder) added to its message. Its code and reason are kept, so a
+// caller that tells one failure from another by them still can; the original is its cause.
+function withSequel(error, sequel) {
+  if (!error || typeof error.message !== 'string') return error;
+  const told = new Error(`${error.message.replace(/\.\s*$/, '')}. ${sequel}`, { cause: error });
+  if (error.code !== undefined) told.code = error.code;
+  if (error.reason !== undefined) told.reason = error.reason;
+  return told;
 }
 
 async function main(deps = {}) {
@@ -3891,13 +4335,15 @@ async function main(deps = {}) {
     // The page backend reads through the download's own throwaway SDK, lent to it: nothing of its own to make or remove.
     const genpage = io.makeGenpageSdk(env, { sdk });
 
-    // The managed download stages its page tree (runDownload `stagePages`): it is published below, after everything that can still stop it.
-    const result = await io.runDownload({ sdk, genpage, outDir, appId, appUnique, allowLossy: allowLossyDownload, resetPageKeys, languageCode: session.languageCode, includeCapabilities, ...(includeManaged ? { stagePages: true } : {}) });
+    // Every download stages its page tree (runDownload `stagePages`): it is checked and published below, after everything that can still
+    // stop the download, so a refusal or a failure before then leaves the maker's pages/ exactly as it was.
+    const result = await io.runDownload({ sdk, genpage, outDir, appId, appUnique, allowLossy: allowLossyDownload, resetPageKeys, languageCode: session.languageCode, includeCapabilities, stagePages: true, ...(includeManaged ? { deferReport: true } : {}) });
     // The run's last writes: these lines, then the result and the exit, with no turn of the event loop between them — made blocking (lib/output-redaction.js).
     makeWritesBlocking(process.stdout, io.stderr);
     if (!result.ok) { finish(false, result); return; }
 
-    const { spec, pages, entities, webResources, droppedSubareas, droppedSubareaDetails, dashboardReconstructionError, dashboardWarnings, notRoundTripped, solutionCandidates, navIdsLeft, pageBindings } = result;
+    const { spec, pages, entities, webResources, droppedSubareas, droppedSubareaDetails, dashboardReconstructionError, dashboardWarnings, solutionCandidates, navIdsLeft, pageBindings, fieldSecurityProfiles } = result;
+    let { notRoundTripped } = result;
     if (droppedSubareas > 0 || dashboardReconstructionError) {
       const droppedList = (droppedSubareaDetails || [])
         .map((d) => `${d.type}${d.id ? `:${d.id}` : ''}${d.title ? ` (${d.title})` : ''}`)
@@ -3927,15 +4373,27 @@ async function main(deps = {}) {
     // dashboards[], in place of the plain entry the download reconstructed for it (lib/declared-dashboard-io.js restoreManagedDashboards),
     // and each declared business rule into businessRules[] (lib/declared-rule-io.js restoreManagedRules), which the plain download leaves out;
     // and each declared business process flow into businessProcessFlows[] (lib/declared-bpf-io.js restoreManagedBpfs), which it leaves out too;
+    // and each declared view a stable build created into views[] (lib/declared-view-io.js restoreManagedViews), which it leaves out too;
+    // and each declared chart a stable build created into charts[] (lib/declared-chart-io.js restoreManagedCharts), which it leaves out too;
     // every other is named, never silently dropped. A store file that is not this app's on this environment stops the download before
     // anything is written.
     let managedForms = null;
     let managedDashboards = null;
     let managedRules = null;
     let managedBpfs = null;
+    let managedViews = null;
+    let managedCharts = null;
+    let managedConfiguration = null;
     // The proved items the restore leaves out only for what the download cannot bring (lib/managed-fragments.js).
     const fragments = [];
+    // The store's bytes as the restore first reads them: every family below reads the file on its own, so a build that rewrote it
+    // in between would have them prove against two revisions. Rechecked before anything is published (assertStoreUnchanged). A
+    // store that cannot be read here is left to the restore, which names a missing or foreign file in its own words.
+    let storeRev = null;
+    // The ids the restore put back into the spec, by inventory class (lib/managed-restore-report.js subtractRestored).
+    const restoredIds = {};
     if (includeManaged) {
+      try { storeRev = storeRevision(managedManifestFile); } catch { /* named by the restore below */ }
       const source = {
         sdk,
         spec,
@@ -3946,12 +4404,20 @@ async function main(deps = {}) {
         validate: (s) => io.validateAppSpec(s, { profile: 'plan', reconstructed: true }),
         fragments,
         publisher: result.publisher,
+        // The environment's connections, read as a build reads them (list-connections.js readConnections), and only when a page names a
+        // connection reference whose row holds a connection: such a reference is restored only when they prove it bound to its connector,
+        // the proof the rebuild's page gate asks for (lib/declared-configuration-io.js acceptReference). A failed read proves nothing, so
+        // the reference is left out (page-unready); it never stops the download.
+        connections: deps.connections || (async () => (await readConnections(dataverseOrigin(env))).value),
       };
       try {
         managedForms = await restoreManagedForms(source);
         managedDashboards = await restoreManagedDashboards(source);
         managedRules = await restoreManagedRules(source);
         managedBpfs = await restoreManagedBpfs(source);
+        managedViews = await restoreManagedViews(source);
+        managedCharts = await restoreManagedCharts(source);
+        managedConfiguration = await restoreManagedConfiguration(source);
       } catch (e) {
         finish(false, { ok: false, code: (e && e.code) || 'managed-manifest-unusable', error: `${(e && e.message) || e}. Nothing was written.` });
         return;
@@ -3962,6 +4428,22 @@ async function main(deps = {}) {
       for (const s of managedRules.stale) io.stderr.write(`WARNING: managed business rule ${s.key} was not restored: ${s.reason}. It is left out of businessRules[], as every business rule is without --include-managed.\n`);
       for (const s of managedBpfs.stale) io.stderr.write(`WARNING: managed business process flow ${s.key} was not restored: ${s.reason}. It is left out of businessProcessFlows[], as every process flow is without --include-managed.\n`);
       for (const p of managedBpfs.personas || []) io.stderr.write(`NOTE: persona '${p.name}' was written from its role as it is now; a build owns a persona's role, so a privilege added to that role outside the spec is removed by the next build.\n`);
+      for (const o of managedViews.omitted) io.stderr.write(`WARNING: managed view ${o.key || o.id} was not restored: ${o.reason}. It is left out of views[], as every view is without --include-managed.\n`);
+      restoredIds.views = managedViews.restored.map((r) => r.id);
+      for (const o of managedCharts.omitted) io.stderr.write(`WARNING: managed chart ${o.key || o.id} was not restored: ${o.reason}. It is left out of charts[], as every chart is without --include-managed.\n`);
+      restoredIds.charts = managedCharts.restored.map((r) => r.id);
+      // Protected configuration (lib/declared-configuration-io.js): an item left out is named as every family's is; an item restored
+      // without some of its parts (a default, a value, a connection) names those parts, never their values.
+      for (const [list, r] of Object.entries(managedConfiguration)) {
+        for (const o of r.omitted) io.stderr.write(`WARNING: managed ${o.kind} ${o.key || o.id} was not restored: ${o.reason}. It is left out of ${list}[], as every ${o.kind} is without --include-managed.\n`);
+        for (const w of r.withheld) io.stderr.write(`NOTE: managed ${w.kind} ${w.key || w.id} was restored without ${w.fields.join(', ')}: ${w.reason}.\n`);
+      }
+      // The report runDownload deferred (`deferReport`), less what was restored, printed once. A runDownload that hands back no
+      // deferred parts printed its own report already (or had none), so nothing is printed twice.
+      if (result.deferredReport) {
+        notRoundTripped = notRoundTrippedReport(subtractRestored(result.deferredReport.inventory, restoredIds), spec, result.deferredReport.membershipNotes);
+        if (notRoundTripped) io.stderr.write(notRoundTrippedWarning(notRoundTripped));
+      }
     }
     const validation = io.validateAppSpec(spec, { profile: 'plan', reconstructed: true });
     if (!validation.ok) {
@@ -3980,12 +4462,32 @@ async function main(deps = {}) {
         + '  Review each: change to "selector" if opening the page from the navigation should show a record picker.\n'
       );
     }
-    // The fragments file is settled before anything is published: the staged page tree, the spec and the baseline are written only
-    // after it, so a refusal or a failed write here leaves every one of them as it was. The page tree's own checks come first, so a
-    // tree that cannot be replaced stops the download before the fragments file is written.
+    // The staged page tree is published here, for every download, after validation and everything else that can stop the download: its
+    // checks first (writePageTree's own refusals, made without writing, and the refusals writeFileSafe would make of app-spec.json —
+    // a link, a folder, a hard link, a read-only file or a folder where no new file can be made), then, for the managed download, the
+    // fragments file, then the tree, and only then the spec and the baseline. So a refusal or a failed write before this point leaves
+    // pages/, the spec and the baseline as they were, and a tree or a spec that cannot be replaced stops the managed download before its
+    // fragments file is written, with or without a page tree: a managed download of an app with no generative pages has no tree to check,
+    // but its fragments file is still written before the spec. The spec is still written after the tree, and the two are not one transaction: a write of it that
+    // fails for a reason no look beforehand can see (a full disk, a lock taken meanwhile) comes after the tree is published.
     let managedFragments = null;
     if (includeManaged) {
+      try {
+        assertStoreUnchanged(managedManifestFile, storeRev);
+      } catch (e) {
+        finish(false, { ok: false, code: e.code, error: `${e.message}. Nothing was written.` });
+        return;
+      }
+    }
+    if (result.stagedPages || includeManaged) {
       if (result.stagedPages) result.stagedPages.check();
+      try {
+        assertFileReplaceable(specPath);
+      } catch (e) {
+        throw withSequel(e, `The download stopped before replacing anything: ${path.join(outDir, 'pages')} and ${specPath} are as they were`);
+      }
+    }
+    if (includeManaged) {
       try {
         managedFragments = settleFragments(outDir, { app: appUnique, items: fragments });
       } catch (e) {
@@ -3995,9 +4497,18 @@ async function main(deps = {}) {
       if (managedFragments) {
         io.stderr.write(`WARNING: ${managedFragments.keys.length} managed item(s) left out only for what the download could not bring are written ready to paste in ${managedFragments.file}: add each "paste" entry to app-spec.json together with what its "needs" lists (from the spec it was built from), then build.\n`);
       }
-      if (result.stagedPages) result.stagedPages.publish();
     }
-    writeFileSafe(specPath, JSON.stringify(spec, null, 2));
+    if (result.stagedPages) result.stagedPages.publish();
+    try {
+      writeFileSafe(specPath, JSON.stringify(spec, null, 2));
+    } catch (e) {
+      if (!result.stagedPages) throw e;
+      // Only what is known is said: the page tree was published, and then the write of the spec reported an error. What the spec on
+      // disk is now, and whether it matches the pages, is not: the app may be unchanged (the spec already matched), a rename can take
+      // effect and still report an error, and the swap keeps the previous tree when it cannot remove its folder (writePageTree warns
+      // of that itself). Running the same download again writes both once the cause is resolved.
+      throw withSequel(e, `This download had already published its page tree to ${path.join(outDir, 'pages')} when the write of ${specPath} reported this error, so whether ${specPath} matches those pages has not been confirmed: resolve the error and run the same download again`);
+    }
     // AB#6726727: the spec just written is this app's server-current edit snapshot, so it is the baseline a later build
     // lines the live sitemap up against — a nav change made in the designer after this download is then
     // kept, not reverted by the now-stale spec. Its dashboard and page ids were read from this
@@ -4012,9 +4523,22 @@ async function main(deps = {}) {
     } catch (e) {
       if (e && e.code === 'UNSAFE_OUTPUT') io.stderr.write(`WARNING: ${e.message}\n`);
     }
+    // A view or chart restore says something only when it restored or left out a group: a store with neither family answers the
+    // result a managed download gave before views and charts were restored, byte for byte.
+    const familyResult = (r) => (r && (r.restored.length || r.omitted.length) ? { restored: r.restored.map((x) => x.key), omitted: r.omitted } : null);
+    const viewsResult = familyResult(managedViews);
+    const chartsResult = familyResult(managedCharts);
+    // A configuration list says something only when it restored, left out or withheld part of an item, under its own key, so a store
+    // without protected configuration answers the result a managed download gave before it was restored, byte for byte.
+    const CONFIGURATION_RESULTS = { environmentVariables: 'managedEnvironmentVariables', connectionReferences: 'managedConnectionReferences', customApis: 'managedCustomApis', duplicateDetectionRules: 'managedDuplicateDetectionRules' };
+    const configurationResults = {};
+    for (const [list, r] of Object.entries(managedConfiguration || {})) {
+      if (!r.restored.length && !r.omitted.length && !r.withheld.length) continue;
+      configurationResults[CONFIGURATION_RESULTS[list]] = { restored: r.restored.map((x) => x.key), omitted: r.omitted, ...(r.withheld.length ? { withheld: r.withheld } : {}) };
+    }
     // Each optional field is in the result only when it has something to say. `navIdsLeft` is absent in the usual case (runDownload leaves it out when no id is
     // left) and could be an empty list from another producer, so it is checked for both: an empty list is no finding.
-    finish(true, { ok: true, spec: specPath, pages: pages.length, entities: entities.length, webResources: webResources.length, droppedSubareas, ...(notRoundTripped ? { notRoundTripped } : {}), ...(defaulted.length ? { directEntryDefaulted: defaulted } : {}), ...(navIdsLeft && navIdsLeft.length ? { navIdsLeft } : {}), ...    (pageBindings ? { pageBindings } : {}), ...(solutionCandidates ? { solutionCandidates } : {}), ...(managedForms ? { managedForms } : {}), ...(managedDashboards ? { managedDashboards } : {}), ...(managedRules ? { managedRules } : {}), ...(managedBpfs ? { managedBpfs } : {}), ...(managedFragments ? { managedFragments } : {}) });
+    finish(true, { ok: true, spec: specPath, pages: pages.length, entities: entities.length, webResources: webResources.length, droppedSubareas, ...(notRoundTripped ? { notRoundTripped } : {}), ...(defaulted.length ? { directEntryDefaulted: defaulted } : {}), ...(navIdsLeft && navIdsLeft.length ? { navIdsLeft } : {}), ...    (pageBindings ? { pageBindings } : {}), ...(solutionCandidates ? { solutionCandidates } : {}), ...(managedForms ? { managedForms } : {}), ...(managedDashboards ? { managedDashboards } : {}), ...(managedRules ? { managedRules } : {}), ...(managedBpfs ? { managedBpfs } : {}), ...(viewsResult ? { managedViews: viewsResult } : {}), ...(chartsResult ? { managedCharts: chartsResult } : {}), ...configurationResults, ...(managedFragments ? { managedFragments } : {}), ...(fieldSecurityProfiles ? { fieldSecurityProfiles } : {}) });
   } finally {
     try { if (session) session.cleanup(); } catch { /* best-effort: the result below matters more */ }
     if (outcome) io.emitResult(...outcome);
@@ -4085,4 +4609,4 @@ if (require.main === module) {
   main().catch((err) => emitResult(false, err));
 }
 
-module.exports = { untypedColumnNames, untypedColumnWarnings, collectGlobalChoices, finalizeGlobalChoices, roundTrippedAware, isRoleRestrictedFormXml, notRoundTrippedSummary, notRoundTrippedWarning, relationshipsSkippedWarning, labelFromDataverse, columnDisplayName, resolveAppId, collectSitemap, appComponentEntities, parseDownloadedPages, pageBindingsReport, pageBindingsNote, readPreviousPageKeys, assignPageKeys, missingDownloads, entityFromMetadata, readEntityWithDescriptions, readDescriptionInventory, readAppShellSettings, iconWebResources, readDashboards, readRelationships, droppedSubareaCount, recoverAppSolution, runDownload, preserveAuthoredLanguageCode, makeDownloadSdk, compareText, main };
+module.exports = { untypedColumnNames, untypedColumnWarnings, collectGlobalChoices, finalizeGlobalChoices, roundTrippedAware, isRoleRestrictedFormXml, notRoundTrippedSummary, notRoundTrippedReport, notRoundTrippedWarning, relationshipsSkippedWarning, labelFromDataverse, columnDisplayName, resolveAppId, collectSitemap, appComponentEntities, parseDownloadedPages, pageBindingsReport, pageBindingsNote, readPreviousPageKeys, assignPageKeys, missingDownloads, entityFromMetadata, readEntityWithDescriptions, readDescriptionInventory, fieldSecurityProfileOmissions, fieldSecurityProfilesNote, readAppShellSettings, iconWebResources, readDashboards, readRelationships, droppedSubareaCount, recoverAppSolution, runDownload, writePageTree, generatedFolders, GUARDED_FS_METHODS, preserveAuthoredLanguageCode, makeDownloadSdk, compareText, main };

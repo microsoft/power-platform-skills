@@ -38,7 +38,7 @@ The catalog is rendered from recipe metadata. Recipes are starting points, not c
 - Template: `field-virtual`.
 - Hosts: model-driven apps; Power Pages not certified in this release.
 - Key property: `EventName`.
-- Limits: one customizer per grid, model-driven only, pure renderers/editors. The editor preserves the typed-start character from the official grid customizer `charPress` callback.
+- Limits: one customizer per grid, model-driven only, pure renderers/editors. The editor preserves the typed-start character from the official grid customizer `charPress` callback. A Choice renderer example, for `OptionSet` columns, shows the grid's formatted label.
 
 ## Hierarchy Tree
 

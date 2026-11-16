@@ -10,10 +10,11 @@ function pluginLib(name) { return require(path.join(__dirname, '..', '..', '..',
 // helpers and performs no I/O at require time, so it is safe to load from the offline harness.
 function pluginLib2(name) { return require(path.join(__dirname, '..', '..', '..', '..', 'plugins', 'model-apps', 'scripts', name)); }
 
-const { migrateAppSpec, validateAppSpec, lookupColumnsFor, normalizePageSource, SDK_ROLE_MARKER, FORM_TYPE_CODE, formLayoutNames, subgridRelationshipName } = pluginLib('app-spec.js');
+const { migrateAppSpec, validateAppSpec, lookupColumnsFor, normalizePageSource, SDK_ROLE_MARKER, FORM_TYPE_CODE, formLayoutNames, subgridRelationshipName, choiceValueMap } = pluginLib('app-spec.js');
 const { lintAppSpec } = pluginLib('spec-lint.js');
 const { isDeclaredView, compileViewIntent } = pluginLib('view-reconcile.js');
-const { planFor, PHASES, appDef, viewDef, chartDef, compileFormIntent, formFieldLogicals, defaultViewColumns, enrichesDefaultViews, subgridLabel, personaRoleSpecFor, businessRuleDef, bpfDef } = pluginLib('sdk-build.js');
+const { planFor, PHASES, appDef, viewDef, chartDef, compileFormIntent, formFieldLogicals, defaultViewColumns, enrichesDefaultViews, subgridLabel, personaRoleSpecFor, businessRuleDef, bpfDef, dashboardTileOpts, dashboardComponent } = pluginLib('sdk-build.js');
+const { compileRuleIntent, isDeclaredRule } = pluginLib('rule-settlement.js');
 const { subgridSectionIntent, isNonFieldControl } = pluginLib('artifact-intent.js');
 const { SUBGRID_CLASS_ID, splitSubgrids, columnItems } = pluginLib('form-subgrid-placement.js');
 const { TIMELINE_CLASS_ID, wantsTimeline } = pluginLib('form-timeline.js');
@@ -925,6 +926,88 @@ function processFacts(spec) {
   return { rules, flows };
 }
 
+// The shapes of the DECLARED dashboards, business rules and process flows, read from what the plugin compiles for them (the
+// tile component, the rule intent and the flow definition the build writes) rather than from the spec's own words, so a mapping
+// that drops a size, a binding, a condition or a stage shows up here. Only `reconcile: "declared"` artifacts are read: a plain
+// one is not the maker's to keep. Names are carried for the report and are never compared with the prompt.
+//
+// A tile's view and chart are resolved through synthetic ids shaped `view:<table>|<name>` and `chart:<table>|<name>` (the build's own
+// `<table>|<name>` key), so "this tile is bound to that view" is a string comparison and no environment is involved.
+function declaredShapeFacts(spec) {
+  const declared = (list) => (Array.isArray(list) ? list : []).filter((x) => x && typeof x === 'object' && x.reconcile === 'declared');
+  const created = { views: {}, charts: {} };
+  for (const v of spec.views || []) created.views[`${lc(v.entity)}|${v.name}`] = `view:${lc(v.entity)}|${v.name}`;
+  for (const c of spec.charts || []) created.charts[`${lc(c.entity)}|${c.name}`] = `chart:${lc(c.entity)}|${c.name}`;
+
+  const dashboards = declared(spec.dashboards).map((d) => ({
+    name: d.name,
+    tiles: (d.tiles || []).map((tile, index) => {
+      try {
+        const c = dashboardComponent(dashboardTileOpts(spec, tile, { created }), index);
+        const p = c.parameters || {};
+        return {
+          type: c.type,
+          name: c.name,
+          colspan: c.colspan,
+          rowspan: c.rowspan,
+          entity: p.TargetEntityType ? lc(p.TargetEntityType) : undefined,
+          viewId: p.ViewId,
+          chartId: p.VisualizationId,
+          url: p.Url,
+        };
+      } catch (e) {
+        return { type: tile && tile.type, name: tile && tile.name, error: String((e && e.message) || e) };
+      }
+    }),
+  }));
+
+  // A declared artifact the plugin cannot compile is reported as an `error` shape, so one malformed rule fails its own assertion
+  // with the reason instead of stopping every other fact of the fixture.
+  const shaped = (artifact, read) => {
+    try { return read(artifact); } catch (e) { return { name: artifact && artifact.name, error: String((e && e.message) || e) }; }
+  };
+
+  const rules = declared(spec.businessRules).map((r) => shaped(r, () => {
+    // The same compile the declared-rule build uses; a rule that is not declared never reaches it.
+    const def = isDeclaredRule(r) ? compileRuleIntent(r) : businessRuleDef(r);
+    const root = def.rootCondition || {};
+    const entity = (spec.entities || []).find((e) => lc(e.schemaName) === lc(def.entityLogicalName));
+    const options = entity ? choiceValueMap(entity, spec) : {};
+    return {
+      name: def.name,
+      entity: lc(def.entityLogicalName),
+      scope: def.scope,
+      status: def.status,
+      logic: root.logic,
+      conditions: (root.clauses || []).map((c) => {
+        const byLabel = options[lc(c.field)] || {};
+        return {
+          field: lc(c.field),
+          operator: c.operator,
+          value: c.value,
+          // Every label the compiled value stands for, so "Closed" can be asked of a stored 100000002.
+          options: Object.keys(byLabel).filter((label) => String(byLabel[label]) === String(c.value)),
+        };
+      }),
+      actions: (root.trueBranch || []).map((a) => ({
+        type: a.type,
+        field: lc(a.field),
+        lock: a.lock,
+        required: a.required,
+        visible: a.visible,
+        hasMessage: typeof a.errorMessage === 'string' && a.errorMessage.trim().length > 0,
+      })),
+    };
+  }));
+
+  const flows = declared(spec.businessProcessFlows).map((f) => shaped(f, () => {
+    const def = bpfDef(f);
+    return { name: def.name, entity: lc(def.entityLogicalName), stages: (def.stages || []).map((st) => st.name) };
+  }));
+
+  return { dashboards, rules, flows };
+}
+
 // A synthetic "deployed app" reader built from the spec, so hydrateSpec (the pure download primitive)
 // round-trips offline: the spec is projected into the deployed shapes hydrate consumes (sitemap JSON,
 // pages with a GenPageId, entities, dashboards keyed by id), then hydrated back. Synthetic ids are
@@ -1096,6 +1179,7 @@ async function stageFacts(rawSpec, options = {}) {
     changedOnly: await changedOnlyFacts(spec, options.fixture),
     page: pageFacts(spec),
     process: processFacts(spec),
+    declaredShapes: declaredShapeFacts(spec),
     teardown: teardownFacts(spec),
     download: downloadFacts(spec),
     roundTrip: await roundTripFacts(spec, options),

@@ -552,9 +552,20 @@
         "pages": [],
         "declared": {
           "dashboards": { "minCount": 1 }
-        }
+        },
+        "declaredDashboards": [
+          {
+            "tiles": [
+              { "type": "list", "entity": "cnt_workorder", "view": "Open Work Orders", "minColspan": 2 },
+              { "type": "chart", "entity": "cnt_workorder", "chart": "Work Orders by Status" },
+              { "type": "iframe", "url": "https://contoso.example/field-map", "minRowspan": 13 }
+            ]
+          }
+        ]
       },
-      "expectations": []
+      "expectations": [
+        "process: a declared dashboard holds exactly the tiles the prompt describes, each bound to the view, chart or address it names and sized as asked"
+      ]
     },
     {
       "id": 23,
@@ -573,9 +584,29 @@
         "pages": [],
         "declared": {
           "businessRules": { "tables": ["cnt_request"], "minCount": 2 }
-        }
+        },
+        "declaredRules": [
+          {
+            "when": [{ "field": "cnt_status", "operator": "Equals", "option": "Closed" }],
+            "do": [
+              { "type": "SetBusinessRequired", "field": "cnt_resolution", "required": true },
+              { "type": "LockUnlock", "field": "cnt_notes", "lock": true }
+            ]
+          },
+          {
+            "when": [
+              { "field": "cnt_status", "operator": "Equals", "option": "In Progress" },
+              { "field": "cnt_assignee", "operator": "DoesNotContainData" }
+            ],
+            "logic": "AND",
+            "scope": "AllForms",
+            "do": [{ "type": "ShowErrorMessage", "hasMessage": true }]
+          }
+        ]
       },
-      "expectations": []
+      "expectations": [
+        "process: each declared business rule has the condition, scope and actions the prompt describes"
+      ]
     },
     {
       "id": 24,
@@ -594,9 +625,14 @@
         "pages": [],
         "declared": {
           "businessProcessFlows": { "tables": ["cnt_claim"] }
-        }
+        },
+        "declaredFlows": [
+          { "stages": [{ "pattern": "intake" }, { "pattern": "assess" }, { "pattern": "decision|decide" }] }
+        ]
       },
-      "expectations": []
+      "expectations": [
+        "process: a declared process flow has exactly the stages the prompt names, in order"
+      ]
     },
     {
       "id": 25,

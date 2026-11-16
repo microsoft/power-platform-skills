@@ -1050,6 +1050,10 @@ async function confirmUncertainPublication({ store, barrier, scope, client, read
 // success, as before. Returns the failure to raise, or null.
 const PUBLISH_ANSWERED = new Set(['submitted', 'verified', 'unverifiable']);
 const PUBLISH_NOT_REQUESTED = new Set(['none', 'notApplicable', 'notRequested']);
+// Whether a publishArtifact answer is positive proof that its publish request was sent and answered success: only the kinds above that
+// say so. A no-request kind (the real SDK answers `notApplicable` for an artifact it has nothing to publish for, sending nothing), a
+// failure, an unknown kind and an answer with no kind prove nothing. `shipped` is not read: a `submitted` answer has `shipped: false`.
+const publishAnswerProvesPublication = (answer) => !!(answer && answer.publish && typeof answer.publish === 'object' && PUBLISH_ANSWERED.has(answer.publish.kind));
 
 // How long publishManagedScope waits before each repeated read-back of a publish whose first read does not show it yet:
 // 45 s in all, as the live reads that first agreed came 42 s after the publish answered (see the read-back below).
@@ -1395,6 +1399,7 @@ async function publishManagedScope({ store, barrier, scope, groups, client, read
 }
 module.exports = {
   PUBLICATION_UNVERIFIED,
+  publishAnswerProvesPublication,
   PUBLICATION_UNCONFIRMED,
   PUBLICATION_REFUSED,
   LAYER_READER_MISSING,

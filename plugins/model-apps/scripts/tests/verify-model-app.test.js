@@ -1005,6 +1005,22 @@ test('verify CLI still verifies the deployment of a table whose primaryAttribute
   assert.deepStrictEqual(result.warnings, [PRIMARY_ATTRIBUTE_TYPO]);
 });
 
+// --- a view that carries a key it does not take ---------------------------------------------------------------------------------------
+// The build and the lint refuse a key a `views[]` entry does not take (#827); a release before that check accepted one and built the view without
+// that part. Verification passes viewKeys: 'warn': a warning that names the key and the key it most likely meant, and the verdict is the deployment's.
+const VIEW_KEY_TYPO = "view 'Red tickets': unknown key 'filter' — did you mean 'filters'?; the build does not read it, so it is refused rather than built without it (allowed: entity, name, description, columns, sort, filters, activeOnly, reconcile, key, viewId, linkEntities)";
+
+test('verify CLI still verifies the deployment of a view that carries a key it does not take — and warns, naming the key', async () => {
+  const spec = { ...appSpec({ columns: [column({ type: 'Text' })] }), views: [{ entity: 'new_ticket', name: 'Red tickets', columns: ['new_name'], filter: [{ attr: 'new_ref', op: 'eq', value: 'red' }] }] };
+  const { reads, emitted, stderr } = await verifyOlderSpec(spec);
+  const result = JSON.parse(JSON.stringify(emitted.payload));
+  assert.ok(Number.isInteger(result.total) && result.total > 0 && Array.isArray(result.missing), `a verdict, not a refusal: ${JSON.stringify(result)}`);
+  assert.ok(reads.includes('columns new_ticket'), `the deployed columns were read: ${JSON.stringify(reads)}`);
+  assert.ok(stderr.includes(`WARNING: ${VIEW_KEY_TYPO}\n`), stderr);
+  assert.ok(result.warnings.includes(VIEW_KEY_TYPO), JSON.stringify(result.warnings));
+  assert.ok(!result.errors.some((e) => /unknown key/.test(e)), JSON.stringify(result.errors));
+});
+
 // --- the result JSON carries what stderr warns -----------------------------------------------------------------------------------------
 // A person reads the `WARNING:` lines verify prints, but a caller that reads only the JSON result — a skill, a pipeline — lost them. The result's optional
 // `warnings` array holds the same messages, without the prefix and in the order they were printed, and is left out when there is none, as `unverified` is.

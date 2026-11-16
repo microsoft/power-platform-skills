@@ -49,7 +49,7 @@ test('lint-pcf fails with structured JSON when a project contains no manifests',
     assert.deepEqual(payload.results, []);
     assert.match(payload.error, /No ControlManifest\.Input\.xml files were found/);
   } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
 

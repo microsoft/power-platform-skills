@@ -1800,8 +1800,11 @@ function makeRunner({ emit, total, throttle }) {
         emit(outcome({ phase, status: 'skip', label: `${label} (${typeof why === 'string' ? why : 'exists'})`, n: myN, total }));
         return undefined;
       }
-      emit(outcome({ phase, status: 'error', label, n: myN, total, detail: String((err && err.message) || err) }));
-      throw new BuildHalt(`${phase} failed: ${(err && err.message) || err}${operatorRemedy(err)}`, { phase, code: (err && err.code) || 'sdk-error', recoverable, cause: err, retry: retryPolicyFor(err) });
+      // A build with commandStates marks an error thrown at a table publication with the checked words the halt says of it
+      // (command-state-contract.js withCheckedDisplay); any other error, and every error without commandStates, is said by its own.
+      const shown = require('./command-state-contract.js').checkedDisplay(err);
+      emit(outcome({ phase, status: 'error', label, n: myN, total, detail: shown.text }));
+      throw new BuildHalt(`${phase} failed: ${shown.text}${operatorRemedy(err)}`, { phase, code: shown.code, recoverable, cause: err, retry: retryPolicyFor(err) });
     }
   };
   const skip = (phase, label) => { emit({ phase, status: 'skip', label, n: (n += 1), total }); };

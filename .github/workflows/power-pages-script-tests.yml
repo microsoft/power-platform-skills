@@ -45,6 +45,11 @@ jobs:
               working-directory: plugins/power-pages/scripts/tests
               run: node --test
 
+            - name: run-site-configuration-comparison-tests
+              shell: bash
+              working-directory: plugins/power-pages/skills/compare-site-configurations/scripts/tests
+              run: node --test
+
             # Node 22 can parse TypeScript templates with its built-in API, so
             # template execution needs no compiler dependency. Keep the full
             # script suite on Node 20 to preserve the plugin's runtime baseline.

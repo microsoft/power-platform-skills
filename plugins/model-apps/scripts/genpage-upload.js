@@ -498,9 +498,11 @@ async function main(argv = process.argv.slice(2), deps = {}) {
   // its base check, and only a key that page did not have stops the upload (below, once it is read).
   const styleProblems = griffelStyleProblems(checkedText).problems;
   // The checker command the message suggests names the file: as one argument no shell reads anything in, or — for a path a shell cannot be given literally — as a
-  // placeholder, with the path named in a sentence instead (lib/cli-failure.js commandArg; a path can come from an untrusted checkout).
+  // placeholder, with the path named in a sentence instead (lib/cli-failure.js commandArg; a path can come from an untrusted checkout). For an update it adds
+  // `--existing`: the checker also judges the page's scroll context, which an already deployed page may lack, and holding it to that as a new page would turn a
+  // Griffel fix into a layout rewrite the maker did not ask for — with `--existing` those findings are notes (references/rules.md, Styling gotchas 6).
   const griffelFile = commandArgOrPlaceholder(flags['code-file'], '<file>');
-  const griffelWords = { surface: 'upload', subject: flags['code-file'], command: `node scripts/check-griffel-styles.js --file ${griffelFile.arg}`, ...(griffelFile.note ? { note: griffelFile.note } : {}) };
+  const griffelWords = { surface: 'upload', subject: flags['code-file'], command: `node scripts/check-griffel-styles.js --file ${griffelFile.arg}${updating ? ' --existing' : ''}`, ...(griffelFile.note ? { note: griffelFile.note } : {}) };
   const stylesRefusal = (problems) => ({
     ok: false,
     code: 'griffel-shorthand',

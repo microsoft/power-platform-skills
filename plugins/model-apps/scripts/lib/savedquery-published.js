@@ -92,6 +92,17 @@ function savedQueryLayerSha256(family, layer) {
  * not evidence that the layers are equal, nor that they differ.
  */
 async function readSavedQueryLayers(family, client, group) {
+  const { savedSha256, publishedSha256 } = await readSavedQueryLayerRows(family, client, group);
+  return { savedSha256, publishedSha256 };
+}
+
+/**
+ * readSavedQueryLayers with the rows it hashed: { saved, published, savedSha256, publishedSha256 }, each row holding the compared
+ * fields and the description; `published` is null for a row that was never published. The managed download's chart restore
+ * (lib/declared-chart-io.js) checks the published chart's XML with the verifier through it, so the XML it checks is the very
+ * row whose hash it compared.
+ */
+async function readSavedQueryLayerRows(family, client, group) {
   const t = TABLES[family];
   if (!t) throw unverified(`"${family}" is not a view or chart family`);
   const id = normalizeGuid(group && group.root && group.root.id);
@@ -102,10 +113,10 @@ async function readSavedQueryLayers(family, client, group) {
   if (!ok(savedRes)) throw unverified(`the saved ${family} ${id} could not be read (status ${savedRes && savedRes.status})`);
   const saved = rowOf(t, savedRes, id, 'saved', family);
   const pubRes = await get(client, `/${t.collection}(${id})?${select}`, id, 'published', family);
-  if (pubRes && pubRes.status === 404 && errorCode(pubRes.body) === NOT_FOUND) return { savedSha256: savedQueryLayerSha256(family, saved), publishedSha256: NEVER_PUBLISHED_SHA256 };
+  if (pubRes && pubRes.status === 404 && errorCode(pubRes.body) === NOT_FOUND) return { saved, published: null, savedSha256: savedQueryLayerSha256(family, saved), publishedSha256: NEVER_PUBLISHED_SHA256 };
   if (!ok(pubRes)) throw unverified(`the published ${family} ${id} could not be read (status ${pubRes && pubRes.status})`);
   const published = rowOf(t, pubRes, id, 'published', family);
-  return { savedSha256: savedQueryLayerSha256(family, saved), publishedSha256: savedQueryLayerSha256(family, published) };
+  return { saved, published, savedSha256: savedQueryLayerSha256(family, saved), publishedSha256: savedQueryLayerSha256(family, published) };
 }
 
-module.exports = { readSavedQueryLayers, savedQueryLayerSha256 };
+module.exports = { readSavedQueryLayers, readSavedQueryLayerRows, savedQueryLayerSha256 };

@@ -74,6 +74,8 @@ const { sameFormXmlAcrossLayers } = require('./lib/formxml-layers.js');
 // The app's id and the ids of the roles associated with it live in lib/app-roles.js: the design document reads the same relationship. Still exported from here.
 const { appIdFor, appRoleIdsFor } = require('./lib/app-roles.js');
 const { makeWritesBlocking } = require('./lib/output-redaction.js');
+const { createCommandStateTransport } = require('./lib/command-state-transport.js');
+const { verifyCommandStates } = require('./lib/command-state-read.js');
 const { uniqueKeys } = require('./lib/unique-keys.js');
 
 // An SDK on a THROWAWAY workspace — a temporary folder `dispose()` removes — and never on the app folder's own.
@@ -185,6 +187,8 @@ function singleFlightFirstReads(sdk) {
 
 function readerFor(sdk, appUnique, opts) {
   opts = opts || {};
+  // The command rows are read with the run's raw client (opts.commandStateClient) at the SDK's own api root, as list-command-states.js reads them.
+  const commandStateRoot = sdk && sdk.dataverse && typeof sdk.dataverse.apiUrl === 'function' ? (path) => sdk.dataverse.apiUrl(path) : null;
   sdk = singleFlightFirstReads(sdk);
   // The page backend (lib/genpage-sdk.js): the environment's pages and one page's source. It reads by page id, so no app id is needed.
   const genpage = opts.genpage;
@@ -241,9 +245,15 @@ function readerFor(sdk, appUnique, opts) {
     // The configuration kinds (lib/configuration-artifacts.js verifyConfiguration), read through this reader's SDK: each declared item's
     // definition, its binding when the build was given one (--deployment-settings), a required variable's value, a Custom API's
     // implementation, a rule's publication and the solution's version. Reads only.
-    configuration: async (spec, bindings) => {
+    // Under `configurationIdentity: "stable-v1"` the workspace's binding store (`managedManifest`, readVerifyManifest) names the one
+    // row each item is checked at (lib/configuration-protected.js protectedVerifyPort): never a name lookup, never a write.
+    configuration: async (spec, bindings, managedManifest) => {
       const C = require('./lib/configuration-artifacts.js');
-      return C.verifyConfiguration(spec, C.configurationContext({ sdk, bindings, solutionUniqueName: spec && spec.solution && spec.solution.uniqueName }));
+      const solutionUniqueName = spec && spec.solution && spec.solution.uniqueName;
+      const creates = spec && spec.configurationIdentity === 'stable-v1'
+        ? require('./lib/configuration-protected.js').protectedVerifyPort({ spec, manifest: managedManifest, dataverse: sdk.dataverse, solution: solutionUniqueName, bindings })
+        : undefined;
+      return C.verifyConfiguration(spec, C.configurationContext({ sdk, bindings, solutionUniqueName, creates }));
     },
     findTable: async (logical) => {
       const l = String(logical).toLowerCase();
@@ -289,6 +299,11 @@ function readerFor(sdk, appUnique, opts) {
     // the build makes before it reuses one — or null when there is none:
     //   GET /webresourceset?$select=webresourceid,content&$filter=name eq 'contoso_/scripts/form.js'&$top=1
     //   { "value": [ { "webresourceid": "…", "content": "dmFyIEZvcm0gPSB7…" } ] }
+    // commandStates(spec): each declared commandStates[] entry checked against its row's stored flags (lib/command-state-read.js). Only when
+    // the run gave its raw client: without one the capability is absent and verify fails every declared entry rather than pass it.
+    ...(opts.commandStateClient && commandStateRoot ? {
+      commandStates: async (spec) => verifyCommandStates(createCommandStateTransport({ client: opts.commandStateClient, apiUrl: commandStateRoot }), spec),
+    } : {}),
     webResource: async (name) => {
       const rows = await sdk.queryRecords('webresource', { select: ['webresourceid', 'content'], filter: `name eq '${odataLit(name)}'`, top: 1 });
       const row = rows && rows[0];
@@ -805,9 +820,11 @@ async function main() {
   // verification only reads that deployment. Every other finding about the entry stays an error.
   // `primaryAttributeKeys: 'warn'` is the same again for a key a table's `primaryAttribute` does not take: an earlier release accepted and
   // ignored it, and the table was built without it.
+  // `viewKeys: 'warn'` is the same for a key a `views[]` entry or one of its filters does not take: the build refuses one, because it would
+  // drop it and build the view without that part, but an earlier release accepted it — and verification only reads that deployment.
   // `declaredKeyCollisions: 'warn'` is the same for two declared views (or two declared charts) on one table with one name: a build refuses them,
   // because one --authorize adopt:/overwrite: approval would name both, but verification takes no approval and only reads what was deployed.
-  const v = validateAppSpec(spec, { profile: 'deploy', relationshipCollisions: 'warn', columnValues: 'warn', fieldOptionKeys: 'warn', primaryAttributeKeys: 'warn', declaredKeyCollisions: 'warn' });
+  const v = validateAppSpec(spec, { profile: 'deploy', relationshipCollisions: 'warn', columnValues: 'warn', fieldOptionKeys: 'warn', primaryAttributeKeys: 'warn', viewKeys: 'warn', declaredKeyCollisions: 'warn' });
   // A warning is printed for a person and kept for the result JSON in one step, so the two cannot differ: a caller that reads only the JSON must not
   // lose what stderr says. The spec's are found before it is judged, so a spec that is refused reports the warnings it also has.
   const warnings = [];
@@ -856,7 +873,7 @@ async function main() {
       ? readVerifyManifest({ workspaceDir, environment: dataverseOrigin(env), appUniqueName: appUniqueName(spec), solutionUniqueName: spec.solution.uniqueName })
       : undefined;
     // `appDir`: a web resource's `contentPath` is read relative to the spec's folder, as the build reads it, to compare its content.
-    r = await verifySpec(spec, readerFor(session.sdk, appUniqueName(spec), { genpage, workspaceDir, isolatedReader: isolatedReaderFor(env, { httpClient }) }), { baselineSpec, languageCode, appDir: path.dirname(specPath), managedManifest });
+    r = await verifySpec(spec, readerFor(session.sdk, appUniqueName(spec), { genpage, workspaceDir, commandStateClient: httpClient, isolatedReader: isolatedReaderFor(env, { httpClient }) }), { baselineSpec, languageCode, appDir: path.dirname(specPath), managedManifest });
     // Only when asked, and before the SDK's workspace is disposed below.
     if (flags['inspect-components'] === true) components = await inspectComponents(session.sdk, spec);
   } finally {

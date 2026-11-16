@@ -16,9 +16,13 @@ First preview release: ships the `/pcf:pcf` skill, matrix-pinned templates and r
 - Bundled SDK and HTTP client updated to model-apps 2.21.0 (SDK commit 0eef55f8c2d0). PCF still reads through them and publishes through PAC; removal of the SDK's unused PCF registration has no effect.
 - The PCF guide explains why calls after an early-return guard or in an `else` branch are reported, and shows the positive guard block to use instead.
 - An optional call with type arguments that is handed a context member, such as `factory?.<T>(context.device).captureImage()`, is now reported as a Pages call even when the factory returns its own object; call it without `?.` or keep the result in a local first.
+- `inventory`, `upgrade` and `ci-build` share one boolean-flag check; what each one refuses is unchanged.
+- The virtual templates' samples use Fluent v9 `Input` and `Button`.
 
 ### Fixed
 
+- When `pac pcf push` loses its publish to a SQL deadlock (1205), the publish is sent again, each re-send exactly once, and the result reports how many sends were made.
+- grid-customizer renders Choice cells with their formatted label.
 - `check-auth.js` no longer reports success for an identity that cannot read customizations (no security role in the environment); it fails with `no_customization_role` and names a role to ask for.
 - The push receipt (`pcf-receipt.json`) no longer carries an access token that a refused confirmation read quoted, and every file the SDK writes into a push's workspace goes through the same output guard as model-apps' scripts.
 - A large result is no longer cut short on Linux and macOS: `emitResult`, the printer of an uncaught error, `check-auth.js`, the result printers of `pcf-inventory.js`, `verify-pcf.js` and `lint-pcf.js`, every script's usage error and the write-safety hook's message make their writes blocking before the process exits. What is printed and every exit status are unchanged; Windows was never affected.

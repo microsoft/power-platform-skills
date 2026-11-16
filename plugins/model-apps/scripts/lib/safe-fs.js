@@ -244,6 +244,47 @@ function assertPlainFileTarget(filePath, opts) {
   return resolved;
 }
 
+// Inspect only, for a caller that must know BEFORE other work whether writeFileSafe(filePath) would be refused: it makes the same
+// refusals writeFileSafe makes before it writes (a folder that is a link, a target that is a link, a folder, a hard link or read-only),
+// and one more that writeFileSafe only meets as a failed write: a folder in which no new file can be made, so that its temporary
+// sibling cannot be created. That is found by creating, then removing, an empty sibling of the same shape: a look at the permission
+// bits cannot answer it (on Windows the folder's access list decides, and an access check for W_OK reads only the read-only attribute).
+// A probe that cannot then be removed is refused too (`probe-not-removed`), naming it.
+// Like every look beforehand, it says nothing about the moment of the write: a full disk, a lock taken later or a crash still fail
+// the write itself.
+function assertFileReplaceable(filePath, opts) {
+  if (typeof filePath !== 'string' || !filePath.trim()) unsafe('refusing to write: no path was given', 'uninspectable');
+  const fsImpl = (opts && opts.fs) || fs;
+  const resolved = path.resolve(filePath);
+  const realDir = assertSafeOutputDir(path.dirname(resolved), { fs: fsImpl });
+  const target = path.join(realDir, path.basename(resolved));
+  assertWritableTarget(target, fsImpl);
+  const probe = siblingTempName(realDir, path.basename(resolved));
+  let fd;
+  try {
+    fd = fsImpl.openSync(probe, 'wx');
+  } catch (err) {
+    const e = new Error(`refusing to write ${target}: a new file cannot be made in its folder ${realDir} (${(err && err.code) || err}), and the file is written by making a new one there`);
+    e.code = 'IO_ERROR';
+    e.reason = 'folder-not-writable';
+    throw e;
+  }
+  // The probe is empty and named for this process and call only (made by an exclusive create), so removing it touches nothing of
+  // anyone else's. A lock on it is waited out (unlinkWithRetry, on Windows); one that outlasts that wait does not let the look
+  // pass: a look that leaves a file of its own behind has not answered cleanly, and stopping here, before anything is replaced,
+  // is the one point where the file can be named and nothing else has changed.
+  try { fsImpl.closeSync(fd); } catch { /* the descriptor is gone either way; the removal below says whether the file is */ }
+  try {
+    unlinkWithRetry(fsImpl, probe);
+  } catch (err) {
+    const e = new Error(`refusing to write ${target}: ${probe}, an empty file this download made to learn whether its folder takes a new file, could not be removed (${(err && err.code) || err}); it holds nothing of the maker's and can be deleted`, { cause: err });
+    e.code = 'IO_ERROR';
+    e.reason = 'probe-not-removed';
+    throw e;
+  }
+  return target;
+}
+
 function writeFileSafe(filePath, data, opts) {
   if (typeof filePath !== 'string' || !filePath.trim()) unsafe('refusing to write: no path was given', 'uninspectable');
   ({ data, opts } = checkedForTokens(data, opts));
@@ -540,6 +581,7 @@ module.exports = {
   sameFile,
   assertSafeOutputDir,
   assertPlainFileTarget,
+  assertFileReplaceable,
   writeFileSafe,
   appendFileSafe,
   removeFileSafe,

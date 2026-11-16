@@ -171,6 +171,8 @@ const useStyles = makeStyles({
         gap: tokens.spacingVerticalL,
         padding: tokens.spacingHorizontalXL,
         width: '100%',
+        height: '100%',
+        overflowY: 'auto',
         boxSizing: 'border-box',
     },
     pageTitle: { marginBottom: tokens.spacingVerticalS },
