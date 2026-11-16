@@ -4544,7 +4544,7 @@ Connector authoring no longer has a feature flag (the feature itself is in publi
 neither does Custom API support: `custom-api` shipped ON in 2.18.0 and 2.19.0 with its platform
 dependencies live in every region, so it was removed — Custom API discovery, authoring and upload
 are always available, and `GENPAGE_ENABLE_CUSTOM_API` is ignored. The remaining flags are
-`custom-telemetry` (**OFF**) and `dataverse-operations` (**OFF**).
+`custom-telemetry` (**ON**) and `dataverse-operations` (**OFF**).
 
 - **Source of truth:** `feature-flags.json` (e.g. `{ "dataverse-operations": false }`). Flip a
   flag to `true` in a one-line PR once its dependencies are GA in PROD, then remove
@@ -4586,7 +4586,7 @@ only the per-feature specifics are tabled below:
 
 | | `custom-telemetry` | `dataverse-operations` |
 |---|---|---|
-| **Committed default** | OFF | OFF (`GENPAGE_ENABLE_DATAVERSE_OPERATIONS=1` opts in) |
+| **Committed default** | ON (`GENPAGE_ENABLE_CUSTOM_TELEMETRY=0` opts out) | OFF (`GENPAGE_ENABLE_DATAVERSE_OPERATIONS=1` opts in) |
 | **Owner agent** | none — codegen-only | `genpage-customapi-builder` (the same one writer of `actions.json`) |
 | **Plan section** | none — driven by the maker request, not the plan | `## Dataverse Operations` — OPTIONAL; absent means no new built-in operation |
 | **Gated scripts** | none | `list-dataverse-operations.js` |
@@ -4623,7 +4623,7 @@ Feature dependencies remain separate from their committed defaults:
   live in every region, which is why the `custom-api` flag was removed.
   Note the maker-facing name is "Custom API" while the shipped wire contract stays
   `actionBindings` / `executeAction` (see `references/custom-api.md`).
-- **`custom-telemetry` (OFF)** — the page telemetry facade in the UCI host runtime, the GenUX
+- **`custom-telemetry` (ON)** — the page telemetry facade in the UCI host runtime, the GenUX
   authoring control, the AIBuilder CoderAgent telemetry prompt, and the
   `GenUxEnableCustomTelemetry` ECS setting (see `references/page-telemetry.md`).
 - **`dataverse-operations` (OFF)** — a host runtime that implements `executeFunction`, the page
