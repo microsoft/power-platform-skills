@@ -117,15 +117,17 @@ async function runPage(htmlPath, { session = {} } = {}) {
   const renders = [];
   const errors = [];
   const sandbox = {
+    URL,
+    performance: { getEntriesByType: () => [{ type: 'navigate' }] },
     document,
     window: {
       document,
       addEventListener() {}, removeEventListener() {},
-      location: { hash: '', reload() {} },
+      location: { href: 'file:///app/docs/create-app-plan.html', hash: '', reload() {}, replace() {} },
       matchMedia() { return { matches: false, addEventListener() {} }; },
       setTimeout() { return 0; }, setInterval() { return 0; }, scrollTo() {}, scrollY: 0,
     },
-    location: { hash: '', reload() {} },
+    location: { href: 'file:///app/docs/create-app-plan.html', hash: '', reload() {}, replace() {} },
     sessionStorage: {
       store: new Map(Object.entries(session)),
       getItem(key) { return this.store.has(key) ? this.store.get(key) : null; },
