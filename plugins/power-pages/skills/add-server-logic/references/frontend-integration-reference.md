@@ -31,19 +31,46 @@ Server logic endpoints return responses in a standard JSON envelope:
 
 ```json
 {
-  "requestId": "<activity-guid>",
-  "success": true,
-  "serverLogicName": "<endpoint-name>",
-  "data": "<string returned by your function>",
-  "error": null
+  "RequestId": "<activity-guid>",
+  "Success": true,
+  "ServerLogicName": "<endpoint-name>",
+  "Data": "<string returned by your function>",
+  "Error": null
 }
 ```
 
-- `data` contains the string returned by the invoked function (e.g., the `JSON.stringify(...)` result). Parse it with `JSON.parse(response.data)` when the function returns serialized JSON.
-- On failure, `success` is `false`, `data` is `null`, and `error` contains the error message.
-- `requestId` is the server-side activity GUID — useful for correlating with `Server.Logger` output in diagnostics.
+- Microsoft Learn documents PascalCase envelope fields. Some existing wrappers or captured responses may use lowercase names, so check the observed response and support both casings when the runtime contract isn't known.
+- `Data` / `data` contains the string returned by the invoked function (for example, its `JSON.stringify(...)` result). Parse that string with `JSON.parse` when the function returns serialized JSON.
+- On failure, `Success` / `success` is `false`, `Data` / `data` is `null`, and `Error` / `error` contains the error message.
+- `RequestId` / `requestId` is the server-side activity GUID, useful for correlating with `Server.Logger` output in diagnostics.
 
-All frontend helpers and service wrappers should unwrap `.data` from this envelope rather than treating the entire response body as the function's return value.
+Normalize the envelope once instead of assuming lowercase keys throughout the UI:
+
+```typescript
+interface ServerLogicEnvelope {
+  RequestId?: string;
+  Success?: boolean;
+  ServerLogicName?: string;
+  Data?: string | null;
+  Error?: string | null;
+  requestId?: string;
+  success?: boolean;
+  serverLogicName?: string;
+  data?: string | null;
+  error?: string | null;
+}
+
+function readServerLogicData(envelope: ServerLogicEnvelope): string {
+  const success = envelope.Success ?? envelope.success;
+  const data = envelope.Data ?? envelope.data;
+  const error = envelope.Error ?? envelope.error;
+  if (success !== true) throw new Error(error ?? 'Server logic call failed');
+  if (typeof data !== 'string') throw new Error('Server logic response did not contain data');
+  return data;
+}
+```
+
+Frontend helpers and service wrappers should pass the envelope through this normalizer before parsing its data.
 
 Every request to a server logic endpoint, including GET, needs the `__RequestVerificationToken` header. Confirm an existing wrapper adds the token for every method; extend it if it only handles writes. See [Author server logic](https://learn.microsoft.com/power-pages/configure/author-server-logic#call-server-logic-from-client-script).
 
@@ -59,11 +86,11 @@ The Dataverse connector methods (`RetrieveRecord`, `RetrieveMultipleRecords`, `C
 
 ```json
 {
-  "requestId": "…",
-  "success": true,
-  "serverLogicName": "dataverse-crud-operations",
-  "data": "{\"Body\":\"{\\\"@odata.context\\\":\\\"…\\\",\\\"value\\\":[{…}, {…}]}\",\"StatusCode\":200,\"Headers\":{…}}",
-  "error": null
+  "RequestId": "…",
+  "Success": true,
+  "ServerLogicName": "dataverse-crud-operations",
+  "Data": "{\"Body\":\"{\\\"@odata.context\\\":\\\"…\\\",\\\"value\\\":[{…}, {…}]}\",\"StatusCode\":200,\"Headers\":{…}}",
+  "Error": null
 }
 ```
 
@@ -71,7 +98,12 @@ To reach the Dataverse records the client must parse **twice**:
 
 ```javascript
 const envelope = responseBody;             // server logic envelope
-const outer = JSON.parse(envelope.data);    // { Body: "<json string>", StatusCode, Headers }
+const success = envelope.Success ?? envelope.success;
+const error = envelope.Error ?? envelope.error;
+if (success !== true) throw new Error(error ?? 'Server logic call failed');
+const data = envelope.Data ?? envelope.data;
+if (typeof data !== 'string') throw new Error('Server logic response did not contain data');
+const outer = JSON.parse(data);             // { Body: "<json string>", StatusCode, Headers }
 const body  = JSON.parse(outer.Body);       // { "@odata.context": "...", value: [...] } (for RetrieveMultipleRecords)
 const records = body.value;                 // the actual array
 ```
@@ -114,7 +146,12 @@ ajaxCall('Loading...', {
     url: '/_api/serverlogics/dataverse-crud-operations?entitySetName=contacts&additionalParameters=$select=fullname,firstname,lastname,emailaddress1,telephone1',
     contentType: 'application/json'
 }).done(res => {
-    const outer = JSON.parse(res.data);
+    const success = res.Success ?? res.success;
+    const error = res.Error ?? res.error;
+    if (success !== true) throw new Error(error ?? 'Server logic call failed');
+    const data = res.Data ?? res.data;
+    if (typeof data !== 'string') throw new Error('Server logic response did not contain data');
+    const outer = JSON.parse(data);
     const body  = JSON.parse(outer.Body);
     const rows  = (body.value || []).map(r => ({ ...r, id: r.contactid }));
     render(rows);
@@ -153,14 +190,12 @@ function get() {
 Client — note the extra `data` layer before reaching `Body`:
 
 ```typescript
-const envelope = await powerPagesFetch<{ data: string | null; success: boolean; error: string | null }>(
+const envelope = await powerPagesFetch<ServerLogicEnvelope>(
     '/_api/serverlogics/contacts-crud',
     { method: 'GET' }
 );
 if (!envelope) throw new Error('Empty response from contacts-crud');
-if (!envelope.success) throw new Error(envelope.error ?? 'Failed');
-if (envelope.data == null) throw new Error('Missing response data from contacts-crud');
-const payload = JSON.parse(envelope.data) as { status: string; data: { Body: string; StatusCode: number; Headers: Record<string, string> } };
+const payload = JSON.parse(readServerLogicData(envelope)) as { status: string; data: { Body: string; StatusCode: number; Headers: Record<string, string> } };
 const outer   = payload.data;                 // connector result still wrapped here
 const body    = JSON.parse(outer.Body);       // { "@odata.context": "...", value: [...] }
 const records = body.value;
@@ -201,14 +236,12 @@ function get() {
 Client:
 
 ```typescript
-const envelope = await powerPagesFetch<{ data: string | null; success: boolean; error: string | null }>(
+const envelope = await powerPagesFetch<ServerLogicEnvelope>(
     '/_api/serverlogics/getContacts',
     { method: 'GET' }
 );
 if (!envelope) throw new Error('Empty response from getContacts');
-if (!envelope.success) throw new Error(envelope.error ?? 'Failed');
-if (envelope.data == null) throw new Error('Missing response data from getContacts');
-const payload = JSON.parse(envelope.data) as { status: string; contacts: Contact[] };
+const payload = JSON.parse(readServerLogicData(envelope)) as { status: string; contacts: Contact[] };
 return payload.contacts;
 ```
 
@@ -279,7 +312,7 @@ export async function callServerLogic<T = unknown>(
         ? `/_api/serverlogics/${endpointName}?${new URLSearchParams(params)}`
         : `/_api/serverlogics/${endpointName}`;
 
-    const envelope = await powerPagesFetch<{ data: string | null; success: boolean; error: string | null }>(url, {
+    const envelope = await powerPagesFetch<ServerLogicEnvelope>(url, {
         method,
         body: body ? JSON.stringify(body) : undefined,
     });
@@ -287,14 +320,7 @@ export async function callServerLogic<T = unknown>(
     if (!envelope) {
         throw new Error(`Empty response from ${endpointName}`);
     }
-    if (!envelope.success) {
-        throw new Error(envelope.error ?? 'Server logic call failed');
-    }
-    if (envelope.data == null) {
-        throw new Error(`Missing response data from ${endpointName}`);
-    }
-
-    return JSON.parse(envelope.data) as T;
+    return JSON.parse(readServerLogicData(envelope)) as T;
 }
 ```
 

@@ -1,4 +1,4 @@
-# Server logic secrets and environment variables
+# Server Logic Secrets Workflow
 
 Read only when the approved implementation requires secrets or sensitive configuration.
 

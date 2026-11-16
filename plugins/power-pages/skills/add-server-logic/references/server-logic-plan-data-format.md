@@ -71,6 +71,7 @@ Use `status` values like `create`, `update`, or `reuse`.
 Each `webRoles` entry should explain **why that specific role is assigned to that specific server logic**.
 
 Each `functions` entry should explain **why that specific function is being implemented for that specific server logic**.
+Include the function's success and error response shapes, property names, and value types in its `purpose` or `reasoning` so approval covers the client-facing contract.
 
 When a server logic item wraps a Dataverse custom action (mapped in Phase 2.1.2), include a `customAction` object:
 

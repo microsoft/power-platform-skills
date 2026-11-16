@@ -33,7 +33,7 @@ Resolve `${PLUGIN_ROOT}` to this installed plugin's absolute path. Relative link
 4. **Approve the plan** - Render the HTML plan with [the plan data format](references/server-logic-plan-data-format.md), present it, and wait for approval.
 5. **Implement** - Follow [the implementation reference](references/server-logic-implementation.md) for approved code and metadata changes.
 6. **Configure table permissions** - Only when the implementation uses the Dataverse connector; follow [the table-permissions reference](references/server-logic-table-permissions.md).
-7. **Configure secrets** - Only when the implementation needs secrets or sensitive configuration; follow [the secrets reference](references/server-logic-secrets.md).
+7. **Configure secrets** - Only when the implementation needs secrets or sensitive configuration; follow [the secrets workflow](references/server-logic-secrets-workflow.md).
 8. **Configure site settings** - Add only settings needed by the approved plan.
 9. **Integrate the frontend** - Ask whether the user wants UI wiring; follow [the frontend integration reference](references/frontend-integration-reference.md) when approved.
 10. **Validate and explain testing** - Run code and site-integrity checks, then give endpoint, authentication, and CSRF guidance.
@@ -52,7 +52,7 @@ Resolve `${PLUGIN_ROOT}` to this installed plugin's absolute path. Relative link
 
    <!-- gate: add-server-logic:1.5.deploy-first | category=plan | cancel-leaves=nothing -->
 
-   > **Gate (plan · add-server-logic:1.5.deploy-first):** `.powerpages-site` is missing. Deploy first or stop; no server logic files have been written.
+   > 🚦 **Gate (plan · add-server-logic:1.5.deploy-first):** `.powerpages-site` is missing. Deploy first or stop; no server logic files have been written.
    >
    > **Trigger:** The deployment folder is absent.
    > **Why we ask:** Server Logic files must live under `.powerpages-site/server-logic/`.
@@ -64,7 +64,7 @@ Resolve `${PLUGIN_ROOT}` to this installed plugin's absolute path. Relative link
 
 ## Phase 2: Understand the request
 
-For each endpoint, record its purpose, suggested name, status (`create`, `update`, or `reuse`), HTTP methods, SDK features, required roles, Dataverse tables, and secret/configuration needs.
+For each endpoint, record its purpose, suggested name, status (`create`, `update`, or `reuse`), HTTP methods, SDK features, required roles, Dataverse tables, secret/configuration needs, and the success/error response shapes with their property names and types.
 
 - Prefer reuse when an existing endpoint fits the domain, security model, and lifecycle. Split endpoints when their responsibilities, roles, integrations, or lifecycle differ.
 - Decide whether each Dataverse write must validate and execute in one server-side operation. Use this for state transitions, tamper-proof business rules, multi-table operations, computed values, and protected fields. The client must not bypass validation with a separate write.
@@ -72,7 +72,7 @@ For each endpoint, record its purpose, suggested name, status (`create`, `update
 
   <!-- gate: add-server-logic:2.1.2.use-custom-actions | category=plan | cancel-leaves=nothing -->
 
-  > **Gate (plan · add-server-logic:2.1.2.use-custom-actions):** Choose whether to wrap discovered Dataverse custom actions or build from scratch.
+  > 🚦 **Gate (plan · add-server-logic:2.1.2.use-custom-actions):** Choose whether to wrap discovered Dataverse custom actions or build from scratch.
   >
   > **Trigger:** The custom-action listing contains at least one result.
   > **Why we ask:** Automatic selection can wrap the wrong action or duplicate existing behavior.
@@ -87,7 +87,7 @@ For each endpoint, record its purpose, suggested name, status (`create`, `update
 
   <!-- gate: add-server-logic:2.3.1.keyvault | category=plan | cancel-leaves=nothing -->
 
-  > **Gate (plan · add-server-logic:2.3.1.keyvault):** Choose Key Vault or a direct environment variable before the plan is rendered.
+  > 🚦 **Gate (plan · add-server-logic:2.3.1.keyvault):** Choose Key Vault or a direct environment variable before the plan is rendered.
   >
   > **Trigger:** The request needs at least one secret.
   > **Why we ask:** Key Vault needs extra setup; direct variables use a different storage path.
@@ -109,7 +109,7 @@ Read [Server Logic documentation discovery](references/server-logic-docs.md). Se
 
 ## Phase 4: Present and approve the plan
 
-1. Read [the plan data format](references/server-logic-plan-data-format.md) and prepare data for the renderer. Include each endpoint's status, URL, functions, roles and rationale, SDK features, external services, Dataverse tables, settings, secrets, and next steps. Put every endpoint in `SERVER_LOGICS_DATA`.
+1. Read [the plan data format](references/server-logic-plan-data-format.md) and prepare data for the renderer. Include each endpoint's status, URL, functions, roles and rationale, SDK features, external services, Dataverse tables, settings, secrets, response contract, and next steps. Put every endpoint in `SERVER_LOGICS_DATA`.
 2. Check whether `<PROJECT_ROOT>/docs/serverlogic-plan.html` already exists. Choose a new descriptive filename if it does.
 3. Render the HTML instead of hand-authoring it:
 
@@ -124,7 +124,7 @@ Read [Server Logic documentation discovery](references/server-logic-docs.md). Se
 
    <!-- gate: add-server-logic:4.4.plan-approval | category=plan | cancel-leaves=nothing -->
 
-   > **Gate (plan · add-server-logic:4.4.plan-approval):** Approve the rendered plan before writing server logic or creating environment variables.
+   > 🚦 **Gate (plan · add-server-logic:4.4.plan-approval):** Approve the rendered plan before writing server logic or creating environment variables.
    >
    > **Trigger:** The plan is rendered and its summary is presented.
    > **Why we ask:** The endpoint shape, role assignments, or secret-storage mode may be wrong.
@@ -158,7 +158,7 @@ Commit approved permission and role changes as a separate milestone.
 
 ## Phase 7: Configure secrets
 
-Skip this phase when the plan has no secrets. Otherwise, read [the secrets reference](references/server-logic-secrets.md) and follow the user's selected storage path. Do not request or expose a secret value. If no vault exists, ask before creating one or changing to direct environment-variable storage.
+Skip this phase when the plan has no secrets. Otherwise, read [the secrets workflow](references/server-logic-secrets-workflow.md) and follow the user's selected storage path. Do not request or expose a secret value. If no vault exists, ask before creating one or changing to direct environment-variable storage.
 
 Commit approved site-setting files as a milestone. Report cloud-side environment-variable changes separately from local files.
 
@@ -184,7 +184,7 @@ Ask whether to wire the endpoints into the UI:
 
 <!-- gate: add-server-logic:9.1.frontend-scope | category=plan | cancel-leaves=nothing -->
 
-> **Gate (plan · add-server-logic:9.1.frontend-scope):** Choose frontend integration or backend-only completion.
+> 🚦 **Gate (plan · add-server-logic:9.1.frontend-scope):** Choose frontend integration or backend-only completion.
 >
 > **Trigger:** The approved backend work is ready.
 > **Why we ask:** UI edits may be outside the user's requested scope; skipping them leaves endpoints for the user to call.
@@ -198,7 +198,7 @@ On yes, read [the frontend integration reference](references/frontend-integratio
 - Connect the endpoint to the relevant UI flow, not only a new helper.
 - Replace mocks only when they represent the approved behavior; retain loading, success, empty, and error states.
 - For validate-and-execute operations, call the server endpoint for the protected write. Do not send a separate Web API update for the same field.
-- Match response parsing to the shape selected during implementation. If that shape is unknown, ask to deploy and test before guessing.
+- Match response parsing to the approved response contract and the documented envelope casing. If either is unknown, ask before using a live endpoint test to inspect it.
 
 Commit approved frontend changes as a milestone.
 
@@ -230,7 +230,7 @@ Ask before deploying:
 
 <!-- gate: add-server-logic:11.3.deploy | category=plan | cancel-leaves=nothing -->
 
-> **Gate (plan · add-server-logic:11.3.deploy):** Ask before dispatching deployment.
+> 🚦 **Gate (plan · add-server-logic:11.3.deploy):** Ask before dispatching deployment.
 >
 > **Trigger:** Approved artifacts and local checks are complete.
 > **Why we ask:** Deployment targets an environment and must be intentional.
@@ -240,7 +240,7 @@ Offer **Yes, deploy now** or **No, I'll deploy later**. Use the available deploy
 
 <!-- gate: add-server-logic:11.3.test | category=plan | cancel-leaves=nothing -->
 
-> **Gate (plan · add-server-logic:11.3.test):** Ask before live endpoint testing.
+> 🚦 **Gate (plan · add-server-logic:11.3.test):** Ask before live endpoint testing.
 >
 > **Trigger:** Deployment completed successfully.
 > **Why we ask:** Live validation is an additional operation.
