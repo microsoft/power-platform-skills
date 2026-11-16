@@ -96,7 +96,7 @@ function themeSwitch() {
   return `<div class="theme-switch" role="group" aria-label="Color theme" data-theme-switch hidden>${options}</div>`;
 }
 
-function siteHeader(root) {
+function siteHeader(root, activePage) {
   const home = root || './';
   return `<header class="site-header">
   <div class="wrap header-row">
@@ -107,6 +107,7 @@ function siteHeader(root) {
     <nav class="site-nav" id="site-nav" aria-label="Main">
       <ul class="nav-list">
         <li><a href="${escapeAttr(root)}#plugins">Plugins</a></li>
+        <li><a href="${escapeAttr(root)}evaluations/"${activePage === 'evaluations' ? ' aria-current="page"' : ''}>Evaluations</a></li>
         <li><a href="${escapeAttr(root)}#how-it-works">How it works</a></li>
         <li><a href="${escapeAttr(root)}#install-everything">Install</a></li>
         <li><a href="${escapeAttr(root)}#questions">Questions</a></li>
@@ -146,11 +147,12 @@ function siteFooter(root) {
 </footer>`;
 }
 
-function layout({ title, description, root, body, scripts = [], data = null }) {
+function layout({ title, description, root, body, scripts = [], styles = [], data = null, activePage = null }) {
   const pageTitle = title ? `${title} | Power Platform Skills` : 'Power Platform Skills: AI assistant plugins for Power Platform';
   const dataBlock = data ? `\n<script type="application/json" id="page-data">${jsonForScript(data)}</script>` : '';
   // install-links.js is shared by the build and the browser; site.js uses its detectOs().
   const scriptTags = ['assets/install-links.js', 'assets/site.js', ...scripts].map((src) => `\n<script src="${escapeAttr(root + src)}" defer></script>`).join('');
+  const styleTags = styles.map((href) => `\n<link rel="stylesheet" href="${escapeAttr(root + href)}">`).join('');
   // The site loads nothing from other origins, so the policy only allows its own files.
   // GitHub Pages cannot send response headers, which is why this is a meta tag.
   // Fonts are self-hosted for the same reason, and so visitors' addresses go to no font CDN.
@@ -174,11 +176,11 @@ function layout({ title, description, root, body, scripts = [], data = null }) {
 <link rel="preload" href="${escapeAttr(root)}assets/fonts/schibsted-grotesk-latin.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="${escapeAttr(root)}assets/fonts/public-sans-latin.woff2" as="font" type="font/woff2" crossorigin>
 <script src="${escapeAttr(root)}assets/theme.js"></script>
-<link rel="stylesheet" href="${escapeAttr(root)}assets/styles.css">
+<link rel="stylesheet" href="${escapeAttr(root)}assets/styles.css">${styleTags}
 </head>
 <body>
 <a class="skip-link" href="#main">Skip to content</a>
-${siteHeader(root)}
+${siteHeader(root, activePage)}
 <main id="main">
 ${body}
 </main>
@@ -785,6 +787,7 @@ module.exports = {
   ASSISTANTS,
   escapeHtml,
   jsonForScript,
+  layout,
   renderHome,
   renderPlugin,
   renderLauncher,

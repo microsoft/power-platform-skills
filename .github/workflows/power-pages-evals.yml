@@ -1,0 +1,135 @@
+name: power-pages-evals
+
+# Paid measurements are opt-in, not a nondeterministic pull-request gate.
+# Native Actions auth: https://docs.github.com/copilot/how-tos/copilot-cli/use-copilot-cli-in-actions
+on:
+    workflow_dispatch:
+        inputs:
+            skill:
+                description: "Skill with a Vally suite, or all available suites"
+                default: setup-auth
+                required: true
+                type: string
+            runs:
+                description: "Repeats per case and arm; start with 1 for human calibration"
+                default: "1"
+                type: choice
+                options: ["1", "3", "5"]
+            models:
+                description: "Comma-separated model IDs; blank uses Opus 5.5, Sonnet 5.5, GPT-6 Astra and GPT-6.1 Sol"
+                default: ""
+                type: string
+            reasoning_effort:
+                description: "Agent reasoning effort; must be supported by every selected model"
+                default: medium
+                type: choice
+                options: [medium, low, high, xhigh, max, none]
+            judge_model:
+                description: "Optional judge override; blank pairs Opus with Sol and the other models with Opus"
+                default: ""
+                type: string
+            judge_reasoning_effort:
+                description: "Judge reasoning effort"
+                default: medium
+                type: choice
+                options: [medium, low, high, xhigh, max, none]
+
+permissions:
+    contents: read
+
+jobs:
+    select:
+        # Only reviewed default-branch code can receive inference rights or feed
+        # the public dashboard. No fork PR or arbitrary dispatch ref is eligible.
+        if: github.ref == 'refs/heads/main'
+        runs-on: ubuntu-latest
+        outputs:
+            matrix: ${{ steps.select.outputs.matrix }}
+        steps:
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+              with:
+                  persist-credentials: false
+            - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+              with:
+                  node-version: 22
+            - id: select
+              env:
+                  SELECTED_SKILL: ${{ inputs.skill }}
+                  MODELS: ${{ inputs.models }}
+                  JUDGE_MODEL: ${{ inputs.judge_model }}
+                  REASONING_EFFORT: ${{ inputs.reasoning_effort }}
+                  JUDGE_REASONING_EFFORT: ${{ inputs.judge_reasoning_effort }}
+              run: |
+                  node --input-type=module <<'JS'
+                  import fs from 'node:fs';
+                  import evidence from './scripts/lib/eval-evidence.js';
+                  import { evaluationMatrix } from './evals/runtime/models.mjs';
+                  const { listSuiteNames } = evidence;
+                  const skills = listSuiteNames('evals/power-pages');
+                  if (!skills.length) throw new Error('No Power Pages evaluation suites available');
+                  const selected = process.env.SELECTED_SKILL;
+                  if (selected !== 'all' && !skills.includes(selected)) throw new Error('Unknown Power Pages evaluation suite');
+                  const matrix = evaluationMatrix({
+                    skills: selected === 'all' ? skills : [selected],
+                    models: process.env.MODELS, judgeModel: process.env.JUDGE_MODEL,
+                    reasoningEffort: process.env.REASONING_EFFORT || 'medium',
+                    judgeReasoningEffort: process.env.JUDGE_REASONING_EFFORT || 'medium',
+                  });
+                  fs.appendFileSync(process.env.GITHUB_OUTPUT, `matrix=${JSON.stringify(matrix)}\n`);
+                  JS
+
+    evaluate:
+        needs: select
+        strategy:
+            fail-fast: false
+            max-parallel: 2
+            matrix:
+                include: ${{ fromJSON(needs.select.outputs.matrix) }}
+        # Playwright 1.58.2 cannot install Chromium on Ubuntu 26.04.
+        # Revisit this pin when upgrading Playwright's supported runners.
+        runs-on: ubuntu-24.04
+        timeout-minutes: 360
+        permissions:
+            contents: read
+            copilot-requests: write
+        env:
+            POWER_PLATFORM_SKILLS_TELEMETRY_POWER_PAGES_OPTOUT: "1"
+        steps:
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+              with:
+                  persist-credentials: false
+            - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+              with:
+                  node-version: 22
+            - name: install pinned evaluation dependencies
+              run: npm ci --prefix evals/runtime --registry=https://packagefeedproxy.microsoft.io/npm/ --ignore-scripts --no-audit --no-fund
+            - name: install browser
+              run: node evals/runtime/node_modules/playwright/cli.js install --with-deps chromium
+            - name: configure Linux Chromium sandbox
+              if: runner.os == 'Linux'
+              run: bash evals/runtime/setup-linux-chromium-sandbox.sh
+            - name: validate selected suite
+              env:
+                  SKILL: ${{ matrix.skill }}
+              run: node evals/runtime/run.mjs validate --skill "$SKILL"
+            - name: measure paired offline trials
+              env:
+                  # Scoped to inference, never package installation or agent tools.
+                  GITHUB_TOKEN: ${{ github.token }}
+                  SKILL: ${{ matrix.skill }}
+                  RUNS: ${{ inputs.runs }}
+                  MODEL: ${{ matrix.model }}
+                  JUDGE_MODEL: ${{ matrix.judgeModel }}
+                  REASONING_EFFORT: ${{ matrix.reasoningEffort }}
+                  JUDGE_REASONING_EFFORT: ${{ matrix.judgeReasoningEffort }}
+              run: node evals/runtime/run.mjs run --skill "$SKILL" --runs "$RUNS" --model "$MODEL" --judge-model "$JUDGE_MODEL" --reasoning-effort "$REASONING_EFFORT" --judge-reasoning-effort "$JUDGE_REASONING_EFFORT" --out evals/reports/action
+            # Raw trajectories, generated artifacts and screenshots are local-only.
+            # A public repository's Actions artifacts must contain scalar summaries.
+            - name: upload sanitized evidence
+              if: ${{ always() }}
+              uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+              with:
+                  name: power-pages-evals-${{ matrix.skill }}--${{ matrix.model }}
+                  path: evals/reports/action/summary.json
+                  if-no-files-found: warn
+                  retention-days: 90

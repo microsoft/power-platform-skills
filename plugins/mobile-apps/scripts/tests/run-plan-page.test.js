@@ -129,6 +129,8 @@ async function runPage(htmlPath, { session = {} } = {}) {
     replace(url) { reloads.push(url); },
   };
   const sandbox = {
+    URL,
+    performance: { getEntriesByType: () => [{ type: 'navigate' }] },
     document,
     window: {
       document,
@@ -1291,6 +1293,7 @@ test('the plan reloads only when it changed, and never over someone using the li
     const page = await runPage(planPath);
     assert.deepEqual(page.thrown.map((error) => error.message), []);
     assert.equal(page.intervals.length, 1, 'a run in progress schedules its check');
+    assert.equal(page.elements.get('refreshStatus').textContent, 'Auto-refresh on while progress changes.');
     const [frame] = findAll(page.elements.get('deviceScreen'), (n) => n.tagName === 'IFRAME');
     const version = fs.readFileSync(planPath, 'utf8').match(/"version":"([0-9a-f]+)"/)[1];
     const probes = () => findAll(page.document.body, (n) => n.tagName === 'SCRIPT');
@@ -1314,7 +1317,9 @@ test('the plan reloads only when it changed, and never over someone using the li
   changed.report('a-newer-render');
   changed.tick();
   assert.equal(changed.page.reloads.length, 1, 'a changed plan refreshes itself');
-  assert.match(changed.page.reloads[0], /create-app-plan\.html\?t=\d+$/);
+  const reloaded = new URL(changed.page.reloads[0]);
+  assert.match(reloaded.pathname, /create-app-plan\.html$/);
+  assert.match(reloaded.searchParams.get('t'), /^\d+$/, 'a fresh URL, so the cached page is never shown');
 
   // A plan rendered before the sidecar existed, or a browser that blocks file scripts: fall back
   // to the timed refresh rather than leave the page stale.

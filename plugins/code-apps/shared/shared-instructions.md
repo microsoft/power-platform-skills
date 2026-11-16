@@ -16,6 +16,15 @@ Run at the start of every skill execution (at most once per day). Notifies the u
 
 ## Safety Guardrails
 
+### Command-scoped CLI attribution
+
+The plugin must not register global pre-tool hooks or intercept user commands.
+Apply attribution only to Power Apps CLI commands initiated by these skills.
+Follow [command-scoped attribution](./cli-binary.md#command-scoped-attribution).
+Do not export attribution into the parent shell or change user settings.
+Do not attribute Node checks, package installs, Git commands, builds, or other tools.
+The CLI detects the AI tool from its environment. Never guess or inject agent markers.
+
 ### MUST (required before acting)
 
 - **Confirm before any deployment**: Before running `pa app push` (deploy), ask: _"Ready to deploy to [environment name]? This will update the live app."_ Wait for explicit user confirmation.
@@ -165,10 +174,10 @@ The CLI has shipped two binaries — grouped `pa` (preferred) and flat `power-ap
 
 ## CLI Commands
 
-The plugin's shell hooks supply `PA_CLI_ORIGIN=plugin/<host-agent>` automatically
-for recognized CLI commands. Do not add manual attribution exports. Explicit
-user-supplied values win; this attribution uses the CLI's existing telemetry
-consent and `cliSource` common property, not a separate plugin telemetry stream.
+Apply [command-scoped attribution](./cli-binary.md#command-scoped-attribution)
+only to CLI commands initiated by these skills. Do not register tool hooks.
+The CLI retains its existing telemetry consent and `cliSource` common property.
+The plugin does not send a separate telemetry stream.
 
 The Power Apps code app CLI (`@microsoft/power-apps-cli`) is installed into each project as a dev dependency (the Vite template doesn't include it; see [cli-binary.md](./cli-binary.md)). **Never invoke a bare `pa`/`power-apps`** — always run the locally-installed CLI through the resolved `$PA` prefix (`npx --no-install …`) from within the project directory. **Resolve the binary first (see [cli-binary.md](./cli-binary.md)); the commands below are canonical grouped `pa` templates — substitute `$PA` for the leading `pa`, and when `PA_KIND=power-apps` translate the verb path and renamed flags via the mapping tables before running.**
 

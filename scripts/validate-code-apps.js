@@ -61,6 +61,10 @@ function validate() {
     JSON.parse(readPackageFile(path.join(PLUGIN, 'com.github.copilot', 'hooks', 'hooks.json'))),
     JSON.parse(readPackageFile(path.join(PLUGIN, 'hooks.json'))),
     'portable Copilot hooks must preserve the existing native hook configuration');
+  for (const file of ['hooks.json', 'hooks/hooks.json', 'com.github.copilot/hooks/hooks.json']) {
+    assert.deepEqual(JSON.parse(readPackageFile(path.join(PLUGIN, file))).hooks, {},
+      'Code Apps must not intercept unrelated tool calls');
+  }
 
   function checkResources(directory) {
     assert.ok(fs.lstatSync(directory).isDirectory(), `${directory} must be a regular directory`);

@@ -1,0 +1,23 @@
+{
+  "siteName": "Contoso Expenses",
+  "framework": "React",
+  "provider": "Local",
+  "sourceEvidence": {
+    "devMock": {
+      "email": "tester@contoso.com",
+      "roles": [
+        "Administrators"
+      ]
+    },
+    "navigation": "show Expenses when hasRole('Administrators')",
+    "dataCall": "GET /_api/contoso_expenses?$select=contoso_amount"
+  },
+  "permissionExport": {
+    "table": "contoso_expense",
+    "scope": "Global",
+    "roles": [
+      "Anonymous Users"
+    ],
+    "read": true
+  }
+}

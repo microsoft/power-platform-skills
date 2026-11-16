@@ -352,6 +352,9 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
         <span class="topbar-sep">|</span>
         <span id="updatedAt" data-generated="__ATTR_GENERATED_ISO__">Updated __HTML_GENERATED_AT__ UTC</span>
       </div>
+      <div class="topbar-sub">
+        <span id="refreshStatus" role="status"></span>
+      </div>
     </div>
   </div>
   <div class="topbar-right">
@@ -1993,24 +1996,10 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
   });
   renderSteps();
 
-  /**
-   * The agent rewrites this file in place, and the page is opened over file://, where fetch() is
-   * CORS-blocked - so there is no way to poll for changes and patch the DOM. A reload is the only
-   * mechanism available, which makes *when* it happens the whole design:
-   *
-   *  - Restore the open tab and scroll position through sessionStorage, so a reload never throws
-   *    the reader back to the top of Overview.
-   *  - Pause while the reader is actually using the page. Being yanked mid-sentence is worse than
-   *    seeing a slightly stale plan.
-   *  - Stop entirely once nothing is in progress.
-   */
+  // Both automatic and manual refreshes replace the document. Keep the reader's
+  // tab and scroll position; the shared controller below owns when to refresh.
   var STORE_TAB = 'mobile-plan-tab';
   var STORE_SCROLL = 'mobile-plan-scroll';
-  var RELOAD_MS = 4000;
-  var QUIET_MS = 30000;
-  var lastInteraction = 0;
-  // Captured now: currentScript is only set while this script first runs, not in later callbacks.
-  var scriptNonce = (document.currentScript && document.currentScript.nonce) || '';
 
   function showTab(tab) {
     var button = document.querySelector('.nav-btn[data-tab="' + tab + '"]');
@@ -2024,34 +2013,35 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
 
   document.querySelectorAll('.nav-btn').forEach(function (btn) {
     btn.addEventListener('click', function () {
-      lastInteraction = Date.now();
       showTab(btn.dataset.tab);
       try { sessionStorage.setItem(STORE_TAB, btn.dataset.tab); } catch (e) { /* private mode */ }
     });
   });
 
-  ['scroll', 'keydown', 'pointerdown'].forEach(function (event) {
-    window.addEventListener(event, function () { lastInteraction = Date.now(); }, { passive: true });
-  });
-
   // The live preview is a cross-origin frame, so the clicks, keys and scrolls a reader makes
-  // inside it go to that frame's document and never reach the listeners above. Without this,
-  // someone trying out their app would have it reset under them by the next reload. Pointer
-  // entry and focus are the two signals that do cross the frame boundary, so either one counts
-  // as using the page. Leaving restarts the quiet window, so the reload still waits QUIET_MS
-  // after the reader is done rather than firing on the next tick.
+  // inside it go to that frame's document and never reach the refresh controller's listeners.
+  // Without this, someone trying out their app would have it reset under them by the next
+  // reload. Pointer entry and focus are the two signals that do cross the frame boundary, so
+  // either one marks the page busy, and the controller waits. Leaving reports busy once more,
+  // which restarts the controller's quiet window, so a reload still waits until the reader is
+  // done rather than firing on the next tick.
   var pointerInPreview = false;
+  var leftPreview = false;
   if (liveFrame) {
     liveFrame.addEventListener('pointerenter', function () { pointerInPreview = true; });
     liveFrame.addEventListener('pointerleave', function () {
       pointerInPreview = false;
-      lastInteraction = Date.now();
+      leftPreview = true;
     });
   }
-
-  function usingLivePreview() {
-    return !!liveFrame && (pointerInPreview || document.activeElement === liveFrame);
-  }
+  window.planRefreshBusy = function () {
+    if (!liveFrame) return false;
+    // Focus can leave the frame without an event this page reliably sees, so check it each time.
+    if (pointerInPreview || document.activeElement === liveFrame) return true;
+    var justLeft = leftPreview;
+    leftPreview = false;
+    return justLeft;
+  };
 
   window.addEventListener('beforeunload', function () {
     try { sessionStorage.setItem(STORE_SCROLL, String(window.scrollY)); } catch (e) { /* ignore */ }
@@ -2063,57 +2053,9 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
     var savedScroll = Number(sessionStorage.getItem(STORE_SCROLL) || 0);
     if (savedScroll > 0) window.scrollTo(0, savedScroll);
   } catch (e) { /* sessionStorage unavailable; first-tab default is fine */ }
-
-  // Reload only when the plan changed. Every reload restarts the live app in the phone on its
-  // first screen with its sample data reset, and a timed refresh did that every few seconds while
-  // the user was trying the app. A file:// page cannot fetch, so it cannot ask whether its own file
-  // changed, but it can still load a classic script: app-docs.js rewrites
-  // create-app-plan.version.js beside this page on every render, and the page loads it each tick.
-  // The nonce lets that script past this page's CSP. If it cannot load (a plan rendered before the
-  // sidecar existed, or a browser that blocks file scripts), fall back to the timed refresh rather
-  // than leave the page stale.
-  var planChanged = false;
-  window.__planVersion = function (version) {
-    if (version !== summary.version) planChanged = true;
-  };
-  function checkPlanVersion() {
-    var probe = document.createElement('script');
-    if (scriptNonce) probe.setAttribute('nonce', scriptNonce);
-    probe.addEventListener('load', function () { probe.remove(); });
-    probe.addEventListener('error', function () { planChanged = true; probe.remove(); });
-    probe.src = 'create-app-plan.version.js?t=' + Date.now();
-    (document.head || document.body).appendChild(probe);
-  }
-
-  if (!summary.settled) {
-    setInterval(function () {
-      if (!planChanged) {
-        checkPlanVersion();
-        return;
-      }
-      // Never interrupt someone who is reading. The next tick picks it up.
-      if (Date.now() - lastInteraction < QUIET_MS) return;
-      // Focus can leave the frame without an event this page reliably sees, so a tick that
-      // finds the preview in use restarts the quiet window itself.
-      if (usingLivePreview()) {
-        lastInteraction = Date.now();
-        return;
-      }
-      if (document.hidden) return;
-      try { sessionStorage.setItem(STORE_SCROLL, String(window.scrollY)); } catch (e) { /* ignore */ }
-      // A plain reload() is not enough. This page is opened over file://, so it carries no
-      // cache headers, and `render-template.js` publishes each rewrite with an atomic rename -
-      // a new inode at the same path. Browsers are free to serve the copy they already have,
-      // which is why the build animation could persist until a hard refresh. Reloading through
-      // a URL that differs every time is the only lever a file:// page has.
-      var fresh = location.href.split('#')[0].split('?')[0] + '?t=' + Date.now();
-      // replace(), not assign(): the plan changes many times in a run, and each reload would
-      // otherwise be a back-button entry the reader has to escape.
-      location.replace(fresh);
-    }, RELOAD_MS);
-  }
 })();
 </script>
+<script nonce="__ATTR_CSP_NONCE__" id="planRefreshScript">__RAW_AUTO_REFRESH__</script>
 <footer class="ai-footer">AI-generated content may be incorrect</footer>
 </body>
 </html>
