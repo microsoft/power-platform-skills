@@ -6,6 +6,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
+const vm = require('node:vm');
 
 const {
   EDIT_ITEM_STATUSES, PHASES, PHONE_STAGES, SECTIONS, applyStep, initState, loadState, outputPath,
@@ -22,6 +23,123 @@ function project(name) {
 function seeded(root) {
   return save(root, initState(root, { appName: 'Field Inspections', dataPlatform: 'dataverse' }));
 }
+
+// Execute the script emitted into the real artifact across simulated navigations.
+// Time advances only at timer ticks, so the production reload budget is tested without
+// spending five minutes per case.
+function refreshPage(html, href, {
+  hidden = false, storageUnavailable = false, navigationType = 'navigate',
+} = {}) {
+  const script = html.match(/<script[^>]*id="planRefreshScript"[^>]*>([\s\S]*?)<\/script>/);
+  assert.ok(script, 'the generated plan must include its refresh controller');
+  const handlers = {};
+  const intervals = [];
+  const navigations = [];
+  const message = { textContent: '' };
+  let now = 100000;
+  vm.runInNewContext(script[1], {
+    URL,
+    performance: { getEntriesByType: () => [{ type: navigationType }] },
+    Date: { now: () => now },
+    location: { href, replace: (fresh) => navigations.push(fresh) },
+    document: {
+      hidden,
+      getElementById: (id) => id === 'refreshStatus' ? message : null,
+    },
+    window: { addEventListener: (event, callback) => { handlers[event] = callback; } },
+    sessionStorage: storageUnavailable ? {
+      getItem() { throw new Error('Storage unavailable'); },
+      setItem() { throw new Error('Storage unavailable'); },
+    } : {},
+    setInterval: (callback) => intervals.push(callback),
+  });
+  return {
+    intervals, navigations, handlers, message,
+    tick() { now += 10000; intervals.forEach((callback) => callback()); },
+  };
+}
+
+test('create and edit plans bound unchanged reloads, even without browser storage', () => {
+  for (const edit of [false, true]) {
+    const root = project('docs-refresh-cap');
+    try {
+      const state = initState(root, { appName: 'App' });
+      applyStep(state, { id: 'requirements', status: 'active', note: 'Working' });
+      const render = () => {
+        if (edit) return writeEditProgress(root, { status: 'active', note: 'Working' });
+        return save(root, state) && outputPath(root);
+      };
+      let href = 'file:///app/docs/plan.html?keep=value#changes';
+      for (let attempt = 0; attempt < 30; attempt += 1) {
+        // Each render stamps a new generated time/nonce but makes no progress.
+        state.updatedAt = new Date(attempt * 1000).toISOString();
+        const page = refreshPage(fs.readFileSync(render(), 'utf8'), href, { storageUnavailable: true });
+        page.tick();
+        assert.equal(page.navigations.length, 1);
+        href = page.navigations[0];
+      }
+      const paused = refreshPage(fs.readFileSync(render(), 'utf8'), href);
+      assert.equal(paused.intervals.length, 0, 'an interrupted run must stop polling');
+      assert.match(paused.message.textContent, /no new progress/);
+      assert.equal(new URL(href).searchParams.get('keep'), 'value');
+      assert.equal(new URL(href).hash, '#changes');
+      const manual = refreshPage(fs.readFileSync(render(), 'utf8'), href, { navigationType: 'reload' });
+      assert.equal(manual.intervals.length, 1, 'manual refresh renews the progress check');
+      manual.tick();
+      assert.equal(new URL(manual.navigations[0]).searchParams.get('planReloads'), '1',
+        'browser reload starts a fresh budget even when the URL still carries the exhausted count');
+
+      applyStep(state, { id: 'requirements', status: 'done' });
+      applyStep(state, { id: 'architecture', status: 'active', note: 'Planning' });
+      const changedFile = edit
+        ? writeEditProgress(root, { status: 'active', phase: 'build', note: 'Building' })
+        : save(root, state) && outputPath(root);
+      const changed = refreshPage(fs.readFileSync(changedFile, 'utf8'), href);
+      changed.tick();
+      assert.equal(new URL(changed.navigations[0]).searchParams.get('planReloads'), '1',
+        'real progress renews the budget');
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  }
+});
+
+test('input gates, terminal plans and reader activity do not trigger automatic reloads', () => {
+  const root = project('docs-refresh-states');
+  try {
+    const state = initState(root, { appName: 'App' });
+    for (const edit of [false, true]) {
+      for (const status of ['waiting', 'done', 'failed']) {
+        applyStep(state, {
+          id: 'requirements', status: status === 'waiting' ? 'active' : status,
+          note: status === 'waiting' ? 'Gate 1 - awaiting your approval' : '',
+        });
+        const file = edit
+          ? writeEditProgress(root, { status, waiting: status === 'waiting' })
+          : save(root, state) && outputPath(root);
+        const html = fs.readFileSync(file, 'utf8');
+        assert.doesNotMatch(html, /id="refreshPlan"/, 'use browser reload instead of a dedicated button');
+        const page = refreshPage(html, 'file:///app/plan.html', { navigationType: 'reload' });
+        assert.equal(page.intervals.length, 0, `${edit ? 'edit' : 'create'} ${status}`);
+      }
+    }
+    applyStep(state, { id: 'requirements', status: 'active', note: 'Working' });
+    save(root, state);
+    const html = fs.readFileSync(outputPath(root), 'utf8');
+    const hidden = refreshPage(html, 'file:///app/plan.html', { hidden: true });
+    hidden.tick();
+    assert.equal(hidden.navigations.length, 0);
+    const reading = refreshPage(html, 'file:///app/plan.html');
+    reading.handlers.pointerdown();
+    reading.tick();
+    assert.equal(reading.navigations.length, 0);
+    reading.tick();
+    reading.tick();
+    assert.equal(reading.navigations.length, 1);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test('init creates docs/ with a plan that carries its own brand mark', () => {
   const root = project('docs-init');
@@ -319,7 +437,8 @@ test('edit progress renders each operation state and settles when work completes
   assert.match(html, /class="item waiting" data-item-id="approve"/);
   assert.match(html, /1 of 3 operations complete/);
   assert.match(html, /aria-valuenow="33"/);
-  assert.match(html, /location\.replace\(fresh\)/);
+  assert.equal(refreshPage(html, 'file:///app/edit.html').intervals.length, 0,
+    'waiting for approval must pause polling');
   assert.match(html, /sessionStorage\.setItem\(STORE_SCROLL/);
   assert.match(html, /sessionStorage\.getItem\(STORE_SCROLL/);
   assert.match(html, /window\.scrollTo\(0, savedScroll\)/);
@@ -345,7 +464,8 @@ test('edit progress renders each operation state and settles when work completes
     ],
   });
   const completedHtml = fs.readFileSync(progress, 'utf8');
-  assert.doesNotMatch(completedHtml, /location\.replace\(fresh\)/);
+  assert.equal(refreshPage(completedHtml, 'file:///app/edit.html').intervals.length, 0,
+    'completed edits must stop polling');
   assert.match(completedHtml, /sessionStorage\.getItem\(STORE_SCROLL/);
   assert.match(completedHtml, /window\.scrollTo\(0, savedScroll\)/);
   assert.match(completedHtml, /Scan to test the changes/);
@@ -1521,18 +1641,20 @@ test('the plan never reloads over a reader, and never resets their place', () =>
   assert.match(template, /window\.scrollTo\(0, savedScroll\)/);
 
   // Reading, typing, scrolling or clicking defers the reload; a hidden tab never reloads.
-  assert.match(template, /Date\.now\(\) - lastInteraction < QUIET_MS/);
-  assert.match(template, /if \(document\.hidden\) return;/);
+  const controller = fs.readFileSync(path.resolve(__dirname, '..', 'lib', 'plan-refresh.js'), 'utf8');
+  assert.match(controller, /Date\.now\(\) - lastInteraction < QUIET_MS/);
+  assert.match(controller, /if \(document\.hidden\) return;/);
   // And it stops altogether once the build is finished.
-  assert.match(template, /if \(!summary\.settled\)/);
+  assert.match(controller, /if \(options\.settled\)/);
 
   // A bare reload() may serve the cached copy: a file:// page has no cache headers, and each
   // rewrite lands as a new inode at the same path via an atomic rename. The animation could
   // therefore persist until a hard refresh, so the refresh goes through a changing URL.
-  assert.doesNotMatch(template, /(?<!\/\/.*)\blocation\.reload\(\)/,
+  assert.doesNotMatch(controller, /(?<!\/\/.*)\blocation\.reload\(\)/,
     'a plain reload can be served from the file:// cache');
-  assert.match(template, /location\.replace\(fresh\)/);
-  assert.match(template, /\?t=' \+ Date\.now\(\)/, 'the reload URL must differ every time');
+  assert.match(controller, /location\.replace\(fresh\.href\)/);
+  assert.match(controller, /searchParams\.set\('t', String\(Date\.now\(\)\)\)/,
+    'the reload URL must differ every time');
   // replace(), not assign(): this fires every few seconds and must not fill the back button.
   assert.doesNotMatch(template, /location\.assign\(/);
 

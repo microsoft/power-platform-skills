@@ -37,6 +37,7 @@ const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 
 const { publishAtomic, renderTemplate } = require('./lib/render-template');
+const { planRefreshScript } = require('./lib/plan-refresh');
 
 /**
  * The plan's state file is read by one process and rewritten by another as the run advances, so
@@ -455,6 +456,19 @@ function render(projectRoot, state) {
       PHONE: state.phone || { stage: 'building', screens: [] },
       CAPABILITIES: capabilityLabels(state),
       BRAND_ICON: brandIconDataUri(),
+      AUTO_REFRESH: planRefreshScript({
+        startedAt: state.startedAt,
+        phases: state.phases,
+        sections: state.sections,
+        sectionStates: state.sectionStates,
+        phone: state.phone,
+      }, {
+        active: state.phases.some((phase) => phase.status === 'active'),
+        waiting: Boolean(summary.awaitingInput),
+        settled: summary.settled,
+        reloadMs: 10000,
+        quietMs: 30000,
+      }),
     },
   });
 }
@@ -951,19 +965,15 @@ function writeEditProgress(projectRoot, options = {}) {
       + `<button type="button" class="input-banner-close" id="inputBannerClose" aria-label="Dismiss">&times;</button>`
       + `</div>`
     : '';
-  const autoRefresh = settled ? '' : `
-    var RELOAD_MS = 2500;
-    var QUIET_MS = 10000;
-    var lastInteraction = 0;
-    ['scroll', 'keydown', 'pointerdown'].forEach(function (event) {
-      window.addEventListener(event, function () { lastInteraction = Date.now(); }, { passive: true });
-    });
-    setInterval(function () {
-      if (document.hidden || Date.now() - lastInteraction < QUIET_MS) return;
-      try { sessionStorage.setItem(STORE_SCROLL, String(window.scrollY)); } catch (error) { /* private mode */ }
-      var fresh = location.href.split('#')[0].split('?')[0] + '?t=' + Date.now();
-      location.replace(fresh);
-    }, RELOAD_MS);`;
+  const autoRefresh = planRefreshScript({
+    phase, note, status, waiting, items, changes, phone,
+  }, {
+    active: status === 'active',
+    waiting: waiting || status === 'waiting',
+    settled,
+    reloadMs: 2500,
+    quietMs: 10000,
+  });
 
   const html = `<!DOCTYPE html>
 <html lang="en">
@@ -1135,6 +1145,9 @@ function writeEditProgress(projectRoot, options = {}) {
         <div class="topbar-sub">
           <span>${escapeHtml(appName)}</span><span class="topbar-sep">|</span>
           <span>Updated ${escapeHtml(generatedAt)} UTC</span>
+        </div>
+        <div class="topbar-sub">
+          <span id="refreshStatus" role="status"></span>
         </div>
       </div>
     </div>
@@ -1405,9 +1418,9 @@ function writeEditProgress(projectRoot, options = {}) {
       var savedScroll = Number(sessionStorage.getItem(STORE_SCROLL) || 0);
       if (savedScroll > 0) window.scrollTo(0, savedScroll);
     } catch (error) { /* sessionStorage unavailable; Changes stays selected */ }
-    ${autoRefresh}
   }());
   </script>
+  <script nonce="${nonce}" id="planRefreshScript">${autoRefresh}</script>
 </body>
 </html>`;
 
