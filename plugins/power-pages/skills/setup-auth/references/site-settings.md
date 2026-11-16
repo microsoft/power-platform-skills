@@ -20,12 +20,17 @@ Before linking, check for multi-tenant Authority paths `/organizations/` or `/co
 Such configurations disable contact mapping: use `false`, explain why and recommend a specific single-tenant authority.
 Never equate a matching unverified email with proof of identity.
 
-For external providers, confirm Open self-service versus Controlled pre-provisioned-only registration, including when reusing an existing app.
+In `keep-only` mode, preserve global and per-provider registration settings unless the user explicitly requests a registration-policy change.
+Missing local records mean unknown deployed values, not disabled registration.
+An explicit request to omit invitation UI or email linking does not approve disabling registration.
+If route planning depends on unknown registration settings, ask to verify their effective values before implementing those routes.
+
+When registration policy is in scope, confirm Open self-service versus Controlled pre-provisioned-only registration, including when reusing an existing app.
 Store `OPEN_REGISTRATION_CHOICE`; it must agree with the site audience and local registration mode when both exist.
 Local registration follows the four-mode matrix in the local branch, not the generic external default.
 If invitations are explicitly requested on an external-only site, collect invitation/open-registration settings and load the invitation branch.
 Resolve conflicting registration choices before final plan approval.
-For external-only sites, derive `REGISTRATION_MODE` from the approved global switches without asking local-account questions:
+For external-only sites, derive `REGISTRATION_MODE` from confirmed existing or explicitly approved global switches without asking local-account questions:
 
 | Open registration | Invitations | REGISTRATION_MODE | Registration Enabled |
 |---|---|---|---|

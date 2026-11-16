@@ -79,6 +79,13 @@ test('provider discovery and merge modes remain mandatory', () => {
   assert.match(read('references/provider-entra-external-id.md'), /confirmed `REDIRECT_URI`/);
 });
 
+test('keep-only planning preserves registration policy outside the approved scope', () => {
+  const settings = read('references/site-settings.md');
+  assert.match(settings, /`keep-only`.*preserve global and per-provider registration settings/);
+  assert.match(settings, /Missing local records mean unknown deployed values, not disabled registration/);
+  assert.match(settings, /An explicit request to omit invitation UI or email linking does not approve disabling registration/);
+});
+
 test('local and optional branches retain server contracts without forcing local auth', () => {
   const local = read('references/local-auth-workflow.md');
   assert.match(entry, /local accounts only when explicitly requested or already configured and retained/);
