@@ -322,6 +322,12 @@ const SKILL_DIR = path.join(__dirname, '../../skills/add-server-logic');
 const frontendReference = fs.readFileSync(path.join(
   SKILL_DIR, 'references/frontend-integration-reference.md'
 ), 'utf8');
+const implementationReference = fs.readFileSync(path.join(
+  SKILL_DIR, 'references/server-logic-implementation.md'
+), 'utf8');
+const troubleshootingReference = fs.readFileSync(path.join(
+  SKILL_DIR, 'references/server-logic-troubleshooting.md'
+), 'utf8');
 const skill = fs.readFileSync(path.join(SKILL_DIR, 'SKILL.md'), 'utf8');
 
 function exampleAfter(document, heading) {
@@ -441,7 +447,7 @@ test('create example logs failed writes and missing or malformed record URLs', (
 });
 
 test('validate-and-execute example reads the record body before checking a transition', () => {
-  const source = exampleAfter(skill, '#### Validate-and-Execute Template');
+  const source = exampleAfter(implementationReference, '#### Validate-and-Execute Template');
   for (const updateStatus of [204, 403]) {
     const writes = [];
     const { payload, errors } = runExample(source, 'post', {
@@ -487,7 +493,7 @@ test('wrapped passthrough server and client examples preserve and parse the conn
 });
 
 test('custom API templates parse connector status before reporting success', () => {
-  const section = skill.slice(skill.indexOf('#### Custom Action Wrapping Template'));
+  const section = implementationReference.slice(implementationReference.indexOf('#### Custom Action Wrapping Template'));
   for (const [heading, method] of [
     ['**Unbound action:', 'post'],
     ['**Entity-bound action:', 'post'],
@@ -507,13 +513,13 @@ test('custom API templates parse connector status before reporting success', () 
 });
 
 test('server-side guidance examples pass the local validator', (t) => {
-  const customSection = skill.slice(skill.indexOf('#### Custom Action Wrapping Template'));
+  const customSection = implementationReference.slice(implementationReference.indexOf('#### Custom Action Wrapping Template'));
   for (const source of [
     exampleAfter(frontendReference, '**Approach A'),
     exampleAfter(frontendReference, '**Approach B'),
     exampleAfter(frontendReference, '**Approach C'),
     exampleAfter(frontendReference, 'For writes, return the new id'),
-    exampleAfter(skill, '#### Validate-and-Execute Template'),
+    exampleAfter(implementationReference, '#### Validate-and-Execute Template'),
     exampleAfter(customSection, '**Unbound action:'),
     exampleAfter(customSection, '**Entity-bound action:'),
     exampleAfter(customSection, '**Unbound function (read-only, GET):'),
@@ -527,7 +533,7 @@ test('server-side guidance examples pass the local validator', (t) => {
 });
 
 test('troubleshooting example captures inline logs or a trace identifier', async () => {
-  const source = exampleAfter(skill, 'If `browser_network_requests`');
+  const source = exampleAfter(troubleshootingReference, '### 2. Capture the network response');
   for (const responseHeaders of [
     { 'x-ms-user-trace': Buffer.from('{"logs":[]}').toString('base64') },
     { 'x-ms-user-trace-id': 'example-trace-id' },

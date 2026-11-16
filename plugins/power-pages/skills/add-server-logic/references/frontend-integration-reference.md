@@ -260,7 +260,7 @@ function post() {
 
 ### When the response shape is unknown
 
-If the frontend integration is failing because the exact Dataverse response shape is unclear for a specific operation (custom actions, bound actions, non-standard query options), invoke `/test-site` against the deployed site. The test-site skill captures live `/_api/serverlogics/` responses and reports the exact `envelope.data` and (when present) `outer.Body` shapes so the frontend integration can be written against the real response, not a guessed one.
+If the frontend integration is failing because the exact Dataverse response shape is unclear for a specific operation (custom actions, bound actions, non-standard query options), use the available live endpoint testing capability after deployment. Capture the `envelope.data` and (when present) `outer.Body` shapes so the frontend integration follows the actual response.
 
 ### Key points for Dataverse-backed server logic
 

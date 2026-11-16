@@ -6,9 +6,7 @@ Power Pages Server Logic is a preview feature with documentation that may expand
 
 ### Step 1: Search to discover pages
 
-```
-mcp__plugin_power-pages_microsoft-learn__microsoft_docs_search("Power Pages Server Logic")
-```
+Use a Microsoft Learn documentation search capability to search for "Power Pages Server Logic".
 
 ### Step 2: Collect unique page URLs
 
@@ -27,15 +25,15 @@ Classify each discovered page into one of these categories:
 |----------|:------------:|----------------|
 | **Core reference** | Yes | Overview page, authoring guide, SDK/server objects reference |
 | **How-to guide** | If relevant | Tutorials for specific scenarios (Dataverse, external APIs, Azure Functions, Graph, etc.) |
-| **New/unknown** | If relevant | Any page not matching known patterns — read it to learn about new capabilities |
+| **New/unknown** | If relevant | Any page not matching known patterns - read it to learn about new capabilities |
 
 ### Step 4: Fetch in parallel
 
-Fetch all core reference pages plus relevant how-to guides in parallel using `mcp__plugin_power-pages_microsoft-learn__microsoft_docs_fetch`.
+Fetch all core reference pages plus relevant how-to guides using a Microsoft Learn documentation fetch capability. Fetch independent pages in parallel when supported.
 
 ## Known Pages (as of March 2026)
 
-These are pages that existed when this reference was last updated. They serve as a baseline — the search step above will discover these plus any new ones:
+These are pages that existed when this reference was last updated. They serve as a baseline - the search step above will discover these plus any new ones:
 
 | Page | URL |
 |------|-----|
@@ -47,7 +45,7 @@ These are pages that existed when this reference was last updated. They serve as
 | Azure Function | `https://learn.microsoft.com/en-us/power-pages/configure/server-logic-azure-function` |
 | Graph & SharePoint | `https://learn.microsoft.com/en-us/power-pages/configure/server-logic-graph-sharepoint` |
 
-If the search discovers pages not in this table, those are new additions — fetch and use them.
+If the search discovers pages not in this table, those are new additions - fetch and use them.
 
 ## What to Extract from the Docs
 
@@ -72,15 +70,13 @@ When the user's requirements are known, fetch any additional pages that match th
 | Microsoft Graph / SharePoint | Graph API, SharePoint integration |
 | Any other scenario | Any matching tutorial or how-to page |
 
-If the search results contain unfamiliar but relevant pages, read them — they may document new capabilities.
+If the search results contain unfamiliar but relevant pages, read them - they may document new capabilities.
 
 ## Code Samples
 
 Also search for current samples:
 
-```
-mcp__plugin_power-pages_microsoft-learn__microsoft_code_sample_search("Power Pages server logic")
-```
+Use a Microsoft Learn code-sample search capability to search for "Power Pages server logic".
 
 ## Known SDK Baseline
 
@@ -93,6 +89,6 @@ Use this as a baseline only. If Microsoft Learn differs, Microsoft Learn wins.
 - **Server.User**: `fullname`, `firstname`, `lastname`, `emailaddress1`, `contactid`, `Roles`, `Token`, and many other contact properties
 - **Server.Website**: `adx_websiteid`, `adx_name`, `adx_primarydomainname`, `adx_defaultlanguage`, etc.
 - **Server.Sitesetting**: `Get(name)`
-- **Server.EnvironmentVariable**: `get(name)` — reads Dataverse environment variable values directly (alternative to reading via site settings with `envvar_schema`)
+- **Server.EnvironmentVariable**: `get(name)` - reads Dataverse environment variable values directly (alternative to reading via site settings with `envvar_schema`)
 
 When new SDK members or changed patterns are discovered, use them and record the differences in the implementation plan.
