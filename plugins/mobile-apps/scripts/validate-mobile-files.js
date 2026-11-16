@@ -15,11 +15,12 @@ const PLUGIN_ROOT = path.resolve(__dirname, '..');
 
 function usage() {
   return [
-    'Usage: node validate-mobile-files.js --project-root <path> (--all-source | --file <path> [--file <path> ...]) [--approved-js-dependency <name>@<exact-version> ...]',
+    'Usage: node validate-mobile-files.js --project-root <path> (--all-source | --file <path> [--file <path> ...]) [--approved-js-dependency <name>@<exact-version> ...] [--upgrade-only]',
     '',
     'Paths must be regular files. Relative paths resolve from --project-root.',
     '--all-source validates every .ts/.tsx file under app/ and src/, plus root .ts/.tsx files.',
     'Approved JavaScript dependencies must use exact semver versions from the reviewed app plan.',
+    '--upgrade-only skips app-lock/native-inventory admission; the upgrade must pass Expo, Expo Doctor and TypeScript checks.',
   ].join('\n');
 }
 
@@ -41,6 +42,7 @@ function parseArgs(argv) {
     errors: [],
     projectRoot: null,
     targets: [],
+    upgradeOnly: false,
   };
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -53,6 +55,8 @@ function parseArgs(argv) {
       index += 1;
     } else if (arg === '--all-source') {
       parsed.allSource = true;
+    } else if (arg === '--upgrade-only') {
+      parsed.upgradeOnly = true;
     } else if (arg === '--diagnostic-artifacts') {
       parsed.errors.push('BLOCKED: --diagnostic-artifacts is retired. Use published host/template packages.');
       parsed.blocked = true;
@@ -108,7 +112,7 @@ function collectSourceTargets(projectRoot) {
   return targets.sort();
 }
 
-function runValidator(validatorName, filePath, content, projectRoot, approvedJsDependencies) {
+function runValidator(validatorName, filePath, content, projectRoot, approvedJsDependencies, upgradeOnly) {
   const validatorPath = path.join(PLUGIN_ROOT, 'hooks', validatorName);
   const payload = JSON.stringify({
     cwd: projectRoot,
@@ -119,6 +123,7 @@ function runValidator(validatorName, filePath, content, projectRoot, approvedJsD
       filePath,
       validation_mode: 'explicit-mobile-workflow',
       approved_js_dependencies: approvedJsDependencies,
+      ...(upgradeOnly ? { validation_scope: 'upgrade-only' } : {}),
     },
   });
 
@@ -143,6 +148,7 @@ function main(argv) {
     help,
     projectRoot: projectRootArg,
     targets,
+    upgradeOnly,
   } = parseArgs(argv);
   if (help) {
     process.stdout.write(`${usage()}\n`);
@@ -218,6 +224,7 @@ function main(argv) {
         content,
         projectRoot,
         approvedJsDependencies,
+        upgradeOnly,
       );
       if (result.stdout) process.stdout.write(result.stdout);
       if (result.stderr) process.stderr.write(result.stderr);

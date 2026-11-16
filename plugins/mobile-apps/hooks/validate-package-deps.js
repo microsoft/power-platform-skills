@@ -151,6 +151,12 @@ function main(input) {
     fail('Diagnostic artifact mode is retired. Resolve the app against its published host and template packages.');
   }
   const explicit = toolInput.validation_mode === 'explicit-mobile-workflow';
+  if (explicit && toolInput.validation_scope === 'upgrade-only') {
+    // The host CLI owns installation; upgrades rely on Expo/Doctor/TypeScript,
+    // not this separate app-lock and native-inventory admission policy.
+    process.stderr.write('WARNING: Upgrade validation does not verify Dev Player/Wrap compatibility.\n');
+    return;
+  }
   let baseline;
   let installed;
   if (explicit) {

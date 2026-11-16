@@ -59,15 +59,22 @@ npm outdated --json --depth=0 > .tmp/dependency-maintenance/outdated.json
 
 Use `outdated.json` for Steps 2-4, then delete it before returning. Exit 0 or 1 is valid only when the file contains valid JSON; otherwise return `BLOCKED`. Let npm use the existing registry/auth configuration and never read or print its credentials. Only direct declarations in `dependencies`, `devDependencies`, `optionalDependencies`, and `peerDependencies` are eligible.
 
+For `E401`, pause mutations and, with approval, run the app's existing renewal
+script or the user-approved credential-provider command against its `.npmrc`.
+Preserve project registry routing; do not replace the project `.npmrc` with
+user-level configuration or switch feeds to bypass authentication. After renewal,
+retry the same reviewed publication. If an install was interrupted, inspect its
+project-scoped journal and recovery instructions before resuming.
+
 Before changing each **JavaScript-only** package in Steps 3-4, show a one-row table with its package name, current version, declared range, and target version. Then use `AskUserQuestion` with **Update package** and **Skip package** choices; make **Skip package** the recommended default. Only an explicit **Update package** response authorizes that package's mutation. Step 2 instead approves the complete coupled release. Invoking this skill or a parent skill is not approval. Validate an approved update before presenting the next package. Record skipped packages and continue in order. If the user cancels, delete only this invocation's temporary discovery file, stop without further package changes, and return `DONE` as the literal first line followed by `Dependency updates canceled by user.` Do not delete recovery snapshots or interrupted journals.
 
 ## Step 2: Offer A Coordinated Native Release Or Host Repair
 
 **Telemetry checkpoint: `update_native_host_dependency`**
 
-Run this step even when the host is absent from `outdated.json`. A manual host update can leave an older template behind. Read the recorded source with `resolve-mobile-release.js --project-root '<working_dir>' --requirements-only`; this reads app state and the installed host without a catalogue or registry lookup and does not authorize native changes.
+Run this step even when the host is absent from `outdated.json`. A manual host update can leave an older template behind. The plan below reads the recorded source state and installed host identity.
 
-Keep `npm outdated --json --depth=0` as discovery. Review its `current`, `wanted`, and `latest` host versions and the user's requested supported npm channel; do not update every runtime package independently. Select one **exact stable published host version**. If the installed host is already current, still inspect that version for a pending template migration. `resolve-mobile-release.js --default` can inspect npm's default host channel, but it is not proof of Player or Wrap availability. Then run:
+Review the saved discovery's `current`, `wanted`, and `latest` host versions and the user's requested supported npm channel; do not repeat discovery or update every runtime package independently. Select one **exact stable published host version**. If the installed host is already current, still inspect that version for a pending template migration. `resolve-mobile-release.js --default` can inspect npm's default host channel, but it is not proof of Player or Wrap availability. Then run:
 
 ```bash
 cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
@@ -123,7 +130,18 @@ Interpret the decision:
    producer fix. Migration authoring, release tagging, runtime preparation and
    Player build scripts are maintainer tools, not customer upgrade steps.
 5. For a clean edge, apply it only to the disposable copy with `upgrade-template --project '<preview_dir>'`, including its validated install. Do not use `--no-install` to simulate state advancement. Record every changed/deleted/created file and dependency, plus the actual before/after protected metadata. Require progress without overshoot, then repeat dry-run and apply until the selected target is reached. No target migration is needed for host-only repair. Never reuse approval of one preview for unseen later edges.
-6. Resolve the disposable app against the selected release, run dependency admission, the installed SDK check below, type-check, changed-file validation, and target platform bundles. Preserve customer instructions/settings; review any customer-section conflict, never resolve by whole-file replacement. If the published tool cannot rehearse the full chain, return `BLOCKED` before touching the real app.
+6. Re-run `mobile-template-lifecycle.js plan --project-root '<preview_dir>' --host-version "<exact-host-version>"`
+   and require `kind: "current"` to confirm the selected host/template/runtime
+   state was reached. Do not run strict app admission or add a separate lockfile,
+   installed-package or native-inventory verification gate; the host CLI owns
+   dependency installation. Use `validate-mobile-files.js --project-root '<preview_dir>' --upgrade-only --file <changed-file>`
+   for changed-file policies without that duplicate package admission.
+   Expo compatibility, Expo Doctor, TypeScript and platform bundles are mandatory;
+   any failure blocks application. Require successful Expo Doctor output from
+   this host-owned installation, or run it separately through the approved tooling.
+   Surface planning's fingerprint `warnings` without claiming Player/Wrap support.
+   Preserve customer instructions/settings and review conflicts rather than
+   replacing whole files. An incomplete rehearsal blocks real-app changes.
    Run `mobile-template-lifecycle.js check-sdk --project-root '<preview_dir>'` for
    the Expo check. It binds the actual installed Expo CLI to the explicit app
    directory and scopes `EXPO_OFFLINE=1` to that check only, validating the frozen
@@ -131,6 +149,12 @@ Interpret the decision:
    not skipped. Do not substitute bare `expo install --check`, use `npx --prefix`
    as a working-directory change, or set offline mode globally. Use this same
    helper against the real app after approved application.
+   When Metro/app-startup testing is requested, run the app's own development
+   command from its explicit directory and request bundles for the target
+   platforms; a responding `/status` endpoint alone does not verify bundling.
+   When a client is available, load the intended route and exercise the customer
+   workflow. Report bundle and runtime results separately; do not fabricate
+   environment/auth configuration to manufacture a successful smoke test.
 7. Present the **aggregate full-chain diff**, each edge, conflicts/resolutions, install scripts, expected binaries, and rollback scope. Ask **Apply reviewed release** or **Skip native release** (recommended). Only explicit application approval authorizes real edits.
 
 ### Apply only the approved plan
@@ -139,7 +163,7 @@ Recheck every source input against the snapshot, including lock/dependency state
 
 On failure restore only touched files from this invocation's snapshot, including deleted/created paths and original modes, without disturbing pre-existing customer changes. Reconcile installed dependencies from the restored lockfile using the reviewed install policy. If rollback or journal recovery cannot complete safely, preserve the snapshot/journal, report both failures, and stop. Never report `DONE` for a partial migration.
 
-After success resolve the app again and run the same validators/bundles as the rehearsal. Only a host-validated migration may advance protected template/runtime state; never set it by hand. Update the relevant existing plan/runtime summary, not unrelated memory-bank content. Release approval is not deployment approval.
+After success re-run the metadata-only plan and the same mandatory checks as the rehearsal against `<working_dir>`, passing `--upgrade-only` to changed-file validation. Fingerprint differences remain warnings; deployment retains its separate strict admission. Only a host-validated migration may advance protected template/runtime state; never set it by hand. Update the relevant existing plan/runtime summary, not unrelated memory-bank content. Release approval is not deployment approval.
 
 ## Step 3: Update Other Microsoft Packages
 
@@ -157,7 +181,7 @@ For each approved package update:
 
 1. Snapshot `package.json`, existing npm lockfiles, and `native-app-plan.md` when that package will change it under `.tmp/dependency-maintenance/`.
 2. Install with `--ignore-scripts`; use `--package-lock=false` when the project had no npm lockfile.
-3. Run `npm install --ignore-scripts`, `mobile-template-lifecycle.js check-sdk --project-root '<working_dir>'`, the project's `type-check` script (or `npx --no-install tsc --noEmit` when TypeScript is declared), and `validate-mobile-files.js` for each changed file (including `package.json`, passing approved exact JS dependency exceptions). Re-resolve the native release and reject lock/native closure drift. Never run `npx expo install --fix`.
+3. Validate that installation with `mobile-template-lifecycle.js check-sdk --project-root '<working_dir>'`, Expo Doctor, the project's `type-check` script (or `npx --no-install tsc --noEmit` when TypeScript is declared), and `validate-mobile-files.js --upgrade-only` for each changed file (including `package.json`). All checks must pass. Read `resolve-mobile-release.js --project-root '<working_dir>' --requirements-only` to confirm that this JS-only update preserved the host/template/runtime requirements, without validating the app lock or scanning its installed native inventory. Never run `npx expo install --fix`.
 4. If any command fails, restore that package's snapshot, reconcile `node_modules`, return `BLOCKED` with the failed command, and do not offer later packages. Otherwise delete the snapshot and continue.
 
 Do not update transitive packages directly, add overrides, move packages between dependency sections, or use Git to roll back project files.

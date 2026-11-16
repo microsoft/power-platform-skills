@@ -136,6 +136,28 @@ test('the dispatcher uses the isolated policy and preserves exact JS-approval pa
   assert.match(invalid.stderr, /Invalid --approved-js-dependency/);
 });
 
+test('upgrade file validation skips lock and installed-inventory admission but retains package policy', (t) => {
+  const fixture = createFixture(t);
+  addDependency(fixture.projectRoot, 'expo-custom-module', '1.0.0');
+  const invoke = (upgrade) => spawnSync(process.execPath, [
+    path.join(fixture.pluginRoot, 'scripts/validate-mobile-files.js'),
+    '--project-root', fixture.projectRoot, '--file', 'package.json',
+    ...(upgrade ? ['--upgrade-only'] : []),
+  ], { cwd: fixture.projectRoot, encoding: 'utf8', env: { ...process.env, POWER_PLATFORM_SKILLS_TELEMETRY_MOBILE_APP_OPTOUT: '1' } });
+  const result = invoke(true);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stderr, /WARNING:.*does not verify Dev Player\/Wrap compatibility/);
+  blocked(invoke(false), /Native\/runtime dependency/);
+  fs.writeFileSync(path.join(fixture.projectRoot, 'package-lock.json'), 'not JSON');
+  fs.writeFileSync(path.join(fixture.projectRoot, 'node_modules/expo-custom-module/package.json'), 'not JSON');
+  assert.equal(invoke(true).status, 0);
+  fs.unlinkSync(path.join(fixture.projectRoot, 'package-lock.json'));
+  assert.equal(invoke(true).status, 0);
+  writeJson(path.join(fixture.projectRoot, 'package-lock.json'), { lockfileVersion: 3, packages: { '': {} } });
+  addDependency(fixture.projectRoot, 'axios', '1.0.0');
+  blocked(invoke(true), /Forbidden dependency/);
+});
+
 test('old apps are admitted by their release, not by a newer default release', (t) => {
   const old = fixtureRelease();
   const newest = fixtureRelease(2);

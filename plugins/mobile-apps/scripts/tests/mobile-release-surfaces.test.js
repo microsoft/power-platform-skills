@@ -342,6 +342,10 @@ test('upgrade rehearsals preserve source config context and require reviewed ove
   assert.match(skill, /Never run bare `npm ci`/);
   assert.match(skill, /check-sdk --project-root '<preview_dir>'/);
   assert.match(skill, /check-sdk --project-root '<working_dir>'/);
+  assert.match(skill, /Expo compatibility, Expo Doctor, TypeScript and platform bundles are mandatory/);
+  assert.match(skill, /any failure blocks application/);
+  assert.match(skill, /Do not run strict app admission/);
+  assert.doesNotMatch(skill, /resolve-mobile-release\.js[^\n]*--upgrade-only/);
   assert.doesNotMatch(skill, /`npx --no-install expo install --check`/);
   for (const source of [skill, lifecycle]) {
     assert.match(source, /restore-preview/);

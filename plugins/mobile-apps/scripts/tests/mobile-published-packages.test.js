@@ -8,7 +8,7 @@ const test = require('node:test');
 const { createHash } = require('node:crypto');
 const { spawnSync } = require('node:child_process');
 const {
-  HOST, TEMPLATE, createSource, selectPublishedContract, selectTemplateContract,
+  HOST, TEMPLATE, compareVersions, createSource, selectPublishedContract, selectTemplateContract,
   readSourceRequirements, projectContract, planPublishedUpdate,
 } = require('../lib/mobile-published-packages');
 const { acquireHost } = require('../mobile-template-lifecycle');
@@ -91,6 +91,16 @@ function migration(version = '2.0.0', from = '^1.0.0') {
     packageTransitions: { dependencies: { [HOST]: { from, to: `^${version}` } } },
   };
 }
+
+test('published package version comparisons are numeric, inclusive and stable-only', () => {
+  assert.equal(compareVersions('1.10.0', '1.9.9'), 1);
+  assert.equal(compareVersions('1.0.0', '1.0.0'), 0);
+  assert.equal(compareVersions('1.0.0', '2.0.0'), -1);
+  assert.equal(compareVersions('1.0.0+build.1', '1.0.0+build.2'), 0);
+  for (const version of ['latest', '^1.0.0', '01.0.0', '1.0.0-beta.1']) {
+    assert.throws(() => compareVersions(version, '1.0.0'), /exact stable/);
+  }
+});
 
 test('requirements-only inspection reads recorded state without a catalogue or registry', (t) => {
   const f = fixture(t);
@@ -222,11 +232,14 @@ test('downgrades and missing migration edges are rejected', (t) => {
   assert.throws(() => planPublishedUpdate(f.projectRoot, '2.0.0', f.options), /migration chain/);
 });
 
-test('equal version is current only after lock and installed-native validation', (t) => {
+test('current-version upgrade planning does not read the app lock or dependency inventory', (t) => {
   const f = fixture(t);
   assert.equal(planPublishedUpdate(f.projectRoot, '1.0.0', f.options).kind, 'current');
-  modifyJson(path.join(f.projectRoot, 'node_modules/expo-haptics/package.json'), (pkg) => { pkg.version = '1.0.1'; });
-  assert.throws(() => planPublishedUpdate(f.projectRoot, '1.0.0', f.options), /differs from the app lock/);
+  fs.writeFileSync(path.join(f.projectRoot, 'package-lock.json'), 'not JSON');
+  fs.writeFileSync(path.join(f.projectRoot, 'node_modules/expo-haptics/package.json'), 'not JSON');
+  assert.equal(planPublishedUpdate(f.projectRoot, '1.0.0', f.options).kind, 'current');
+  fs.unlinkSync(path.join(f.projectRoot, 'package-lock.json'));
+  assert.equal(planPublishedUpdate(f.projectRoot, '1.0.0', f.options).kind, 'current');
 });
 
 test('native inventory comes from the published lock, never from the customer lock', (t) => {
@@ -253,11 +266,13 @@ test('runtime labels cannot excuse mismatching published fingerprints', (t) => {
   assert.throws(() => selectPublishedContract('1.0.1', f.options), /fingerprint/);
 });
 
-test('a matching new template cannot conceal a native fingerprint change under unchanged runtime counters', (t) => {
+test('upgrade fingerprint differences are warnings rather than blockers', (t) => {
   const f = fixture(t);
   f.host('1.1.0', 2, 1, [migration('1.1.0')]).profile.nativeRuntime.android.fingerprint = 'f'.repeat(64);
   f.template('1.1.0', '1.1.0');
-  assert.throws(() => planPublishedUpdate(f.projectRoot, '1.1.0', f.options), /fingerprint change must advance/);
+  const result = planPublishedUpdate(f.projectRoot, '1.1.0', f.options);
+  assert.equal(result.kind, 'template-upgrade');
+  assert.deepEqual(result.warnings, ['android native fingerprints differ; verify Dev Player/Wrap compatibility separately.']);
 });
 
 test('current-state admission rejects a locally altered host profile', (t) => {
@@ -265,10 +280,11 @@ test('current-state admission rejects a locally altered host profile', (t) => {
   modifyJson(path.join(f.projectRoot, 'node_modules', HOST, 'compatibility/current.json'), (profile) => {
     profile.managedDependencies['expo-haptics'] = '2.0.0';
   });
-  assert.throws(() => planPublishedUpdate(f.projectRoot, '1.0.0', f.options), /metadata differs/);
+  assert.equal(planPublishedUpdate(f.projectRoot, '1.0.0', f.options).kind, 'current');
+  assert.throws(() => resolveProjectRelease(f.projectRoot, undefined, undefined, f.options), /metadata differs/);
 });
 
-test('project admission and current-version planning both verify offline files against the selected SDK publication', t => {
+test('strict admission verifies offline artifacts while upgrade planning leaves installation checks to the host', t => {
   const offline = '@microsoft/power-apps-native-offline';
   const entry = `node_modules/${offline}`;
   for (const mode of ['admit', 'current']) {
@@ -309,12 +325,13 @@ test('project admission and current-version planning both verify offline files a
       ? resolveProjectRelease(f.projectRoot, undefined, undefined, f.options)
       : planPublishedUpdate(f.projectRoot, '1.0.0', f.options);
     assert.doesNotThrow(verify);
-    assert.equal(f.requests.filter(request => request === `${offline}@0.2.0`).length, 1);
+    assert.equal(f.requests.filter(request => request === `${offline}@0.2.0`).length, mode === 'admit' ? 1 : 0);
     fs.writeFileSync(path.join(sdk, 'android/runtime.aar'), 'altered native fixture');
     modifyJson(path.join(sdk, 'compatibility.json'), metadata => {
       metadata.artifacts['android/runtime.aar'] = createHash('sha256').update('altered native fixture').digest('hex');
     });
-    assert.throws(verify, /metadata differs from its integrity-verified published archive/);
+    if (mode === 'admit') assert.throws(verify, /metadata differs from its integrity-verified published archive/);
+    else assert.equal(verify().kind, 'current');
   }
 });
 

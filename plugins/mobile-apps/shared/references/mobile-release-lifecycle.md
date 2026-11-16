@@ -153,7 +153,7 @@ Run the independent Expo check with `mobile-template-lifecycle.js check-sdk
 the app's installed CLI in that app's directory with `EXPO_OFFLINE=1` scoped only
 to the explicit SDK version check. This still rejects incompatible dependencies
 against the installed SDK's bundled versions; it does not skip validation or
-adopt newer online recommendations. Keep npm installation, dependency admission,
+adopt newer online recommendations. Keep npm installation, Expo Doctor,
 configuration, TypeScript and bundle checks in their normal environment.
 Do not use target-reference `NODE_PATH` instead of the source dependency context.
 Preview one edge with `--project '<preview_dir>' --dry-run`, then apply only an
@@ -168,8 +168,17 @@ pins distinguishable from genuine customer customizations.
 Published migrations use the host-owned strict npm installer and guarded lock
 regeneration. A broken published CLI requires a producer fix; do not locally
 rewrite first-party packages or use Player-build scripts to repair an app.
-After every edge, re-resolve the app and run changed-file validation before
+After every edge, recheck the target requirements and run changed-file validation before
 advancing through the reviewed migration chain.
+
+During `/check-updates`, do not run strict app-lock or installed-package/native
+inventory admission. The host CLI owns installation; re-run its published plan
+and require `current` to confirm the target host/template/runtime requirements.
+Pass `--upgrade-only` to changed-file validation to retain file/package policies
+without duplicating npm's dependency checks. Expo compatibility, Expo Doctor,
+TypeScript and platform bundles are mandatory, blocking checks. Fingerprint
+differences are warnings only; Player/Wrap compatibility remains unverified.
+Strict creation, native feature and deployment admission are unchanged.
 
 Compare app requirements with the actual supported counters of a selected Player
 when available. A mismatch requires a matching binary or an approved migration,

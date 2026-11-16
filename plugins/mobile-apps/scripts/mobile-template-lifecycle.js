@@ -6,12 +6,10 @@ const os = require('node:os');
 const path = require('node:path');
 const { runCliSync, CliLaunchError } = require('./lib/process-runner');
 const { withNpmContext } = require('./lib/npm-context');
+const { planPublishedUpdate } = require('./lib/mobile-published-packages');
 const {
   selectRelease,
-  selectProjectRelease,
-  resolveProjectRelease,
   summarizeRelease,
-  exactVersion,
 } = require('./lib/mobile-release');
 
 const HOST = '@microsoft/power-apps-native-host';
@@ -23,73 +21,6 @@ function readJson(file) {
   } catch {
     throw new Error(`Cannot read valid ${path.basename(file)}; restore it before continuing`);
   }
-}
-
-function compareVersions(left, right) {
-  if (!exactVersion(left, true) || !exactVersion(right, true)) {
-    throw new Error('Only exact stable package versions can be compared');
-  }
-  const a = left.split('+', 1)[0].split('.').map(BigInt);
-  const b = right.split('+', 1)[0].split('.').map(BigInt);
-  for (let index = 0; index < a.length; index += 1) {
-    if (a[index] !== b[index]) return a[index] > b[index] ? 1 : -1;
-  }
-  return 0;
-}
-
-function assertMajorTransition(source, target) {
-  const changed = ['android', 'ios'].some((platform) => (
-    source.nativeRuntimeVersions[platform] !== target.nativeRuntimeVersions[platform]
-    || source.platforms?.[platform]?.fingerprint !== target.platforms?.[platform]?.fingerprint
-  )) || ['expo', 'react-native'].some((name) => (
-    source.nativePackages[`node_modules/${name}`] !== target.nativePackages[`node_modules/${name}`]
-  ));
-  if (changed && (Number(target.nativePackages[`node_modules/${HOST}`].split('.')[0])
-    <= Number(source.nativePackages[`node_modules/${HOST}`].split('.')[0])
-    || Number(target.template.version.split('.')[0]) <= Number(source.template.version.split('.')[0]))) {
-    throw new Error('A native runtime transition requires a new host and template package major release; counters alone do not authorize an ABI change');
-  }
-}
-
-function planUpdate(projectRoot, releaseId, catalog) {
-  if (catalog === undefined) return require('./lib/mobile-published-packages').planPublishedUpdate(projectRoot, releaseId);
-  const source = selectProjectRelease(projectRoot, catalog);
-  const target = selectRelease(releaseId, catalog);
-  const installedHost = readJson(path.join(projectRoot, 'node_modules', HOST, 'package.json')).version;
-  const targetHost = target.nativePackages[`node_modules/${HOST}`];
-  if (target.templateVersion < source.templateVersion
-    || compareVersions(source.template.version, target.template.version) > 0
-    || compareVersions(source.nativePackages[`node_modules/${HOST}`], targetHost) > 0
-    || ['android', 'ios'].some((platform) => (
-      target.nativeRuntimeVersions[platform] < source.nativeRuntimeVersions[platform]
-    )) || compareVersions(installedHost, targetHost) > 0) {
-    throw new Error('Selected release would downgrade the app; choose a supported forward release');
-  }
-
-  const migrationRequired = target.templateVersion > source.templateVersion;
-  if (!migrationRequired && ['android', 'ios'].some((platform) => (
-    target.nativeRuntimeVersions[platform] !== source.nativeRuntimeVersions[platform]
-    || target.platforms[platform].fingerprint !== source.platforms[platform].fingerprint
-  ))) {
-    throw new Error('Runtime or fingerprint changes require a published template migration, not metadata edits');
-  }
-  assertMajorTransition(source, target);
-  let kind = migrationRequired ? 'template-upgrade' : 'host-repair';
-  if (!migrationRequired && installedHost === targetHost) {
-    // Equality is supported, but is not proof the rest of the app is undrifted.
-    const resolved = resolveProjectRelease(projectRoot, catalog);
-    if (resolved.id !== target.id) throw new Error('Installed app does not match the selected release');
-    kind = 'current';
-  }
-  return {
-    kind,
-    installedHostVersion: installedHost,
-    source: summarizeRelease(source),
-    target: summarizeRelease(target),
-    hostInstallRequired: installedHost !== targetHost,
-    migrationRequired,
-    fullChainPreviewRequired: migrationRequired,
-  };
 }
 
 function assertEmptyDestination(destination) {
@@ -367,7 +298,7 @@ function main(argv) {
     .filter((key) => values[key]).length !== 1) {
     throw new Error(`Required: ${allowed[0]} and one exact host/template version`);
   }
-  if (action === 'plan') return planUpdate(path.resolve(values['--project-root']), values['--host-version'] || values['--release']);
+  if (action === 'plan') return planPublishedUpdate(path.resolve(values['--project-root']), values['--host-version'] || values['--release']);
   return values['--host-version']
     ? acquireHost(values['--destination'], values['--host-version'])
     : acquireTemplate(values['--destination'], values['--template-version'] || values['--release']);
@@ -382,4 +313,4 @@ if (require.main === module) {
   }
 }
 
-module.exports = { acquireTemplate, acquireHost, assertEmptyDestination, assertTemplateManifest, assertMajorTransition, checkSdk, compareVersions, inspectDestination, main, planUpdate, restorePreviewDependencies };
+module.exports = { acquireTemplate, acquireHost, assertEmptyDestination, assertTemplateManifest, checkSdk, inspectDestination, main, restorePreviewDependencies };

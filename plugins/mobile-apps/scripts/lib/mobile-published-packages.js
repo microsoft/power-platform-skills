@@ -7,7 +7,7 @@ const { runCliSync, CliLaunchError } = require('./process-runner');
 const { unpack, hashFile, readOfflineContract, verifyInstalledOfflineSdk } = require('./mobile-package-artifacts');
 const {
   exactVersion, declarationSpec, dependencySections, isRuntimePackage, readProjectRequirements, validateRelease,
-  readProject, readPlatformContext, validateProjectAgainstRelease, summarizeRelease, validHostIntegrity,
+  summarizeRelease, validHostIntegrity,
 } = require('./mobile-release');
 
 const HOST = '@microsoft/power-apps-native-host';
@@ -338,15 +338,14 @@ function planPublishedUpdate(projectRoot, hostVersion, options = {}) {
   const nativeChanged = PLATFORMS.some((platform) => sourceRequirements.nativeRuntimeVersions[platform] !== target.nativeRuntimeVersions[platform]);
   requireValue(!nativeChanged || migrationRequired, 'Native runtime changes require a host-owned template migration.');
   const installedProfilePath = path.join(projectRoot, 'node_modules', HOST, 'compatibility/current.json');
+  const warnings = [];
   if (fs.existsSync(installedProfilePath)) {
     const installedProfile = readJson(installedProfilePath, 'installed host compatibility profile');
     for (const platform of PLATFORMS) {
       const previous = installedProfile.nativeRuntime?.[platform];
       if (previous?.version !== sourceRequirements.nativeRuntimeVersions[platform]) continue;
-      requireValue(/^[a-f0-9]{64}$/.test(previous.fingerprint || ''), 'Invalid installed native fingerprint; restore the host package before planning.');
       if (previous.fingerprint !== target.platforms[platform].fingerprint) {
-        requireValue(migrationRequired && target.nativeRuntimeVersions[platform] > previous.version,
-          'A native fingerprint change must advance its runtime version through a template migration.');
+        warnings.push(`${platform} native fingerprints differ; verify Dev Player/Wrap compatibility separately.`);
       }
     }
   }
@@ -364,11 +363,6 @@ function planPublishedUpdate(projectRoot, hostVersion, options = {}) {
     'A native runtime transition requires a new host major; the published migration must identify the source host requirement.');
   }
   const hostInstallRequired = sourceRequirements.hostVersion !== hostVersion;
-  if (!migrationRequired && !hostInstallRequired) {
-    const project = readProject(projectRoot, readPlatformContext());
-    assertInstalledProfile(projectRoot, host.profile, host.pkg, project.lock, template.lock, source.read);
-    validateProjectAgainstRelease(project, contractFromPackages(host, template, project));
-  }
   return {
     kind: migrationRequired ? 'template-upgrade' : hostInstallRequired ? 'host-repair' : 'current',
     installedHostVersion: sourceRequirements.hostVersion,
@@ -378,6 +372,7 @@ function planPublishedUpdate(projectRoot, hostVersion, options = {}) {
     migrationRequired,
     fullChainPreviewRequired: migrationRequired,
     nativeChanged,
+    warnings,
     binaryAvailability: 'not-checked; package publication does not prove Player or Wrap availability',
   };
 }

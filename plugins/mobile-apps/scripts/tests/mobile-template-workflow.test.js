@@ -41,7 +41,9 @@ test('rehearsal, full-chain approval, drift checks and recovery are separate gat
 
 test('JavaScript updates retain approval and audit safeguards without native bumps', () => {
   assert.match(updates, /Skip package.*recommended default/);
-  assert.match(updates, /exact JS dependency exceptions/);
+  assert.match(updates, /validate-mobile-files\.js --upgrade-only/);
+  assert.equal((updates.match(/npm outdated --json --depth=0/g) || []).length, 1);
+  assert.doesNotMatch(updates, /Run `npm install --ignore-scripts`/);
   assert.match(updates, /installed transitive closure adds native code/);
   assert.match(updates, /isDirect: true/);
   assert.match(updates, /Ignore string-only `via` rollups/);
@@ -50,6 +52,21 @@ test('JavaScript updates retain approval and audit safeguards without native bum
     'check_mobile_app_plugin_version', 'update_native_host_dependency',
     'update_microsoft_dependencies', 'update_remaining_npm_dependencies',
   ]) assert.ok(updates.includes(`\`${checkpoint}\``), checkpoint);
+});
+
+test('registry authentication recovery preserves the reviewed feed and interrupted-install boundary', () => {
+  assert.match(updates, /For `E401`, pause mutations/);
+  assert.match(updates, /user-approved credential-provider command against its `\.npmrc`/);
+  assert.match(updates, /do not replace the project `\.npmrc`/);
+  assert.match(updates, /retry the same reviewed publication/);
+  assert.match(updates, /project-scoped journal and recovery instructions before resuming/);
+});
+
+test('requested Metro smoke tests distinguish bundle compilation from runtime behavior', () => {
+  assert.match(updates, /a responding `\/status` endpoint alone does not verify bundling/);
+  assert.match(updates, /load the intended route and exercise the customer\s+workflow/);
+  assert.match(updates, /Report bundle and runtime results separately/);
+  assert.match(updates, /do not fabricate\s+environment\/auth configuration/);
 });
 
 test('creation resolves immutable published package metadata before planning or data mutations', () => {
