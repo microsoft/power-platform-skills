@@ -236,6 +236,22 @@ function assertValidSha(sha) {
   }
 }
 
+function validateResponsivePreviews(previews, context) {
+  if (!Array.isArray(previews)) return `${context} responsivePreviews must be an array`;
+  const ids = new Set();
+  for (const preview of previews) {
+    if (!preview || typeof preview !== 'object' || Array.isArray(preview)) {
+      return `${context} responsive preview must be an object`;
+    }
+    for (const field of ['id', 'displayName', 'desktop', 'mobile']) {
+      if (!isNonEmptyString(preview[field])) return `${context} responsive preview missing string field: ${field}`;
+    }
+    if (ids.has(preview.id)) return `${context} has duplicate responsive preview id: ${preview.id}`;
+    ids.add(preview.id);
+  }
+  return null;
+}
+
 function validateCatalogShape(catalog) {
   // Raw `templates/manifest.json` shape:
   //   { "$schema": "./schemas/templates-manifest.schema.json", "templates": [
@@ -244,7 +260,9 @@ function validateCatalogShape(catalog) {
   //       "keywords": ["311", "citizen-services"],
   //       "audience": ["makers", "developers"],
   //       "requiredDataverseLanguages": [1033],
-  //       "previewImages": ["spa/311-portal/previews/home.png"],
+  //       "responsivePreviews": [{ "id": "home", "displayName": "Home",
+  //         "desktop": "spa/311-portal/previews/desktop-home.png",
+  //         "mobile": "spa/311-portal/previews/mobile-home.png" }],
   //       "seedDataPath": "spa/311-portal/seed/data.json",
   //       "author": "Microsoft" }
   //   ] }
@@ -280,25 +298,16 @@ function validateCatalogShape(catalog) {
     if (!Array.isArray(template.keywords)) return `template ${template.id} keywords must be an array`;
     const solutionSettingsError = validateSolutionSettings(template.solutions, template.id);
     if (solutionSettingsError) return solutionSettingsError;
+    if (template.responsivePreviews !== undefined) {
+      const error = validateResponsivePreviews(template.responsivePreviews, `template ${template.id}`);
+      if (error) return error;
+    }
     if (isCreateWebsiteApiTemplate(template)) {
       if (!isNonEmptyString(template.provisioning.templateName)) {
         return `template ${template.id} provisioning.templateName must be a non-empty string`;
       }
       for (const field of ['capabilities', 'requirements', 'responsivePreviews']) {
         if (!Array.isArray(template[field])) return `template ${template.id} ${field} must be an array`;
-      }
-      const previewIds = new Set();
-      for (const preview of template.responsivePreviews) {
-        if (!preview || typeof preview !== 'object' || Array.isArray(preview)) {
-          return `template ${template.id} responsive preview must be an object`;
-        }
-        for (const field of ['id', 'displayName', 'desktop', 'mobile']) {
-          if (!isNonEmptyString(preview[field])) {
-            return `template ${template.id} responsive preview missing string field: ${field}`;
-          }
-        }
-        if (previewIds.has(preview.id)) return `template ${template.id} has duplicate responsive preview id: ${preview.id}`;
-        previewIds.add(preview.id);
       }
       for (const field of ['previewImages', 'requiredDataverseLanguages', 'seedDataPath', 'variants']) {
         if (template[field] !== undefined) return `template ${template.id} create-website-api must not define ${field}`;
@@ -311,8 +320,11 @@ function validateCatalogShape(catalog) {
       ) {
         return `template ${template.id} requiredDataverseLanguages must be a non-empty array of positive integers`;
       }
-      if (!Array.isArray(template.previewImages)) {
+      if (template.previewImages !== undefined && !Array.isArray(template.previewImages)) {
         return `template ${template.id} previewImages must be an array`;
+      }
+      if (template.responsivePreviews === undefined && template.previewImages === undefined) {
+        return `template ${template.id} responsivePreviews or previewImages must be an array`;
       }
     }
     if (isNestedFamilyTemplate(template)) {
@@ -333,6 +345,10 @@ function validateCatalogShape(catalog) {
         }
         if (variant.previewImages !== undefined && !Array.isArray(variant.previewImages)) {
           return `template ${template.id} variant ${framework} previewImages must be an array`;
+        }
+        if (variant.responsivePreviews !== undefined) {
+          const error = validateResponsivePreviews(variant.responsivePreviews, `template ${template.id} variant ${framework}`);
+          if (error) return error;
         }
         if (
           variant.requiredDataverseLanguages !== undefined &&
@@ -364,6 +380,22 @@ function resolveCatalogArtifactPath(catalogPath, artifactPath) {
   return `${base}/${artifactPath.replace(/^\/+/, '')}`;
 }
 
+function materializeResponsivePreviews(previews, catalogPath) {
+  return previews.map((preview) => ({
+    ...preview,
+    desktop: resolveCatalogArtifactPath(catalogPath, preview.desktop),
+    mobile: resolveCatalogArtifactPath(catalogPath, preview.mobile),
+  }));
+}
+
+function effectivePreviewFields(source, fallback) {
+  // A variant's legacy list still overrides family previews during migration.
+  // Explicit empty lists mean no previews, not permission to inherit another list.
+  if (source.responsivePreviews !== undefined) return { responsivePreviews: source.responsivePreviews };
+  if (source.previewImages !== undefined) return { previewImages: source.previewImages };
+  return fallback ? effectivePreviewFields(fallback) : { previewImages: [] };
+}
+
 function materializeCatalogArtifactPaths(catalog, catalogPath) {
   return {
     ...catalog,
@@ -382,11 +414,7 @@ function materializeCatalogArtifactPaths(catalog, catalogPath) {
         } : {}),
       };
       if (Array.isArray(template.responsivePreviews)) {
-        materialized.responsivePreviews = template.responsivePreviews.map((preview) => ({
-          ...preview,
-          desktop: resolveCatalogArtifactPath(catalogPath, preview.desktop),
-          mobile: resolveCatalogArtifactPath(catalogPath, preview.mobile),
-        }));
+        materialized.responsivePreviews = materializeResponsivePreviews(template.responsivePreviews, catalogPath);
       }
       if (template.seedDataPath) {
         materialized.seedDataPath = resolveCatalogArtifactPath(catalogPath, template.seedDataPath);
@@ -396,6 +424,9 @@ function materializeCatalogArtifactPaths(catalog, catalogPath) {
           const materializedVariant = { ...variant };
           if (Array.isArray(variant.previewImages)) {
             materializedVariant.previewImages = variant.previewImages.map((imagePath) => resolveCatalogArtifactPath(catalogPath, imagePath));
+          }
+          if (Array.isArray(variant.responsivePreviews)) {
+            materializedVariant.responsivePreviews = materializeResponsivePreviews(variant.responsivePreviews, catalogPath);
           }
           if (variant.seedDataPath) {
             materializedVariant.seedDataPath = resolveCatalogArtifactPath(catalogPath, variant.seedDataPath);
@@ -420,7 +451,7 @@ function normalizeCatalogFamilies(catalog = {}) {
         keywords: template.keywords || [],
         audience: template.audience || [],
         requiredDataverseLanguages: template.requiredDataverseLanguages || [],
-        previewImages: template.previewImages || [],
+        ...effectivePreviewFields(template),
         ...(template.seedDataPath ? { seedDataPath: template.seedDataPath } : {}),
         ...(template.solutions?.length ? { solutions: template.solutions } : {}),
         author: template.author,
@@ -435,7 +466,7 @@ function normalizeCatalogFamilies(catalog = {}) {
           keywords: template.keywords || [],
           audience: template.audience || [],
           requiredDataverseLanguages: template.requiredDataverseLanguages || [],
-          previewImages: template.previewImages || [],
+          ...effectivePreviewFields(template),
           ...(template.seedDataPath ? { seedDataPath: template.seedDataPath } : {}),
           ...(template.solutions?.length ? { solutions: template.solutions } : {}),
           author: template.author,
@@ -450,7 +481,7 @@ function normalizeCatalogFamilies(catalog = {}) {
       keywords: template.keywords || [],
       audience: template.audience || [],
       requiredDataverseLanguages: template.requiredDataverseLanguages || [],
-      previewImages: template.previewImages || [],
+      ...effectivePreviewFields(template),
       ...(template.seedDataPath ? { seedDataPath: template.seedDataPath } : {}),
       ...(template.solutions?.length ? { solutions: template.solutions } : {}),
       author: template.author,
@@ -467,7 +498,7 @@ function normalizeCatalogFamilies(catalog = {}) {
           keywords: template.keywords || [],
           audience: template.audience || [],
           requiredDataverseLanguages: variant.requiredDataverseLanguages || template.requiredDataverseLanguages || [],
-          previewImages: Array.isArray(variant.previewImages) ? variant.previewImages : (template.previewImages || []),
+          ...effectivePreviewFields(variant, template),
           ...(variant.seedDataPath || template.seedDataPath ? { seedDataPath: variant.seedDataPath || template.seedDataPath } : {}),
           ...(template.solutions?.length ? { solutions: template.solutions } : {}),
           author: template.author,
@@ -1254,6 +1285,8 @@ module.exports = {
   validateTemplateVariantDirectory,
   validateCatalogShape,
   normalizeCatalogFamilies,
+  effectivePreviewFields,
+  validateResponsivePreviews,
   isSpaTemplate,
   isCreateWebsiteApiTemplate,
   zipFileNames,

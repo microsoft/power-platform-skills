@@ -18,6 +18,52 @@ function tempDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'template-import-status-test-'));
 }
 
+test('create-site forwards the selected variant structured previews with a legacy CLI fallback', () => {
+  const skill = fs.readFileSync(path.join(__dirname, '../../skills/create-site/SKILL.md'), 'utf8');
+  assert.match(skill, /each SPA family and variant, prefer `responsivePreviews` when present/);
+  assert.match(skill, /preserving the page's `id` and `displayName`/);
+  assert.match(skill, /variant defines neither field/);
+  assert.match(skill, /--responsivePreviewsJson '<JSON array of SELECTED_TEMPLATE_VARIANT\.responsivePreviews/);
+  assert.match(skill, /replace `--responsivePreviewsJson` with `--previewImagesJson`/);
+});
+
+test('structured SPA previews keep explicit page identity and device pairing through the CLI', (t) => {
+  const dir = tempDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const desktop = path.join(dir, 'wide.png');
+  const mobile = path.join(dir, 'narrow.png');
+  const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  fs.writeFileSync(desktop, png);
+  fs.writeFileSync(mobile, png);
+  const responsivePreviews = [{
+    id: 'service-requests', displayName: 'Service requests',
+    desktop, mobile,
+  }];
+  const outputPath = path.join(dir, 'status', 'index.html');
+  const args = parseArgs([
+    '--templateName', '311 Portal',
+    '--statusPath', path.join(dir, 'status', 'status.json'),
+    '--outputPath', outputPath,
+    '--responsivePreviewsJson', JSON.stringify(responsivePreviews),
+    '--previewImagesJson', '["https://legacy.example/ignored.png"]',
+  ]);
+  assert.deepEqual(args.responsivePreviews, responsivePreviews);
+  const model = buildModel(args);
+  assert.deepEqual(model.template.previews, [{
+    name: 'service-requests', displayName: 'Service requests',
+    desktop: 'preview-images/preview-01.png',
+    mobile: 'preview-images/preview-02.png',
+  }]);
+  assert.deepEqual(fs.readFileSync(path.join(dir, 'status', model.template.previews[0].desktop)), png);
+  assert.deepEqual(fs.readFileSync(path.join(dir, 'status', model.template.previews[0].mobile)), png);
+  assert.equal(renderTemplateImportStatus(args).status, 'ok');
+  const html = fs.readFileSync(outputPath, 'utf8');
+  assert.match(html, /"name":"service-requests","displayName":"Service requests"/);
+  assert.doesNotMatch(html, /legacy\.example/);
+  assert.deepEqual(buildModel({ ...args, responsivePreviews: [] }).template.previews, []);
+  assert.throws(() => buildModel({ ...args, responsivePreviews: [{}] }), /missing string field/);
+});
+
 test('parseArgs accepts import status page inputs', () => {
   assert.deepEqual(parseArgs([
     '--templateName', 'Supplier Portal',

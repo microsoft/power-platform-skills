@@ -14,6 +14,17 @@ Add offline Vally suites under `evals/power-pages/<skill>/` as individual skills
 Use synthetic fixtures and contained local artifacts; live environment access is outside these evaluations.
 Production plugin installs do not include the repository's evaluation runtime.
 
+## Template catalog previews
+
+SPA and non-SPA catalog entries use `responsivePreviews`: page records with `id`, `displayName`, `desktop`, and `mobile`.
+Preserve page identity and device pairs through artifact caching, the template browser, and creation-status rendering.
+For older SPA manifests, use `previewImages` only when `responsivePreviews` is absent; an explicit empty array stays empty.
+A SPA variant's own preview definition overrides its family's, including a legacy variant list.
+Inherit family previews only when the variant defines neither field.
+Keep this precedence in `scripts/lib/template-catalog.js`; create-site caches the effective variant previews before rendering and reuses them on the status page.
+The read-only browser shows each framework's effective previews in a labeled group within the family tab.
+The non-SPA experience-preview disclosure in `references/non-spa-preview.md` is separate and unchanged.
+
 ## Non-SPA creation and shared design quality
 
 `scripts/telemetry-config.js` delegates preference changes to the bundled shared CLI and adds the non-SPA creation disclosure.
