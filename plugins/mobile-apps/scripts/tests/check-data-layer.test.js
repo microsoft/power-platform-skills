@@ -178,3 +178,32 @@ test('the CLI exits 1 on violations, 0 when clean, and 2 on bad arguments', () =
   assert.equal(JSON.parse(failed.stdout).status, 'violations');
   assert.equal(run(['--nope']).status, 2);
 });
+
+test('--require-wired accepts sample data the user deferred, and only that', () => {
+  // Creation lets the user keep an entity on sample data (a skipped connector). The marker records
+  // that choice, so a later whole-project check, such as an /edit-app run that never touched the
+  // entity, passes instead of reporting it as unfinished wiring.
+  const deferredEntity = PREVIEW_ENTITY.replace('DATA SOURCE START - preview', 'DATA SOURCE START - preview deferred');
+  const deferredDevice = PREVIEW_DEVICE.replace('preview capturePhoto', 'preview deferred capturePhoto');
+  const root = project({
+    ...BASE,
+    'src/hooks/data/inspections.ts': deferredEntity,
+    'src/hooks/data/device.ts': deferredDevice,
+    'src/hooks/data/sites.ts': WIRED_ENTITY.replace(/inspection/gi, 'site'),
+  });
+  const wired = checkDataLayer(root, { requireWired: true });
+  assert.equal(wired.status, 'ok', JSON.stringify(wired.violations));
+  assert.deepEqual(wired.deferred, ['src/hooks/data/inspections.ts:3', 'src/hooks/data/device.ts#capturePhoto']);
+  assert.deepEqual(wired.previewBound, wired.deferred, 'deferred blocks are still reported as sample data');
+  assert.equal(wired.deviceActions[0].name, 'capturePhoto', 'the action name is still the last word');
+
+  // A plain preview block beside it is still unfinished wiring.
+  fs.writeFileSync(path.join(root, 'src/hooks/data/device.ts'), PREVIEW_DEVICE);
+  const partial = checkDataLayer(root, { requireWired: true });
+  assert.deepEqual(partial.violations.map((v) => `${v.rule} ${v.file}`), ['still-preview src/hooks/data/device.ts']);
+
+  // Only sample data can be deferred: `deferred` on a real binding is a marker mistake.
+  fs.writeFileSync(path.join(root, 'src/hooks/data/device.ts'), PREVIEW_DEVICE.replace('preview capturePhoto', 'native deferred capturePhoto'));
+  const misplaced = checkDataLayer(root, { requireWired: true });
+  assert.ok(misplaced.violations.some((v) => v.rule === 'misplaced-deferred'));
+});

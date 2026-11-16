@@ -59,7 +59,8 @@ The user approves it at the screen graph gate, `preview-screen-builder` builds e
 
 ### Routes and navigation
 
-- `navigation` is `Stack` (up to about three screens, or one main flow), `Tabs + Stack` (three to five peer areas), or `Drawer` (many areas, rarely right on a phone).
+- `navigation` is `Stack` (up to about three screens, or one main flow) or `Tabs + Stack` (three to five peer areas).
+  Do not plan `Drawer`: it needs `@react-navigation/drawer`, which the template does not install, so the renderer rejects it before the gate. For more areas than five tabs hold, group the rest under one tab or Profile.
   With tabs, each top-level file or folder under `app/(app)/` is a tab.
 - A folder under `app/(app)/` needs an `index.tsx`. Put an entity's list at `app/(app)/<entities>/index.tsx` and its detail at `app/(app)/<entities>/[id].tsx`; a detail that owns child screens moves to `[id]/index.tsx`.
   A flat detail (`app/(app)/inspection.tsx` with an `id` param) suits a Stack with one entity.

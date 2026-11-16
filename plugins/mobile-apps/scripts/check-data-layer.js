@@ -19,21 +19,29 @@
  * Bindings are declared with marker comments around each source or device action:
  *
  *   // DATA SOURCE START - preview
+ *   // DATA SOURCE START - preview deferred
  *   // DATA SOURCE START - dataverse cr123_inspection
  *   // DATA SOURCE START - connector sharepointonline
  *   // DATA SOURCE START - local
  *   // DATA SOURCE END
  *   // DEVICE ACTION START - preview capturePhoto
+ *   // DEVICE ACTION START - preview deferred capturePhoto
  *   // DEVICE ACTION START - native camera capturePhoto
  *   // DEVICE ACTION END
  *
  * The first word after " - " is the binding kind. For a device action the last word is the action
  * name. `local` is for data that intentionally stays on the device (for example saved filters).
  *
+ * `preview deferred` marks sample data the user chose to keep when real data was connected (a
+ * skipped connector, a deferred table). It is the record of that decision, in the code beside the
+ * block: `/create-mobile-app` writes it, and `--require-wired` accepts it and lists it under
+ * `deferred`. Without it every later whole-project check (an `/edit-app` run, say) would report
+ * the same block as unfinished wiring and fail an edit that never touched it.
+ *
  * Usage:
  *   node check-data-layer.js --project-root <app> [--require-wired]
  * Prints one JSON object. Exit 0 when clean, 1 on violations (with `--require-wired`, any source
- * or action still bound to `preview` is a violation), 2 on usage errors.
+ * or action still bound to `preview` and not marked `deferred` is a violation), 2 on usage errors.
  */
 
 'use strict';
@@ -179,8 +187,16 @@ function readMarkers(root, file) {
         violations.push({ file: toPosix(file), line: index + 1, rule: 'unknown-binding', detail: `'${binding}' is not one of ${[...BINDINGS].join(', ')}` });
       }
       const entry = { file: toPosix(file), line: index + 1, binding, target: rest };
+      const words = rest.split(/\s+/).filter(Boolean);
+      if (words[0] === 'deferred') {
+        if (binding === 'preview') {
+          entry.deferred = true;
+          words.shift();
+        } else {
+          violations.push({ file: toPosix(file), line: index + 1, rule: 'misplaced-deferred', detail: `only a preview binding can be deferred, not '${binding}'` });
+        }
+      }
       if (kind === 'DEVICE ACTION') {
-        const words = rest.split(/\s+/).filter(Boolean);
         entry.name = words.length ? words[words.length - 1] : '';
         if (!entry.name) {
           violations.push({ file: toPosix(file), line: index + 1, rule: 'unnamed-device-action', detail: 'a DEVICE ACTION marker must end with the action name' });
@@ -238,13 +254,13 @@ function checkDataLayer(projectRoot, { requireWired = false } = {}) {
     }
   }
 
-  const previewBound = [
-    ...sources.filter((entry) => entry.binding === 'preview').map((entry) => `${entry.file}:${entry.line}`),
-    ...deviceActions.filter((entry) => entry.binding === 'preview').map((entry) => `${entry.file}#${entry.name}`),
-  ];
+  const label = (entry) => (entry.name ? `${entry.file}#${entry.name}` : `${entry.file}:${entry.line}`);
+  // Everything still on sample data, deferred or not, so a summary can name all of it.
+  const previewBound = [...sources, ...deviceActions].filter((entry) => entry.binding === 'preview').map(label);
+  const deferred = [...sources, ...deviceActions].filter((entry) => entry.deferred).map(label);
 
   if (requireWired) {
-    for (const entry of [...sources, ...deviceActions].filter((item) => item.binding === 'preview')) {
+    for (const entry of [...sources, ...deviceActions].filter((item) => item.binding === 'preview' && !item.deferred)) {
       violations.push({
         file: entry.file,
         line: entry.line,
@@ -276,6 +292,7 @@ function checkDataLayer(projectRoot, { requireWired = false } = {}) {
     sources,
     deviceActions,
     previewBound,
+    deferred,
     violations,
   };
 }

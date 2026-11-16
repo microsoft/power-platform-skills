@@ -336,7 +336,7 @@ node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' step --i
 node "${PLUGIN_ROOT}/scripts/scaffold-preview-screens.js" --working-dir '<working_dir>' --screens-file '<working_dir>/.tmp/screens.json'
 ```
 
-It writes the outer Tabs or Drawer layout from the template's protected layout, one inner `Stack` per folder with each child's presentation, and a placeholder at every planned screen's **File**, leaving `template (keep)` routes alone.
+It writes the outer Tabs layout (or Drawer, in an app that installs `@react-navigation/drawer`) from the template's protected layout, one inner `Stack` per folder with each child's presentation, and a placeholder at every planned screen's **File**, leaving `template (keep)` routes alone.
 It prints one line of JSON:
 
 - `status: "ok"`: keep `writtenFiles` for Step 7 and `entry`, the screen the preview opens on, for Step 6.

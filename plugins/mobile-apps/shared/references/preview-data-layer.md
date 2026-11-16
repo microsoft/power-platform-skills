@@ -241,7 +241,9 @@ When the real source genuinely needs a different shape, change the type and fix 
 Device actions are wired the same way: the block calls the `src/native/` wrapper, maps its result to the action's `DeviceResult`, and the marker becomes `native <capability> <action name>`.
 A device action whose capability was declined at the architecture gate is removed together with the control that triggers it; that is a screen change, so it goes through `screen-builder`.
 
-An entity or action whose source was deferred keeps its `preview` block.
+An entity or action whose source the user deferred keeps its sample data, and its marker says so: `// DATA SOURCE START - preview deferred`, or `// DEVICE ACTION START - preview deferred <action name>`.
+The marker is the record of that choice, so `check-data-layer.js --require-wired` accepts the block and lists it under `deferred`, during creation and in every later edit.
+Only the run that connects real data writes it, for an entity the user chose to defer.
 It is reported in the run summary and `memory-bank.md` as still on sample data, by name, so the user never mistakes it for real data.
 
-Wiring is complete when `npx --no-install tsc --noEmit` is clean and `check-data-layer.js --require-wired` exits `0`, or reports only the entities the user explicitly deferred.
+Wiring is complete when `npx --no-install tsc --noEmit` is clean and `check-data-layer.js --require-wired` exits `0`.

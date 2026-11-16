@@ -134,3 +134,18 @@ test('the CLI exits 1 with problems and leaves the plan untouched', (t) => {
   assert.equal(broken.status, 1);
   assert.equal(JSON.parse(broken.stdout).status, 'blocked');
 });
+
+test('a Drawer graph is refused at the gate unless the app installs @react-navigation/drawer', (t) => {
+  // The template has no @react-navigation/drawer, and Step 5's scaffold refuses Drawer without it.
+  // Checked only there, the user approved a graph the run could not build.
+  const drawer = { ...graph(), navigation: 'Drawer' };
+  const root = project(t, drawer, '# App\n\n## Screens\n');
+  const refused = renderScreenGraph({ workingDir: root });
+  assert.equal(refused.status, 'blocked');
+  assert.ok(refused.problems.some((p) => /needs @react-navigation\/drawer[\s\S]*Plan Tabs \+ Stack or Stack/.test(p)));
+  assert.equal(fs.readFileSync(path.join(root, 'native-app-plan.md'), 'utf8'), '# App\n\n## Screens\n',
+    'nothing is rendered for the gate');
+
+  fs.mkdirSync(path.join(root, 'node_modules', '@react-navigation', 'drawer'), { recursive: true });
+  assert.equal(renderScreenGraph({ workingDir: root }).status, 'ok', 'an app that installs it may use Drawer');
+});

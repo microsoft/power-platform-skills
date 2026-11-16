@@ -31,7 +31,9 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { Blocked, ENTRY_FILE, expoRoute, isTemplateKept, normalizeGraph } = require('./scaffold-preview-screens');
+const {
+  Blocked, ENTRY_FILE, expoRoute, isTemplateKept, navigationProblem, normalizeGraph,
+} = require('./scaffold-preview-screens');
 
 const GRAPH_SECTIONS = ['Navigation Pattern', 'Screen Map', 'Navigation Contracts', 'Shared Conventions', 'Data Contract'];
 const ARCHETYPES = new Set(['List', 'Detail', 'Form', 'Dashboard', 'Settings', 'Auth', 'Empty']);
@@ -52,15 +54,21 @@ function routeOf(screen) {
   return text(screen.route) || expoRoute(text(screen.file));
 }
 
-/** Every problem in the graph, not just the first: the orchestrator repairs them in one pass. */
-function checkGraph(graph) {
+/**
+ * Every problem in the graph, not just the first: the orchestrator repairs them in one pass.
+ * `root` is the app, for the checks that depend on what it has installed; without it they are
+ * skipped, as for a graph checked on its own.
+ */
+function checkGraph(graph, { root } = {}) {
   const problems = [];
   const warnings = [];
   try {
-    const { screens } = normalizeGraph(graph);
+    const { navigation, screens } = normalizeGraph(graph);
     if (!screens.some((s) => s.file === ENTRY_FILE && !s.kept)) {
       problems.push(`the root index opens /(app)/home, so one screen to build must have file ${ENTRY_FILE}`);
     }
+    const unbuildable = root ? navigationProblem(root, navigation) : null;
+    if (unbuildable) problems.push(unbuildable);
   } catch (error) {
     if (!(error instanceof Blocked)) throw error;
     problems.push(error.message);
@@ -235,7 +243,7 @@ function mergeIntoPlan(plan, sections) {
 function renderScreenGraph({ workingDir, screensFile = '.tmp/screens.json', planFile = 'native-app-plan.md' }) {
   const root = path.resolve(workingDir);
   const graph = JSON.parse(fs.readFileSync(path.resolve(root, screensFile), 'utf8'));
-  const { problems, warnings } = checkGraph(graph);
+  const { problems, warnings } = checkGraph(graph, { root });
   if (problems.length) return { status: 'blocked', problems, warnings };
   const planPath = path.resolve(root, planFile);
   const plan = fs.existsSync(planPath) ? fs.readFileSync(planPath, 'utf8') : '';

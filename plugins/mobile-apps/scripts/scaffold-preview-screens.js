@@ -305,6 +305,19 @@ function writeIfChanged(root, relative, content, written) {
   written.push(relative);
 }
 
+/**
+ * Why `navigation` cannot be built in this app, or null when it can. Drawer navigation imports
+ * `expo-router/drawer`, which needs `@react-navigation/drawer`, and the template does not install
+ * it. The screen graph renderer runs this before the screen graph gate, so the user never approves
+ * a graph that Step 5 then refuses; this script runs it again in case the graph changed since.
+ */
+function navigationProblem(root, navigation) {
+  if (navigation === 'Drawer' && !fs.existsSync(path.join(root, 'node_modules', '@react-navigation', 'drawer'))) {
+    return 'Drawer navigation needs @react-navigation/drawer, which this template does not install. Plan Tabs + Stack or Stack navigation instead.';
+  }
+  return null;
+}
+
 function scaffoldPreviewScreens({ workingDir, graph }) {
   const root = path.resolve(workingDir);
   if (!fs.existsSync(path.join(root, 'app'))) throw new Blocked(`${root} has no app/ folder; run this from a prepared template`);
@@ -313,9 +326,8 @@ function scaffoldPreviewScreens({ workingDir, graph }) {
   if (!screens.some((s) => s.file === ENTRY_FILE)) {
     throw new Blocked(`the root index redirects to /(app)/home, so the screen graph must assign ${ENTRY_FILE}`);
   }
-  if (navigation === 'Drawer' && !fs.existsSync(path.join(root, 'node_modules', '@react-navigation', 'drawer'))) {
-    throw new Blocked('Drawer navigation needs @react-navigation/drawer, which this template does not install. Plan Tabs or Stack navigation instead.');
-  }
+  const unbuildable = navigationProblem(root, navigation);
+  if (unbuildable) throw new Blocked(unbuildable);
 
   const folders = folderTree(screens);
   const written = [];
@@ -412,6 +424,7 @@ module.exports = {
   PLACEHOLDER_MARKER,
   expoRoute,
   isTemplateKept,
+  navigationProblem,
   normalizeGraph,
   scaffoldPreviewScreens,
 };

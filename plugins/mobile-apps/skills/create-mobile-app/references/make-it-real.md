@@ -813,7 +813,7 @@ Entity modules are independent files; write them as one batch.
 - **A device action whose capability was declined** at the architecture gate is removed together with its control: rebuild the affected screens with `screen-builder` (Step 9.3's prompt with `data_mode: wired` in place of `spec_source`, naming the declined action), then remove the action.
 - **An embedded native view** (the barcode scanner) replaces its preview placeholder: rebuild that screen with `screen-builder` and `data_mode: wired`.
 - **A field mapped to `Defer`** (for example one that needs an external projection) has no real value: make it optional in the domain type, rebuild each screen that shows it with `screen-builder` (`data_mode: wired`, naming the deferred field) so the screen stops depending on it, and record it in `memory-bank.md` `## Concerns`.
-- **An entity the user deferred** (a skipped connector or a deferred table) keeps its `preview` block. Record it in `memory-bank.md` `## Concerns` as `<Entity> still serves sample data - <reason>`, and carry it to the summary.
+- **An entity the user deferred** (a skipped connector or a deferred table) keeps its sample data, and its marker records the choice: `// DATA SOURCE START - preview deferred` (`// DEVICE ACTION START - preview deferred <action>` for a device action). Record it in `memory-bank.md` `## Concerns` as `<Entity> still serves sample data - <reason>`, and carry it to the summary.
 
 #### 14.3 — Wiring gate
 
@@ -827,7 +827,7 @@ node "${PLUGIN_ROOT}/scripts/check-routes.js"
 
 This is the **Wiring gate**.
 TypeScript and routes must be clean.
-`check-data-layer.js --require-wired` must exit `0`, or report `still-preview` only for the entities recorded as deferred above; any other violation is repaired in one batch and the gate rerun.
+`check-data-layer.js --require-wired` must exit `0`. It accepts the `preview deferred` blocks and lists them under `deferred`; check that list against the entities recorded above. Any violation is repaired in one batch and the gate rerun.
 A TypeScript error in a screen file means an adapter changed a domain type or hook shape: fix the adapter, and change the screen only when the real source genuinely needs a different shape.
 Delete fixture files nothing imports, then run the shared changed-file gate on every file this step wrote.
 
