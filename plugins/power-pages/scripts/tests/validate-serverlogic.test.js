@@ -327,7 +327,8 @@ const skill = fs.readFileSync(path.join(SKILL_DIR, 'SKILL.md'), 'utf8');
 function exampleAfter(document, heading) {
   const start = document.indexOf(heading);
   assert.notEqual(start, -1, `Missing heading: ${heading}`);
-  const example = document.slice(start).match(/```javascript\n([\s\S]*?)\n```/);
+  // Git can check Markdown out with CRLF on Windows; accept either newline at both fences.
+  const example = document.slice(start).match(/```javascript\r?\n([\s\S]*?)\r?\n```/);
   assert.ok(example, `Missing example: ${heading}`);
   return example[1];
 }
@@ -358,6 +359,19 @@ function connectorResponse(status, body, headers = {}) {
     Headers: headers,
   });
 }
+
+test('documentation examples execute with LF and CRLF line endings', () => {
+  for (const newline of ['\n', '\r\n']) {
+    const document = frontendReference.replace(/\r\n/g, '\n').replace(/\n/g, newline);
+    const source = exampleAfter(document, '**Approach C');
+    const { payload, errors } = runExample(source, 'get', {
+      RetrieveMultipleRecords: () => connectorResponse(200, '{"value":[]}'),
+    });
+    assert.equal(payload.status, 'success');
+    assert.deepEqual(payload.contacts, []);
+    assert.deepEqual(errors, []);
+  }
+});
 
 test('normalized read example returns rows from a serialized connector response', () => {
   const source = exampleAfter(frontendReference, '**Approach C');
