@@ -126,6 +126,13 @@ test('CSRF guidance preserves the baseline non-GET requirement', () => {
   assert.doesNotMatch(troubleshooting, /Failed to get CSRF token/);
 });
 
+test('default Server Logic enabled setting is only created when re-enabling is needed', () => {
+  assert.match(
+    skill,
+    /`ServerLogic\/Enabled` defaults to `true`; create it only when the existing site explicitly disables it and Server Logic needs re-enabling\./
+  );
+});
+
 test('upstream runtime and Dataverse guidance remains reachable', () => {
   const implementation = fs.readFileSync(
     path.join(SKILL_DIR, 'references', 'server-logic-implementation.md'),

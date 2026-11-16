@@ -167,7 +167,7 @@ Commit approved site-setting files as a milestone. Report cloud-side environment
 
 ## Phase 8: Configure site settings
 
-Create only settings required by the approved plan. Defaults are `ServerLogic/Enabled=true`, `ServerLogic/AllowNetworkingToAllDomains=true`, and `ServerLogic/TimeoutInSeconds=120`. Add `ServerLogic/AllowedDomains` when the user wants to restrict external hosts; use `ServerLogic/AllowNetworkingToAllDomains=false` with it. The platform caps the timeout at 120 seconds; values above 120 are silently clamped. Only configure a lower timeout.
+Create only settings required by the approved plan. `ServerLogic/Enabled` defaults to `true`; create it only when the existing site explicitly disables it and Server Logic needs re-enabling. The other defaults are `ServerLogic/AllowNetworkingToAllDomains=true` and `ServerLogic/TimeoutInSeconds=120`. Add `ServerLogic/AllowedDomains` when the user wants to restrict external hosts; use `ServerLogic/AllowNetworkingToAllDomains=false` with it. The platform caps the timeout at 120 seconds; values above 120 are silently clamped. Only configure a lower timeout.
 
 Use the existing script for local setting files:
 
