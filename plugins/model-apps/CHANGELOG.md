@@ -5,6 +5,10 @@ All notable changes to the **model-apps** plugin.
 Entries are deliberately short: what changed and why it matters to you. The reasoning,
 evidence and trade-offs behind a change live in its PR, in `docs/`, or in the linked issue.
 
+## [Unreleased]
+
+- **Custom page telemetry enabled by default:** `/genpage` can instrument pages with Application Insights when you explicitly ask to measure or track something. Set `GENPAGE_ENABLE_CUSTOM_TELEMETRY=0` to disable it for a run; plugin usage telemetry is unchanged.
+
 ## [2.28.0]
 
 - **Default configuration creates are sent once (#807):** new configuration rows, children included, have individual requests at stable ids; after a lost answer, builds stop until recovery settles it; teardown and build applies of an app cannot overlap within one workspace.
