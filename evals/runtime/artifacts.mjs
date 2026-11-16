@@ -69,7 +69,7 @@ export function validateContract(contract) {
       if (!entries.length) throw new Error('requiredValuePatterns must contain top-level string patterns');
       for (const [key, pattern] of entries) {
         strings([key, pattern], 'requiredValuePatterns');
-        new RegExp(pattern, 'iu');
+        new RegExp(pattern, 'u');
       }
     }
     if (file.diagram !== undefined) {
@@ -266,7 +266,7 @@ export async function gradeArtifacts({ contract, workDir, suiteDir, output = '',
         add(`${spec.path}: ${key} matches ${pattern}`,
           data !== null && typeof data === 'object' && !Array.isArray(data) &&
           Object.hasOwn(data, key) && typeof data[key] === 'string' &&
-          new RegExp(pattern, 'iu').test(data[key]));
+          new RegExp(pattern, 'u').test(data[key]));
       }
     }
     if (spec.type !== 'html') {

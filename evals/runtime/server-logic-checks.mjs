@@ -130,6 +130,14 @@ export async function inspectServerLogic({ spec, workDir, signal }) {
         add(`${scenario.name}: end-to-end outcome`, scenario.error
           ? failed : !failed && value?.[field] === (scenario.expected ?? scenario.temperature));
         if (!scenario.error) {
+          let payload;
+          try { payload = JSON.parse(envelope.data); }
+          catch { payload = null; }
+          // A client can recompute the expected result, so its output cannot
+          // establish that the independently callable endpoint returns correct data.
+          add(`${scenario.name}: handler response preserves requested result`,
+            !handlerRejected && !domainFailure(envelope.data) &&
+            payload?.[field] === (scenario.expected ?? scenario.temperature));
           add(`${scenario.name}: authenticated frontend call`, endpointCalls === 1 && csrf);
           if (exercise === 'weather') add(`${scenario.name}: requested provider queried`, providerCalls === 1 && providerCoordinates);
         }

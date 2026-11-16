@@ -209,6 +209,7 @@ test('Arabic resource checks accept equivalent JSON escapes and inspect message 
     ['literal', literal, true],
     ['escaped', escaped, true],
     ['escaped interpolation', escaped.replace('{name}', '\\u007bname\\u007d').replace('{count}', '\\u007bcount\\u007d'), true],
+    ['changed interpolation identity', JSON.stringify({ ...messages, greeting: '{Name}' }), false],
     ['English with Arabic metadata', JSON.stringify({ ...messages, heading: 'Bookings', note: messages.heading }), false],
     ['non-string heading', JSON.stringify({ ...messages, heading: { text: messages.heading } }), false],
   ]) {

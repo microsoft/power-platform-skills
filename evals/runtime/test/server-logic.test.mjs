@@ -87,6 +87,18 @@ test('wrong response layer, missing CSRF, ignored HTTP status and helper-only fr
   }
 });
 
+test('frontend recomputation cannot mask incorrect server response values', async t => {
+  for (const [exercise, source, replacement] of [
+    ['sum', sum.replace('JSON.stringify({sum:', 'JSON.stringify({sum: 1 +'), '{sum: Number(query.a) + Number(query.b)}'],
+    ['weather', weather.replace('JSON.stringify({temperatureC})', 'JSON.stringify({temperatureC: temperatureC + 1})'),
+      "{temperatureC: query.latitude === '0' ? 7.25 : query.latitude === '-23' ? -4.5 : 0}"],
+  ]) {
+    const frontend = client(exercise).replace('return feature;', `return ${replacement};`);
+    const checks = await grade(t, exercise, source, frontend);
+    assert.ok(checks.some(check => !check.passed && check.name.includes('handler response')), JSON.stringify(checks));
+  }
+});
+
 test('frontend validation cannot mask a handler that coerces blank inputs to zero', async t => {
   const validatingFrontend = client('sum').replace('  const html', `
   for (const field of ['a', 'b']) {
