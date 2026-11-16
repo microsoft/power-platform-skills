@@ -87,6 +87,14 @@ standard `systemuser` GUID columns can remain `reuse`, without aliases or schema
 writes. An explicitly present `SourceType: null` is valid for these columns
 because they cannot be specialized ([SourceType metadata](https://learn.microsoft.com/en-us/dotnet/api/microsoft.xrm.sdk.metadata.attributemetadata.sourcetype)).
 Missing or malformed `SourceType` is not that evidence and must remain unverified.
+
+For built-in `statecode` and `statuscode` columns, use `state` and `status` in the
+approved contract, not `choice`, and copy their live option values and labels.
+The verifier maps them to Dataverse’s `State` / `StateType` and `Status` /
+`StatusType`, compares options, and accepts the same explicit `SourceType: null`
+([StateAttributeMetadata](https://learn.microsoft.com/en-us/dotnet/api/microsoft.xrm.sdk.metadata.stateattributemetadata),
+[StatusAttributeMetadata](https://learn.microsoft.com/en-us/dotnet/api/microsoft.xrm.sdk.metadata.statusattributemetadata)).
+These system columns can only be `reuse`d; never plan to create or adapt them.
 After updating a verifier, regenerate the bounded execution-reconciliation
 snapshot; do not repair cached metadata by inserting nulls or changing types.
 
