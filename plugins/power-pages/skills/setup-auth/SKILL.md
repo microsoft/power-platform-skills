@@ -161,6 +161,7 @@ Mocks must not apply to a deployed site.
 Skip new authorization artifacts for login/logout-only scope.
 Otherwise follow authorization and the selected framework reference.
 Provide case-insensitive role checks, any/all checks, authenticated/admin checks and framework-appropriate guards or visibility wrappers.
+Both any-role and all-role checks must deny an empty required-role list.
 Keep the server-permission security reminder beside the utilities.
 
 **Complete when:** the approved role-check API and framework bindings exist, or existing ones are verified and reused.

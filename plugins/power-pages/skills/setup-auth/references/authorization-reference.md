@@ -7,10 +7,13 @@ Create `src/utils/authorization.ts` with:
 - `getUserRoles()` - returns array of role names from current user
 - `hasRole(roleName)` - case-insensitive single role check
 - `hasAnyRole(roleNames)` - OR check across multiple roles
-- `hasAllRoles(roleNames)` - AND check across multiple roles
+- `hasAllRoles(roleNames)` - AND check across a non-empty list of roles
 - `isAuthenticated()` - re-exports from auth service
 - `isAdmin()` - checks for "Administrators" role
 - `hasElevatedAccess(additionalRoles)` - checks admin or specified roles
+
+Both any-role and all-role checks deny an empty required-role list, including when a framework wrapper delegates to them.
+Keep this behavior when adapting the utilities to an existing auth service.
 
 #### 4.3 Security Reminder
 
@@ -70,7 +73,8 @@ export function hasAnyRole(roleNames: string[]): boolean {
  * Checks if the current user has ALL of the specified roles.
  */
 export function hasAllRoles(roleNames: string[]): boolean {
-  return roleNames.every((role) => hasRole(role));
+  // An empty requirement is not an access grant, even though every([]) is true.
+  return roleNames.length > 0 && roleNames.every((role) => hasRole(role));
 }
 
 /**

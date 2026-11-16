@@ -127,6 +127,34 @@ test('conditional examples agree with registration, callback and secret contract
   assert.match(read('references/framework-vue.md'), /removeEventListener\('powerpages:auth-user-changed'/);
 });
 
+test('authorization examples deny empty requirements and preserve role membership checks', templateRuntime, () => {
+  const source = typescriptBlocks(read('references/authorization-reference.md'))
+    .find((block) => block.includes('export function hasAllRoles'));
+  assert.ok(source, 'authorization reference must contain the reusable role checks');
+  let userRoles = ['mAnAgErS', 'Employees'];
+  const context = {
+    getCurrentUser: () => ({ userRoles }),
+    checkAuthenticated: () => true,
+  };
+  const executable = source.replace(/^import .* from ['"][^'"]+['"];?\r?$/gm, '');
+  vm.runInNewContext(stripTypeScriptTypes(executable).replace(/^export /gm, '')
+    + '\nglobalThis.api = { hasRole, hasAnyRole, hasAllRoles };', context);
+  const { hasRole, hasAnyRole, hasAllRoles } = context.api;
+  assert.equal(hasRole('MANAGERS'), true);
+  assert.equal(hasRole('Administrators'), false);
+  assert.equal(hasAnyRole(['Administrators', 'managers']), true);
+  assert.equal(hasAnyRole(['Administrators']), false);
+  assert.equal(hasAllRoles(['managers', 'EMPLOYEES']), true);
+  assert.equal(hasAllRoles(['Managers', 'Administrators']), false);
+  assert.equal(hasAnyRole([]), false);
+  assert.equal(hasAllRoles([]), false, 'an empty required-role list must not grant access');
+  userRoles = [];
+  assert.equal(hasRole('Managers'), false);
+  assert.equal(hasAnyRole(['Managers']), false);
+  assert.equal(hasAllRoles(['Managers']), false);
+  assert.equal(hasAllRoles([]), false);
+});
+
 test('React auth refresh reaches separate profile and header hook consumers', templateRuntime, () => {
   let source = typescriptBlocks(read('references/framework-react.md'))[0];
   source = source.replace(/import[\s\S]*?from ['"][^'"]+['"];?/g, '');
