@@ -1,0 +1,16 @@
+{
+  "siteName": "Contoso Volunteers",
+  "framework": "React",
+  "provider": "Local",
+  "registrationMode": "Invitation-only",
+  "loginBy": "Email",
+  "emailConfirmation": true,
+  "resetPassword": true,
+  "termsEnforced": true,
+  "profilePage": false,
+  "metadataExportPresent": true,
+  "existingRoles": [
+    "Anonymous Users",
+    "Authenticated Users"
+  ]
+}

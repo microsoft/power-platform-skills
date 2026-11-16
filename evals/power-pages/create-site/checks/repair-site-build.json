@@ -1,0 +1,41 @@
+{
+  "site": {
+    "root": "site",
+    "routes": [
+      {
+        "path": "/",
+        "requiredText": ["Contoso Repairs"],
+        "requiredPatterns": ["book"],
+        "forbiddenPatterns": ["__[A-Z][A-Z_]+__", "lorem ipsum"]
+      },
+      {
+        "path": "/book",
+        "requiredPatterns": ["book", "device", "email"],
+        "forbiddenPatterns": ["__[A-Z][A-Z_]+__", "lorem ipsum"]
+      },
+      {
+        "path": "/track",
+        "requiredPatterns": ["track", "reference"],
+        "forbiddenPatterns": ["__[A-Z][A-Z_]+__", "lorem ipsum"]
+      }
+    ]
+  },
+  "files": [
+    {
+      "path": "site/powerpages.config.json",
+      "type": "json",
+      "requiredKeys": ["siteName", "compiledPath", "defaultLandingPage"],
+      "requiredText": ["Contoso Repairs"]
+    }
+  ],
+  "unchanged": [
+    {
+      "path": "inputs/repair-site-build.json",
+      "source": "fixtures/repair-site-build.json"
+    }
+  ],
+  "absent": [
+    "site/node_modules",
+    "site/dist"
+  ]
+}

@@ -2473,6 +2473,48 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
         if (a.sendWindow) a.sendWindow.possible += 1;
       });
     },
+    /**
+     * The send-once transport (lib/managed-create-transport.js), after the service answered ONE sealed create request (a
+     * POST whose every row is a create) with a rejection that says it was not carried out (lib/managed-feature-contract.js
+     * notStartedAnswer: a 400, 403, 404 or 412 carrying a Dataverse error code, or a 412 to an If-Match request; never a
+     * `$batch`), while the scope that sent it was
+     * still open (#847). A single Dataverse operation that fails is rolled back whole — a deep insert's children with its
+     * root — and the client never re-sends a send-once request, so nothing that request carried exists: its rows go back
+     * to what they were before sealRowDispatch (`dispatched: false`, no sealed projection) and its one count moves from
+     * `possible` to `notStarted`, in one write. Then the attempt's own record proves nothing it sent can land
+     * (attemptProvenUnsent) unless another of its requests was dispatched, and the run that holds it can release it
+     * (retireProvenUnsentAttempt) instead of leaving a pending create no later build can settle.
+     * rows: [{ kind, key, id, sentSha256 }] — exactly the rows that request sealed, each still dispatched under that same
+     * sealed projection. Checked under the lease against the record reread there: a configuration attempt still sending,
+     * with an observed send window at exactly `epoch` that counts at least one possible send. Anything else (another run
+     * claimed the attempt, a row was never sealed or was sealed by another request) is refused with nothing written, and
+     * the attempt stays possibly sent: a refusal here only ever leaves the stricter state.
+     */
+    noteRowsNotStarted({ token, epoch, rows } = {}) {
+      if (!Array.isArray(rows) || rows.length === 0) throw storeError(CODES.notSettled, 'noteRowsNotStarted needs the rows the refused request carried');
+      if (!Number.isInteger(epoch)) throw storeError(CODES.notSettled, 'noteRowsNotStarted needs the send window epoch the request was sent under');
+      mutate((env, disk, spend) => {
+        const a = sendingRowAttempt(env, disk, token, epoch);
+        spend(token);
+        const name = `the managed ${a.family} "${a.key}"`;
+        if (!a.sendWindow || a.sendWindow.epoch !== epoch || a.sendWindow.possible < 1) throw storeError(CODES.notSettled, `${name} attempt has no counted send at this epoch to answer`);
+        const found = rows.map((s) => {
+          const r = a.rowProtocol.rows.find((x) => x.kind === s.kind && x.key === s.key);
+          if (!r || r.id !== normalizeGuid(s.id) || !r.dispatched || r.sentSha256 !== s.sentSha256) {
+            throw storeError(CODES.requestMismatch, `the ${s.kind} row ${s.id} of ${name} is not dispatched under the request that was refused; it stays possibly sent`);
+          }
+          return r;
+        });
+        if (new Set(found).size !== found.length) throw storeError(CODES.requestMismatch, `the refused request of ${name} names one row twice; it stays possibly sent`);
+        for (const r of found) {
+          r.sentFields = null;
+          r.sentSha256 = null;
+          r.dispatched = false;
+        }
+        a.sendWindow.possible -= 1;
+        a.sendWindow.notStarted += 1;
+      });
+    },
     /** Mark one completion effect (a solution membership, a rule's state) of a sending configuration attempt dispatched, before it leaves. */
     markRowEffectDispatch({ token, epoch, kind, id } = {}) {
       mutate((env, disk, spend) => {
@@ -2774,6 +2816,33 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
         removed = owned.length;
       });
       // As retireUnsentAttempt: only after the durable write does the attempt's own hold end.
+      if (barrier) barrier.release(token);
+      return { retired: true, effects: removed };
+    },
+    /**
+     * Stop tracking the unfinished configuration attempt `token` of (`family`, `key`), under the maker's exact approval
+     * (`--authorize retire:<family>:<key>@<token>`, lib/configuration-protected.js pendingSweep) — for an item the App
+     * Spec no longer declares, whose attempt may have been sent, so neither retire above applies (#847: a create whose
+     * answer was lost, or one an earlier plugin left pending after the service refused it). Without this an attempt
+     * nobody declares any more could never be settled (only its own declaration settles it) and every build of the app
+     * stopped on it. Nothing is deleted or sent: one write removes only that attempt and the effects it owns; its
+     * committed group, if any, its publication debt and every other attempt and effect stay. Rows the attempt may have
+     * created stay on the service, unmanaged — a later declaration of the item goes through the unbound create path, whose
+     * reads stop on a row already at the derived id, so nothing is ever created twice or bound unseen. Checked under the
+     * lease against the record reread there: the attempt must still be `token`, of a configuration family, for exactly
+     * that family and key (an approval given for one attempt never retires another). Answers { retired: true, effects }.
+     */
+    abandonAttempt({ token, family, key } = {}) {
+      if (typeof token !== 'string' || !token) throw storeError(CODES.notSettled, 'abandonAttempt needs the attempt token');
+      let removed = 0;
+      mutate((env, disk) => {
+        const a = requireAttempt(env, disk, token);
+        if (!isRowFamily(a.family) || a.family !== family || a.key !== key) throw storeError(CODES.notSettled, `the attempt ${token} is not the configuration attempt of the managed ${family} "${key}"; nothing is retired`);
+        const owned = env.workflowEffects.filter((e) => e.attemptToken === a.token);
+        env.attempts = env.attempts.filter((x) => x !== a);
+        env.workflowEffects = env.workflowEffects.filter((e) => e.attemptToken !== a.token);
+        removed = owned.length;
+      });
       if (barrier) barrier.release(token);
       return { retired: true, effects: removed };
     },

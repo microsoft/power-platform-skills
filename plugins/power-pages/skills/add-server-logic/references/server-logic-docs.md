@@ -88,7 +88,7 @@ Use this as a baseline only. If Microsoft Learn differs, Microsoft Learn wins.
 - **Server.Connector.Dataverse**: `CreateRecord(entitySetName, payload)`, `RetrieveRecord(entitySetName, id, options)`, `RetrieveMultipleRecords(entitySetName, options)`, `UpdateRecord(entitySetName, id, payload)`, `DeleteRecord(entitySetName, id)`, `InvokeCustomApi(httpMethod, url, payload)`
 - **Server.User**: `fullname`, `firstname`, `lastname`, `emailaddress1`, `contactid`, `Roles`, `Token`, and many other contact properties
 - **Server.Website**: `adx_websiteid`, `adx_name`, `adx_primarydomainname`, `adx_defaultlanguage`, etc.
-- **Server.SiteSetting**: `Get(name)`
+- **Server.Sitesetting**: `Get(name)`
 - **Server.EnvironmentVariable**: `get(name)` - reads Dataverse environment variable values directly (alternative to reading via site settings with `envvar_schema`)
 
 When new SDK members or changed patterns are discovered, use them and record the differences in the implementation plan.

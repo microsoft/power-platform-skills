@@ -148,7 +148,7 @@ const { odataLit } = require('./odata.js');
 const { exactOne, distinctRows } = require('./query-completeness.js');
 const { isRestrictedSolution } = require('./system-solutions.js');
 const { tableRefs, pinAppTables, publishAppComponents, resolveMainForms, appComponentsFor, applyAppMainForms, explainAppPushWarnings, savedPageRows,
-  declaredAppPins, pinDeclaredArtifacts } = require('./app-components.js');
+  declaredAppPins, pinDeclaredArtifacts, createdViewIds } = require('./app-components.js');
 const { pinIntentOf, pinWarningOf, reconcileUnconfirmedPin } = require('./app-pin-recovery.js');
 const { createAppPublication } = require('./app-publication-policy.js');
 const { appWriteTables, appPushTables, preAppTables, publishTablesXml, readSavedNotPublished, describeSavedNotPublished, readAppFormChartTables, describePreAppRefusal, describeUnreadAppComponents } = require('./table-publish.js');
@@ -3587,7 +3587,7 @@ function protectedConfigurationInPlay(spec, { apply, env, workspaceDir, appDir }
 // an attempt needs it and kept by its gate: every attempt of a whole-build retry (build-model-app.js) shares the one managed create
 // context, so an answer one attempt received is still known to the next. Keyed by the gate, which the CLI makes once per invocation.
 const protectedHookups = new WeakMap();
-function protectedConfigurationFor(gate, store, { env, approvals } = {}) {
+function protectedConfigurationFor(gate, store, { env, approvals, retirements } = {}) {
   const made = protectedHookups.get(gate);
   if (made && made.store === store) return made;
   const { createManagedCreateContext } = require('./managed-create-context.js');
@@ -3596,7 +3596,8 @@ function protectedConfigurationFor(gate, store, { env, approvals } = {}) {
   // The maker's `--authorize adopt:<kind>:...` row approvals (build-model-app.js authorizationKeys), exactly as the preflight printed them.
   const ctx = createManagedCreateContext({ store, approvals: approvals ? [...approvals] : [], notFoundCode: NOT_FOUND_CODE });
   // The API root the SDK prefixes every request with (the bundle uses v9.0): a Custom API change set is admitted only under it.
-  const hookup = createProtectedConfiguration({ store, gate, ctx, apiBase: `${new URL(String(env)).origin}/api/data/v9.0` });
+  // `retirements` are the maker's `--authorize retire:...@<attempt token>` approvals, which only the debt sweep reads (pendingSweep).
+  const hookup = createProtectedConfiguration({ store, gate, ctx, apiBase: `${new URL(String(env)).origin}/api/data/v9.0`, retirements: retirements ? [...retirements] : [] });
   protectedHookups.set(gate, hookup);
   return hookup;
 }
@@ -4088,7 +4089,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
   let configurationOpts = opts;
   if (opts.managedCreateGate && workflowStore && !opts.protectedConfiguration) {
     opts.managedCreateGate.bind(workflowStore);
-    configurationOpts = { ...opts, protectedConfiguration: protectedConfigurationFor(opts.managedCreateGate, workflowStore, { env: opts.env, approvals: opts.configurationApprovals }) };
+    configurationOpts = { ...opts, protectedConfiguration: protectedConfigurationFor(opts.managedCreateGate, workflowStore, { env: opts.env, approvals: opts.configurationApprovals, retirements: opts.configurationRetirements }) };
   }
   // A declared artifact that did not settle stops the build. Its result's own findings decide — never the SDK error
   // behind them: rethrown, a 5xx answer would make the runner judge an unsettled create as transient and retry it, and a
@@ -7329,6 +7330,19 @@ async function runSdkBuildPhases(spec, opts, owed) {
     // only PER ENTITY, so a name-only key lets a same-named view on another entity OVERWRITE this id and
     // cross-wire dashboards / sub-grids / AI-summaries to the wrong entity's view.
     (spec.views || []).forEach((v, i) => { result.created.views[`${v.entity.toLowerCase()}|${v.name}`] = ids[i]; });
+    // #845: two declared views may share one name on one table under two keys (views[].key), and the build makes both, but the
+    // `entity|name` entry above holds only the last of them. Each other one is listed in `sameNamedViews` as { entity, name, key, id },
+    // so the views this run made or reused are all recorded: the app's components and declared pins and the views the default-view
+    // enrichment leaves alone read them through createdViewIds (lib/app-components.js). A list of fields, not more `entity|name|key`
+    // entries: a view may itself be named `Twin|v1`, and a joined key would take its entry. The `entity|name` entries are exactly as
+    // before, so a lookup by name (a dashboard tile, a sub-grid, the per-table publish, the snapshot index) is unchanged, and a spec
+    // without same-named declared views records exactly what it did (no `sameNamedViews`).
+    const sameNamed = [];
+    (spec.views || []).forEach((v, i) => {
+      const entity = v.entity.toLowerCase();
+      if (ids[i] && isDeclaredView(v) && result.created.views[`${entity}|${v.name}`] !== ids[i]) sameNamed.push({ entity, name: v.name, key: declaredViewKey(v), id: ids[i] });
+    });
+    if (sameNamed.length) result.created.sameNamedViews = sameNamed;
   }
 
   // 4a. Quick Find (entities[].quickFind, lib/quick-find.js): the columns the search box matches on are the table's Quick Find
@@ -7377,7 +7391,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
     }
   };
   if (has('views')) {
-    const authorViewIds = Object.values(result.created.views || {}).filter(Boolean);
+    const authorViewIds = createdViewIds(result.created);
     for (const e of spec.entities || []) {
       if (!enrichesDefaultViews(spec, e)) continue;
       const logical = e.schemaName.toLowerCase();

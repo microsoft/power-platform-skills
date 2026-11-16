@@ -4039,3 +4039,59 @@ test('verifySpec charts: a declared chart with a managed binding is its bound ro
   const legacy = await verifySpec(chartSpec({}), chartReader([chartRow()]), { managedManifest: manifest() });
   assert.ok(legacy.checks.some((c) => c.kind === 'chart' && c.present));
 });
+
+// A binding store that cannot be read holds no group, so every declared artifact would look unbound and be found by its name. A
+// declared dashboard, business rule and process flow are then unresolved, as declared views and charts are: a namesake never passes.
+test('verifySpec: an unreadable binding store, or an unusable group record, never lets a namesake pass for a declared dashboard, business rule or process flow', async () => {
+  const NAMESAKE = '77777777-7777-4777-8777-777777777777';
+  const store = { family: 'store', key: 'managed-bindings', reason: 'not valid JSON', code: 'managed-binding-store-unreadable' };
+  const manifest = (invalid) => ({ revision: 0, groups: [], pending: [], invalid });
+  const filters = [];
+  // Every name read answers one Active row of that name: the namesake a name fallback would take.
+  const read = {
+    findTable: async () => null,
+    findColumns: async () => [],
+    sitemapXml: async () => '',
+    queryRecords: async (set, q) => {
+      filters.push(`${set}: ${(q && q.filter) || ''}`);
+      if (set === 'systemform') return [{ formid: NAMESAKE, name: 'Twin' }];
+      if (set === 'workflow') return [{ workflowid: NAMESAKE, statecode: 1 }];
+      return [];
+    },
+  };
+  const spec = (reconcile) => ({
+    solution: { uniqueName: 's', publisherPrefix: 'new' }, app: { name: 'A' }, entities: [],
+    dashboards: [{ name: 'Twin', ...reconcile }],
+    businessRules: [{ name: 'Twin', entity: 'new_ticket', ...reconcile }],
+    businessProcessFlows: [{ name: 'Twin', entity: 'new_ticket', ...reconcile }],
+  });
+  const namesOf = (r) => r.checks.filter((c) => ['dashboard', 'business-rule', 'business-process-flow'].includes(c.kind)).map((c) => [c.kind, c.present]);
+  const nameReads = () => filters.filter((f) => /^(systemform|workflow): .*\bname eq\b/.test(f));
+  for (const [what, invalid, why] of [
+    ['an unreadable store', [store], 'managed-binding-store-unreadable'],
+    ['an unusable group record', [
+      { family: 'dashboard', key: 'twin', reason: 'its record is not usable' },
+      { family: 'rule', key: 'new_ticket/Twin', reason: 'its record is not usable' },
+      { family: 'bpf', key: 'new_ticket/Twin', reason: 'its record is not usable' },
+    ], 'its record is not usable'],
+  ]) {
+    filters.length = 0;
+    const r = await verifySpec(spec({ reconcile: 'declared' }), read, { managedManifest: manifest(invalid) });
+    // The dashboard keeps its check, failed with the reason (as a pending one does); the workflows are unverified, never a pass.
+    assert.deepStrictEqual(namesOf(r), [['dashboard', false]], `${what}: ${JSON.stringify(r.checks)}`);
+    assert.strictEqual(r.checks.find((c) => c.kind === 'dashboard').detail, `its managed binding (twin) is not settled (${why}) — unverified, not proven correct`);
+    for (const kind of ['business-rule', 'business-process-flow']) {
+      assert.ok(r.unverified.includes(`${kind}:new_ticket.Twin (its managed binding (new_ticket/Twin) is not settled (${why}) — unverified, not proven correct)`), `${what}: ${JSON.stringify(r.unverified)}`);
+    }
+    assert.deepStrictEqual(nameReads(), [], `${what}: never read by name`);
+    assert.strictEqual(r.ok, false);
+  }
+  // Controls: a legacy dashboard, rule and flow are found by their names whatever the store holds, and a declared one with no store
+  // entry at all (nothing bound yet) keeps its name lookup as before.
+  for (const [reconcile, m] of [[{}, manifest([store])], [{ reconcile: 'declared' }, manifest([])]]) {
+    filters.length = 0;
+    const r = await verifySpec(spec(reconcile), read, { managedManifest: m });
+    assert.deepStrictEqual(namesOf(r), [['dashboard', true], ['business-rule', true], ['business-process-flow', true]], JSON.stringify(r.checks));
+    assert.strictEqual(nameReads().length, 3);
+  }
+});

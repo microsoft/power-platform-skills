@@ -31,48 +31,19 @@ Server logic endpoints return responses in a standard JSON envelope:
 
 ```json
 {
-  "RequestId": "<activity-guid>",
-  "Success": true,
-  "ServerLogicName": "<endpoint-name>",
-  "Data": "<string returned by your function>",
-  "Error": null
+  "requestId": "<activity-guid>",
+  "success": true,
+  "serverLogicName": "<endpoint-name>",
+  "data": "<string returned by your function>",
+  "error": null
 }
 ```
 
-- Microsoft Learn documents PascalCase envelope fields. Some existing wrappers or captured responses may use lowercase names, so check the observed response and support both casings when the runtime contract isn't known.
-- `Data` / `data` contains the string returned by the invoked function (for example, its `JSON.stringify(...)` result). Parse that string with `JSON.parse` when the function returns serialized JSON.
-- On failure, `Success` / `success` is `false`, `Data` / `data` is `null`, and `Error` / `error` contains the error message.
-- `RequestId` / `requestId` is the server-side activity GUID, useful for correlating with `Server.Logger` output in diagnostics.
+- `data` contains the string returned by the invoked function (e.g., the `JSON.stringify(...)` result). Parse it with `JSON.parse(response.data)` when the function returns serialized JSON.
+- On failure, `success` is `false`, `data` is `null`, and `error` contains the error message.
+- `requestId` is the server-side activity GUID — useful for correlating with `Server.Logger` output in diagnostics.
 
-Normalize the envelope once instead of assuming lowercase keys throughout the UI:
-
-```typescript
-interface ServerLogicEnvelope {
-  RequestId?: string;
-  Success?: boolean;
-  ServerLogicName?: string;
-  Data?: string | null;
-  Error?: string | null;
-  requestId?: string;
-  success?: boolean;
-  serverLogicName?: string;
-  data?: string | null;
-  error?: string | null;
-}
-
-function readServerLogicData(envelope: ServerLogicEnvelope): string {
-  const success = envelope.Success ?? envelope.success;
-  const data = envelope.Data ?? envelope.data;
-  const error = envelope.Error ?? envelope.error;
-  if (success !== true) throw new Error(error ?? 'Server logic call failed');
-  if (typeof data !== 'string') throw new Error('Server logic response did not contain data');
-  return data;
-}
-```
-
-Frontend helpers and service wrappers should pass the envelope through this normalizer before parsing its data.
-
-Every request to a server logic endpoint, including GET, needs the `__RequestVerificationToken` header. Confirm an existing wrapper adds the token for every method; extend it if it only handles writes. See [Author server logic](https://learn.microsoft.com/power-pages/configure/author-server-logic#call-server-logic-from-client-script).
+All frontend helpers and service wrappers should unwrap `.data` from this envelope rather than treating the entire response body as the function's return value.
 
 ## Dataverse Connector Response Format
 
@@ -82,15 +53,20 @@ Reference: [Microsoft Learn — How to interact with Dataverse tables using serv
 
 ### Shape of `Server.Connector.Dataverse.*` return values
 
-The Dataverse connector methods (`RetrieveRecord`, `RetrieveMultipleRecords`, `CreateRecord`, `UpdateRecord`, `DeleteRecord`, `InvokeCustomApi`) return an object that contains the raw Dataverse HTTP response. When that object is returned from the server logic function, it is serialized into the envelope's `data` string. Concretely the client sees:
+The Dataverse connector methods (`RetrieveRecord`, `RetrieveMultipleRecords`, `CreateRecord`, `UpdateRecord`, `DeleteRecord`, `InvokeCustomApi`) return a JSON string containing `StatusCode`, `Body`, and `Headers`.
+`Body` is itself a JSON string for reads and can be empty for successful writes.
+These methods are synchronous.
+Parse the connector string before reading any properties; accessing `result.Body` on the unparsed string gives `undefined`.
+Pass read query options without a leading `?`; the connector inserts that separator.
+When the handler returns the connector string unchanged, the client sees:
 
 ```json
 {
-  "RequestId": "…",
-  "Success": true,
-  "ServerLogicName": "dataverse-crud-operations",
-  "Data": "{\"Body\":\"{\\\"@odata.context\\\":\\\"…\\\",\\\"value\\\":[{…}, {…}]}\",\"StatusCode\":200,\"Headers\":{…}}",
-  "Error": null
+  "requestId": "…",
+  "success": true,
+  "serverLogicName": "dataverse-crud-operations",
+  "data": "{\"Body\":\"{\\\"@odata.context\\\":\\\"…\\\",\\\"value\\\":[{…}, {…}]}\",\"StatusCode\":200,\"Headers\":{…}}",
+  "error": null
 }
 ```
 
@@ -98,17 +74,18 @@ To reach the Dataverse records the client must parse **twice**:
 
 ```javascript
 const envelope = responseBody;             // server logic envelope
-const success = envelope.Success ?? envelope.success;
-const error = envelope.Error ?? envelope.error;
-if (success !== true) throw new Error(error ?? 'Server logic call failed');
-const data = envelope.Data ?? envelope.data;
-if (typeof data !== 'string') throw new Error('Server logic response did not contain data');
-const outer = JSON.parse(data);             // { Body: "<json string>", StatusCode, Headers }
+const outer = JSON.parse(envelope.data);    // { Body: "<json string>", StatusCode, Headers }
 const body  = JSON.parse(outer.Body);       // { "@odata.context": "...", value: [...] } (for RetrieveMultipleRecords)
 const records = body.value;                 // the actual array
 ```
 
-For `RetrieveRecord`, `body` is the single record object (no `value` array). For `CreateRecord`, the new record's GUID is returned in the HTTP response header `entityid` — read it with `xhr.getResponseHeader('entityid')` (jQuery/safeAjax) or `response.headers.get('entityid')` (fetch).
+For `RetrieveRecord`, `body` is the single record object (no `value` array).
+For `CreateRecord`, the connector's `Headers["OData-EntityId"]` contains a full record URL, such as `https://contoso.crm.dynamics.com/api/data/v9.2/contacts(<guid>)`.
+Extract the GUID in the final parentheses before passing it to `UpdateRecord` or `DeleteRecord`.
+Header names are case-insensitive.
+The Learn passthrough sample reads an outer HTTP `entityid` header; do not confuse that with the connector metadata inside `envelope.data`.
+Prefer returning the parsed GUID explicitly, as shown in Approach C, rather than assuming the outer response forwards that header.
+See [Dataverse create responses](https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/create-entity-web-api).
 
 ### Three approaches — pick one and apply it consistently
 
@@ -138,7 +115,7 @@ function get() {
 }
 ```
 
-Client (matches the Microsoft Learn sample exactly):
+Client:
 
 ```javascript
 ajaxCall('Loading...', {
@@ -146,25 +123,16 @@ ajaxCall('Loading...', {
     url: '/_api/serverlogics/dataverse-crud-operations?entitySetName=contacts&additionalParameters=$select=fullname,firstname,lastname,emailaddress1,telephone1',
     contentType: 'application/json'
 }).done(res => {
-    const success = res.Success ?? res.success;
-    const error = res.Error ?? res.error;
-    if (success !== true) throw new Error(error ?? 'Server logic call failed');
-    const data = res.Data ?? res.data;
-    if (typeof data !== 'string') throw new Error('Server logic response did not contain data');
-    const outer = JSON.parse(data);
+    if (!res.success) throw new Error(res.error || 'Server logic call failed');
+    const outer = JSON.parse(res.data);
+    if (outer.IsSuccessStatusCode === false || !(outer.StatusCode >= 200 && outer.StatusCode < 300)) {
+        throw new Error('Dataverse read failed: ' + outer.StatusCode);
+    }
     const body  = JSON.parse(outer.Body);
-    const rows  = (body.value || []).map(r => ({ ...r, id: r.contactid }));
+    if (!Array.isArray(body.value)) throw new Error('Dataverse read returned no value array');
+    const rows  = body.value.map(r => ({ ...r, id: r.contactid }));
     render(rows);
 });
-```
-
-For `CreateRecord` the new id comes from a response header:
-
-```javascript
-success: (res, status, xhr) => {
-    record.id = xhr.getResponseHeader('entityid');
-    addRecord(record);
-}
 ```
 
 **Approach B — Server envelope that still wraps the connector result**
@@ -179,6 +147,10 @@ function get() {
         Server.Logger.Log("GET called");
         const entitySetName = Server.Context.QueryParameters["entitySetName"];
         const result = Server.Connector.Dataverse.RetrieveMultipleRecords(entitySetName);
+        const response = JSON.parse(result);
+        if (response.IsSuccessStatusCode === false || !(response.StatusCode >= 200 && response.StatusCode < 300)) {
+            throw new Error("Dataverse read failed: " + response.StatusCode);
+        }
         return JSON.stringify({ status: "success", data: result });
     } catch (err) {
         Server.Logger.Error("GET failed: " + err.message);
@@ -187,17 +159,24 @@ function get() {
 }
 ```
 
-Client — note the extra `data` layer before reaching `Body`:
+Client - parse the extra `data` string before reaching `Body`:
 
-```typescript
-const envelope = await powerPagesFetch<ServerLogicEnvelope>(
+```javascript
+const envelope = await powerPagesFetch(
     '/_api/serverlogics/contacts-crud',
     { method: 'GET' }
 );
 if (!envelope) throw new Error('Empty response from contacts-crud');
-const payload = JSON.parse(readServerLogicData(envelope)) as { status: string; data: { Body: string; StatusCode: number; Headers: Record<string, string> } };
-const outer   = payload.data;                 // connector result still wrapped here
+if (!envelope.success) throw new Error(envelope.error ?? 'Failed');
+if (envelope.data == null) throw new Error('Missing response data from contacts-crud');
+const payload = JSON.parse(envelope.data);    // { status: string, data: "<connector JSON string>" }
+if (payload.status !== 'success') throw new Error(payload.message || 'Dataverse read failed');
+const outer   = JSON.parse(payload.data);     // connector metadata
+if (outer.IsSuccessStatusCode === false || !(outer.StatusCode >= 200 && outer.StatusCode < 300)) {
+    throw new Error('Dataverse read failed: ' + outer.StatusCode);
+}
 const body    = JSON.parse(outer.Body);       // { "@odata.context": "...", value: [...] }
+if (!Array.isArray(body.value)) throw new Error('Dataverse read returned no value array');
 const records = body.value;
 ```
 
@@ -213,12 +192,16 @@ Server logic:
 function get() {
     try {
         Server.Logger.Log("getContacts GET called");
-        const dvResponse = Server.Connector.Dataverse.RetrieveMultipleRecords(
+        const dvResponse = JSON.parse(Server.Connector.Dataverse.RetrieveMultipleRecords(
             "contacts",
-            "?$select=contactid,firstname,lastname,emailaddress1,telephone1"
-        );
+            "$select=contactid,firstname,lastname,emailaddress1,telephone1"
+        ));
+        if (dvResponse.IsSuccessStatusCode === false || !(dvResponse.StatusCode >= 200 && dvResponse.StatusCode < 300)) {
+            throw new Error("Dataverse read failed: " + dvResponse.StatusCode);
+        }
         const body = JSON.parse(dvResponse.Body);
-        const contacts = (body.value || []).map(r => ({
+        if (!Array.isArray(body.value)) throw new Error("Dataverse read returned no value array");
+        const contacts = body.value.map(r => ({
             id: r.contactid,
             firstName: r.firstname,
             lastName: r.lastname,
@@ -236,33 +219,56 @@ function get() {
 Client:
 
 ```typescript
-const envelope = await powerPagesFetch<ServerLogicEnvelope>(
+const envelope = await powerPagesFetch<{ data: string | null; success: boolean; error: string | null }>(
     '/_api/serverlogics/getContacts',
     { method: 'GET' }
 );
 if (!envelope) throw new Error('Empty response from getContacts');
-const payload = JSON.parse(readServerLogicData(envelope)) as { status: string; contacts: Contact[] };
+if (!envelope.success) throw new Error(envelope.error ?? 'Failed');
+if (envelope.data == null) throw new Error('Missing response data from getContacts');
+const payload = JSON.parse(envelope.data) as { status: string; contacts: Contact[] };
+if (payload.status !== 'success') throw new Error('Dataverse read failed');
 return payload.contacts;
 ```
 
-For writes, return the new id from the server logic explicitly rather than relying on the `entityid` header:
+For writes, return the new id from the server logic explicitly rather than relying on the outer `entityid` header:
 
 ```javascript
-const dvResponse = Server.Connector.Dataverse.CreateRecord("contacts", JSON.stringify(body));
-const newId = dvResponse.Headers && dvResponse.Headers.entityid;
-return JSON.stringify({ status: "success", id: newId });
+function post() {
+    try {
+        Server.Logger.Log("createContact POST called");
+        const dvResponse = JSON.parse(Server.Connector.Dataverse.CreateRecord("contacts", Server.Context.Body));
+        if (dvResponse.IsSuccessStatusCode === false || !(dvResponse.StatusCode >= 200 && dvResponse.StatusCode < 300)) {
+            throw new Error("Dataverse create failed: " + dvResponse.StatusCode);
+        }
+        // OData-EntityId is a record URL ending in "(<guid>)", not a bare GUID.
+        // https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/create-entity-web-api
+        const headers = dvResponse.Headers;
+        const headerName = Object.keys(headers).find(key => key.toLowerCase() === "odata-entityid");
+        const recordUrl = headers[headerName];
+        const match = typeof recordUrl === "string"
+            ? recordUrl.match(/\(([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\)$/i)
+            : null;
+        if (!match) throw new Error("Dataverse create returned no valid OData-EntityId URL");
+        return JSON.stringify({ status: "success", id: match[1] });
+    } catch (err) {
+        Server.Logger.Error("createContact POST failed: " + err.message);
+        return JSON.stringify({ status: "error", message: err.message });
+    }
+}
 ```
 
 ### When the response shape is unknown
 
-If the frontend integration is failing because the exact Dataverse response shape is unclear for a specific operation (custom actions, bound actions, non-standard query options), ask before using the live endpoint testing workflow against the deployed site. That workflow captures `/_api/serverlogics/` responses and reports the exact `envelope.data` and (when present) `outer.Body` shapes so the frontend integration can use the observed response.
+If the frontend integration is failing because the exact Dataverse response shape is unclear for a specific operation (custom actions, bound actions, non-standard query options), use the available live endpoint testing capability after deployment. Capture the `envelope.data` and (when present) `outer.Body` shapes so the frontend integration follows the actual response.
 
 ### Key points for Dataverse-backed server logic
 
-- `Server.Connector.Dataverse.*` methods return an object with `Body` (a JSON string), `StatusCode`, and `Headers`. They are **synchronous** — do not `await` them.
-- When the server logic returns that object directly, the client must `JSON.parse(res.data)` to get the outer object and `JSON.parse(outer.Body)` to get the Dataverse payload.
+- Parse the synchronous connector's JSON string before accessing `Body`, `StatusCode`, or `Headers`.
+- Raw passthrough requires two client parses; wrapping the connector string in `{ status, data }` requires three.
+- Check the connector's status before treating a response as successful; missing or malformed read bodies must surface as errors.
 - `RetrieveMultipleRecords` payloads have a `value` array; `RetrieveRecord` payloads are a single record object.
-- `CreateRecord` returns the new record id via the `entityid` HTTP response header — not in the body.
+- Extract the GUID from the connector's `OData-EntityId` URL for creates; successful writes may have an empty body.
 - For non-trivial features, prefer unwrapping `Body` inside the server logic and returning a feature-specific shape (Approach C) so the client integration is obvious and stable.
 
 ## Recommended Approaches
@@ -312,7 +318,7 @@ export async function callServerLogic<T = unknown>(
         ? `/_api/serverlogics/${endpointName}?${new URLSearchParams(params)}`
         : `/_api/serverlogics/${endpointName}`;
 
-    const envelope = await powerPagesFetch<ServerLogicEnvelope>(url, {
+    const envelope = await powerPagesFetch<{ data: string | null; success: boolean; error: string | null }>(url, {
         method,
         body: body ? JSON.stringify(body) : undefined,
     });
@@ -320,7 +326,14 @@ export async function callServerLogic<T = unknown>(
     if (!envelope) {
         throw new Error(`Empty response from ${endpointName}`);
     }
-    return JSON.parse(readServerLogicData(envelope)) as T;
+    if (!envelope.success) {
+        throw new Error(envelope.error ?? 'Server logic call failed');
+    }
+    if (envelope.data == null) {
+        throw new Error(`Missing response data from ${endpointName}`);
+    }
+
+    return JSON.parse(envelope.data) as T;
 }
 ```
 
@@ -355,7 +368,10 @@ export async function callServerLogic<T = unknown>(
         'Content-Type': 'application/json',
     };
 
-    headers['__RequestVerificationToken'] = await getCsrfToken();
+    // CSRF token is required for non-GET requests only
+    if (method !== 'GET') {
+        headers['__RequestVerificationToken'] = await getCsrfToken();
+    }
 
     const response = await fetch(url, {
         method,

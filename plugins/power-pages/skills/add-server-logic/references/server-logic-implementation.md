@@ -46,14 +46,7 @@ Repeat this step for each approved server logic item. Create or update `<PROJECT
 5. **No imports or requires**: No `import`, `require`, or external dependencies.
 6. **No browser APIs**: No `fetch`, `XMLHttpRequest`, `setTimeout`, `setInterval`, `console.log`, or DOM APIs.
 7. **Async when needed**: Mark functions as `async` only when they use `await` (HttpClient calls). Dataverse connector methods (`Server.Connector.Dataverse.*`) are **synchronous** - do NOT use `async`/`await` with them.
-
-#### Preserve input and response contracts
-
-- Validate every required query/body value before coercing it, building a URL, or making a request. In JavaScript, `Number("")` and `Number("   ")` are `0`; reject blank values as missing before numeric conversion, then check type, format, and allowed range.
-- For external `HttpClient` calls, check any returned HTTP status before accepting the body. Treat non-2xx responses as failures even when their bodies contain parseable success-shaped data. Confirm the body exists, parse its supported representation, and validate every required response field and type before returning success.
-- Define each endpoint's success and error JSON shapes, property names, and value types in the approved plan. Return a string on every path, keep `status: "success"` and `status: "error"` distinct, and preserve the planned success fields across later edits. If an existing endpoint is updated, preserve its public response contract unless the user approves an API change; update its callers in the same approved scope.
-- Tie each success value to the data source in the approved plan. Do not replace requested live or configured data with a placeholder or demo value; resolve an unknown source before presenting the endpoint as complete.
-- Keep error messages useful without returning credentials, secret values, or sensitive request data. Log only the context needed to diagnose failures.
+8. **Callbacks**: Use arrow functions or named helpers nested inside a handler.
 
 #### Prohibited Script Patterns
 
@@ -61,7 +54,8 @@ The Power Pages server-side script validator rejects scripts containing certain 
 
 | Pattern | Regex | Caveat |
 |---------|-------|--------|
-| JavaScript `with` statement | `with\s*\(` | The regex matches the substring `with(` **anywhere** in the file - including inside string literals and inside other identifiers. OData filter functions like `startswith(`, `endswith(`, and `groupwith(` will trip it because they end with `with(`. |
+| JavaScript `with` statement | `with\s*\(` (case-insensitive) | The regex matches the substring `with(` **anywhere** in the file - including inside string literals and inside other identifiers. OData filter functions like `startswith(`, `endswith(`, and `groupwith(` will trip it because they end with `with(`. |
+| Anonymous functions and `Function` constructor | `Function\s*\(` (case-insensitive) | The runtime scans raw source, including comments, strings, and longer identifiers. Anonymous callbacks such as `.map(function (r) { ... })` are rejected. Use arrow callbacks or named nested helpers; top-level `function get()` remains valid. |
 
 **Workaround for OData functions** - split the literal so `with(` is not contiguous in source:
 
@@ -74,6 +68,8 @@ var query = "$filter=startswith" + "(name,'INV-')";
 ```
 
 The same trick applies to `endswith(`, `groupwith(`, and any other identifier that ends with `with(`.
+
+These restrictions apply to server logic `.js` files, not frontend JavaScript. The local validator mirrors these runtime checks in `${PLUGIN_ROOT}/skills/add-server-logic/scripts/validate-serverlogic.js`.
 
 #### Code Template
 
@@ -128,7 +124,11 @@ function post() {
         const targetStatus = body.targetStatus;
 
         // 1. Read the current record from Dataverse
-        const current = Server.Connector.Dataverse.RetrieveRecord("<table-name>", entityId, "?$select=<status-field>");
+        const readResponse = JSON.parse(Server.Connector.Dataverse.RetrieveRecord("<table-name>", entityId, "$select=<status-field>"));
+        if (readResponse.IsSuccessStatusCode === false || !(readResponse.StatusCode >= 200 && readResponse.StatusCode < 300)) {
+            throw new Error("Dataverse read failed: " + readResponse.StatusCode);
+        }
+        const current = JSON.parse(readResponse.Body);
         const currentStatus = current["<status-field>"];
 
         // 2. Validate the transition
@@ -152,7 +152,10 @@ function post() {
         // 3. Execute the write - server performs the Dataverse update
         const updateData = {};
         updateData["<status-field>"] = targetStatus;
-        Server.Connector.Dataverse.UpdateRecord("<table-name>", entityId, JSON.stringify(updateData));
+        const writeResponse = JSON.parse(Server.Connector.Dataverse.UpdateRecord("<table-name>", entityId, JSON.stringify(updateData)));
+        if (writeResponse.IsSuccessStatusCode === false || !(writeResponse.StatusCode >= 200 && writeResponse.StatusCode < 300)) {
+            throw new Error("Dataverse update failed: " + writeResponse.StatusCode);
+        }
 
         Server.Logger.Log("<name> transition executed: " + currentStatus + " → " + targetStatus);
 
@@ -209,6 +212,10 @@ function post() {
             payload
         );
 
+        const response = JSON.parse(result);
+        if (response.IsSuccessStatusCode === false || !(response.StatusCode >= 200 && response.StatusCode < 300)) {
+            throw new Error("Dataverse custom action failed: " + response.StatusCode);
+        }
         Server.Logger.Log("<name> custom action completed successfully");
 
         return JSON.stringify({
@@ -246,6 +253,10 @@ function post() {
             payload
         );
 
+        const response = JSON.parse(result);
+        if (response.IsSuccessStatusCode === false || !(response.StatusCode >= 200 && response.StatusCode < 300)) {
+            throw new Error("Dataverse bound action failed: " + response.StatusCode);
+        }
         Server.Logger.Log("<name> bound action completed for entity " + entityId);
 
         return JSON.stringify({
@@ -280,6 +291,10 @@ function get() {
             null
         );
 
+        const response = JSON.parse(result);
+        if (response.IsSuccessStatusCode === false || !(response.StatusCode >= 200 && response.StatusCode < 300)) {
+            throw new Error("Dataverse custom function failed: " + response.StatusCode);
+        }
         Server.Logger.Log("<name> custom function completed successfully");
 
         return JSON.stringify({
@@ -307,16 +322,18 @@ function get() {
 
 #### Dataverse Response Shape (Critical for Frontend Integration)
 
-When a function returns the result of a `Server.Connector.Dataverse.*` method, the client sees a double-wrapped payload - the most common cause of broken frontend integrations. Before writing the function, pick one of three response shapes and record the choice for Phase 9: **Approach A - raw passthrough** (return the connector result as-is), **Approach B - envelope that wraps the connector result** (return `{ status, data: result }` without unwrapping `Body`), or **Approach C - fully normalized** (parse `Body` server-side and return a feature-specific shape - recommended for non-generic endpoints).
+`Server.Connector.Dataverse.*` returns a JSON string. Parse it with `JSON.parse(result)` before accessing `StatusCode`, `Body`, or `Headers`; `Body` is another JSON string. Check the connector status before reporting success. Parse read bodies explicitly; an empty or malformed read body is an error, not an empty record set. Successful writes can have an empty body, so do not parse it unless the operation returns a payload. Pass read query options without a leading `?`; the connector inserts the query separator.
 
-See `${PLUGIN_ROOT}/skills/add-server-logic/references/frontend-integration-reference.md` → "Dataverse Connector Response Format" for the double-wrapping explanation, the `CreateRecord` / `entityid` header behavior, and server- and client-side examples for each shape.
+Before writing the function, pick a response shape and record it for Phase 9: **Approach A - raw passthrough** (return the connector string unchanged), **Approach B - wrapped passthrough** (return `{ status, data: result }`, where `data` remains a string), or **Approach C - normalized** (parse the connector result and its `Body` server-side, then return a feature-specific shape). Prefer Approach C for feature endpoints.
+
+Read `${PLUGIN_ROOT}/skills/add-server-logic/references/frontend-integration-reference.md` -> "Dataverse Connector Response Format" before implementing Dataverse reads or writes. It contains server/client parsing examples and explains how to extract a GUID from the `CreateRecord` connector's `OData-EntityId` URL.
 
 #### Referencing Secrets in Code
 
 When the server logic needs a secret value identified in Phase 2.3, **never hardcode the value**. Instead, read it at runtime from a site setting backed by an environment variable:
 
 ```javascript
-const apiKey = Server.SiteSetting.Get("ExternalApi/ExchangeRateApiKey");
+const apiKey = Server.Sitesetting.Get("ExternalApi/ExchangeRateApiKey");
 ```
 
 Use the site setting name planned in Phase 2.3. The actual environment variable and site setting YAML will be created in Phase 7.
@@ -367,4 +384,6 @@ Before saving, verify the code against these constraints:
 | No external dependencies | No `import`, `require`, `module.exports` |
 | No browser APIs | No `fetch`, `XMLHttpRequest`, `setTimeout`, `console.log`, `document`, `window` |
 | Async only when needed | Only functions using `await` are marked `async` |
+| Runtime patterns | Apply the raw-source checks in "Prohibited Script Patterns" |
+| Dataverse results | Apply the parsing and status checks in "Dataverse Response Shape" |
 | ECMAScript 2023 compliant | Standard JS features only (optional chaining, nullish coalescing, etc. are fine) |

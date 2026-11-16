@@ -5,6 +5,13 @@ const path = require('node:path');
 
 const SKILL_DIR = path.join(__dirname, '..', '..', 'skills', 'add-server-logic');
 const SKILL_PATH = path.join(SKILL_DIR, 'SKILL.md');
+const SITE_INTEGRITY_PATH = path.resolve(
+  SKILL_DIR,
+  '..',
+  '..',
+  'references',
+  'site-modification-integrity.md'
+);
 const REFERENCE_NAMES = [
   'server-logic-docs.md',
   'server-logic-plan-data-format.md',
@@ -18,6 +25,7 @@ const skill = fs.readFileSync(SKILL_PATH, 'utf8');
 const references = REFERENCE_NAMES.map((name) =>
   fs.readFileSync(path.join(SKILL_DIR, 'references', name), 'utf8')
 );
+const siteIntegrity = fs.readFileSync(SITE_INTEGRITY_PATH, 'utf8');
 const fullSkill = [skill, ...references].join('\n');
 
 test('main skill stays concise and does not bind to one agent runtime', () => {
@@ -33,6 +41,11 @@ test('every progressively loaded reference exists', () => {
     assert.ok(fs.existsSync(path.join(SKILL_DIR, 'references', reference)), reference);
     assert.ok(skill.includes(`references/${reference}`), `${reference} must be reachable`);
   }
+  assert.ok(skill.includes('${PLUGIN_ROOT}/references/site-modification-integrity.md'));
+  assert.ok(fs.existsSync(SITE_INTEGRITY_PATH), 'site-modification-integrity.md');
+  assert.match(siteIntegrity, /configured locale resource/i);
+  assert.match(siteIntegrity, /bidirectional/i);
+  assert.match(siteIntegrity, /expansion/i);
 });
 
 test('all approval gates and data-gathering prompts remain discoverable', () => {
@@ -75,8 +88,8 @@ test('all approval gates and data-gathering prompts remain discoverable', () => 
 
 test('approval and secret-handling safeguards remain explicit', () => {
   assert.match(skill, /get approval before writing server logic or creating environment variables/i);
+  assert.match(skill, /\*\*Initial request:\*\* \$ARGUMENTS/);
   assert.match(skill, /Put every endpoint in `SERVER_LOGICS_DATA`/);
-  assert.match(skill, /displayed endpoint count matches `SERVER_LOGICS_DATA`/);
   assert.match(skill, /Never ask the user to share secret values in chat/);
   assert.match(
     fullSkill,
@@ -84,7 +97,7 @@ test('approval and secret-handling safeguards remain explicit', () => {
   );
   assert.match(skill, /Use the available deployment capability only after yes/);
   assert.match(skill, /ask whether to run the live endpoint testing workflow/);
-  assert.doesNotMatch(fullSkill, /\/(?:deploy-site|test-site|activate-site)/);
+  assert.doesNotMatch(fullSkill, /\/(?:create-site|deploy-site|test-site|activate-site)(?![\w-])/);
   assert.doesNotMatch(fullSkill, /deterministic (?:writer|scripts)/);
   assert.match(
     fs.readFileSync(
@@ -93,78 +106,75 @@ test('approval and secret-handling safeguards remain explicit', () => {
     ),
     /wait for approval before creating any files/i
   );
-  assert.match(
-    fs.readFileSync(
-      path.join(SKILL_DIR, 'references', 'server-logic-plan-data-format.md'),
-      'utf8'
-    ),
-    /Never ask for approval on an incomplete plan/
-  );
+  assert.match(skill, /Before changing SPA UI, read.*site-modification-integrity\.md/);
 });
 
-test('CSRF handling follows current server logic requirements', () => {
+test('CSRF guidance preserves the baseline non-GET requirement', () => {
   const frontendReference = fs.readFileSync(
     path.join(SKILL_DIR, 'references', 'frontend-integration-reference.md'),
     'utf8'
   );
-  assert.match(skill, /Every server logic API request, including GET, requires a CSRF token/);
-  assert.match(frontendReference, /Every request to a server logic endpoint, including GET/);
-  assert.doesNotMatch(frontendReference, /method !== 'GET'/);
+  const troubleshooting = fs.readFileSync(
+    path.join(SKILL_DIR, 'references', 'server-logic-troubleshooting.md'),
+    'utf8'
+  );
+  assert.match(skill, /POST, PUT, PATCH, and DELETE requests require a CSRF token/);
+  assert.match(skill, /GET requests are exempt from antiforgery validation/);
+  assert.match(frontendReference, /CSRF token is required for non-GET requests only/);
+  assert.match(frontendReference, /if \(method !== 'GET'\)/);
+  assert.match(troubleshooting, /GET requests are exempt from antiforgery validation/);
+  assert.doesNotMatch(troubleshooting, /Failed to get CSRF token/);
 });
 
-test('implementation guidance validates inputs and upstream responses before success', () => {
+test('upstream runtime and Dataverse guidance remains reachable', () => {
   const implementation = fs.readFileSync(
     path.join(SKILL_DIR, 'references', 'server-logic-implementation.md'),
     'utf8'
   );
-  assert.match(implementation, /Validate every required query\/body value before coercing/i);
-  assert.match(implementation, /reject blank values as missing before numeric conversion/i);
-  assert.match(implementation, /Treat non-2xx responses as failures/i);
-  assert.match(implementation, /Define each endpoint's success and error JSON shapes/i);
-  assert.match(implementation, /preserve the planned success fields/i);
-  assert.match(implementation, /Tie each success value to the data source in the approved plan/i);
-  assert.match(implementation, /Do not replace requested live or configured data with a placeholder or demo value/i);
-  assert.match(implementation, /status:\s*"success"/);
-  assert.match(implementation, /status:\s*"error"/);
-  assert.match(skill, /success\/error response shapes with their property names and types/);
-  assert.match(skill, /approved response contract/);
-  assert.match(
-    fs.readFileSync(
-      path.join(SKILL_DIR, 'references', 'server-logic-plan-data-format.md'),
-      'utf8'
-    ),
-    /success and error response shapes, property names, and value types/
-  );
-});
-
-test('frontend envelope guidance supports documented and lowercase field names', () => {
   const frontendReference = fs.readFileSync(
     path.join(SKILL_DIR, 'references', 'frontend-integration-reference.md'),
     'utf8'
   );
-  assert.match(frontendReference, /Success.*Data.*Error/s);
-  assert.match(frontendReference, /Success\s*\?\?\s*[^;\n]*success/);
-  assert.match(frontendReference, /Data\s*\?\?\s*[^;\n]*data/);
-  assert.match(frontendReference, /Error\s*\?\?\s*[^;\n]*error/);
+  const planReference = fs.readFileSync(
+    path.join(SKILL_DIR, 'references', 'server-logic-plan-data-format.md'),
+    'utf8'
+  );
+  assert.match(implementation, /Callbacks.*arrow functions/i);
+  assert.match(implementation, /with\\s\*\\\(/);
+  assert.match(implementation, /Function\\s\*\\\(/);
+  assert.match(implementation, /Anonymous callbacks.*\.map\(function/);
+  assert.match(implementation, /JSON\.parse\(Server\.Connector\.Dataverse\.RetrieveRecord/);
+  assert.match(implementation, /read query options without a leading/);
+  assert.match(frontendReference, /OData-EntityId/);
+  assert.match(frontendReference, /Pass read query options without a leading/);
+  assert.doesNotMatch(implementation, /Preserve input and response contracts/);
+  assert.doesNotMatch(implementation, /Validate every required query\/body value before coercing/i);
+  assert.doesNotMatch(skill, /success\/error response shapes with their property names and types/);
+  assert.doesNotMatch(planReference, /success and error response shapes, property names, and value types/);
+  assert.doesNotMatch(planReference, /Never ask for approval on an incomplete plan/);
+});
 
-  const normalizer = frontendReference.match(
-    /function readServerLogicData\(envelope: ServerLogicEnvelope\): string \{[\s\S]*?\n\}/
+test('frontend envelope guidance uses the documented lowercase response fields', () => {
+  const frontendReference = fs.readFileSync(
+    path.join(SKILL_DIR, 'references', 'frontend-integration-reference.md'),
+    'utf8'
   );
-  assert.ok(normalizer, 'envelope normalizer example must remain executable');
-  const readServerLogicData = new Function(
-    `${normalizer[0].replace(
-      'function readServerLogicData(envelope: ServerLogicEnvelope): string {',
-      'function readServerLogicData(envelope) {'
-    )}; return readServerLogicData;`
-  )();
-  assert.equal(readServerLogicData({ Success: true, Data: '{"ok":true}' }), '{"ok":true}');
-  assert.equal(readServerLogicData({ success: true, data: '{"ok":true}' }), '{"ok":true}');
-  assert.throws(
-    () => readServerLogicData({ Success: false, Error: 'denied', Data: null }),
-    /denied/
+  assert.match(frontendReference, /"success": true/);
+  assert.match(frontendReference, /"data":/);
+  assert.match(frontendReference, /"error": null/);
+  assert.match(frontendReference, /envelope\.success/);
+  assert.match(frontendReference, /envelope\.data/);
+  assert.match(frontendReference, /envelope\.error/);
+  assert.doesNotMatch(frontendReference, /readServerLogicData/);
+  assert.doesNotMatch(frontendReference, /Success\s*\?\?/);
+});
+
+test('upstream trace diagnostics distinguish inline logs from trace identifiers', () => {
+  const troubleshooting = fs.readFileSync(
+    path.join(SKILL_DIR, 'references', 'server-logic-troubleshooting.md'),
+    'utf8'
   );
-  assert.throws(
-    () => readServerLogicData({ Success: true, Data: null }),
-    /did not contain data/
-  );
+  assert.match(troubleshooting, /x-ms-user-trace` response header/);
+  assert.match(troubleshooting, /x-ms-user-trace-id/);
+  assert.match(troubleshooting, /do not decode the identifier as logs/);
 });

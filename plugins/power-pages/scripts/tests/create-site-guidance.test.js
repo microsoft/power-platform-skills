@@ -135,6 +135,19 @@ test('template mutations preserve consent, result collection, cleanup and join b
   assert.match(entry, /otherwise execute sequentially/);
 });
 
+test('template previews retain responsive, inherited and legacy variant behavior', () => {
+  const selection = read('references/template-selection-workflow.md');
+  const importing = read('references/template-import-workflow.md');
+  assert.match(selection, /prefer `responsivePreviews` when present, including an empty array/);
+  assert.match(selection, /If either download returns `ok: false`.*omit that page/);
+  assert.match(selection, /variant's own preview definition overrides the family's/);
+  assert.match(selection, /Inherit family previews only when the variant defines neither field/);
+  assert.match(importing, /--responsivePreviewsJson/);
+  assert.match(importing, /legacy `previewImages`.*--previewImagesJson/);
+  assert.match(importing, /selected variant's effective previews, including inherited family previews/);
+  assert.match(importing, /Structured previews use explicit page\/device fields regardless of filenames/);
+});
+
 test('non-SPA disclosure, single accepted operation and verified baseline precede completion', () => {
   const workflow = readCreateSiteGuidance('non-spa');
   assert.ok(workflow.indexOf('## Preview disclosure') < workflow.indexOf('## Progress tracking'));
@@ -159,8 +172,16 @@ test('localized plan example retains the complete renderer label contract', () =
   }
 });
 
+const validationCommand = /validate-site\.js" \\\r?\n\s+--expectedLocale "<SITE_LOCALE>" --expectedDirection "<SITE_DIRECTION>"/;
+
+test('completion validation command is recognized with LF and CRLF', () => {
+  for (const text of [entry.replace(/\r\n/g, '\n'), entry.replace(/\r?\n/g, '\r\n')]) {
+    assert.match(text, validationCommand);
+  }
+});
+
 test('completion remains explicit without depending on host lifecycle hooks', () => {
-  assert.match(entry, /validate-site\.js" \\\n\s+--expectedLocale "<SITE_LOCALE>" --expectedDirection "<SITE_DIRECTION>"/);
+  assert.match(entry, validationCommand);
   assert.match(read('references/review-workflow.md'), /validate-site-integrity\.js/);
   assert.match(read('references/verification-workflow.md'), /Chosen Google Fonts verified loaded by the font check/);
   assert.match(read('references/localization-workflow.md'), /\[FROM_CREATE_SITE\]/);

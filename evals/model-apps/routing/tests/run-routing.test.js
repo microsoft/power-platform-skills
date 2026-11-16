@@ -12,6 +12,7 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 
 const { parseArgs, runRouting, spawnTrial, DEFAULTS } = require('../run-routing.js');
+const { TRIAL_NOTE } = require('../lib/agents.js');
 
 const RUNNER = path.join(__dirname, '..', 'run-routing.js');
 const FAKE = path.join(__dirname, 'fake-agent.js');
@@ -151,6 +152,35 @@ test('CLI --dry-run prints the isolated invocation and launches nothing', () => 
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /# dry run — would launch \d+ case\(s\) × 3 trial\(s\)/);
   assert.match(r.stdout, /copilot .*--plugin-dir .*--available-tools skill view glob grep/);
+  assert.ok(r.stdout.includes(TRIAL_NOTE), 'the note every prompt follows is shown, so what the agent is sent can be reviewed');
+});
+
+// The note only works if the agent is actually sent it. This drives the real trial path (runRouting's default
+// trial function, the Copilot preflight, the transcript save) through an executable stand-in for the CLI, and
+// reads back what reached the agent's stdin: the fake echoes it as the transcript's user message.
+test('CLI trial: the agent receives the whole note, then the case prompt verbatim and last', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'routing-note-'));
+  try {
+    const shim = path.join(dir, process.platform === 'win32' ? 'agent.cmd' : 'agent.sh');
+    fs.writeFileSync(shim, process.platform === 'win32'
+      ? `@"${process.execPath}" "${FAKE}" %*\r\n`
+      : `#!/bin/sh\nexec "${process.execPath}" "${FAKE}" "$@"\n`, { mode: 0o755 });
+    const transcripts = path.join(dir, 'transcripts');
+    const evalCase = require('../evals.json').evals.find((c) => c.id === 28);
+    const r = spawnSync(process.execPath, [RUNNER, '--agent', 'copilot', '--agent-bin', shim, '--eval', String(evalCase.id), '--runs', '1', '--transcripts', transcripts], {
+      encoding: 'utf8', env: { ...process.env, FAKE_AGENT_MODE: 'copilot-answer' },
+    });
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    const file = path.join(transcripts, `${evalCase.id}-1.copilot.jsonl`);
+    const sent = fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)).find((e) => e.type === 'user.message').data.content;
+    assert.equal(sent, `${TRIAL_NOTE}\n\n${evalCase.prompt}`, 'the note, a blank line, then the user\'s words untouched');
+    assert.ok(sent.endsWith(evalCase.prompt), 'the case prompt is last');
+    // Both directions: a fitting skill is called, and with none the agent finishes in one sentence.
+    assert.match(sent, /If one of the available skills fits the request, call it\./);
+    assert.match(sent, /If none of them does, reply in one short sentence naming what the request needs, and stop: do not try to build it\./);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  }
 });
 
 // ---------- spawnTrial against a fake agent (real process plumbing) ----------

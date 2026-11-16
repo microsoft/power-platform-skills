@@ -181,7 +181,7 @@ After creating all environment variables and site settings:
 
 - Confirm each site setting YAML was created in `.powerpages-site/site-settings/`
 - Verify each YAML contains `envvar_schema` and `source: 1`
-- Confirm the server logic code references the correct site setting names via `Server.SiteSetting.Get("<SiteSetting/Name>")`
+- Confirm the server logic code references the correct site setting names via `Server.Sitesetting.Get("<SiteSetting/Name>")`
 
 ### 7.4 Git Commit
 

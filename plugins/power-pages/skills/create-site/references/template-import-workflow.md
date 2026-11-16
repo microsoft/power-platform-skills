@@ -14,15 +14,18 @@
         --templateName "<SELECTED_TEMPLATE.displayName>" \
         --templateDescription "<SELECTED_TEMPLATE.description>" \
         --statusPath "<temp-import-status-dir>/status.json" \
-        --previewImagesJson '<JSON array of SELECTED_TEMPLATE.previewImages localUrl values from the template browser step>' \
+        --responsivePreviewsJson '<JSON array of SELECTED_TEMPLATE_VARIANT.responsivePreviews with cached desktop/mobile localUrl values from the template browser step>' \
         --solutionCount "<TEMPLATE_SOLUTIONS_TO_IMPORT.length, or SELECTED_TEMPLATE_SOLUTIONS.length when imports are skipped>" \
         --outputPath "<temp-import-status-dir>/index.html"
       node "${PLUGIN_ROOT}/scripts/serve-static-dir.js" --root "<temp-import-status-dir>" --urlFile "<temp-import-status-dir>/url.txt" --cleanupRoot
       node "${PLUGIN_ROOT}/scripts/open-url.js" --url "<url from <temp-import-status-dir>/url.txt>"
       ```
+      When the selected variant has only legacy `previewImages`, replace `--responsivePreviewsJson` with `--previewImagesJson` and pass that variant's cached URL array.
+      Use the selected variant's effective previews, including inherited family previews resolved in the browser step.
       Reuse the already-downloaded local preview image URLs from the browser step; do not fetch preview images again for this page.
-      Name device-specific captures `desktop-<page>.<ext>` and `mobile-<page>.<ext>` so the status page can pair them.
-      Unprefixed images count as desktop previews, and the Mobile control appears only when a mobile-prefixed image is present.
+      Structured previews use explicit page/device fields regardless of filenames.
+      For legacy `previewImages` only, name device-specific captures `desktop-<page>.<ext>` and `mobile-<page>.<ext>` so the status page can pair them.
+      Unprefixed legacy images count as desktop previews; the Mobile control appears when the selected page has a mobile image.
       The server command returns only after the listener is ready. It removes the temporary status directory after a successful redirect, after the browser stops polling, or when the maximum lifetime expires.
    7. Unless `SKIP_TEMPLATE_SOLUTION_IMPORT = true`, mark **Import template supporting solutions** as `in_progress`. Process `TEMPLATE_SOLUTIONS_TO_IMPORT` sequentially in its existing case-insensitive lexical unique-name order. For each entry, set `CURRENT_TEMPLATE_SOLUTION` and prepare its unmanaged solution for import:
       ```bash

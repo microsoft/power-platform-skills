@@ -13,6 +13,8 @@ description: >-
 
 Create or update one or more Power Pages Server Logic endpoints. Start with the user's request and conversation, and work in the existing Power Pages project.
 
+**Initial request:** $ARGUMENTS
+
 Resolve `${PLUGIN_ROOT}` to this installed plugin's absolute path. Relative links below start in this skill directory. Read each linked reference only when its condition applies.
 
 ## Safety and execution rules
@@ -41,7 +43,7 @@ Resolve `${PLUGIN_ROOT}` to this installed plugin's absolute path. Relative link
 
 ## Phase 1: Verify the site
 
-1. Find `powerpages.config.json` in the current directory or an immediate subdirectory. If it is missing, tell the user to create a site first with `/create-site`.
+1. Find `powerpages.config.json` in the current directory or an immediate subdirectory. If it is missing, tell the user to create a site first using the available site-creation capability.
 2. Read the config for the site name and settings. Read `package.json` to identify React, Vue, Angular, or Astro and use `${PLUGIN_ROOT}/references/framework-conventions.md` only when framework details matter.
 3. Inspect the project for:
    - Existing `.powerpages-site/server-logic/` folders, their functions, SDK use, and metadata web roles.
@@ -64,7 +66,7 @@ Resolve `${PLUGIN_ROOT}` to this installed plugin's absolute path. Relative link
 
 ## Phase 2: Understand the request
 
-For each endpoint, record its purpose, suggested name, status (`create`, `update`, or `reuse`), HTTP methods, SDK features, required roles, Dataverse tables, secret/configuration needs, and the success/error response shapes with their property names and types.
+For each endpoint, record its purpose, suggested name, status (`create`, `update`, or `reuse`), HTTP methods, SDK features, required roles, Dataverse tables, and secret/configuration needs.
 
 - Prefer reuse when an existing endpoint fits the domain, security model, and lifecycle. Split endpoints when their responsibilities, roles, integrations, or lifecycle differ.
 - Decide whether each Dataverse write must validate and execute in one server-side operation. Use this for state transitions, tamper-proof business rules, multi-table operations, computed values, and protected fields. The client must not bypass validation with a separate write.
@@ -82,7 +84,7 @@ For each endpoint, record its purpose, suggested name, status (`create`, `update
 
   For each endpoint, ask which action it should wrap, if any. Record the action name, function/action type, binding, bound entity, and known request/response fields in the plan.
 
-- Identify required SDK features from the task. Possible features include `Server.Connector.HttpClient`, `Server.Connector.Dataverse`, `Server.Context`, `Server.User`, `Server.Logger`, `Server.SiteSetting`, `Server.EnvironmentVariable`, and `Server.Website`. Use each only when needed.
+- Identify required SDK features from the task. Possible features include `Server.Connector.HttpClient`, `Server.Connector.Dataverse`, `Server.Context`, `Server.User`, `Server.Logger`, `Server.Sitesetting`, `Server.EnvironmentVariable`, and `Server.Website`. Use each only when needed.
 - Identify every secret or sensitive configuration value, its purpose, site-setting name, and environment-variable schema. If secrets are needed, ask the user to choose Key Vault or a direct environment variable before planning:
 
   <!-- gate: add-server-logic:2.3.1.keyvault | category=plan | cancel-leaves=nothing -->
@@ -109,7 +111,7 @@ Read [Server Logic documentation discovery](references/server-logic-docs.md). Se
 
 ## Phase 4: Present and approve the plan
 
-1. Read [the plan data format](references/server-logic-plan-data-format.md) and prepare data for the renderer. Include each endpoint's status, URL, functions, roles and rationale, SDK features, external services, Dataverse tables, settings, secrets, response contract, and next steps. Put every endpoint in `SERVER_LOGICS_DATA`.
+1. Read [the plan data format](references/server-logic-plan-data-format.md) and prepare data for the renderer. Include each endpoint's status, URL, functions, roles and rationale, SDK features, external services, Dataverse tables, settings, secrets, and next steps. Put every endpoint in `SERVER_LOGICS_DATA`.
 2. Check whether `<PROJECT_ROOT>/docs/serverlogic-plan.html` already exists. Choose a new descriptive filename if it does.
 3. Render the HTML instead of hand-authoring it:
 
@@ -118,9 +120,8 @@ Read [Server Logic documentation discovery](references/server-logic-docs.md). Se
    ```
 
    Create `docs/` if needed. Remove the temporary JSON data file after rendering succeeds. Open the plan for review before asking for approval.
-4. Inspect the rendered plan before presenting it. Confirm the displayed endpoint count matches `SERVER_LOGICS_DATA`, and that every endpoint has the intended name, functions, role assignments, and status. If an endpoint is missing or the displayed count is zero, correct the source data and render a new file; do not ask for approval on an incomplete plan.
-5. In the conversation, report only the endpoint count, create/update/reuse mix, whether roles, permissions, settings, or secrets are involved, and the rendered plan path. Keep the HTML as the detailed plan.
-6. Ask whether the plan is correct:
+4. In the conversation, report only the endpoint count, create/update/reuse mix, whether roles, permissions, settings, or secrets are involved, and the rendered plan path. Keep the HTML as the detailed plan.
+5. Ask whether the plan is correct:
 
    <!-- gate: add-server-logic:4.4.plan-approval | category=plan | cancel-leaves=nothing -->
 
@@ -166,7 +167,7 @@ Commit approved site-setting files as a milestone. Report cloud-side environment
 
 ## Phase 8: Configure site settings
 
-Create only settings required by the approved plan. Defaults are `ServerLogic/Enabled=true`, `ServerLogic/AllowNetworkingToAllDomains=true`, and `ServerLogic/TimeoutInSeconds=120`. Add `ServerLogic/AllowedDomains` when the user wants to restrict external hosts; use `ServerLogic/AllowNetworkingToAllDomains=false` with it. Current [Microsoft Learn guidance](https://learn.microsoft.com/power-pages/configure/server-logic-overview#site-settings) allows a timeout up to 240 seconds; check it again before setting a nondefault value.
+Create only settings required by the approved plan. Defaults are `ServerLogic/Enabled=true`, `ServerLogic/AllowNetworkingToAllDomains=true`, and `ServerLogic/TimeoutInSeconds=120`. Add `ServerLogic/AllowedDomains` when the user wants to restrict external hosts; use `ServerLogic/AllowNetworkingToAllDomains=false` with it. The platform caps the timeout at 120 seconds; values above 120 are silently clamped. Only configure a lower timeout.
 
 Use the existing script for local setting files:
 
@@ -195,11 +196,13 @@ Offer **Yes, fully integrate into the UI** or **No, I'll handle the frontend mys
 On yes, read [the frontend integration reference](references/frontend-integration-reference.md) and:
 
 - Reuse the site's existing service layer and CSRF handling.
+- Before changing SPA UI, read `${PLUGIN_ROOT}/references/site-modification-integrity.md`; synchronize visible states across configured locale resources and keep the UI bidirectional and expansion-safe. Backend-only work needs no localization changes.
 - Connect the endpoint to the relevant UI flow, not only a new helper.
-- Replace placeholder data, mock handlers, or temporary actions when they are meant to be backed by an endpoint. Keep each success value tied to the approved data source; do not move placeholder or demo values into the endpoint as a substitute for the requested behavior.
+- Replace placeholder data, mock handlers, or temporary actions when they are meant to be backed by the new server logic endpoints.
 - Retain loading, success, empty, and error states.
 - For validate-and-execute operations, call the server endpoint for the protected write. Do not send a separate Web API update for the same field.
-- Match response parsing to the approved response contract and the documented envelope casing. If either is unknown, ask before using a live endpoint test to inspect it.
+- For Dataverse-backed endpoints, match frontend parsing to the response shape chosen in the implementation reference. See the frontend integration reference for the exact parsing per shape.
+- If the response shape is unclear, do not guess. After the site is deployed, use the available live endpoint testing capability to capture the response and guide the integration.
 
 Commit approved frontend changes as a milestone.
 
@@ -207,7 +210,11 @@ Commit approved frontend changes as a milestone.
 
 ## Phase 10: Validate and explain testing
 
-Re-read the final `.js` and `.serverlogic.yml` files. Confirm the methods, return strings, error handling, logging, SDK calls, metadata identity, and required roles. Run:
+Re-read the final `.js` and `.serverlogic.yml` files. Confirm the methods, return strings, error handling, logging, SDK calls, metadata identity, and required roles.
+
+### 10.1b Final site-integrity gate
+
+After server logic and any optional frontend integration are complete, run the shared validator. Fix every blocking error before reporting completion or asking to deploy. Inspect and report review findings in both directions and with expanded content. Backend-only work still runs this gate; it is a no-op for visible-source integrity when no SPA source changed. Rerun it after any later source change.
 
 ```bash
 node "${PLUGIN_ROOT}/scripts/validate-site-integrity.js" --projectRoot "<PROJECT_ROOT>"
@@ -216,7 +223,7 @@ node "${PLUGIN_ROOT}/scripts/validate-site-integrity.js" --projectRoot "<PROJECT
 Fix blocking errors and rerun after frontend changes. For each endpoint, provide `https://<site-url>/_api/serverlogics/<name>` and explain:
 
 - Deploy before calling the endpoint.
-- Every server logic API request, including GET, requires a CSRF token from `/_layout/tokenhtml` in the `__RequestVerificationToken` header, as documented in [Author server logic](https://learn.microsoft.com/power-pages/configure/author-server-logic#call-server-logic-from-client-script).
+- POST, PUT, PATCH, and DELETE requests require a CSRF token from `/_layout/tokenhtml` in the `__RequestVerificationToken` header. GET requests are exempt from antiforgery validation.
 - Authenticated calls use the site's session cookies. Anonymous access depends on site governance and endpoint roles.
 - Server.Logger diagnostics are available in Power Pages design studio.
 - For an error or unexpected response, follow [the troubleshooting reference](references/server-logic-troubleshooting.md).
@@ -247,7 +254,7 @@ Offer **Yes, deploy now** or **No, I'll deploy later**. Use the available deploy
 > **Why we ask:** Live validation is an additional operation.
 > **Cancel leaves:** The site remains deployed; no live test starts.
 
-Offer **Yes, run the live endpoint testing workflow** or **No, skip testing**. Afterward, remind the user about CSRF tokens for every API call, table permissions, the 120-second default and 240-second timeout limit, preview status, and any environment variables still set to placeholders.
+Offer **Yes, run the live endpoint testing workflow** or **No, skip testing**. Afterward, remind the user about CSRF tokens for non-GET API calls, table permissions, the 120-second timeout maximum, preview status, and any environment variables still set to placeholders.
 
 **Exit condition:** The user has a clear report and chose whether to deploy and test.
 

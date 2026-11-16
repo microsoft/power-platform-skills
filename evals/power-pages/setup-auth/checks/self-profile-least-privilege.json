@@ -1,0 +1,33 @@
+{
+  "files": [
+    {
+      "path": "docs/self-profile-least-privilege.html",
+      "type": "html",
+      "responsive": false,
+      "requiredText": [
+        "contact",
+        "Authenticated Users",
+        "emailaddress1",
+        "nickname",
+        "mobilephone"
+      ],
+      "requiredPatterns": [
+        "self",
+        "read",
+        "write",
+        "propos|offline"
+      ],
+      "minTextLength": 200,
+      "forbiddenPatterns": [
+        "\\{\\{[A-Z_][A-Z_0-9]*\\}\\}",
+        "__[A-Z][A-Z_]+__"
+      ]
+    }
+  ],
+  "unchanged": [
+    {
+      "path": "inputs/self-profile-least-privilege.json",
+      "source": "fixtures/self-profile-least-privilege.json"
+    }
+  ]
+}

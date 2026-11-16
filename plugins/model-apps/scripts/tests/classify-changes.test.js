@@ -225,3 +225,90 @@ test('equalExcept ignores the named keys, order-independent', () => {
   assert.ok(C.equalExcept({ a: 1, b: 2, __x: 9 }, { b: 2, a: 1, __x: 5 }, ['__x']));
   assert.ok(!C.equalExcept({ a: 1, __x: 9 }, { a: 2, __x: 9 }, ['__x']));
 });
+
+// #845: two declared views of one name on one table, each under its own key.
+const twins = (s) => { s.views = [{ key: 'v1', entity: 'new_x', name: 'Twin', reconcile: 'declared', columns: ['new_name'] }, { key: 'v2', entity: 'new_x', name: 'Twin', reconcile: 'declared', columns: ['new_name', 'createdon'] }]; return s; };
+
+test('#845: an edit of the EARLIER of two same-named views is seen — with a page edit it is never a pages-only change', () => {
+  const prior = twins(spec());
+  const cur = twins(spec());
+  cur.views[0].columns.push('createdon'); // an append to v1, the view the later namesake used to hide
+  cur.pages[0].__contentSha = 'psha2';
+  const r = C.classifyChanges(cur, prior);
+  assert.deepStrictEqual(r.fastChanges.map((c) => [c.shape, c.identity]), [['view', 'new_x|Twin (view key v1)'], ['page', 'overview']]);
+  // A non-append edit of v1 is a full build with debt named by its key.
+  const edited = twins(spec());
+  edited.views[0].columns = ['createdon'];
+  edited.pages[0].__contentSha = 'psha2';
+  const e = C.classifyChanges(edited, prior);
+  assert.strictEqual(e.verdict, 'full');
+  // The debt is owed under the view's name and key, not its label (a view may be named like a label; see below).
+  assert.deepStrictEqual(e.debt, [{ artifactType: 'view', identity: '["new_x|Twin","v1"]', reason: 'view-nonappend-edit' }]);
+  assert.match(e.fullReasons.join('\n'), /view 'new_x\|Twin \(view key v1\)' changed beyond a pure column-append/);
+});
+
+test('#845 controls: the later namesake edit, a pages-only change, a second key added and a key removed', () => {
+  const prior = twins(spec());
+  const later = twins(spec());
+  later.views[1].columns.push('modifiedon');
+  later.pages[0].__contentSha = 'psha2';
+  assert.deepStrictEqual(C.classifyChanges(later, prior).fastChanges.map((c) => [c.shape, c.identity]), [['view', 'new_x|Twin (view key v2)'], ['page', 'overview']]);
+  const pagesOnly = twins(spec());
+  pagesOnly.pages[0].__contentSha = 'psha2';
+  const p = C.classifyChanges(pagesOnly, prior);
+  assert.strictEqual(p.verdict, 'fast');
+  assert.deepStrictEqual(p.fastChanges.map((c) => c.shape), ['page']);
+  const one = spec();
+  one.views = [prior.views[0]];
+  const added = C.classifyChanges(prior, one);
+  assert.strictEqual(added.verdict, 'full');
+  assert.match(added.fullReasons[0], /1 new view\(s\) added/);
+  assert.deepStrictEqual(added.debt, []);
+  const removed = C.classifyChanges(one, prior);
+  assert.deepStrictEqual(removed.debt, [{ artifactType: 'view', identity: '["new_x|Twin","v2"]', reason: 'view-removed' }]);
+});
+
+test('#845: two changed views keep two debt entries when one is named like the label of the other\'s key', () => {
+  // 'Twin (view key v2)' is a legal view name of its own: a debt identity built from the label would make it and the keyed v2 one entry.
+  const views = (s) => { s.views = [...twins(s).views, { key: 'third', entity: 'new_x', name: 'Twin (view key v2)', reconcile: 'declared', columns: ['new_name'] }]; return s; };
+  const prior = views(spec());
+  const cur = views(spec());
+  cur.views[1].columns = ['createdon'];
+  cur.views[2].columns = ['createdon'];
+  cur.pages[0].__contentSha = 'psha2';
+  const r = C.classifyChanges(cur, prior);
+  assert.strictEqual(r.verdict, 'full');
+  assert.deepStrictEqual(r.debt, [
+    { artifactType: 'view', identity: '["new_x|Twin","v2"]', reason: 'view-nonappend-edit' },
+    { artifactType: 'view', identity: 'new_x|Twin (view key v2)', reason: 'view-nonappend-edit' },
+  ]);
+  // The messages still name each view as a person reads it.
+  assert.deepStrictEqual(r.fullReasons.filter((m) => /beyond a pure column-append/.test(m)).length, 2);
+});
+
+test('#845: same-named views without a key of their own each cannot be aligned — any change among them is a full build with debt', () => {
+  const legacy = (s) => { s.views = [{ entity: 'new_x', name: 'Twin', columns: ['new_name'] }, { entity: 'new_x', name: 'Twin', columns: ['new_name', 'createdon'] }]; return s; };
+  const prior = legacy(spec());
+  const cur = legacy(spec());
+  cur.views[0].columns.push('createdon');
+  cur.pages[0].__contentSha = 'psha2';
+  const r = C.classifyChanges(cur, prior);
+  assert.strictEqual(r.verdict, 'full');
+  assert.deepStrictEqual(r.debt, [{ artifactType: 'view', identity: 'new_x|Twin', reason: 'view-nonappend-edit' }]);
+  // Unchanged, they are left alone: a page edit beside them is still a pages-only change.
+  const still = legacy(spec());
+  still.pages[0].__contentSha = 'psha2';
+  assert.deepStrictEqual(C.classifyChanges(still, prior).fastChanges.map((c) => c.shape), ['page']);
+});
+
+test('a changed phase in which no change could be classified forces a full build, even beside a fast page edit', () => {
+  const prior = spec();
+  prior.views.push({ entity: 'new_x', name: 'Other', columns: ['new_name'] });
+  const cur = spec();
+  cur.views = [prior.views[1], prior.views[0]]; // the same views in another order: the slice differs, no view changed
+  cur.pages[0].__contentSha = 'psha2';
+  const r = C.classifyChanges(cur, prior);
+  assert.strictEqual(r.verdict, 'full');
+  assert.deepStrictEqual(r.fullReasons, ['views: changed, but no change in it could be classified — full build (fail-closed)']);
+  assert.deepStrictEqual(r.debt, []);
+});

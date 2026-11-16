@@ -55,14 +55,21 @@
 
 5. Render `TEMPLATE_PREVIEW_FAMILIES` for browser preview:
 
-   - Download each `previewImages` artifact into the SHA-keyed cache before rendering:
+   - For each SPA family and variant, prefer `responsivePreviews` when present, including an empty array.
+     Each page has `{ id, displayName, desktop, mobile }`.
+     Download both device artifacts into the SHA-keyed cache before rendering:
      ```bash
      node "${PLUGIN_ROOT}/scripts/fetch-template-artifact.js" --sha "<catalog-sha>" --artifactPath "<preview-image-path>"
      ```
-     Replace each preview image path with the returned `localUrl`. If a preview download returns `ok: false`, omit that one image from the gallery and continue; a missing preview should not block using an otherwise-valid template.
+     Replace each device path with the returned `localUrl`, preserving the page's `id` and `displayName`.
+     If either download returns `ok: false`, explain the unavailable preview and omit that page from the gallery; previews must not block an otherwise-valid template.
+     Use legacy `previewImages` only when `responsivePreviews` is absent, replacing each path with its downloaded `localUrl` and omitting failed images.
+     A variant's own preview definition overrides the family's, even if the variant uses legacy `previewImages`.
+     Inherit family previews only when the variant defines neither field.
+     Reuse cached downloads for inherited paths.
    - Write a temporary JSON file containing a `TEMPLATES_JSON` array with the templates the user
      should preview. Preserve `kind` so the HTML shows `SPA` or `Non-SPA` beside every template
-     name. Include SPA variants and cached `previewImages`; include non-SPA responsive `previews`
+     name. Include SPA variants with their effective cached `responsivePreviews` or legacy `previewImages`; include non-SPA responsive `previews`
      unchanged. Keep the browser read-only.
    - Run:
      ```bash
