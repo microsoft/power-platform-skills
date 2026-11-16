@@ -20,29 +20,16 @@ Before linking, check for multi-tenant Authority paths `/organizations/` or `/co
 Such configurations disable contact mapping: use `false`, explain why and recommend a specific single-tenant authority.
 Never equate a matching unverified email with proof of identity.
 
-In `keep-only` mode, preserve global and per-provider registration settings unless the user explicitly requests a registration-policy change.
-Missing local records mean unknown deployed values, not disabled registration.
-An explicit request to omit invitation UI or email linking does not approve disabling registration.
-If route planning depends on unknown registration settings, ask to verify their effective values before implementing those routes.
+For external-only sites, `REGISTRATION_MODE` is not collected.
+Use `OPEN_REGISTRATION_CHOICE` only when collected during IdP provisioning: write `OpenRegistrationEnabled` as `true` for Open or `false` for Controlled.
+Do not write `Enabled` or `InvitationEnabled` for external-only sites.
+If `OPEN_REGISTRATION_CHOICE` was not collected, skip these settings and let the server defaults apply.
+In particular, `keep-only` skips new-provider setup and collects no new registration choice.
+Do not infer a local registration mode or invitation routes from the external Open/Controlled choice.
+Controlled changes only the open-registration switch; it does not mean registration is disabled.
 
-When registration policy is in scope, confirm Open self-service versus Controlled pre-provisioned-only registration, including when reusing an existing app.
-Store `OPEN_REGISTRATION_CHOICE`; it must agree with the site audience and local registration mode when both exist.
-Local registration follows the four-mode matrix in the local branch, not the generic external default.
-If invitations are explicitly requested on an external-only site, collect invitation/open-registration settings and load the invitation branch.
-Resolve conflicting registration choices before final plan approval.
-For external-only sites, derive `REGISTRATION_MODE` from confirmed existing or explicitly approved global switches without asking local-account questions:
-
-| Open registration | Invitations | REGISTRATION_MODE | Registration Enabled |
-|---|---|---|---|
-| true | false | Open registration only | true |
-| false | true | Invitation-only | true |
-| true | true | Both | true |
-| false | false | Registration disabled | false |
-
-Controlled registration alone does not enable invitations; confirm them when requested or included in an accepted recommendation.
-Use the same mode for route creation and the global `Enabled`, `OpenRegistrationEnabled` and `InvitationEnabled` settings.
-This does not add a local provider or local registration form.
-Per-provider registration and contact-linking choices must remain consistent with this global policy.
+When local authentication is configured, collect `REGISTRATION_MODE` through the local branch.
+Use its four-mode matrix for global registration settings and registration/invitation pages.
 
 ## Create or reconcile settings
 
@@ -92,7 +79,7 @@ If an existing record is true, correct it; otherwise server redirects to reserve
 Set `Authentication/Registration/ExternalLoginEnabled=true` when external login is in scope.
 Do not blindly enable local login on an external-only site.
 For local registration, write the approved `Enabled`, `OpenRegistrationEnabled` and `InvitationEnabled` matrix.
-For external-only registration, honor `OPEN_REGISTRATION_CHOICE` rather than a local default; preserve unrelated existing switches.
+For external-only registration, apply only the `OPEN_REGISTRATION_CHOICE` rule above.
 Do not unconditionally write `Enabled=true` when registration is disabled.
 
 For each configured external provider, use `Authentication/{Type}/{ProviderName}/...`, where Type is `OpenIdConnect`, `SAML2`, `WsFederation` or `OpenAuth`.
@@ -100,7 +87,7 @@ For each configured external provider, use `Authentication/{Type}/{ProviderName}
 | Suffix | Value |
 |---|---|
 | `Caption` | Approved display name; local forms have no provider Caption |
-| `RegistrationEnabled` | Approved per-provider registration choice; normally true, false can block new sign-ups while preserving existing sign-in |
+| `RegistrationEnabled` | `true` for each selected external provider; retain an existing value on reruns |
 | `RegistrationClaimsMapping` | Mapping below unless None |
 | `LoginClaimsMapping` | Same mapping only for Both |
 | `AllowContactMappingWithEmail` | Approved verified-email linking choice after multi-tenant guard |

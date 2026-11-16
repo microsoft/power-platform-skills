@@ -79,11 +79,17 @@ test('provider discovery and merge modes remain mandatory', () => {
   assert.match(read('references/provider-entra-external-id.md'), /confirmed `REDIRECT_URI`/);
 });
 
-test('keep-only planning preserves registration policy outside the approved scope', () => {
+test('external-only registration follows the baseline choice without deriving local modes', () => {
   const settings = read('references/site-settings.md');
-  assert.match(settings, /`keep-only`.*preserve global and per-provider registration settings/);
-  assert.match(settings, /Missing local records mean unknown deployed values, not disabled registration/);
-  assert.match(settings, /An explicit request to omit invitation UI or email linking does not approve disabling registration/);
+  assert.match(settings, /external-only.*`REGISTRATION_MODE` is not collected/i);
+  assert.match(settings, /`OpenRegistrationEnabled`.*`true` for Open.*`false` for Controlled/);
+  assert.match(settings, /Do not write `Enabled` or `InvitationEnabled` for external-only sites/);
+  assert.match(settings, /If `OPEN_REGISTRATION_CHOICE` was not collected, skip these settings and let the server defaults apply/);
+  assert.match(settings, /`keep-only` skips new-provider setup.*no new registration choice/);
+  assert.doesNotMatch(settings, /derive `REGISTRATION_MODE`|Open registration \| Invitations|invitations are explicitly requested on an external-only site/);
+  assert.doesNotMatch(read('references/planning-workflow.md'), /derive registration mode for external-only sites/);
+  assert.match(read('references/auth-ui.md'), /Create registration-mode pages only when `REGISTRATION_MODE` was collected for local authentication/);
+  assert.doesNotMatch(read('references/verification-and-report.md'), /including external-only provider selection/);
 });
 
 test('local and optional branches retain server contracts without forcing local auth', () => {
@@ -119,7 +125,6 @@ test('profile, secret and explicit completion-validation contracts remain discov
 });
 
 test('conditional examples agree with registration, callback and secret contracts', () => {
-  assert.match(read('references/site-settings.md'), /derive `REGISTRATION_MODE`/);
   assert.match(read('references/external-confirmation.md'), /When terms are disabled, omit/);
   assert.match(read('references/discovery-workflow.md'), /MicrosoftAccount/);
   assert.match(read('references/local-auth-workflow.md'), /Skip the page and RegisterForm entirely/);

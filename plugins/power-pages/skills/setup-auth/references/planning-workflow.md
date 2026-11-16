@@ -70,7 +70,7 @@ If the user has NOT specified which provider(s) they want, ask the user to deter
 | Which identity provider(s) do you want to use? (select all that apply) | Entra External ID (Recommended) - Customer identity with self-service sign-up (CIAM), Microsoft Entra ID - Azure AD / Entra ID for internal/employee sites, OpenID Connect - Okta, Auth0, or any OIDC-compliant provider, SAML2 - SAML 2.0 identity provider (ADFS, Shibboleth, Login.gov, etc.), WS-Federation - WS-Federation identity provider, Microsoft Account - Sign in with Microsoft personal/work account, Facebook - Sign in with Facebook, Google - Sign in with Google |
 
 For each selected provider, use its entry-linked reference to collect mandatory values and share its official documentation.
-Use the entry-linked site-settings contract to derive registration mode for external-only sites.
+Use the entry-linked site-settings contract for external-only Open/Controlled settings; this does not select a local registration mode.
 The four local-account questions apply only when local authentication is explicitly in scope.
 
 **Login page layout** - when more than one auth provider is configured (including local + 1 external, or 2+ providers), the Login page renders all of them. Ask the user how they want providers laid out:

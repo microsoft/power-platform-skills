@@ -118,7 +118,8 @@ node "${PLUGIN_ROOT}/scripts/create-site-setting.js" \
 | Both | `true` | `true` | `true` |
 | Registration disabled | `false` | (skip - moot) | (skip - moot) |
 
-> **External-provider sites (no local auth):** when the user did NOT choose Local Authentication, `REGISTRATION_MODE` is not collected. Instead honor `OPEN_REGISTRATION_CHOICE` from Phase 2.1.2 (the Phase 2.1.2 open-registration question): write `Authentication/Registration/OpenRegistrationEnabled` = `true` for **Open - self-service**, `false` for **Controlled - pre-provisioned only**. Do not write `Enabled`/`InvitationEnabled` in this case (they govern the local registration pages, which an external-only site doesn't scaffold). If neither `REGISTRATION_MODE` nor `OPEN_REGISTRATION_CHOICE` was collected, skip these settings and let the server defaults apply.
+This matrix applies to local authentication only.
+External-only sites use the common settings contract linked from SKILL.md, without collecting `REGISTRATION_MODE`.
 
 > **Do NOT create the `Authentication/Registration/RequireInvitationCode` setting.** It does not exist on the server (the server never reads it). The invitation-only behavior is enforced entirely by `OpenRegistrationEnabled = false` + `InvitationEnabled = true`. Earlier versions of this skill wrote this setting - if you find it in the project's site settings (`.powerpages-site/site-settings/Authentication-Registration-RequireInvitationCode.sitesetting.yml`), **delete the file** as part of the setup.
 

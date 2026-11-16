@@ -53,6 +53,9 @@ When the `/login` page exists, the AuthButton's "Sign In" must navigate to `/log
 
 #### 5.1.2 Create Registration Page
 
+Create registration-mode pages only when `REGISTRATION_MODE` was collected for local authentication.
+External-only Open/Controlled settings do not select this branch or the invitation branch; the external-login confirmation page remains separate.
+
 **Always create the `/registration` page when `REGISTRATION_MODE` is not `Registration disabled`** - regardless of whether the mode is `Open registration only`, `Invitation-only`, or `Both`, and regardless of whether local or external providers (or both) are configured. The page mirrors the Login page layout when both local and external providers exist: external provider buttons in a horizontal row at the top, an "or sign up with email" divider, and the local registration form below (when local auth is configured). In invitation-only mode the page is reached via the `/redeem-invitation` flow (Phase 5.1.7) or via the server-bouncing flow (Code-Site-Shell-Header catches `/account/login/register`), not direct navigation - but the SPA route must still exist so React Router can render it.
 
 > **Important architectural note:** The server-side registration page (`/Account/Login/Register`) is an ASP.NET Web Forms page, NOT an MVC action. The local `register()` function in authService handles this by first fetching the server page (GET), parsing the ViewState and control names, then POSTing with the correct payload. This only applies when the user submits the local registration form - external provider buttons skip this entirely and go through `loginExternal()`.
