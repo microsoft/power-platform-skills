@@ -24,6 +24,7 @@ const { authorizeFlag } = require('./cli-failure.js');
 // lease's exclusive create-and-reclaim and reclaimed only from a build that is provably gone; and the build lease an apply holds outside it
 // (lib/app-operation-lease.js).
 const { acquireAppPagesLease, withAppBuildLease, applyWorkspaceOf } = require('./app-operation-lease.js');
+const { assertConfigurationCreatesClear } = require('./configuration-create-guard.js');
 const { unreadableAnswer } = require('./collection-answers.js');
 // normalizePageSource: read the page source from the discriminated `source` field (v2) or the
 // legacy top-level `codeFile` (pre-migration). PHASES: canonical ordered phase list — imported
@@ -209,6 +210,7 @@ const isDeclaredRuleOn = (r) => declaredFeatureOn('rules') && !!r && r.reconcile
 // reason the helper is required at first use.
 const isDeclaredBpfOn = (f) => declaredFeatureOn('bpf') && !!f && f.reconcile === 'declared';
 const { readSystemFormRootPresence } = require('./systemform-published.js');
+const { captionSharingNoteOf, attachFormCaptionSharing } = require('./form-caption-sharing.js');
 
 // Re-export from entity-provision so the export surface stays unchanged
 const BuildHalt = _BuildHalt;
@@ -3612,8 +3614,23 @@ async function runSdkBuild(spec, opts = {}) {
   const commandStateSpecError = commandStateSpecHalt(spec);
   if (commandStateSpecError) throw commandStateSpecError;
   if (!opts.apply) return runSdkBuildAttempt(spec, opts);
-  return withAppBuildLease({ workspaceDir: applyWorkspaceOf(opts), appUniqueName: appUniqueName(spec), buildLease: opts.buildLease, warn: opts.warn }, () => runSdkBuildAttempt(spec, opts));
+  return withAppBuildLease({ workspaceDir: applyWorkspaceOf(opts), appUniqueName: appUniqueName(spec), buildLease: opts.buildLease, warn: opts.warn }, () => {
+    // #807: the configuration create receipt guard at the engine's own entry, under the lease and before the attempt sends anything, so a
+    // direct caller (a test harness, the changed-only flow, another script) cannot pass an open unit, an unreadable receipt or an
+    // unacknowledged quarantine that the command would have stopped. Local only: a workspace with no receipt adds no request.
+    // A quarantine acknowledgment lets ONE attempt do configuration work; once spent it is dropped, so an automatic re-run asks again.
+    const ack = opts.configurationQuarantineAcknowledgment;
+    const attemptOpts = ack && typeof ack === 'object' && spentQuarantineAcknowledgments.has(ack) ? { ...opts, configurationQuarantineAcknowledgment: undefined } : opts;
+    const cleared = assertConfigurationCreatesClear(applyWorkspaceOf(opts), {
+      spec, env: opts.env, languageCode: opts.preResolvedLanguageCode, phases: opts.phases,
+      quarantineAcknowledgment: attemptOpts.configurationQuarantineAcknowledgment,
+    });
+    if (cleared.acknowledged) spentQuarantineAcknowledgments.add(ack);
+    return runSdkBuildAttempt(spec, attemptOpts);
+  });
 }
+// The quarantine acknowledgments an engine attempt has already used (see runSdkBuild). Held by identity, never serialized.
+const spentQuarantineAcknowledgments = new WeakSet();
 
 // One attempt; the phases run in runSdkBuildPhases. This wrapper only carries what an attempt
 // still owes out of a halt, for the caller that retries:
@@ -4126,7 +4143,12 @@ async function runSdkBuildPhases(spec, opts, owed) {
       : `${next}; it is not retried automatically.`;
     const err = new BuildHalt(`${label}: ${said.length ? said.join('; ') : stopCode} — this declared artifact did not settle, and nothing more was written for it. ${tail}`, { phase, code: stopCode, recoverable: false, retry: freshLag ? RETRY.SERVICE : RETRY.NEVER, cause });
     Object.defineProperty(err, 'findings', { value: findings, enumerable: false, configurable: true });
-    return err;
+    // A caption-sharing observation (lib/form-caption-sharing.js) rides on the stop's error, or an error it wraps, as a non-enumerable
+    // `formCaptionSharingNote`: display-only text that may quote maker names and captions. It is carried up onto this halt, the same
+    // way, and is NEVER part of its message: the message is what the build journal persists (build-log.jsonl, build-status.json) and
+    // what the approval discovery above reads, so the note can neither name an approval nor reach a file. The CLI prints it after the
+    // message (build-model-app.js haltDisplay). It is found by that property only, never by parsing a message.
+    return attachFormCaptionSharing(err, captionSharingNoteOf(cause));
   };
   // A stored dashboard group whose last change is saved and whose publish is owed (state 'owed', no dispatch token: definitely
   // not sent) is ordinary debt to the store (managed-bindings.js classifyPersisted: eligible), and holds nothing, because the

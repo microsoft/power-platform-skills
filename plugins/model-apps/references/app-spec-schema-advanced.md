@@ -742,10 +742,17 @@ spec's new columns.
   created and published like any other view. The stock `Active <plural>` and `Inactive <plural>` views
   exist on every table, new ones included, so declaring one of them is an adoption (see Approvals).
   `--verify` finds a declared view as the build does: by the row the workspace's managed bindings record
-  for its key, else by its `viewId`, else by its name on its table. So two declared views with one name on
-  one table, each with its own `key`, are each checked against their own row. With neither a binding nor a
-  `viewId`, the name cannot tell such a pair apart: both are checked as present, and their content is listed
-  as unverified.
+  for its key, else by its `viewId`, else by its name on its table. Two or more declared views with one
+  name on one table, each with its own `key`, each need a row of their own. Each binding, `viewId` and,
+  under `createIdentity: "stable-v1"`, the id the build creates an unbound, unpinned view at names one
+  row, checked by its id; two declarations that name the same row fail before anything is read, whatever
+  their names. The views no id identifies are proven only present: one read of the name has to answer a
+  distinct row for each, rows another declaration of any name owns left out, or the check fails. Each
+  such view passes with a `present only` note and its content is listed as unverified, because no read
+  can say which of the rows is which view. This proof covers views that share a name on their table; a
+  view whose name is unique there keeps its plain by-name read, so verify is not a distinct-row audit of
+  every declared view. Verify never adopts or pins a row: keep the workspace's
+  bindings, or set a `viewId`, to have the content checked.
 - **`charts[].reconcile: "declared"`** — the chart type, category, series and description follow the
   spec. `title` is written only to a chart whose stored layout already has a title; a new chart cannot
   store one, so a declared `title` on a new chart is refused (`chart-title-not-stored`).
@@ -840,6 +847,53 @@ stop can also name the cells and languages whose caption reads differently in th
 "Caption difference at cell <id> (language 1033)"), never the caption text. Start the comparison in Maker
 there. This does not show whether the difference is an unpublished edit or how the platform reads the layer,
 so the stop and its key stay the same. A form the build created and a dashboard get no such list.
+
+**Form cells that another form shares.** Two forms of one table can hold a cell with the same id. The
+measured case made such a pair by copying form XML with its cell ids kept; no particular Maker copy route
+was checked. When the build stops on a form's publication (a saved change it did not make, or a publish it
+could not confirm) and a cell caption of that form reads differently in its saved and published layers, the
+build reads the forms of that table (read-only, a bounded number of reads) and prints a note after the stop:
+each form that holds the same cell id, and the caption each shows saved and published. The note is printed
+only: it is not written to `build-log.jsonl` or `build-status.json`. The names and captions are quoted as
+read; they are observations, not proof of what caused the difference. If a form could not be read, the note
+says the scan was partial or could not be completed, and why, and which listings were read whole, in part or
+not at all; that is not evidence that no other form shares the cell. A partial scan is not an approval
+basis: stop rather than approving a change for only the forms it lists.
+
+At the drift stop, the note says that publishing or undoing the change, as the stop advises, may not be
+enough here. In a measured case, a change to the description COLUMN of one sharing form followed by a publish
+of that table put the existing saved cell label live on every sharing form. That column is not a cell caption
+(a cell's caption is the description ATTRIBUTE of its label in the form XML), the saved label may be another
+maker's, and a publish of the table also puts every other unpublished change of that table live. The build
+writes nothing to repair this, and the stop, its code and its key are unchanged. To recover:
+
+1. Stop retrying a bare publish of the table, the app or all customizations. Changing the caption in the spec
+   does not rewrite the caption of a sub-grid that already exists.
+2. Read both layers of every sharing form, by its id, cell and language, and get the full values where the
+   note cut them or could not read them. Check the other cells of the form you mean to change for sharing
+   too, and the table's other unpublished changes. The note does not show every form a change could reach.
+3. Choose the cell label that should go live with the owners of the forms. In the measured case the live
+   label became the existing SAVED cell label, which may be another form's maker's, not the old published
+   one and not the text written to the `description` column. If the saved label is not wanted, or the reads
+   disagree, change the label on purpose with its owner, under its own approval.
+4. Before any write, by an agent or an operator, get exact approval that names the form and the change, every
+   sharing form the change must cover, the cell, language and full caption that should go live on each, and
+   the one table, with the table's other pending changes accounted for separately. If the scan was partial
+   or the impact is uncertain, there is no basis for approval: stop rather than approving a change for only
+   the forms returned. An adopt or `publication-risk` approval does not grant it.
+5. The measured method was a substantive PATCH of the systemform `description` COLUMN on one sharing form,
+   then a publish of that table only. The approval therefore covers the column change itself, the
+   caption(s) that should go live, every sharing form and the table's other pending changes, not only the
+   new column text. Saving or patching the form unchanged was not shown to work, and the method was not
+   measured on a managed form the build adopted.
+6. After the approved change, read every affected form and control again, check the approved values in both
+   layers, and run the build again. A caption that now reads as intended does not settle a publish the build
+   still has outstanding: the build's own checks of the whole group decide that.
+
+If the answer to a PATCH or a publish is lost (a timeout, a dropped connection), never send it again
+automatically. A fresh read shows what is there now, not that a delayed request will never run; keep that
+uncertainty in what you report. A `publication-risk` approval for a dispatch the build could not confirm
+stays separate, and never approves a repair.
 
 **How a publish is confirmed.** After a declared form's table or a declared dashboard is published, the
 build reads the published layer and compares it with what it saved. The platform changes some captions by
@@ -1574,10 +1628,16 @@ the field builds exactly as before.
   error code, nothing was created. The item stops with `create-refused` and the code, the items after it still
   run, and nothing is left unfinished: correct the declaration or its deployment settings value and build
   again, or remove it from the App Spec. A refused edit of an existing row is different: it stays unfinished,
-  as above. A secret environment variable is created in two requests, its definition and then its value:
-  when the service refuses the value (for example a Key Vault reference it rejects), the definition already
-  exists, so the build stops with the outcome unknown and keeps the attempt; retire it as described next, then
-  delete that definition row before you declare the variable again.
+  as above. An environment variable with a value is created in two requests, its definition and then its
+  value. When the service refuses only the value (for example a Key Vault reference this environment
+  cannot read), the definition may already exist, so the attempt stays unfinished and the build stops with
+  `create-value-refused`, the service code and the exact retire approval. Correct the value in the
+  deployment settings, keep the App Spec definition unchanged, and build again: after fresh checks, the
+  build sends only the missing value, once, and never the definition again. A value refused again stops
+  the same way. If no recorded answer proves the attempt created the definition (for example its answer
+  was lost), the build first asks you to approve it with `adopt:environmentVariable:<key>`. A value whose
+  request may have reached the service is never sent again. To stop tracking the attempt instead, retire
+  it as described next, then delete that definition row before you declare the variable again.
   A create an earlier plugin version (2.26.0 or before) left unfinished after such a refusal is not
   released by corrected settings: that version did not record that nothing was created, so the build
   stops with `create-completion-required` and sends nothing. The stop prints the way out with the exact
@@ -1592,8 +1652,12 @@ the field builds exactly as before.
   a create that is missing a row, its solution membership or the rule's initial state stops with
   `create-completion-required` — complete it under the same ids, then build again (or let it go as
   described for a refused create above). An initial
-  publication that failed or whose answer was lost is never sent again by the build: publish the rule
-  under the same id yourself. The one exception is a rule whose content was saved, but whose publish
+  publication that failed or whose answer was lost is never sent again by the build. The stop names the
+  rule, its App Spec key and its original id: check that exact rule in the environment. If it reads
+  Publishing, wait and build again. Otherwise check its definition and conditions and, if they are what you
+  intend, publish it yourself in the environment's duplicate detection rules settings, then build again.
+  Setting `"status": "published"` in the App Spec does not bypass this pending attempt. The one exception
+  is a rule whose content was saved, but whose publish
   request the record proves was never sent (the run stopped first). The next build sends that publish
   once, then binds the rule. If the rule's conditions still need your approval, the build asks for it
   first. Rows that no answer proved this build's own are bound only after you check

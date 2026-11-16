@@ -54,6 +54,7 @@ able to tell what moved from the docs alone):
 | [`docs/architecture.md`](docs/architecture.md) | Wiring / flow **diagrams** for both skills (`/genpage` + `/app-builder`) | You change the orchestration, phase pipeline, or how the pieces connect |
 | [`docs/app-builder-capabilities.md`](docs/app-builder-capabilities.md) | `/app-builder` **capabilities** — what ships today, with the evidence for each | You ship an app-builder capability |
 | [`docs/app-builder-design.md`](docs/app-builder-design.md) | `/app-builder` **design record** — Part I staged-flow architecture (**cited from code by section number — never renumber**), Part II the `--changed-only` contract | You change the staged flow or the partial-apply contract |
+| [`docs/configuration-create-recovery.md`](docs/configuration-create-recovery.md) | The maker-facing guide to interrupted configuration creates: why a build stops, `configuration-recovery.js`, every `configuration-create-*` stop code and its way forward | You change the receipt guard, the recovery command or a stop code |
 | [`CHANGELOG.md`](CHANGELOG.md) | Keep-a-Changelog — at most 300 words per release entry and 45 per bullet, enforced by `scripts/tests/changelog-brevity.test.js`; the reasoning and evidence belong in the PR and `docs/` | Any user-visible change |
 | [`references/app-spec-schema.md`](references/app-spec-schema.md) | The App Spec contract (always-present fields) | You change the App Spec shape or validation |
 | [`references/app-spec-schema-advanced.md`](references/app-spec-schema-advanced.md) | The conditional App Spec fields (business rules, BPFs, commands, web resources, global choices, dashboards, roleGrants) — split out so the always-read contract stays small | You change one of those features |
@@ -629,6 +630,25 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   would be run three more times, after every earlier phase, with a log that blames the service. The halts that wrap a failure of the service (`pages-publish-failed`, `pages-existence-failed`, `pages-sitemap-read-failed`, `pages-shared-check-failed`, `pages-read-throttled`) follow it: a 429 or a 503 is run again, a refusal is not. A listing that fails *before*
   anything is written leaves nothing to duplicate, and is retried like any transient halt. A transient halt *later* in the same run (a 503 on a later read or write, say) still re-runs the whole build,
   which reads each page again — as each rebuild does — and a page that already holds its content is not written (and is published only if this workspace did not record that this very content was published), so its history does not record the prompt again.
+  **A web-resource publish refused because another customization holds the lock waits longer before the build's next run** (#848; `publishLockRefusalOf`, `lib/retry-policy.js`; `lockWaitMs`,
+  build-model-app.js). The lock is judged only when the answer is a 429, its `error.code` is one of `CUSTOMIZATION_LOCK_CODES` (each also in the transient codes; `0x80071154` is not one of them, its wait is
+  the ordinary one), the request was the SDK's `PublishXml`/`PublishAllXml` (`lib/sdk-http-client.js` keeps the answer's `Retry-After` on the error body: `HTTP_RETRY_AFTER`, a non-enumerable symbol,
+  uncapped, with the moment it was read), and the refusal is found under `WEB_RESOURCE_UNVERIFIED` with the row's id — a spec web resource, the generated app icon or the page manifest, written and not
+  confirmed. Only for that publish does the next run prove the target before it publishes it again, which is what makes a longer wait safe: an import that held the lock may have replaced the target's saved
+  layer while the build waited, and a publish with nothing in front of it would publish that instead. The guarantee is exactly this: **before a lock-refused web resource is published again, the next run has
+  either written it again by id, or read its published copy back after the wait and found it holding the content the build would write** — a mismatch is written again by id first. The spec's resources and
+  the icon are written again by id whatever was published (`writeOwnedWebResource`); the page manifest's published copy is read (its row must be the recorded id) and compared whole, and written again by id
+  only where it differs — where it already holds the content it is kept and not published again (`persistPageManifest`).
+  **A generative page's publish keeps the ordinary 3/6/12 s waits, as in 2.27.0** (the halt `pages-publish-failed`, whatever the answer's code or `Retry-After`): its next run reads the page by id and
+  compares the source, name, data sources, model and bindings (`lib/genpage-sdk.js`, `planEdits`), but not the compiled runtime the service publishes, so a longer wait would give an import more time to
+  replace a compiled row the next run would then publish unseen. Every other publish the lock refuses — a table's, a form's, a view's, a site map's, an app module's (the SDK's, or the plugin's own
+  `publishAppComponents`), the final `PublishAllXml` — keeps the ordinary waits too: its next run is not proven to write or read the target first, so a longer wait would only make a blind re-publish of it
+  likelier to land. A 500 or 503 with a lock code, a lock named only in words, a lock on another request and a service-protection 429 keep the ordinary schedule as well. The lock's wait before the next
+  run is about 30 s, 60 s and 90 s (plus jitter under a second), or the `Retry-After` when that is longer, and is spent from the run's throttle budget: a wait the budget has no room for is cut to what is left
+  (or the build stops with `throttle-budget-exhausted` when the service asked for more than is left). The number of runs does not change (the same `maxRetries`). The log names the refusal ("a publish was
+  refused because another customization is running"), and a build that stops on it says how many times the publish was refused and how long it waited, and to run the same command again once that
+  operation has finished. Pinned by `tests/web-resource-unconfirmed.test.js` (over the vendored SDK and the production HTTP client: a spec web resource and the page manifest) and, for the ordinary wait of
+  a page, `tests/lock-refused-page-publish-real-bundle.test.js` and `tests/build-model-app.test.js`.
   **All of the build's Dataverse access is via the SDK** (see "Dataverse Access From Scripts" for the
   sanctioned exceptions elsewhere), so metadata is persisted under
   `<app-folder>/.maker-workspace/` for reuse/edits. Environment variables and connection references are the
@@ -637,7 +657,8 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   (`lib/workspace-configuration-memory.js`, applied by `lib/maker-sdk.js` to every SDK it makes). Copies an earlier
   version wrote there are never deleted or hidden by the plugin: a pair the SDK's own metadata proves clean (the copy
   equals its last-synced `snapshot`) is left on disk and never used as configuration (it is read only to prove it clean); anything else (a draft, a lone file, a file that cannot be
-  read) is refused with `WORKSPACE_LEGACY_CONFIGURATION_COPY` at the SDK's first touch of that artifact, naming its two
+  read) is refused with `WORKSPACE_LEGACY_CONFIGURATION_COPY` at the SDK's first touch of that artifact (and, in the
+  app's durable workspace, by an apply before it makes the SDK at all), naming its two
   files and quoting none of their content, and checked again on the next touch; every SDK made over a folder that still
   holds such files warns once per process, naming the folders. The maker removes them by hand (app-builder skill,
   "Sensitive configuration in the workspace"). The 16 phases
@@ -2273,6 +2294,39 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   unusable makes the chart `unverified`. Two charts with the spec's name on its table are present, their content `unverified`. A
   row read without its content columns (the eval's synthesized reader answers so) is checked for presence, and its type, its data
   and a declared title are `unverified`, never passed; a declared description is still checked when the row carries one.
+  A **declared view** its managed binding or `viewId` names is read by that id alone, as a bound chart is. Two or more declared
+  views that share one name on one table under distinct keys (an authored `key`, or the implicit `<table>/<name>`) each need a row
+  of their own, and a read by the name answers one row for all of them, so they are proven as a group (`lib/view-assignment.js`).
+  Ownership comes first: every declaration's binding and pin, the manifest's view roots and, under `createIdentity: "stable-v1"`,
+  the id the build creates an unbound, unpinned view at (`creates-stable-build.js` `stableViewIdentityFor`) each claim one
+  `savedqueryid`, and two owners of one id, whatever their sources, fail the group (`identity conflict: savedquery <id> is claimed
+  by view keys …`) before anything is read. The claims are made once for the whole pass, across every group of every name, so two
+  groups that claim one id both fail, and a row another group owns (renamed, say) is never a spare row of this group's name. A
+  bound or pinned member is then read by its id; a stable id is read the same way and, when its row answers there, is that view's
+  row, held to its columns, filters and sort like a bound one; an empty, complete answer leaves the view to the rest, and any
+  other answer fails it. The rest are matched, from ONE paginated read of the name,
+  onto distinct rows nobody owns: too few rows fail the group, and content no one-to-one assignment can satisfy fails the
+  declarations that cannot all be served (named by key). A matching that exists is a witness, never an identity: it proves only
+  that distinct rows are available, so each such view passes with the note `present only: a distinct row is available, but view
+  key "<key>" is not attributed to a row` (printed after its ✓ line) and its content is `unverified`. A read that reports more
+  rows, or answers rows it cannot identify, may still show enough distinct rows, never that there are too few: with too few it
+  fails as not proven, and its unverified entries say the read was incomplete. A binding still unsettled, or a stable id that
+  cannot be computed, leaves the group's unattributed members `unverified`, with no read of the name. A nonconflicting, wholly
+  bound or pinned group (its ids distinct and claimed by no other declaration anywhere in the pass), a view whose name only it
+  uses, a legacy namesake and a spec that repeats a key send the same requests as before. The distinct-row proof covers eligible
+  same-name groups only: a unique-name view keeps its by-name read, so verify is not a distinctness audit of every declared view.
+  A sub-grid that embeds such a view is compared only with a row its declaration owns, else left out as `unverified`
+  (see **Verify and download** below). Verify never adopts or pins a row: keep the workspace's settled bindings, or correct a pin.
+  A **declared form** (`reconcile: "declared"`) is found, and its layout read, by the row its managed binding records
+  (`formIdentity`), as the build takes it — before any `formId` pin or name. The bound row is read by that id alone
+  (`readBoundFormId`) and must answer as that id, on the form's table and of its form type; its display name is not compared,
+  so a form a maker renamed is still the form, and a form of the same name made beside it is never read in its place. A bound
+  row that no longer answers fails the form (`form`); a read that fails or answers another row, table or type fails it with
+  that reason. A binding that is pending, unusable, in a store that cannot be read, or that records no id lists the form (and
+  its layout) as `unverified`, and nothing is read for it — a namesake cannot settle it; a `formId` pin that is not the bound
+  row fails the form. A form with no managed binding, or an undeclared one, is found by its pin, then its name, as before.
+  The same identity holds a page a declared form embeds (no `page` check while that form is not known; its navigation entry is
+  still checked, and an embed on another form still fails it). Validation refuses such a spec today; this only keeps one from passing on a namesake.
   A relationship is verified by its **identity**, not its name: the answer has to state its schema name, its
   type, both its tables and, for a 1:N, its lookup column — for an N:N, its intersect table and the column each
   table has in it — and all of them have to match (`compareRelationship`, `lib/relationship-metadata.js`; an N:N's
@@ -3084,22 +3138,84 @@ charts phases. A spec that uses none of them takes the legacy paths unchanged. W
   `readSystemFormLayers` (`lib/systemform-published.js`) also offers both form XMLs to `cellCaptionDifferences`,
   AFTER computing the two hashes and inside its own guard. A cell is compared only when its id, tab, section and
   direct controls match on both sides, and a language only when it has exactly one label on each side; anything
-  ambiguous or unread answers nothing. A usable answer (at most 8 cell/language pairs, copied field by field) is
+  ambiguous or unread answers nothing. Measured with languages 1033 and 3082 provisioned: the published form XML
+  that `GET systemforms` returns (also with an `Accept-Language: es-ES` header) holds only a cell's 1033 label,
+  although a solution export shows its published 3082 label too, so a caption difference in the second language was
+  not reported there. A usable answer (at most 8 cell/language pairs, copied field by field) is
   appended to the unconfirmed-publication stop (`publishManagedScope`, `confirmUncertainPublication`) as cell ids
   and language codes, never caption text. It is a diagnostic, not a proof: it changes no hash, no decision and no
   store record, and a helper that throws, is missing or answers anything else leaves the stop exactly as before.
   It cannot tell an unpublished edit from the platform's read projection (the saved layer has no version), so the
   stop still needs the printed `publication-risk` approval. Created forms and dashboards get no diagnostic.
+  **Shared form cells** (`lib/form-caption-sharing.js`, a supplement to that diagnostic, not a replacement): a cell
+  id can be held by more than one form of a table (measured with form XML copied with its cell ids kept; no Maker
+  copy route was checked). At the drift stop
+  and at the unconfirmed-publication stops (`publishManagedScope`, `confirmUncertainPublication`, and a later run's
+  owed or settle stop), once the stop is decided and its scope blocked, each stopped managed form on a TABLE scope
+  whose saved and published hashes differ is read afresh (it must still give the hashes the stop decided on:
+  `systemFormLayerSha256` of `savedCompared` and of the published row), and only when a cell caption differs between
+  its layers are the table's forms listed: `GET systemforms?$filter=objecttypecode eq '<table>'` and its
+  `RetrieveUnpublishedMultiple()`, `Prefer: odata.maxpagesize=100`, through the shared paged reader
+  `lib/systemform-inventory.js` (also behind `lib/page-reference-guard.js`), bounded in reads, forms and XML bytes.
+  ONE byte budget (8 MiB a document, 32 MiB in all) covers the fresh root reads and both listings. It is metered in
+  the reader only (`createXmlBudget`/`chargeXml`: `meteredClient` for the root reads, `readSystemFormLayer`'s
+  `xmlBudget` for every page, repeated rows included): each answer is charged once on arrival, before any check,
+  conflict record, fingerprint or parser sees it; an answer past it is refused whole and no later read is sent; the
+  diagnostic never measures XML. So a root past it is never parsed and opens no listing, and a form repeated on a
+  refused page (or whose copy is past the one-document budget) is never hashed or kept and, if it is the stopped
+  form, drops its explanation. The deletion guard passes no `xmlBudget`. The root's
+  listing row must fingerprint as its fresh read (`systemFormRootLayerSha256` of name, description, form XML, type
+  and table, both layers), else `observations-changed`; a root listing row with no fingerprint (its XML past the
+  one-document budget, or none) cannot be compared, so the root drops its explanation too. The paged reader's
+  optional `progress` channel keeps the
+  rows of the pages it accepted before a later failure (the deletion guard does not pass it, and keeps its
+  all-or-nothing refusal), so the scan is partial with `scan.coverage` per listing ('complete' | 'partial' |
+  'unread') and a form a partial listing does not hold reads as not read, never as not returned. Every form a
+  returned page repeats (of an earlier page or within itself) is left out of its layer with all its copies, and a
+  copy of the stopped form that does not fingerprint as its fresh read is `observations-changed` even on the page
+  that ended the listing. A returned row of a read form type with no text name or XML is an unreadable form
+  (`invalid-row`).
+  Form types 2, 6, 7 and 11 are read; dashboards are skipped; any other type, a failed or malformed page, a budget
+  or an unreadable sharer makes the scan PARTIAL or UNAVAILABLE with its reason, never a negative. A form is a sharer
+  only by the same normalized cell id (never a control, caption or GUID found elsewhere). The answer is display-only:
+  a non-enumerable `formCaptionSharingNote` on the stop, carried up onto the halt (`managedStop` in
+  `lib/sdk-build.js`) but never into any message, so the build journal (`build-log.jsonl`, `build-status.json`),
+  which persists the message, never holds it; the CLI prints it after the message (`haltDisplay` in
+  `build-model-app.js`, used by `main()`'s failure path); and one maker-text-free barrier label. Every name and caption in it is an
+  observation, JSON-quoted with control, separator and bidi characters escaped, cut at 256 code points with the cut
+  marked outside the quote; at most 8 entries of 20 forms and 32 KiB. Equal ETags do not tell the layers apart, so
+  the note never claims a cause. Its guidance: at the drift stop the generic publish-or-undo sentence is qualified
+  as not sufficient; in a measured control a substantive PATCH of the systemform description COLUMN on one sharing
+  form plus a publish of that table put the existing SAVED CELL LABEL live on every observed sharer, but that column
+  is not the cell caption (the label's description ATTRIBUTE is), the saved label may be another maker's, and a table
+  publish puts every other pending customization of the table live. There is no repair writer: any write needs exact
+  approval naming the form, every sharer, the cell, language and full caption and the one table, with the table's
+  other pending changes accounted for separately, and no adopt or `publication-risk` approval grants it; a partial
+  scan is not an approval basis (the note says so). The note also says never to repeat a PATCH or publish whose
+  answer was lost, that caption equality does not settle an outstanding publish, and to re-read every affected form
+  after any action, and points to the six-step recovery sequence in `references/app-spec-schema-advanced.md`
+  ("Form cells that another form shares"). It changes no decision, code, message, data, store record or approval,
+  and anything it throws adds nothing.
   **Verify and download** (`lib/declared-form-io.js`): verify reads each bound declared form fresh by its
   recorded id through the isolated reader (`readerFor(...).declaredForm`, never `readGroup`) and runs
   `verifyDeclaredForm` against the declaration and the store's recorded children (`managed-form` check);
-  a form whose publication is `dispatching` or `unconfirmed`, or a reader that cannot read by id, is listed
-  unverified, never passed. A sub-grid's view is resolved as the build resolves it (`resolveSubgridView`
-  mirrors `subgridViewId`: the named spec view, else the first spec view of the child table, else the default
+  a reader that cannot read by id is listed unverified and no check is made. A form whose publication is
+  `dispatching` or `unconfirmed` is still checked on its saved form, so its `managed-form` check may pass, and
+  its publication is listed unverified beside it: the saved body is proved, the published layer is not. A sub-grid's
+  view is resolved as the build resolves it (`resolveSubgridView` mirrors `subgridViewId`: the named spec view, else the first spec view of the child table, else the default
   public view) and matched exactly: a declared view the environment lacks fails, an ambiguous or unreadable
-  one leaves the host out as unverified, and the oracle has no wildcard. A quick view's target is looked up by
-  name (ambiguous → unverified). `download-model-app.js --include-managed --managed-manifest <store file>`
-  (both or neither) restores each proved form with `hydrateDeclaredForm`, validating incrementally; a
+  one leaves the host out as unverified, and the oracle has no wildcard. When the named view is a declared one (the
+  last declaration of that name on the child table, the one whose id the build embeds), it is the row its managed
+  binding or its `viewId` names (`viewIdentity`, `boundSubgridView`), read by id and never by name: a binding
+  that is unsettled or a pin that contradicts it leaves the host out as unverified, and a bound row that is gone
+  or is not a public view of the child table fails. A declared view that shares its name with other declared views is
+  identified as the top-level check proves it (the same-named group above): by its binding, pin or observed stable id, else
+  the host is left out as unverified — a row a distinct-row witness found is no declaration's own and is never compared. A quick view's target is looked up by
+  name (ambiguous → unverified), unless the spec declares that Quick View form with a managed binding: then it is
+  the bound row (`formIdentity`, `readBoundFormId`), never one of its name, and a binding that is unsettled,
+  pinned elsewhere, or a row that does not answer as it leaves that host out as unverified. A host left out is
+  not compared, so the `managed-form` check can still pass on the rest of the saved form beside that entry.
+  `download-model-app.js --include-managed --managed-manifest <store file>` (both or neither) restores each proved form with `hydrateDeclaredForm`, validating incrementally; a
   pending, unreadable or invalid one is left out and named. A form with `events` brings each handler library
   the spec does not declare (`librariesNotIn`), read by name through the download's SDK (`libraryEntry`, cached
   per run) and added as `{ name, displayName?, type: 'js', contentBase64, external: true }` together with the
@@ -3492,6 +3608,65 @@ retired, so they have no incarnation. Tests: `tests/managed-bindings.test.js` ("
 `tests/creates-composite-catalog.test.js` ("incarnations"), and "declared again after" / "after
 retirement" / "two retirements" in `tests/sdk-build-declared-{forms,dashboards,rules,bpf}.test.js`.
 
+**Configuration create receipts, the guard and recovery** (#807). A default build's configuration creates
+are recorded in `<workspace>/configuration-create-state.v1.json` (`lib/configuration-create-state.js`) before
+the first request. `lib/configuration-create-guard.js` is the one local, request-free check every entry point
+runs before configuration work: `build-model-app.js` `runBuildCommand` (under the build lease, before the
+shortcuts and before `makeSdk`; a dry run only warns and adds `configurationCreate` to its result),
+`sdk-build.js` (inside `withAppBuildLease`, so a direct engine caller is guarded too), `changed-only-flow.js`
+`runChangedOnlyApplyHeld` (first, before the snapshot is read, so no no-op or fast apply certifies a workspace
+with an open unit) and `teardown-model-app.js` (`assertTeardownClear`: any recovery evidence at all — an open
+or deferred unit, an unreadable receipt, a quarantine marker or archive — refuses with
+`configuration-create-workspace-in-use`, before the fence, in `beforeRename` and in `beforeRemove` against the
+isolated folder). A teardown apply now holds the app's build lease too, so a concurrent build or teardown of
+the same app in the workspace gets `build-locked`. It keeps that lease through `--clear-workspace` (main()
+passes the clear to `teardownModelApp` as `deps.underLease`, which runs it after the fenced teardown and before
+the lease is let go), so no build can start in the workspace between the deletes and the clear and then have its
+folder moved and deleted under it. A workspace folder the teardown made itself is still removed only after the
+lease is let go (the lock lives in it), and the clear then reports nothing to clear, as before. The legacy original/snapshot pair check of
+`workspace-configuration-memory.js` is exported (`checkLegacyConfigurationPair`, with
+`legacyConfigurationArtifacts` listing every pair on disk) so `configuration-recovery.js` refuses a dirty
+legacy copy in the real workspace with the existing `WORKSPACE_LEGACY_CONFIGURATION_COPY` before it changes a
+receipt. The build command (`build-model-app.js` runBuildCommand) runs the same check over every pair in the
+app's durable workspace under its lease, before it makes the SDK: its configuration step works in the
+solution-scoped SDK's throwaway workspace, so the in-memory wrapper alone never meets a draft left there. A dirty,
+malformed or orphaned pair stops an apply with `WORKSPACE_LEGACY_CONFIGURATION_COPY` before any write (the preceding
+Dataverse requests are the sign-in check and either the organization language read or, for a valid CLI or App Spec
+language override, the provisioned-languages read; a dry run warns); a clean pair changes nothing.
+Recovery also compares a Custom API's or duplicate rule's workspace copy with its snapshot (the SDK's `diffArtifact`,
+over a storage that refuses writes and a client that refuses requests) in `prepare` and `resolve`, and an unsent
+edit stops both with `create-completion-required`, the code the build's `refuseLocalDraft` uses.
+`createDeclarationsOf` (`lib/configuration-create-guard.js`), the declaration list of the recovery command and of every
+entry guard, also lists each page the build writes (`pagesStatingBindings`) as a `page` declaration that depends on the
+Custom APIs its `actionBindings` name and the connection references its `connectorBindings` name, so a deferral is
+refused while a page still calls the root and a build stops on a page that calls a deferred root. An action binding named
+exactly as a built-in Dataverse operation (`isBuiltInOperation`) depends on nothing.
+The receipt, its quarantine markers and archives are owned by the plugin: while a build or recovery runs, no
+other process may change, rename, create, sync or restore files in that workspace folder. The plugin's own
+entries coordinate through the app build lease and the receipt's record lease (`lib/record-lease.js`); an
+outside change during a run is not protected against, and the documented remedy is to stop, preserve the
+workspace as it is and run `inspect`.
+
+The halts are `retry: "never"` and must never be read as "run it again": an agent relays the stop and runs
+the GET-only `configuration-recovery.js inspect`, never a rebuild, a workspace delete or a row recreate.
+`configuration-recovery.js` (`inspect` · `prepare` · `resolve`) wraps `lib/configuration-create-recovery.js`
+over a read-only Dataverse client (`readonly-operations.js`); it never creates, updates, deletes, adds
+membership or publishes, and its completed resolution exits 1 with `configuration-create-reconciled` (never a
+build success). `--env` is required to prepare or resolve a unit, and a receipt of another context is refused
+before any read. `prepare` and `resolve` hold the app build lease (a held lease is
+`configuration-create-state-busy`, its reason naming the lock file); `inspect` only reads and takes none.
+`accept-current` compiles today's intent of a data-source variable under its recorded parent definition id
+only after `verifiedParentOf` reads that parent by id and finds the schema name the App Spec names as its
+parent now; a parent that is gone or is not the one named is `configuration-create-intent-changed`, and one
+that cannot be read is `configuration-create-graph-unreadable`.
+The build's `--acknowledge-quarantined-configuration <id>[,<id>...]` is invocation-only:
+validated against the workspace's quarantines (`validateQuarantineAcknowledgment`), handed to the first
+attempt only and spent by the engine (a WeakSet), never persisted and never accepted by teardown. Maker guide
+and stop-code table: [`docs/configuration-create-recovery.md`](docs/configuration-create-recovery.md). Tests:
+`tests/configuration-create-entry-guards.test.js` (each entry point, its shortcuts included),
+`tests/configuration-create-guard.test.js`, `tests/configuration-recovery-cli.test.js`,
+`tests/teardown-model-app.test.js` ("teardown CLI ... receipt", "... holds its lease").
+
 **Protected configuration** (`configurationIdentity: "stable-v1"`, `minimumPluginVersion: "2.23.0"`, a lint
 warning below it). Declared environment variables, connection references, Custom APIs (with their children)
 and duplicate rules (with their conditions) get exact ids (`lib/configuration-create-bindings.js` plans,
@@ -3567,7 +3742,22 @@ The one exception (`unsentPublication`, `publishOnce`): a saved rule create (`ac
 unpublished whose `rule-state` effect is still `dispatched: false`, and which would commit (or need only
 ownership approvals, named first) if that publish had landed, sends `PublishDuplicateRule` once under a new
 epoch (`store.claimUnsentRowEffect`, through `ctx.claimEffect`), sealed dispatched before it leaves, then
-reads the rule a bounded number of times and settles. A pending EDIT is decided by
+reads the rule a bounded number of times and settles. The other exception is a variable value its record proves
+never dispatched (`valueOwed`, below). When a protected rule create's first publication may
+have left but is not confirmed (its `rule-state` effect dispatched, the create neither committed nor an edit
+nor an adoption, read with a root and a stop of `create-completion-required` or `create-identity-unverified`),
+the stop also names the rule, its App Spec key and its original id, and says to wait and rebuild if the rule reads
+Publishing, otherwise to check it and publish it in the environment's duplicate detection rules settings, then
+rebuild; `status: "published"` does not bypass the pending attempt. This is wording only: no extra read, send,
+store field or code. The protected module notes the stop it settled (`noteStop`, keyed by the hookup's own
+preflight result or port and the attempt's token, root and declaration digest) and `publicationHint` answers only
+for that note, re-checked against the binding store; the build asks it only for its own port, so a replaced or
+wrapped port, another hookup or a raw helper keeps today's text. Which port and methods ran is fixed when they are
+replaced, never inferred from what is in place once the step ends: `ctx.creates` and each port method are
+non-configurable accessors that read and write as plain properties but remember the first write of anything else,
+and the build checks its port and methods both before the step and after it, so a stand-in that puts the original
+back before calling it, then throws a stop of its own, still keeps today's text. `configurationHaltMessage` takes the advice as
+an optional callback and appends it to the item in parentheses. A pending EDIT is decided by
 the rows its attempt persisted (`settlePendingEdit`, answering `settled`, `retired` or `needs-write`): complete
 -> committed read-only; already at its target -> accepted read-only only when that acceptance commits (its
 verdict is judged in the preflight by `judgeReadOnly` and again by `resolve`, so an ownership approval it needs
@@ -3590,8 +3780,24 @@ owed recovery) is un-sealed by the transport while its scope is open (`managed-c
 `ctx.release` succeeds and the item stops as `create-refused` (`refusedStop`, `nothingCreated`, the service
 code), routed to the refused bucket so later items still run: nothing is pending, and the next build creates it
 again from what the App Spec then declares (a secret variable's value from the settings), or drops it. Measured live, a
-secret variable's protected create is two sends (the definition, then its value): a refused value therefore keeps the
-attempt (`create-outcome-unknown`, the definition row left), and the maker retires it as the reference describes. Environment variable and connection reference updates (definition, first
+variable's protected create with a value is two sends (the definition, then its value outside the solution): a refused
+value therefore keeps the attempt. Whenever such an unchecked run saw its own definition acknowledged with no
+conflicting fact and no local failure (`ctx.hasPartialRoot`: the candidate `run` kept in memory — a later process never
+receipts a root from a matching GET), the port reads the definition afresh (`rootReadOf`): an exact read is receipted
+(`ctx.receiptPartialVariableRoot`) whatever became of the value, whose possibly-sent mark is never touched, so a lost
+value answer later needs only the value's own approval; a positive contradiction (another id, a parent, other public
+content or child rows) stops `create-identity-conflict`; an absent or unreadable read proves nothing. A value the
+service refused unstarted then stops `create-value-refused` (`valueRefusedStop`: the service code and the attempt's own
+token, routed as unknown; `valueRefusedHint` spells the exact retire approval). The value is the one row a later build
+may still send (`valueOwed`, `completeValueOnce`): its
+record proves it never dispatched (no sealed fields, no child receipt), the attempt's own rows still hash to its
+declaration, the settings supply a non-empty value, a fresh read shows the definition exactly as prepared with the
+value and membership as recorded, and the definition is the attempt's own (`acknowledgedRoot`) or approved by its root
+`adopt:environmentVariable:<key>` token. It is claimed under a new epoch (`store.claimUnsentValueRow`, through
+`ctx.claimValue`: the capture re-checked under the lease, one claim per attempt per process), read and judged again,
+then sent once by `B.postPlannedVariableValue` through the fenced transport, which seals it dispatched first. A value
+refused again stops the same way; any other unchecked answer is `create-outcome-unknown` and never sent again; an
+acknowledged value settles the attempt. Environment variable and connection reference updates (definition, first
 value, own value replacement) go through the protected port as one checked set over the item's plan; a value
 row the binding does not hold is `create-identity-conflict`. Before any service change, every build runs the
 store-driven `pendingSweep` (the hookup's `sweep`, run by `configuration-build.js` `sweepPendingConfiguration`
@@ -4025,9 +4231,10 @@ scripts/
   provision-solution.js        ← Creates a Dataverse solution via the SDK
   write-page-plan.js           ← app-builder Phase 1.5: projects an App Spec into the genpage-plan.md read by page-builder workers
   promote-intent-pages.js      ← app-builder Phase 1.5: validates every generated page, then atomically flips source: intent → tsx
-  build-model-app.js           ← app-builder: narrated, idempotent SDK build (dry-run default; --stage data|ui|app|publish; --changed-only; --language-code; --preview-push on a dry run; --deployment-settings <file> for the declared configuration items)
+  build-model-app.js           ← app-builder: narrated, idempotent SDK build (dry-run default; --stage data|ui|app|publish; --changed-only; --language-code; --preview-push on a dry run; --deployment-settings <file> for the declared configuration items; --acknowledge-quarantined-configuration <id>[,<id>...], invocation-only)
   download-model-app.js        ← app-builder: pull a deployed app into an editable spec (edit flow; takes the build's --language-code: the language the navigation titles are read in, when the spec on disk pins none and the base language cannot be read)
-  teardown-model-app.js        ← app-builder: classifier-safe reverse-of-build teardown
+  teardown-model-app.js        ← app-builder: classifier-safe reverse-of-build teardown (an apply holds the app's build lease and refuses a workspace holding configuration create evidence)
+  configuration-recovery.js    ← app-builder: GET-only recovery of interrupted default configuration creates (inspect · prepare · resolve accept-current|defer|cancel-unsent|quarantine-unreadable); changes only the local receipt
   verify-model-app.js          ← app-builder: reconcile the spec against the deployed app (takes the build's --language-code: the language its form labels were written in; its result JSON is pure ASCII and lists every `WARNING:` line it printed in an optional `warnings` array; `--inspect-components` adds the command-control inspection, `components` in the result)
   data-fix.js                  ← plan/apply/resume/revert a reviewed repair of values in existing rows; shares the app build's lock (`--app`); non-zero unless every change was made
   solutions.js                 ← `inspect`: what the SDK can read of one solution, by kind, with what it skipped or could not read (read-only)
@@ -4042,6 +4249,7 @@ scripts/
   genpage-upload.js            ← /genpage: deploy one page through the page backend (prompt passed BY FILE, never composed into a command; a create needs no app — `--app-id` is optional for a create only: a page needs no app, so a create without it is added to no app and makes no app-scoped check; `--add-to-sitemap` and an update still need `--app-id`, and an update must prove the page is in that app's navigation; an update keeps the page's name, model, data sources and bindings unless given; a named app also gets the default views of the tables the page reads pinned into its components; `--add-to-sitemap` titles the page's entry in the environment's base language, which it reads with the backend's `baseLanguage()` before the placement — as `genpage.js add-to-app` does, and so when a later run completes the placement — and a language that cannot be read fails the placement before the app is touched — the page is written and published, the marker says the placement is unfinished, and the report says only what is known: this run changed nothing in the app's navigation (and, when it completes a placement an earlier run began, did not look at what that run saved there, so it never says the page was "NOT added"), nothing guessed in its place (an upload that places no page writes no title and asks the environment nothing); refuses a create whose `makeStyles` writes a Griffel shorthand (`griffel-shorthand`, before anything is read) and an update that ADDS one the deployed page did not already have — one it already had goes ahead with a warning — and, for an update, no-base / deployed-changed / deployed-unreadable unless --overwrite-deployed; the page's text is made from the file's bytes ONCE and that text is what is checked, hashed and written; a failed write is reported with the page's `pageId`, the backend's `outcome` and the SDK's `code`, so a caller can tell "unknown" from "failed"; `--solution <unique name>` (AB#6443257) is the solution the page joins: read before anything is written (a solution that is not there or is managed, or a page table whose component type cannot be read, refuses the upload with nothing made; a system solution is not read), and the page added LAST, once written, published and placed (`solution`, `addedToSolution`, `systemSolution` in the result) — an add that fails is `ok: false` with `code: "solution-add-failed"` and the page's id, naming the `add-page-to-solution.js` command that adds it, never a second create; a create that did not finish joins the solution when the same command, run again with `--page-id`, finishes it; a write the service throttles is waited out (`lib/throttle-budget.js`), and a wait of more than a few seconds is announced on stderr as `WARNING: …`, never in the result; a page THIS script created and did not finish — its publish failed, or the `--add-to-sitemap` placement did — is finished by running the same command again with `--page-id` added: the base marker beside the code file says `unfinished` for exactly that page, and stands in for the navigation proof an update makes for that page alone; finishing a placement asks the backend to FINISH it — the app is published again even when its saved navigation already names the page, and the marker stays while the app's published navigation can be read and does not show the page (`GENPAGE_APP_PUBLISH_UNPROVEN`, saved: the app's publish is what is left), so a placement that was saved and never published is not reported done; a published navigation that cannot be read at all clears the marker with a warning, since the publish was accepted and keeping the marker would make every later update of the page need `--add-to-sitemap` and publish the app again for as long as that layer stays unreadable)
   genpage-base.js              ← /genpage: record or check the deployed-page base marker next to a page.tsx (#673); `record` needs no `--app-id` — a first page is created before the app that will hold it, and is recorded with the page alone
   genpage.js                   ← /genpage: the page verbs the skills ran through `pac model genpage`, through the page backend and the Azure CLI token — `list`, `download`, `types` (the type generator), `add-to-app`, `remove-from-app` and `delete` (see "The page verbs" under Key Concepts); one pure-ASCII JSON line and exit 0, or a refusal as `{ ok: false, error, code, … }` and exit 1; a mistake in the command line is a usage error: stderr only, stdout empty
+  genpage-shared-check.js      ← /genpage edit flow: before an edit is uploaded, the OTHER apps whose navigation shows the page (see "The shared-page check" under "The page verbs"); exit 0 (not shared, or every other app confirmed by `--confirmed-apps`), exit 2 (`GENPAGE_SHARED_PAGE_UNCONFIRMED`: the apps are named, ask), exit 1 (a failure of the scan, or a usage error)
   genpage-plan-provenance.js   ← /genpage: quarantine a stale plan before the planner writes, then verify the written plan targets the pages the approval named and, for an edit, carries the exact approved change list; for a create, also that its assumptions, data-semantics decisions and lookup records are the approved ones, field by field (`lib/genpage-plan-semantics.js`) — `--require-assumptions` (a newly authored plan carries them all), `--lookup-metadata <file>` (every observed lookup matches the saved metadata read; a planned one may then be promoted), `--require-observed-lookups` (none still planned before generation); an unknown flag is a usage error (exit 1)
   check-page-files.js          ← /genpage: pre-dispatch gate — the page file names of the plan's one ## Pages table are safe write targets (lib/page-file-targets.js)
   genpage-worker-output.js     ← /genpage: accept a parallel worker's page only if complete (default export, balanced, no elided code)
@@ -4146,6 +4354,7 @@ scripts/
     rename-retry.js            ← the one rename that outlasts a brief Windows file lock (EPERM, EACCES or EBUSY while a scanner or a second process holds the file): on win32 only, the same rename is repeated after growing pauses (25 ms doubling to 1 s), at most 5 s for one rename and 30 s for the whole process (the wait blocks the event loop, so it must stay well inside the teardown heartbeat and the transport's timeouts; once the 30 s are spent every later refused rename is ONE attempt), then the ORIGINAL error is thrown untouched, so every caller keeps its message and code; any other platform or code is one attempt. Used by `apply-snapshot-store.js` for files the plugin owns: those it serialises with a lease and compare-and-set (`writeFileAtomic` — which the managed binding store, the snapshot and the page, dashboard and web-resource records write through) and the distrust markers, which take no lease (they must be recordable while another writer holds it) but are each created under a name unique to the call; each site has a note why repeating is safe there; a target that an unleased writer can also write passes `{ retryLock: false }` and renames once (the deployed baseline, which the download writes without the build lease). Also used by the download's page-tree swap (`writePageTree`) for the move of its own new tree into `pages/` and the move of the previous tree back, both folders under a name only that run knows. NOT used by `safe-fs.js` (a maker's files and the diagnostic status file keep their own 25-400 ms waits), by the folder move-aside of `clearWorkspace` (one attempt: the approval was for the folder as it is now), by the page-tree swap's move of the maker's `pages/` aside (one attempt: a wait would let the checks made on it go stale) or by `temp-workspace.js` (its own shorter waits). A test that keeps a rename failing for good calls `tests/helpers/short-rename-wait.js`, which also restores the process total
     hydrate-spec.js            ← reconstruct an App Spec from a deployed app (edit flow)
     verify-spec.js             ← spec-vs-deployed reconciliation core (checks are ordered tasks on a pool of 4)
+    view-assignment.js         ← pure: which declared views share one table and name (`declaredViewGroups`), who owns which savedqueryid (`createOwnerLedger`: one owner per row, a conflict whatever the sources), which rows of a name a paginated read identified (`viewCandidates`, with why it is incomplete) and whether distinct rows can satisfy the declarations nobody owns (`matchDistinctRows`: a witness or a Hall-deficient set, never an assignment) — verify's proof for same-named declared views
     status-reasons-keys.js     ← a table's status reasons (with their states) and alternate keys (with their columns), one narrow read each (`readStatusReasons`, `readAlternateKeys`: `{ state: 'ok' | 'absent' | 'error' }`, never a throw), and the checks of the declared ones against them (`statusReasonChecks`, held to the build's own `statusReasonTargets`; `alternateKeyChecks`) — verify's `status-reason` and `alternate-key` checks
     build-journal.js           ← durable JSONL build journal (resume diagnostics)
     form-preview.js            ← form wireframe renderer
@@ -4178,6 +4387,7 @@ scripts/
     workspace-configuration-memory.js ← keeps the SDK's environment-variable and connection-reference copies (values, defaults, value schemas, secret references, connection ids) in memory, never in a workspace file; never deletes or hides copies an earlier version left (a clean pair is left in place and never used as configuration, anything else is refused with WORKSPACE_LEGACY_CONFIGURATION_COPY; maker-sdk.js warns naming their folders)
     workspace-binding.js       ← a persistent `.maker-workspace` belongs to the environment it was first opened for (only `--apply` opens it; a dry run uses a temporary workspace): turns the SDK's `WORKSPACE_ORG_MISMATCH`, and a manifest the JSON parser rejects, into the build's halt (both environments as origins, the safe remedies — the teardown one only for another environment that was built in, with the folder printed on its own line; a folder that was only opened gets no build-there/teardown advice; a folder with no usable environment is moved aside, not deleted; never clears or re-binds) and into the dry run's warning
     changed-only-flow.js       ← changed-only: --changed-only orchestration (decide fast/full, live identity, snapshot lifecycle)
+    configuration-create-guard.js ← the local, request-free stop every entry point runs before configuration work: open/deferred receipt units, an unreadable receipt, quarantines (with the build's invocation-only acknowledgment) and, for teardown, any recovery evidence at all
     projection.js              ← changed-only: pure post-apply verifiers (form placement / sitemap / page dual-hash)
     detect-browser.js          ← System Chromium/Edge/Chrome detection (used by the launcher)
     modelapps-hook-utils.js    ← Tracked-skill discovery + validator lookup for the hooks
@@ -4300,6 +4510,7 @@ What the skills ran through `pac model genpage` — the listing, the download, t
 | `delete --page-id <guid> [--allow-destructive]` | says what it would delete — the page, its file rows, its conversation messages — and, with `--allow-destructive`, deletes the page and its conversation | (done in Maker) |
 | `prepare-compiler-refresh --page-id <guid> --file <page.tsx> [--expected-base-sha256 <hex>] [--output-file <file>]` | prepares the reviewed one-line source change that makes the SDK compile one named page again; writes nothing to the environment | (none) |
 
+- **The shared-page check** (`scripts/genpage-shared-check.js --env <envUrl> --app-id <guid> --page-id <guid> [--confirmed-apps <uniqueName>[,…]]`, backend `sharedWith`) runs in the edit flow right before the upload (Edit Phase 6) and again right before every later upload of that page: the verification fix-up (`verify-flow.md` 7.5, from Edit Phase 7) and each retry, with only the unique names the user confirmed. A page is an environment-level record and an upload replaces it, so the edit reaches every app whose navigation shows the page. It is the scan the build makes for `pages-shared-across-apps` (`rescanWhileUnreadable`: every app's published AND saved navigation, never-published apps included), taken over every app but the one the edit is made from, which the backend names by unique name (`appUniqueName`, because the scan skips an app by that). No other app: exit 0, `shared: false`, and the flow says nothing. Other apps and no confirmation covering all of them: exit 2 (apart from the failures' 1, so a question is never taken for a failure of the scan), `GENPAGE_SHARED_PAGE_UNCONFIRMED`, `apps` (`uniqueName`, `name`, `appId`, `savedOnly`) and `unconfirmed`; the flow asks the user (attended) or halts and reports the apps (unattended, where nothing may confirm them). `--confirmed-apps` carries the user's answer for those exact apps, by unique name: an app that began to show the page since is not in it, so the check refuses again and names it, and a confirmed app that no longer shows the page changes nothing. Fail closed, as the build does: a scan that cannot run, an app that cannot be found, and an app whose navigation is still unreadable after the scan was taken again are `GENPAGE_APPS_UNREADABLE` (exit 1, `apps` and `unreadableApps` say what was found) — even when other apps were found and confirmed, since an unreadable app may hold the page too. It reads and writes nothing, and it is not a lock: an app that takes the page in between the check and the upload is not covered. The skill logs the result either way. The build's halt, the page verbs and `genpage-upload.js` are unchanged.
 - **`download`** reads every page before it writes a file, so a page that cannot be read leaves the folder as it was. Files are written by `lib/safe-fs.js` (a link, a junction or a hard link at the folder or at a file's name is refused — for every page before the first write, a link whose target is missing included, since the check is an `lstat` and not an `existsSync`, which follows the link — and a file is replaced by a temp file and a rename), and the output names what it `replaced` and a stale `prompt.txt` it `removed` (a page with no prompt has none, which a rebuild reads as "no prompt supplied"). The bytes are the page's own: pac wrote a byte order mark and a final CRLF, this writes neither, and `lib/genpage-base.js` hashes a page with both stripped, so a page downloaded either way hashes alike; there is no `page.js` (the SDK compiles a page itself). `--app-id` is optional (pac required it); given, every page must be in the app's SAVED navigation (`GENPAGE_NOT_IN_APP`), checked before anything is read.
 - **`types`** writes the SDK's text as it came (LF, no byte order mark, a blank first line; the output name is checked before the read, a dangling linked folder included). It is the maker portal's own generator, so it is not byte for byte pac's file: it is a self-contained module (the base declarations a page imports are in it, and `GeneratedComponentProps` carries `pageInput`), it leaves out the system and derived read-only columns pac added (the `…name` and `…yominame` ones of a lookup) and the choice enums of columns that cannot be read, and its column order is the portal's. The registrations, row types and `const enum`s are those of pac's file for the columns both type. `--detail colors|descriptions` adds the SDK's comments. A table the environment does not have is `GENPAGE_TABLE_NOT_FOUND` with the `table` it names, not the SDK's `CONNECTION_ERROR`: the SDK reads each table's own metadata (`EntityDefinitions(LogicalName='<table>')`) and its 404 names that request in `url`, and only a 404 of that read, for a table that was asked for, says so (`missingTableOf`; a 404 below the table, from another path or for a table nobody asked for stays the SDK's own error). No file is made.
 - **`add-to-app`** asks the backend's `placeInApp` with `finishIfUnpublished`, so it is safe to run again: a page both layers name has its entry left alone, one that was saved and never published is published, and the page is proved in the PUBLISHED navigation. It is not a no-op on a placed page: when the app lacks the default view of a table the page reads, that view is pinned — an app edit, followed by the app's publish — and nothing at all is written only when both layers name the page and no view is missing. Publishing publishes everything the app has saved, a draft app included. The navigation's titles are written in the environment's base language (`baseLanguage()`, as `apps.js` writes them, and as `genpage-upload.js --add-to-sitemap` reads it before it places a page): a title in a language the environment has not provisioned does not show. The entry is titled with the name the page was given, or `--title` exactly as typed. A page edit changes the navigation and the views it pins, and nothing else of the app's components: a Main form, public view or chart the app's maker took out of it stays out — the SDK's own push would add every active one of each table the navigation opens, so the backend limits it to what the edit owns (`lib/app-component-scope.js`). A failure of the publish carries `appId` and `pageId`, and says what was saved: the navigation, the views, or both.
@@ -5901,7 +6112,13 @@ created. A command bar's or a rule's old copy is never re-read: the build never 
 refused either. The previous bundle comes from `tests/helpers/previous-bundle.js` — the file `MODEL_APPS_PREVIOUS_BUNDLE`
 names (CI fetches the release commit by hash in both suite jobs) or else git history, its SHA-256 checked; without it
 the tests skip locally and FAIL in CI. On the next re-vendor, point `PREVIOUS_RELEASE` and `PREVIOUS_BUNDLE_SHA256`
-there, and the workflow's fetch (`run-tests.test.js` holds them equal), at the release being replaced.
+there, and the workflow's fetch (`run-tests.test.js` holds them equal), at the release being replaced. The downgrade
+tests of a variable's refused value (`configuration-protected.test.js`) run the release before this one, unchanged, over
+each binding record this one writes for it (refused, claimed, sealed, acknowledged but unsettled, completed): it never
+sends the value or the definition again. Its code comes from `tests/helpers/downgrade-release.js` — the `scripts` folder
+`MODEL_APPS_DOWNGRADE_SCRIPTS` names (CI fetches the release commit by hash in both suite jobs) or else git history,
+its plugin version checked; without it the test skips locally and FAILS in CI. On the next release, point
+`DOWNGRADE_RELEASE` and `DOWNGRADE_VERSION`, and the workflow's fetch, at the release being replaced.
 
 **Newer SDK behaviors the plugin adopts, and the options it leaves off.** Each is pinned against the
 real bundle, because a stub stays green through a change in the SDK's own rule.

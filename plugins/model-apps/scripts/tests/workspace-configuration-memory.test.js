@@ -22,6 +22,7 @@ const bundle = require('../vendor/cds-maker-sdk.cjs');
 const { createAzHttpClient } = require('../lib/sdk-http-client.js');
 const { configurationSendOnce } = require('../lib/configuration-transport.js');
 const { readDeploymentBindings } = require('../lib/configuration-artifacts.js');
+const { attachConfigurationCreateBridge } = require('../lib/configuration-create-writer.js');
 const { buildModelApp } = require('../build-model-app.js');
 const { STAGES } = require('../lib/stages.js');
 
@@ -286,10 +287,11 @@ test('a build whose verify meets a draft an earlier version left stops with the 
   assert.deepEqual(first.org.writes(mark), []);
 });
 
-// A --workspace: the build's configuration step works in its own throwaway workspace, so a draft an earlier
-// version left in a --workspace is never read by it: an ordinary apply keeps it byte for byte (it used to be removed at the
-// first write) and the build names its folder in the warning, never its content.
-test('a build over a --workspace holding a draft an earlier version left keeps the draft byte for byte, sends nothing and names its folder', async () => {
+// A --workspace is the app's durable workspace like the app folder's own. The build's configuration step works in its own throwaway
+// workspace, so the SDK never touches a draft an earlier version left there; the build checks every such pair itself before it makes
+// the SDK (#807), so an ordinary apply stops on the draft, keeps it byte for byte (it used to be removed at the first write), sends
+// nothing, and names its files, never their content.
+test('a build over a --workspace holding a draft an earlier version left keeps the draft byte for byte, sends nothing and names its files', async () => {
   const ws = makeTempDir('ws-cfg-draft-ws-');
   const first = await command(specOf(PROTECTED), { argv: ['--workspace', ws] });
   assert.equal(first.thrown, undefined, first.thrown && first.thrown.message);
@@ -300,12 +302,69 @@ test('a build over a --workspace holding a draft an earlier version left keeps t
   const mark = first.org.requests.length;
   const run = await withStderr(() => command(specOf(PROTECTED), { org: first.org, argv: ['--workspace', ws] }));
   const again = run.result;
-  assert.equal(again.thrown, undefined, again.thrown && again.thrown.message);
-  assert.ok(!again.exitCode, again.stderr.slice(-900));
+  assert.equal(again.thrown && again.thrown.code, LEGACY_CODE, again.thrown ? again.thrown.message : again.stderr.slice(-900));
   assert.deepEqual(first.org.writes(mark), [], 'nothing was sent');
   assert.deepEqual(sensitiveFiles(ws), before, 'the draft is kept');
-  assert.ok(run.text.includes('still holds environment-variable or connection-reference copies') && run.text.includes(ws), run.text.slice(-1500));
-  assert.ok(!run.text.includes('canary-draft-5be1') && !Object.values(CANARY).some((c) => run.text.includes(c)), 'the warning quotes no content');
+  assert.ok(again.thrown.message.includes(path.join(ws, 'environment-variables', `${id}.json`)), again.thrown.message);
+  const said = `${again.thrown.message}\n${again.stderr}\n${run.text}`;
+  assert.ok(!said.includes('canary-draft-5be1') && !Object.values(CANARY).some((c) => said.includes(c)), 'nothing quotes the content');
+});
+
+// #807: the build's configuration step works in a throwaway workspace, so the SDK never touches a pair an earlier version left in
+// the app folder's DURABLE workspace: the build itself checks every such pair before it makes the SDK. Each pair that is not proven
+// clean stops an apply that would otherwise PATCH the same item from a changed App Spec; a dry run warns; once the maker removes the
+// files, the apply sends the change.
+test('an apply over a dirty, malformed or orphaned pair an earlier version left in the app folder\u2019s workspace stops before any request is sent and keeps the files; a dry run warns; removed, the apply goes on', async () => {
+  const appDir = path.join(makeTempDir('ws-cfg-durable-'), 'app');
+  const ws = path.join(appDir, '.maker-workspace');
+  const first = await command(specOf(), { appDir });
+  assert.equal(first.thrown, undefined, first.thrown && first.thrown.message);
+  const earlier = await earlierVersionFetched(first.org, ws);
+  const id = first.org.rows('environmentvariabledefinitions').find((r) => r.schemaname === 'contoso_ApiBase').environmentvariabledefinitionid;
+  const copy = path.join(ws, 'environment-variables', `${id}.json`);
+  const meta = path.join(ws, '.metadata', 'environment-variables', `${id}.meta.json`);
+  const clean = { copy: fs.readFileSync(copy), meta: fs.readFileSync(meta) };
+  // The App Spec changes the default of the very item the copy holds, so a build that passed over the copy would PATCH it.
+  const changed = specOf({ environmentVariables: VARIABLES.map((v) => (v.schemaName === 'contoso_ApiBase' ? { ...v, defaultValue: 'https://changed.contoso.example' } : v)) });
+  const cases = {
+    dirty: async () => {
+      await earlier.sdk.updateElement('environmentVariable', id, '/defaultValue', 'canary-draft-77a1');
+      assert.equal(await hasUnsyncedEdits(earlier.sdk, 'environmentVariable', id), true, 'the earlier version reports the draft');
+    },
+    malformed: async () => fs.writeFileSync(copy, '{"truncated":'),
+    'snapshot without a copy': async () => fs.rmSync(copy),
+    'copy without a snapshot': async () => fs.rmSync(meta),
+  };
+  for (const [name, make] of Object.entries(cases)) {
+    fs.writeFileSync(copy, clean.copy);
+    fs.writeFileSync(meta, clean.meta);
+    await make();
+    const before = sensitiveFiles(ws);
+    const mark = first.org.requests.length;
+    const stopped = await command(changed, { org: first.org, appDir });
+    assert.equal(stopped.thrown && stopped.thrown.code, LEGACY_CODE, `${name}: ${stopped.thrown ? stopped.thrown.message : stopped.stderr.slice(-900)}`);
+    assert.deepEqual(first.org.writes(mark), [], `${name}: nothing was sent`);
+    assert.deepEqual(sensitiveFiles(ws), before, `${name}: the files are kept as they are`);
+    assert.ok(stopped.thrown.message.includes(copy), `${name}: ${stopped.thrown.message}`);
+    assert.ok(!stopped.thrown.message.includes('canary-draft-77a1') && !Object.values(CANARY).some((c) => stopped.thrown.message.includes(c)), `${name}: no content is quoted`);
+  }
+  // A dry run over the last of them sends no write either way: it warns and goes on.
+  const before = sensitiveFiles(ws);
+  const mark = first.org.requests.length;
+  const dry = await runCommand(changed, { org: first.org, appDir, apply: false, argv: ['--stage', 'data', '--allow-destructive', '--deployment-settings', settingsFile()] });
+  assert.equal(dry.thrown, undefined, dry.thrown && dry.thrown.message);
+  assert.ok(!dry.exitCode, dry.stderr.slice(-900));
+  assert.match(dry.stderr, /an earlier plugin version wrote[\s\S]*An --apply of this App Spec stops here/);
+  assert.deepEqual(first.org.writes(mark), []);
+  assert.deepEqual(sensitiveFiles(ws), before);
+  // The maker removes the two files: the apply sends the App Spec's change.
+  fs.rmSync(copy, { force: true });
+  fs.rmSync(meta, { force: true });
+  const again = await command(changed, { org: first.org, appDir });
+  assert.equal(again.thrown, undefined, again.thrown && again.thrown.message);
+  assert.ok(!again.exitCode, again.stderr.slice(-900));
+  assert.deepEqual(first.org.writes(mark), [`PATCH /environmentvariabledefinitions(${id})`]);
+  assert.deepEqual(first.org.unexpected, []);
 });
 
 // A caller-supplied workspace is no proof that everything under it is the plugin's.
@@ -332,10 +391,13 @@ test('a direct build of a connection reference and variables keeps the connectio
   const httpClient = createAzHttpClient(org.origin, { getToken: () => 'test-token-0123456789abcdef', request, sleep: async () => {}, sendOnce: (m, u) => configurationSendOnce(m, u) });
   const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(sdkDir), instanceUrl: org.origin, httpClient, solutionUniqueName: SOLUTION });
   await sdk.initWorkspace();
+  // The create bridge build-model-app.js makeSdk attaches: new rows are flat POSTs, their receipts in the build's workspace.
+  const workspaceDir = makeTempDir('ws-cfg-direct-ws-');
+  attachConfigurationCreateBridge(sdk, { httpClient, apiUrl: (p) => sdk.dataverse.apiUrl(p) });
   const spec = specOf({ connectionReferences: [{ logicalName: 'contoso_sp', connectorId: SP }] });
   const bindings = readDeploymentBindings({ ...SETTINGS, ConnectionReferences: [{ LogicalName: 'contoso_sp', ConnectionId: CANARY.connection }] }, spec);
   assert.deepEqual(bindings.errors, []);
-  const r = await buildModelApp(spec, { apply: true, env: org.origin, phases: STAGES.data, workspaceDir: makeTempDir('ws-cfg-direct-ws-'), retryDelayMs: 0, configurationBindings: bindings },
+  const r = await buildModelApp(spec, { apply: true, env: org.origin, phases: STAGES.data, workspaceDir, retryDelayMs: 0, configurationBindings: bindings },
     { sdk, log: () => {}, warn: () => {}, connections: async () => [{ connectionId: CANARY.connection, connectorId: SP }] });
   assert.equal(r.ok, true, JSON.stringify(r.errors));
   assert.equal(org.rows('connectionreferences')[0].connectionid, CANARY.connection, 'the connection was bound');
@@ -344,6 +406,9 @@ test('a direct build of a connection reference and variables keeps the connectio
   assert.equal((await sdk.fetchArtifact('connectionReference', ref.connectionreferenceid, { overwrite: true })).connectionId, CANARY.connection);
   assert.deepEqual(atSend, []);
   assert.deepEqual(canariesIn([sdkDir]), []);
+  // The create receipts hold the public projection only: no value, default, value schema or connection id.
+  assert.ok(walk(workspaceDir).some((f) => /configuration-create-state\.v1\.json$/.test(f)), 'the build kept its create receipt');
+  assert.deepEqual(canariesIn([workspaceDir]), []);
 });
 
 // The build command in a separate OS process, killed (SIGKILL: no cleanup runs) while its first configuration create is on the wire.

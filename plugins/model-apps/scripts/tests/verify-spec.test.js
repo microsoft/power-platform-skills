@@ -4040,6 +4040,139 @@ test('verifySpec charts: a declared chart with a managed binding is its bound ro
   assert.ok(legacy.checks.some((c) => c.kind === 'chart' && c.present));
 });
 
+// A declared form (forms[].reconcile "declared") is identified by its managed binding: the committed root, read by that id alone, never a
+// row of its name. A binding that is not settled, names no id, or is contradicted by the form's pin reads no form at all.
+const DF_ID = '22222222-2222-4222-8222-222222222222';
+const DF_OTHER = '33333333-3333-4333-8333-333333333333';
+const DF_KEY = 'new_o/main/f';
+const declaredFormSpec = (form = {}) => ({
+  entities: [{ schemaName: 'new_o', columns: [{ schemaName: 'new_s' }] }],
+  forms: [{ entity: 'new_o', name: 'F', reconcile: 'declared', ...form }],
+});
+const boundFormManifest = (id = DF_ID, rest = {}, key = DF_KEY) => ({ groups: [{ family: 'form', key, root: { id } }], pending: [], invalid: [], ...rest });
+function declaredFormReader(answer) {
+  const queries = [];
+  const layouts = [];
+  return {
+    queries,
+    layouts,
+    findTable: async () => ({ logicalName: 'new_o' }),
+    findColumns: async () => [{ logicalName: 'new_s' }],
+    sitemapXml: async () => '',
+    formTopology: async (entity, id) => { layouts.push(id); return '<form><tabs><tab name="general"><columns><column><sections><section name="main"><rows><row><cell id="{c1}"><control id="new_s" datafieldname="new_s"/></cell></row></rows></section></sections></column></columns></tab></tabs></form>'; },
+    queryRecords: async (table, o) => {
+      if (table !== 'systemform') return [];
+      queries.push(o.filter);
+      return answer(o, queries.length);
+    },
+  };
+}
+const formOf = (r) => r.checks.filter((c) => c.kind === 'form').map((c) => [c.name, c.present, c.detail]);
+const dfRow = (o = {}) => ({ formid: DF_ID, objecttypecode: 'new_o', type: 2, ...o });
+
+test('verifySpec: a declared form is read by its bound id alone, and an answer that is not that form of its table and type proves nothing', async () => {
+  const by = `the form its managed binding (${DF_KEY}) is bound to (${DF_ID})`;
+  const incomplete = `its bound form ${DF_ID} was read without its table or type`;
+  for (const [what, answer, present, detail, form] of [
+    ['the bound row', () => [dfRow()], true, ''],
+    ['its id braced and in capitals, its type a numeric string', () => [dfRow({ formid: `{${DF_ID.toUpperCase()}}`, type: '2' })], true, ''],
+    ['a declared QuickView', () => [dfRow({ type: 6 })], true, '', { formType: 'QuickView' }],
+    ['a pin equal to the binding, braced and in capitals', () => [dfRow()], true, '', { formId: `{${DF_ID.toUpperCase()}}` }],
+    ['no row', () => [], false, `${by} was not found on its table; a form of the same name is not taken in its place`],
+    ['another row', () => [dfRow({ formid: DF_OTHER })], false, `the read of its bound form ${DF_ID} answered another row; a form of the same name is not taken in its place`],
+    ['two rows', () => [dfRow(), dfRow()], false, `its bound form ${DF_ID} could not be identified: the read did not return one form row`],
+    ['not a list', () => ({ value: [dfRow()] }), false, `its bound form ${DF_ID} could not be identified: the read did not return one form row`],
+    ['no table', () => [dfRow({ objecttypecode: undefined })], false, incomplete],
+    ['no type', () => [{ formid: DF_ID, objecttypecode: 'new_o' }], false, incomplete],
+    ['an empty type', () => [dfRow({ type: '' })], false, incomplete],
+    ['another table', () => [dfRow({ objecttypecode: 'new_x' })], false, `its bound form ${DF_ID} belongs to table 'new_x', not 'new_o'`],
+    ['another type', () => [dfRow({ type: 6 })], false, `its bound form ${DF_ID} is a type-6 form, not the declared Main form (type 2)`],
+    ['a failed read', () => { throw new Error('socket hang up'); }, false, `its bound form ${DF_ID} could not be read: socket hang up`],
+  ]) {
+    const read = declaredFormReader(answer);
+    const key = `new_o/${((form && form.formType) || 'Main').toLowerCase()}/f`;
+    const r = await verifySpec(declaredFormSpec(form), read, { managedManifest: boundFormManifest(`{${DF_ID.toUpperCase()}}`, {}, key) });
+    assert.deepStrictEqual(formOf(r), [['F', present, detail]], what);
+    assert.deepStrictEqual(read.queries, [`formid eq ${DF_ID}`, `formid eq ${DF_ID}`], `${what}: its presence and its layout each read the bound id, and nothing else`);
+    assert.deepStrictEqual(read.layouts, present ? [DF_ID] : [], `${what}: only the bound form's layout is read`);
+  }
+});
+
+test('verifySpec: a declared form whose binding is unsettled, names no id, or is contradicted by its pin reads no form, whatever answers its name', async () => {
+  const namesake = () => [dfRow({ formid: DF_OTHER, name: 'F' })];
+  const open = (code) => `its managed binding (${DF_KEY}) is not settled (${code}) — unverified, not proven correct`;
+  const noId = `its managed binding (${DF_KEY}) records no form id — unverified, not proven correct`;
+  for (const [what, manifest, why, form] of [
+    ['an invalid group', { groups: [], pending: [], invalid: [{ family: 'form', key: DF_KEY, code: 'managed-binding-group-invalid' }] }, open('managed-binding-group-invalid')],
+    ['an unreadable store', { groups: [], pending: [], invalid: [{ family: 'store', key: 'managed-bindings', code: 'managed-binding-store-unreadable' }] }, open('managed-binding-store-unreadable')],
+    ['a pending create, given a root and a pin', { groups: [], pending: [{ family: 'form', key: DF_KEY, code: 'managed-attempt-pending', root: { id: DF_ID } }], invalid: [] }, open('managed-attempt-pending'), { formId: DF_ID }],
+    ['a pending entry beside a committed group', boundFormManifest(DF_ID, { pending: [{ family: 'form', key: DF_KEY, reason: 'an attempt is not proved' }] }), open('an attempt is not proved')],
+    ['a group with no usable id', boundFormManifest('not-a-guid'), noId],
+  ]) {
+    const read = declaredFormReader(namesake);
+    const r = await verifySpec(declaredFormSpec(form), read, { managedManifest: manifest });
+    assert.deepStrictEqual(read.queries, [], `${what}: no form is read, by its id, its pin or its name`);
+    assert.deepStrictEqual(read.layouts, [], what);
+    assert.deepStrictEqual(r.checks.filter((c) => c.kind.startsWith('form')), [], `${what}: nothing about it passes or fails`);
+    assert.deepStrictEqual(r.unverified.filter((u) => u.startsWith('form')), [`form:F (${why})`, `form-identities:new_o.F (${why})`], what);
+    assert.strictEqual(r.ok, true, `${what}: unverified does not fail verify`);
+  }
+  const read = declaredFormReader(namesake);
+  const r = await verifySpec(declaredFormSpec({ formId: DF_OTHER }), read, { managedManifest: boundFormManifest() });
+  assert.deepStrictEqual(formOf(r), [['F', false, `its formId ${DF_OTHER} is not the form its managed binding (${DF_KEY}) is bound to (${DF_ID}); correct or remove the formId`]]);
+  assert.deepStrictEqual(read.queries, [], 'a contradicting pin reads neither row');
+  assert.deepStrictEqual(r.checks.filter((c) => c.kind.startsWith('form-')), [], 'no layout is held against another row');
+  assert.strictEqual(r.ok, false);
+});
+
+test('verifySpec: a declared form\'s layout read is its own: a second identity read that fails still fails the layout, and a reused reader follows a changed binding', async () => {
+  const read = declaredFormReader((o, n) => { if (n === 2) throw new Error('second read unavailable'); return [dfRow()]; });
+  const r = await verifySpec(declaredFormSpec(), read, { managedManifest: boundFormManifest(), concurrency: 1 });
+  assert.deepStrictEqual(formOf(r), [['F', true, '']]);
+  assert.deepStrictEqual(r.checks.filter((c) => c.kind === 'form-identities').map((c) => [c.present, c.detail]), [[false, `could not resolve the deployed form id (its bound form ${DF_ID} could not be read: second read unavailable) — the layout is unverified, not proven correct`]]);
+  // The same reader, two verifies, the binding moved between them: each reads the row its own manifest binds, nothing is remembered.
+  const rows = declaredFormReader((o) => [dfRow({ formid: o.filter.replace('formid eq ', '') })]);
+  for (const id of [DF_ID, DF_OTHER]) {
+    rows.queries.length = 0;
+    rows.layouts.length = 0;
+    const again = await verifySpec(declaredFormSpec(), rows, { managedManifest: boundFormManifest(id) });
+    assert.deepStrictEqual(formOf(again), [['F', true, '']], id);
+    assert.deepStrictEqual(rows.queries, [`formid eq ${id}`, `formid eq ${id}`], id);
+    assert.deepStrictEqual(rows.layouts, [id], id);
+  }
+  // One task at a time or four: the same checks, the same lists, the same reads.
+  const outcome = async (concurrency) => {
+    const reader = declaredFormReader(() => [dfRow()]);
+    const spec = declaredFormSpec();
+    spec.forms.push({ entity: 'new_o', name: 'G', reconcile: 'declared', formId: DF_OTHER }, { entity: 'new_o', name: 'H', reconcile: 'declared' });
+    const manifest = boundFormManifest(DF_ID, { groups: [{ family: 'form', key: DF_KEY, root: { id: DF_ID } }, { family: 'form', key: 'new_o/main/g', root: { id: DF_ID } }], invalid: [{ family: 'form', key: 'new_o/main/h', code: 'managed-binding-group-invalid' }] });
+    const res = await verifySpec(spec, reader, { managedManifest: manifest, concurrency });
+    return { checks: res.checks, missing: res.missing, unverified: res.unverified, queries: [...reader.queries].sort(), layouts: [...reader.layouts].sort() };
+  };
+  assert.deepStrictEqual(await outcome(4), await outcome(1));
+});
+
+test('verifySpec: an undeclared form, a declared one with nothing in the store, and any with the declared build off are still found by their names', async () => {
+  const { DECLARED_FEATURES } = require('../lib/declared-features.js');
+  const named = (o) => /name eq 'F'/.test(o.filter) ? [dfRow({ name: 'F' })] : [];
+  for (const [what, form, manifest, off] of [
+    ['undeclared, beside a binding of its key', { reconcile: undefined }, boundFormManifest(DF_OTHER)],
+    ['declared, nothing in the store', {}, { groups: [], pending: [], invalid: [] }],
+    ['declared, no manifest', {}, undefined],
+    ['declared, the declared build off', {}, boundFormManifest(DF_OTHER), true],
+  ]) {
+    const was = DECLARED_FEATURES.forms;
+    if (off) DECLARED_FEATURES.forms = false;
+    try {
+      const read = declaredFormReader(named);
+      const r = await verifySpec(declaredFormSpec(form), read, manifest ? { managedManifest: manifest } : {});
+      assert.deepStrictEqual(formOf(r), [['F', true, '']], what);
+      assert.strictEqual(read.queries.filter((q) => /name eq 'F'/.test(q)).length, 2, `${what}: ${JSON.stringify(read.queries)}`);
+      assert.deepStrictEqual((r.unverified || []).filter((u) => u.startsWith('form')), [], what);
+    } finally { DECLARED_FEATURES.forms = was; }
+  }
+});
+
 // A binding store that cannot be read holds no group, so every declared artifact would look unbound and be found by its name. A
 // declared dashboard, business rule and process flow are then unresolved, as declared views and charts are: a namesake never passes.
 test('verifySpec: an unreadable binding store, or an unusable group record, never lets a namesake pass for a declared dashboard, business rule or process flow', async () => {
@@ -4093,5 +4226,161 @@ test('verifySpec: an unreadable binding store, or an unusable group record, neve
     const r = await verifySpec(spec(reconcile), read, { managedManifest: m });
     assert.deepStrictEqual(namesOf(r), [['dashboard', true], ['business-rule', true], ['business-process-flow', true]], JSON.stringify(r.checks));
     assert.strictEqual(nameReads().length, 3);
+  }
+});
+// --- #845: declared views that share one name on one table under distinct keys are proven as a group ----------------------------------
+
+const TW1 = 'aaaaaaaa-0000-4000-8000-000000000001';
+const TW2 = 'aaaaaaaa-0000-4000-8000-000000000002';
+const TW3 = 'aaaaaaaa-0000-4000-8000-000000000003';
+const twinView = (key, columns, extra = {}) => ({ entity: 'contoso_item', name: 'Twin', key, reconcile: 'declared', columns, ...extra });
+const twinRow = (id, cells) => ({ savedqueryid: id, returnedtypecode: 'contoso_item', name: 'Twin', layoutxml: `<grid><row>${cells.map((c) => `<cell name="${c}"/>`).join('')}</row></grid>` });
+// A savedquery reader that applies verify's filters as the service does: by id (one row), or by table and name (every row of the name
+// for a paginated read, else up to `top`), with the SDK's non-enumerable `hasMore` report when `hasMore` is given. Every request is kept.
+function twinReader(rows, { hasMore, nameError, idError } = {}) {
+  const reads = [];
+  return {
+    reads,
+    findTable: async () => ({ logicalName: 'contoso_item' }),
+    findColumns: async () => [],
+    sitemapXml: async () => '',
+    queryRecords: async (set, q) => {
+      if (set !== 'savedquery') return [];
+      reads.push(q);
+      const byId = /^savedqueryid eq ([0-9a-f-]{36})$/.exec(q.filter);
+      if (byId) {
+        if (idError) throw new Error(idError);
+        return rows.filter((r) => r.savedqueryid === byId[1]);
+      }
+      if (nameError) throw new Error(nameError);
+      const named = /name eq 'Twin'/.test(q.filter) ? rows : [];
+      const out = q.paginate ? named.slice() : named.slice(0, q.top || 50);
+      if (hasMore !== undefined) Object.defineProperty(out, 'hasMore', { value: hasMore, enumerable: false });
+      return out;
+    },
+  };
+}
+const twinSpecOf = (views) => ({ entities: [], views, appShell: { areas: [] } });
+const viewRows = (r) => r.checks.filter((c) => c.kind.startsWith('view')).map((c) => [c.kind, c.present, c.detail, ...(c.note ? [c.note] : [])]);
+const viewUnverified = (r) => (r.unverified || []).filter((u) => u.startsWith('view'));
+const PRESENT_ONLY = (key) => `present only: a distinct row is available, but view key "${key}" is not attributed to a row`;
+const NOT_PROVEN = (key, tail = '') => `view-content:contoso_item.Twin (view key "${key}": no managed binding, viewId or observed stable id identifies its row; content is not proven for this key${tail})`;
+// The views' own reads: the managed listing reads each bound row by id too (select savedqueryid alone), and those are not the views'.
+const viewReads = (read) => read.reads.filter((q) => q.select.join() !== 'savedqueryid');
+const boundTo = (pairs) => ({ revision: 1, groups: pairs.map(([key, id]) => ({ family: 'view', key, root: { kind: 'view', key, id } })), pending: [], invalid: [] });
+
+test('#845: unattributed same-named declared views read every row of the name once; distinct rows make each present only, its content unverified', async () => {
+  const spec = twinSpecOf([twinView('a', ['contoso_a']), twinView('b', ['contoso_b'])]);
+  for (const [what, hasMore, tail] of [['complete', false, ''], ['unreported', undefined, ''], ['more reported', true, '; the candidate read was incomplete; additional rows may exist']]) {
+    const read = twinReader([twinRow(TW2, ['contoso_a', 'contoso_b']), twinRow(TW1, ['contoso_a', 'contoso_b'])], { hasMore });
+    const r = await verifySpec(spec, read);
+    assert.strictEqual(r.ok, true, `${what}: ${JSON.stringify(r.missing)}`);
+    assert.deepStrictEqual(viewRows(r), [['view', true, '', PRESENT_ONLY('a')], ['view', true, '', PRESENT_ONLY('b')]], what);
+    assert.deepStrictEqual(viewUnverified(r), [NOT_PROVEN('a', tail), NOT_PROVEN('b', tail)], what);
+    assert.deepStrictEqual(viewReads(read), [{
+      select: ['savedqueryid', 'returnedtypecode', 'name', 'layoutxml', 'fetchxml'],
+      filter: "returnedtypecode eq 'contoso_item' and name eq 'Twin'",
+      paginate: true,
+    }], `${what}: one paginated read of the name, no top`);
+  }
+});
+
+test('#845: one row of a name two declared views use fails the group; an incomplete read that finds too few is not proven, and a failed read says so', async () => {
+  const spec = twinSpecOf([twinView('a', ['contoso_a']), twinView('b', ['contoso_b'])]);
+  const one = await verifySpec(spec, twinReader([twinRow(TW1, ['contoso_a', 'contoso_b'])], { hasMore: false }));
+  assert.strictEqual(one.ok, false);
+  assert.deepStrictEqual(viewRows(one), [['view', false, 'only 1 distinct unclaimed row(s) named "Twin" on contoso_item were read for 2 declared view(s) (keys: "a", "b"); each declaration needs a row of its own']]);
+  assert.deepStrictEqual(viewUnverified(one), []);
+  const more = await verifySpec(spec, twinReader([twinRow(TW1, ['contoso_a']), { name: 'Twin' }], { hasMore: true }));
+  assert.deepStrictEqual(viewRows(more), [['view', false, 'a distinct row for each of the 2 declarations (keys: "a", "b") is not proven: the read identified only 1 unclaimed row(s); more rows were reported; some rows had no usable savedqueryid']]);
+  const failed = await verifySpec(spec, twinReader([], { nameError: 'service unavailable' }));
+  assert.deepStrictEqual(viewRows(failed), [['view', false, 'the rows named "Twin" on contoso_item could not be read: service unavailable; a distinct row for each declaration is not proven']]);
+});
+
+test('#845: content no one-to-one assignment can satisfy fails the declarations that cannot all be served, by name; the others stay unverified', async () => {
+  const spec = twinSpecOf([twinView('a', ['contoso_a']), twinView('b', ['contoso_b']), twinView('c', ['contoso_b'])]);
+  const rows = [twinRow(TW1, ['contoso_a']), twinRow(TW2, ['contoso_a', 'contoso_b']), twinRow(TW3, ['contoso_a'])];
+  const r = await verifySpec(spec, twinReader(rows, { hasMore: false }));
+  assert.strictEqual(r.ok, false);
+  assert.deepStrictEqual(viewRows(r), [
+    ['view', true, '', PRESENT_ONLY('a')],
+    ['view-content', false, 'only 1 distinct unclaimed row(s) can satisfy the 2 declarations with keys "b", "c"; no one-to-one content assignment exists'],
+    ['view', true, '', PRESENT_ONLY('b')],
+    ['view', true, '', PRESENT_ONLY('c')],
+  ]);
+  assert.deepStrictEqual(viewUnverified(r), [NOT_PROVEN('a')]);
+  // The same shortfall on a read that reported more rows cannot be decided: unverified, never a failure.
+  const open = await verifySpec(spec, twinReader(rows, { hasMore: true }));
+  assert.strictEqual(open.ok, true, JSON.stringify(open.missing));
+  const undecided = '; the candidate read was incomplete; additional rows may exist; a content assignment cannot be decided from this incomplete read';
+  assert.deepStrictEqual(viewUnverified(open), [NOT_PROVEN('a', undecided), NOT_PROVEN('b', undecided), NOT_PROVEN('c', undecided)]);
+});
+
+test('#845: a bound member keeps its read by id and its row is no namesake\'s; the rest are matched onto the rows nobody owns', async () => {
+  const spec = twinSpecOf([twinView('a', ['contoso_a']), twinView('b', ['contoso_b'])]);
+  const managedManifest = boundTo([['a', TW1]]);
+  const both = twinReader([twinRow(TW1, ['contoso_a', 'contoso_b']), twinRow(TW2, ['contoso_b'])], { hasMore: false });
+  const r = await verifySpec(spec, both, { managedManifest });
+  assert.strictEqual(r.ok, true, JSON.stringify(r.missing));
+  assert.deepStrictEqual(viewRows(r), [['view', true, ''], ['view-columns', true, ''], ['view', true, '', PRESENT_ONLY('b')]]);
+  assert.deepStrictEqual(viewReads(both).map((q) => q.filter), [`savedqueryid eq ${TW1}`, "returnedtypecode eq 'contoso_item' and name eq 'Twin'"]);
+  // Only the bound row carries the name: it is a's, so b has none.
+  const owned = await verifySpec(spec, twinReader([twinRow(TW1, ['contoso_a', 'contoso_b'])], { hasMore: false }), { managedManifest });
+  assert.deepStrictEqual(viewRows(owned).slice(2), [['view', false, 'only 0 distinct unclaimed row(s) named "Twin" on contoso_item were read for 1 declared view(s) (keys: "b"); each declaration needs a row of its own']]);
+  // A row bound to a key the spec no longer declares is not free either.
+  const stale = await verifySpec(spec, twinReader([twinRow(TW1, ['contoso_a']), twinRow(TW2, ['contoso_b'])], { hasMore: false }), { managedManifest: boundTo([['a', TW1], ['gone', TW2]]) });
+  assert.match(viewRows(stale)[2][2], /^only 0 distinct unclaimed row\(s\)/);
+});
+
+test('#845: two declarations naming one saved query fail before any read, whatever pins or bindings name it and however it is spelled', async () => {
+  const conflict = (a, b) => `identity conflict: savedquery ${TW1} is claimed by view keys ${a}, ${b}; each declaration needs a row of its own`;
+  for (const [what, views, managedManifest, text] of [
+    ['two pins', [twinView('a', ['contoso_a'], { viewId: TW1 }), twinView('b', ['contoso_b'], { viewId: `{${TW1.toUpperCase()}}` })], undefined, conflict('"a" (viewId)', '"b" (viewId)')],
+    ['a binding and a pin', [twinView('a', ['contoso_a']), twinView('b', ['contoso_b'], { viewId: TW1.toUpperCase() })], boundTo([['a', TW1]]), conflict('"a" (managed binding)', '"b" (viewId)')],
+    ['two bindings', [twinView('a', ['contoso_a']), twinView('b', ['contoso_b'])], boundTo([['a', TW1], ['b', TW1]]), conflict('"a" (managed binding)', '"b" (managed binding)')],
+    ['an implicit key', [{ entity: 'contoso_item', name: 'Twin', reconcile: 'declared', columns: ['contoso_a'], viewId: TW1 }, twinView('b', ['contoso_b'], { viewId: TW1 })], undefined, conflict('"contoso_item/Twin" (viewId)', '"b" (viewId)')],
+  ]) {
+    const read = twinReader([twinRow(TW1, ['contoso_a', 'contoso_b'])], { hasMore: false });
+    const r = await verifySpec(twinSpecOf(views), read, { managedManifest });
+    assert.strictEqual(r.ok, false, what);
+    assert.deepStrictEqual(viewRows(r), [['view', false, text]], what);
+    assert.deepStrictEqual(viewReads(read), [], `${what}: no read`);
+  }
+});
+
+test('#845: an unsettled binding in the group leaves the unattributed members unverified, with no read of the name', async () => {
+  const spec = twinSpecOf([twinView('a', ['contoso_a']), twinView('b', ['contoso_b'])]);
+  const read = twinReader([twinRow(TW1, ['contoso_a']), twinRow(TW2, ['contoso_b'])], { hasMore: false });
+  const r = await verifySpec(spec, read, { managedManifest: { revision: 1, groups: [], pending: [{ family: 'view', key: 'a', code: 'managed-attempt-pending' }], invalid: [] } });
+  assert.strictEqual(r.ok, true, JSON.stringify(r.missing));
+  assert.deepStrictEqual(viewRows(r), []);
+  assert.deepStrictEqual(viewUnverified(r), [
+    'view:contoso_item.Twin (its managed binding (a) is not settled (managed-attempt-pending) — unverified, not proven correct)',
+    'view:contoso_item.Twin (view key "b": another declaration\'s managed binding is unsettled, so a distinct-row assignment is not proven)',
+  ]);
+  assert.deepStrictEqual(viewReads(read), []);
+});
+
+test('#845 controls: a wholly bound or pinned group with distinct ids, a unique view, a legacy namesake and a repeated key keep their reads, request for request', async () => {
+  const byId = (id) => ({ select: ['savedqueryid', 'returnedtypecode', 'layoutxml', 'fetchxml'], filter: `savedqueryid eq ${id}`, top: 1 });
+  const byName = { select: ['savedqueryid', 'layoutxml', 'fetchxml'], filter: "returnedtypecode eq 'contoso_item' and name eq 'Twin'", top: 1 };
+  const rows = [twinRow(TW1, ['contoso_a']), twinRow(TW2, ['contoso_b'])];
+  for (const [what, views, managedManifest, reads, unverified] of [
+    ['bound', [twinView('a', ['contoso_a']), twinView('b', ['contoso_b'])], boundTo([['a', TW1], ['b', TW2]]), [byId(TW1), byId(TW2)], []],
+    ['pinned', [twinView('a', ['contoso_a'], { viewId: TW1 }), twinView('b', ['contoso_b'], { viewId: TW2 })], undefined, [byId(TW1), byId(TW2)], []],
+    ['unique', [twinView('a', ['contoso_a'])], undefined, [byName], []],
+    ['beside a legacy view', [twinView('a', ['contoso_a']), { entity: 'contoso_item', name: 'Twin', columns: ['contoso_a'] }], undefined, [byName, byName],
+      ['view-content:contoso_item.Twin (several views on contoso_item have this name, and this one (a) has neither a managed binding nor a viewId, so which of the rows it is cannot be told)']],
+    ['a repeated key', [twinView('a', ['contoso_a']), twinView('a', ['contoso_a'])], undefined, [byName, byName], [
+      'view-content:contoso_item.Twin (several views on contoso_item have this name, and this one (a) has neither a managed binding nor a viewId, so which of the rows it is cannot be told)',
+      'view-content:contoso_item.Twin (several views on contoso_item have this name, and this one (a) has neither a managed binding nor a viewId, so which of the rows it is cannot be told)',
+    ]],
+  ]) {
+    const read = twinReader(rows, { hasMore: false });
+    const r = await verifySpec(twinSpecOf(views), read, { managedManifest });
+    assert.strictEqual(r.ok, true, `${what}: ${JSON.stringify(r.missing)}`);
+    assert.deepStrictEqual(viewReads(read), reads, what);
+    assert.deepStrictEqual(viewUnverified(r), unverified, what);
+    assert.ok(r.checks.every((c) => !c.note), `${what}: no note`);
   }
 });
