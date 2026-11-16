@@ -219,6 +219,28 @@ test('Arabic resource checks accept equivalent JSON escapes and inspect message 
   }
 });
 
+test('all localization English-resource contracts preserve decoded interpolation identities', async t => {
+  const root = await workspace(t);
+  const suiteDir = path.resolve(import.meta.dirname, '../../power-pages/add-localization');
+  await mkdir(path.join(root, 'proposals'));
+  for (const name of ['rtl-preserving-routes', 'vue-translator-owned-values']) {
+    const full = JSON.parse(await readFile(path.join(suiteDir, `checks/${name}.json`), 'utf8'));
+    const spec = full.files.find(file => file.path === 'proposals/en.json');
+    const messages = { heading: 'Bookings', greeting: '{name}', count: '{count}' };
+    const literal = JSON.stringify(messages);
+    for (const [label, source, expected] of [
+      ['literal', literal, true],
+      ['escaped', literal.replace('{name}', '\\u007bname\\u007d').replace('{count}', '\\u007bcount\\u007d'), true],
+      ['renamed greeting input', JSON.stringify({ ...messages, greeting: '{Name}' }), false],
+      ['renamed count input', JSON.stringify({ ...messages, count: '{Count}' }), false],
+    ]) {
+      await writeFile(path.join(root, spec.path), source);
+      const result = await gradeArtifacts({ contract: { files: [spec] }, workDir: root, suiteDir });
+      assert.equal(result.passed, expected, `${name}, ${label}: ${result.evidence}`);
+    }
+  }
+});
+
 test('JSON/YAML parsing, preservation, and absence checks do not silently pass malformed evidence', async t => {
   const root = await workspace(t);
   await writeFile(path.join(root, 'original.txt'), 'original');
