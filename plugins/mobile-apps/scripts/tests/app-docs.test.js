@@ -1648,9 +1648,12 @@ test('phase order matches the order the skill actually runs them', () => {
   // agreed with the stale list it stayed green while a completed "Bring the app online" rendered
   // above three still-pending gates.
   assert.deepEqual(order, [
-    'requirements', 'scaffold', 'screen-plan', 'screens', 'preview', 'design', 'architecture',
-    'data-model', 'auth', 'dataverse', 'capabilities', 'wiring', 'run',
+    'requirements', 'scaffold', 'screen-plan', 'screens', 'auth', 'preview', 'design', 'architecture',
+    'data-model', 'dataverse', 'capabilities', 'wiring', 'run',
   ]);
+  // Power Apps Mobile Preview will not run the app without a client ID, so the registration is
+  // chosen once the screens are built and before the preview gate draws the phone QR code.
+  assert.ok(at('screens') < at('auth') && at('auth') < at('preview'), 'sign-in is set up before the phone QR');
 
   assert.ok(at('requirements') < at('scaffold'), 'the brief is confirmed before anything is built');
   assert.ok(at('scaffold') < at('screens'), 'the project exists before screens are written into it');

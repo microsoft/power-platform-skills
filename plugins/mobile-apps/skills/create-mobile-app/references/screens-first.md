@@ -479,13 +479,27 @@ node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' step --i
 
 ### Step 8 — The preview gate
 
+#### 8.0 — Sign-in for the phone
+
+**Telemetry checkpoint: `configure_native_authentication`**
+
+Power Apps Mobile Preview runs the app only once it has an app registration to sign in with.
+`power.config.json` has named an environment since Step 3, and from then on the host shows a "Missing auth client ID" screen in place of the app while `auth.config.json` has no `msal.clientId`.
+So the registration is chosen here, before the QR code, rather than with the rest of the setup after the architecture gate.
+The browser preview needs no registration and is already running, so nothing waits on this but the phone.
+
+Print:
+> "✓ Your app is running in the build plan's phone. To open it on your phone too, it needs the Entra ID app registration it will sign in with: choose one below, or skip and keep using the browser preview."
+
+**Shared step:** read [`auth-config.md`](auth-config.md) and follow it in full.
+
 #### 8.1 — The preview gate
 
 ```bash
 node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' step --id preview --status active --note "Preview gate - waiting for you to try the app"
 ```
 
-Put the app on the user's phone too. The dev server from Step 3.5 already serves it there, so this only draws the code; skip it when Step 3.5 fell back to `--localhost`:
+Put the app on the user's phone too. The dev server from Step 3.5 already serves it there, so this only draws the code; skip it when Step 3.5 fell back to `--localhost`, or when 8.0 left `msal.clientId` empty, because the phone would show only the missing-client-ID screen:
 
 ```bash
 cd -- '<working_dir>' || exit 1
@@ -503,7 +517,7 @@ Print:
 > "✓ Your app is running in the build plan's phone frame (`docs/create-app-plan.html`), served from `http://localhost:<port>`.
 > It shows sample data and the default theme; your design system and real data come next.
 > Try it right in the phone: move between screens, search, open a record, fill in a form.
-> 📱 To try it on your phone, scan the QR code (above, and under the plan's phone) with Power Apps Mobile Preview on the same network. Confirmation dialogs and the date picker are native controls, so the browser shows a stand-in and your phone shows the real thing.
+> 📱 To try it on your phone, scan the QR code (above, and under the plan's phone) with Power Apps Mobile Preview on the same network, and sign in with your work account. Confirmation dialogs and the date picker are native controls, so the browser shows a stand-in and your phone shows the real thing.
 > Device features such as the camera return sample results on both until they are wired after you approve the architecture; then they work on your phone as it reloads."
 
 Leave out the 📱 line when no QR code was drawn.

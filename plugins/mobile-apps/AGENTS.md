@@ -69,7 +69,11 @@ Do not add preparation rewrites for `scheme`, `package`, `bundleIdentifier`, `sr
      and shows them in a live web preview (preview gate) before any architecture
      work. One `npm run dev` server, started at Step 3.5, serves that preview and,
      through the QR code the preview gate draws, the same app on a phone; it runs
-     to the end of the run, so connecting real data reloads the app in place. The architecture gate (`architecture-planner`) then derives native
+     to the end of the run, so connecting real data reloads the app in place.
+     The app registration is chosen at the preview gate (Step 8.0), before the QR:
+     Power Apps Mobile Preview shows "Missing auth client ID" instead of the app
+     once `power.config.json` names an environment and `auth.config.json` has no
+     `msal.clientId`. Step 11 only re-checks it for connector permissions. The architecture gate (`architecture-planner`) then derives native
      capabilities, connectors, and the data platform from the approved screens,
      and the data model gate maps their Data Contract to Dataverse. Gates are
      named, not numbered. Phase A (up to the preview gate) lives in

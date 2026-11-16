@@ -1,6 +1,6 @@
 # Auth config
 
-A step both build orders of `/create-mobile-app` run: [`make-it-real.md`](make-it-real.md) (screens first) and
+A step both build orders of `/create-mobile-app` run: [`screens-first.md`](screens-first.md) (screens first, at the preview gate, before the phone QR code) and
 [`data-model-first.md`](data-model-first.md) (data model first) each read it under their own numbered heading.
 Fix it here and both orders get the fix.
 
@@ -8,16 +8,17 @@ Steps it names, by build order:
 
 | Named here | Screens first | Data model first |
 |---|---|---|
-| this step | Step 11 | Step 7 |
-| `Step <n>/<total>` in progress lines | 11/17 | 7/13 |
-| the environment step | Step 9.0 | Step 4 |
-| the Apply data model step | Step 12 | Step 8 |
+| this step | Step 8.0 | Step 7 |
+| `Step <n>/<total>` in progress lines | 8/17 | 7/13 |
+| the environment step | Step 3 | Step 4 |
+| the next step | the preview gate's QR code (Step 8.1) | the Apply data model step (Step 8) |
+| the sign-in re-check | Step 11 | none |
 
 <!-- The step starts here; everything above is about the file. -->
 
 This step asks the user for an app registration, so it opens as waiting. Without a phase of its
 own the plan showed nothing in progress here at all: the phase before it closes first, and the
-Dataverse phase does not open until the Apply data model step.
+next phase does not open until the next step.
 
 ```bash
 node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' step --id auth --status active --note "Waiting for your Entra ID app registration"
@@ -68,6 +69,7 @@ TENANT_ID=$(node -e "const j=require('./.resolved-environment.json'); console.lo
 ```
 
 If `TENANT_ID` is still empty, STOP and ask the user to fix environment resolution before continuing. Do not guess the tenant and do not copy `msal.tenantId` from `auth.config.json`.
+In screens first this is the first step that needs Azure CLI, so the usual fix is `az login --tenant <tenant>` (the tenant from the maker portal's environment details) in the foreground; offer `Skip for now` beside it, which runs "Skip auth for later" and leaves the browser preview as it is.
 
 #### Discover and choose an app registration
 
@@ -75,7 +77,9 @@ Read the approved `## Connectors` section in `native-app-plan.md`. Dataverse is
 part of the baseline and does not activate connector checks. If the section
 contains any non-Dataverse Power Platform connector, set
 `CONNECTOR_PERMISSION_ARG=--include-connectors`; otherwise set it to an empty
-string.
+string. In screens first the plan has no `## Connectors` section yet, because
+this step runs before the architecture gate: set it to an empty string, and the
+sign-in re-check checks the registration again once connectors are approved.
 
 Run the read-only discovery and native-runtime permission check:
 
@@ -189,7 +193,7 @@ Print:
 > Permission status: `<✓ All required permissions configured|✗ Missing required permissions|Not verified>`
 > Wrap verification: required"
 
-Jump to the Apply data model step.
+Continue with the next step.
 
 #### Create a new app registration in Power Apps Wrap
 
@@ -215,6 +219,9 @@ Write `auth.config.json` using `Edit`:
 
 Print:
 > `⚠️ Auth client ID is not configured. The app will fail to sign in until you add one. Run /set-app-registration-native later, or paste an app registration client ID into auth.config.json for tenant <tenant-guid>.`
+
+In screens first, where the sign-in re-check asks again, print this instead:
+> `↷ Phone preview skipped: the app needs an app registration to sign in on a phone. The browser preview is unaffected, and you can choose one after the architecture is approved.`
 
 Do NOT touch `src/playerConfig.ts` — auth identifiers live in `auth.config.json` only.
 

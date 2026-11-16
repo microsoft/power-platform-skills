@@ -491,9 +491,10 @@ test('create-mobile-app uses precise checkpoint names at major workflow boundari
       'build_and_validate_screens',
       'generate_preview_data_layer',
       'launch_web_preview',
+      // At the preview gate, before the phone QR: the dev player needs a client ID to run the app.
+      'configure_native_authentication',
       'install_approved_javascript_dependencies',
       'plan_app_architecture',
-      'configure_native_authentication',
       'apply_dataverse_data_model',
       'configure_native_capabilities',
       'generate_connector_data_sources',

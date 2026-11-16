@@ -135,13 +135,27 @@ test('screens are planned, built, and previewed before any architecture or data-
   assert.deepEqual([...positions].sort((a, b) => a - b), positions, 'steps must appear in run order');
   assert.doesNotMatch(createSkill, /### Step 2c|### Step 2d/);
 
-  // Nothing before the preview gate touches Dataverse, connectors, native wrappers, or auth,
-  // and SKILL.md holds nothing else: Phase B is only read once the preview is approved.
+  // Nothing before the preview gate touches Dataverse, connectors, or native wrappers, and SKILL.md
+  // holds nothing else: Phase B is only read once the preview is approved.
   const phaseA = createSkillPhaseA();
   for (const outside of ['Invoke skill: /add-', 'create-dataverse-snapshot.js', 'detect-publisher-prefix.js',
-    'discover-app-registrations.js', 'mobile-app:architecture-planner', 'auth.config.json` using `Edit`']) {
+    'mobile-app:architecture-planner']) {
     assert.ok(!phaseA.includes(outside), `Phase A must not reach ${outside}`);
   }
+  // Sign-in is the one exception. Power Apps Mobile Preview shows "Missing auth client ID" instead
+  // of the app until auth.config.json has one, so the registration is chosen at the preview gate:
+  // after the browser preview is live, and before the QR code that opens the app on a phone.
+  const signIn = phaseA.indexOf('#### 8.0 — Sign-in for the phone');
+  assert.ok(phaseA.indexOf('phone --stage live') < signIn, 'the browser preview does not wait for sign-in');
+  assert.ok(signIn < phaseA.indexOf('discover-app-registrations.js'));
+  assert.ok(phaseA.indexOf('auth.config.json` using `Edit`') < phaseA.indexOf('phone --qr-image'));
+  assert.match(section(phaseA, '#### 8.1 — The preview gate', '**On `Change screens`,**'),
+    /skip it when Step 3\.5 fell back to `--localhost`, or when 8\.0 left `msal\.clientId` empty/);
+  // Step 11 re-checks the chosen registration once connectors are approved, instead of asking again.
+  const recheck = section(createSkill, '### Step 11 — Auth config', '### Step 12 —');
+  assert.match(recheck, /--client-id '<msal\.clientId>' --include-connectors/);
+  assert.match(recheck, /\*\*No client ID\*\* \(the user skipped at Step 8\.0\): read \[`auth-config\.md`\]/);
+  assert.doesNotMatch(recheck, /Telemetry checkpoint/, 'the checkpoint fires once, where sign-in is set up');
   assert.doesNotMatch(phaseA, /^### Step (?:9|1[0-7])\b/m, 'Phase B steps belong in references/make-it-real.md');
   assert.match(phaseA, /On `Looks good - continue`[\s\S]*\*\*Continue with Phase B:\*\* read \[`references\/make-it-real\.md`\]\(make-it-real\.md\) in full now/);
 
@@ -231,7 +245,12 @@ test('the first screen reaches the phone while the rest are still building', () 
 test('SKILL.md stays small enough to keep Phase A fast', () => {
   // Every model turn re-reads what the run has loaded, so the orchestrator file's size is paid
   // on every Phase A turn. Phase B detail belongs in references/make-it-real.md.
-  const bytes = Buffer.byteLength(createSkillPhaseA(), 'utf8');
+  // Counted as the model loads them: the two files themselves, without the shared steps they name.
+  // A shared step is its own file, read when the run reaches it, and the only one Phase A reaches
+  // (sign-in, at the preview gate) comes after the preview is already live.
+  const skillDir = path.join(pluginRoot, 'skills', 'create-mobile-app');
+  const bytes = ['SKILL.md', path.join('references', 'screens-first.md')]
+    .reduce((total, file) => total + fs.statSync(path.join(skillDir, file)).size, 0);
   assert.ok(bytes < 60 * 1024, `SKILL.md is ${bytes} bytes; move detail Phase A does not need into references/`);
   assert.ok(createSkillPhaseB().length > 0);
 });

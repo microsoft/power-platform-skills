@@ -31,7 +31,7 @@ Both build orders make the same app to the same quality bar, and in both the use
 
 | Build order | Flow | What the user sees |
 |---|---|---|
-| **Screens first** (recommended) | [`references/screens-first.md`](references/screens-first.md) (Steps 1-8), then [`references/make-it-real.md`](references/make-it-real.md) (Steps 9-17) | The screens are planned and built on sample data, and the app runs live in the build plan's phone within minutes, each screen appearing as it finishes; once they are all built, a QR code puts the same app on the user's phone. The design system, architecture, data model, sign-in, and connections follow, and the running app switches to real data in place. |
+| **Screens first** (recommended) | [`references/screens-first.md`](references/screens-first.md) (Steps 1-8), then [`references/make-it-real.md`](references/make-it-real.md) (Steps 9-17) | The screens are planned and built on sample data, and the app runs live in the build plan's phone within minutes, each screen appearing as it finishes; once they are all built, the user picks the app registration it signs in with and a QR code puts the same app on their phone. The design system, architecture, data model, and connections follow, and the running app switches to real data in place. |
 | **Data model first** | [`references/data-model-first.md`](references/data-model-first.md) (Steps 1-13) | The architecture, data model, and screen specifications are approved up front, and the tables, connectors, and services exist before any screen is written. The app first runs at the end, on real data. |
 
 Read only the chosen flow. The other flow's steps, phases, and gates never apply to the run, even where their step numbers match.
@@ -208,7 +208,7 @@ Otherwise ask one `AskUserQuestion` that opens with the brief, so choosing an or
 
 | Header | Question | Options |
 |---|---|---|
-| `build order` | "Here's what I'll build:", the brief's bullets, then "How should I build it?" | **Screens first (recommended)** - "Watch your screens get built and run live in the build plan's phone within minutes, on sample data. The data model, sign-in, and connections are set up afterwards while the app stays on screen." · **Data model first** - "Approve the architecture and data model first, create the tables and connections, then build the screens on real data. The app first runs at the end." |
+| `build order` | "Here's what I'll build:", the brief's bullets, then "How should I build it?" | **Screens first (recommended)** - "Watch your screens get built and run live in the build plan's phone within minutes, on sample data. The data model and connections are set up afterwards while the app stays on screen." · **Data model first** - "Approve the architecture and data model first, create the tables and connections, then build the screens on real data. The app first runs at the end." |
 
 A typed answer instead of an option changes the brief: revise the brief and `.tmp/requirements.json` from it, then ask this question again.
 

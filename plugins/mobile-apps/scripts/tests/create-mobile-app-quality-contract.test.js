@@ -305,9 +305,10 @@ test('no user-authored value reaches the shell as a command argument', () => {
 });
 
 test('authentication discovers and checks registrations before writing a client ID', () => {
+  // Screens first chooses the registration at the preview gate, so the phone can sign in.
   const auth = skill.slice(
-    skill.indexOf('### Step 11 — Auth config'),
-    skill.indexOf('### Step 12 — Apply data model'),
+    skill.indexOf('#### 8.0 — Sign-in for the phone'),
+    skill.indexOf('#### 8.1 — The preview gate'),
   );
   const discovery = auth.indexOf('discover-app-registrations.js');
   const write = auth.indexOf('#### Verify and write the selected client ID');

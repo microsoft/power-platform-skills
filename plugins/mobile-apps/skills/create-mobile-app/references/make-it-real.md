@@ -63,7 +63,7 @@ leaves a plan that explains nothing:
 | `architecture` | Architecture gate (Step 10) | `dataPlatform`, `nativeCapabilities[]` and `connectors[]` as `{ name, reason }` — a bare name cannot be approved or rejected, the reason is the decision |
 | `dataModel` | Data model gate (Step 10) | `connectorOnly` when there are no tables; otherwise `tables[]` with `logicalName`, `displayName`, `status` (`new`/`reused`/`modified`, or the plan's `create`/`reuse`/`extend`), `purpose` (what it holds), **`reason` (why it is created, reused or extended)**, `columns[]` (`logicalName`, `displayName`, `type`, `key: PK\|FK`), `relationships[]` (`relatedTable`, `name`, `cardinality`) |
 | `offline` | Data model gate (Step 10) | `enabled`, `mode`, `tables[]`, `rationale` |
-| `auth` | Step 11 | `status` |
+| `auth` | Step 8.0, or Step 11 when the user skipped it there | `status` |
 | `trust` | Step 13, after capabilities and connectors are wired | `permissions[]` (`name`, `status` as one of the acquisition patterns below, **`detail`: when access is requested and why**), `handles[]`, `notCollected[]`, `battery[]` (`name`, `detail`) |
 
 The ER diagram is **built from `dataModel.tables`**, so populate the structured fields rather
@@ -716,9 +716,20 @@ node "$DOCS" --working-dir '<working_dir>' step --id dataverse --status skipped
 
 ### Step 11 — Auth config
 
-**Telemetry checkpoint: `configure_native_authentication`**
+The app registration was chosen at Step 8.0, before the architecture gate approved any connectors, so the phone could sign in at the preview gate.
+This step checks it against what was approved since. Read `msal.clientId` and `msal.tenantId` from `auth.config.json`:
 
-**Shared step:** read [`auth-config.md`](auth-config.md) and follow it in full.
+- **No client ID** (the user skipped at Step 8.0): read [`auth-config.md`](auth-config.md) now and follow it in full, using the approved `## Connectors` section. The "next step" it continues with is Step 12.
+- **A client ID, and `## Connectors` has no non-Dataverse Power Platform connector:** the registration was already checked for everything the app needs. Print `✓ Sign-in was set up at the preview gate.` and continue to Step 12.
+- **A client ID, and `## Connectors` has a non-Dataverse Power Platform connector:** connectors need more permissions than Step 8.0 checked for. Check that one registration with the connector permissions:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/discover-app-registrations.js" --tenant-id '<msal.tenantId>' --client-id '<msal.clientId>' --include-connectors
+```
+
+Then follow "Verify and write the selected client ID" in [`auth-config.md`](auth-config.md) with that result; any discovery failure is permission check `unavailable`.
+While it waits on the user, show it in the plan with `step --id auth --status active --note "Waiting: the app registration needs connector permissions"`, and close it with `--status done` afterwards.
+If the user chooses another registration, follow "Discover and choose an app registration" there with `CONNECTOR_PERMISSION_ARG=--include-connectors`, and tell them a phone already signed in with the old registration signs in again when it reloads.
 
 ### Step 12 — Apply data model
 
@@ -769,7 +780,7 @@ node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' phone --
 When the preview gate drew no QR code (the server fell back to `--localhost`), use `--stage building` instead; the dev server step draws the code.
 Tell the user once:
 
-> "→ Your app now reads real data, which needs a signed-in host, so the build plan's phone shows the QR code instead of the browser preview. A phone that already scanned it keeps running the app: it may show errors for a moment while the data layer switches over, then reloads with your live data, and device features such as the camera use the real hardware. Sign in when it asks. After the run, `npm run web` opens the same app signed in, with live data, in your browser."
+> "→ Your app now reads real data, which needs a signed-in host, so the build plan's phone shows the QR code instead of the browser preview. A phone that already scanned it keeps running the app: it may show errors for a moment while the data layer switches over, then reloads with your live data, and device features such as the camera use the real hardware. Sign in again if it asks. After the run, `npm run web` opens the same app signed in, with live data, in your browser."
 
 Without a QR code, say instead:
 
