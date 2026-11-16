@@ -143,8 +143,7 @@ function renderEvaluations(data) {
   const current = allSkills.filter((skill) => skill.evidence.some((item) => item.fresh && item.complete)).length;
   const models = [...new Set(allSkills.flatMap((skill) => skill.evidence.map((item) => item.model)))].sort();
   const body = `<div class="wrap eval-page">
-  <div class="intro"><div><p class="section-label">Evaluation evidence</p><h1>What have we tested?</h1><p class="lede">See how each skill performed on repeatable tasks, with and without the skill installed.</p><a href="#methodology">How to read these results</a></div>
-  <aside class="scope"><strong>Offline only</strong><p>These checks assess generated artifacts and skill routing. They do not verify a live Power Platform environment, deployment, security, or production readiness.</p></aside></div>
+  <div class="intro"><div><p class="section-label">Evaluation evidence</p><h1>What have we tested?</h1><p class="lede">See how each skill performed on repeatable tasks, with and without the skill installed.</p><a href="#methodology">How to read these results</a></div></div>
   <nav class="eval-jump" aria-label="Evaluation sections"><a href="#results">Skill results</a><a href="#usage">Token usage</a></nav>
   <section class="coverage" aria-label="Published coverage"><div><strong>${data.plugins.length}</strong><span>marketplace plugins</span></div><div><strong>${allSkills.length}</strong><span>locally discovered skills</span></div><div><strong>${evaluated}<span> / ${allSkills.length}</span></strong><span>skills with published evidence</span></div><div><strong>${current}</strong><span>with current, complete evidence</span></div></section>
   ${evaluated === 0 ? '<div class="empty-state"><h2>No evaluation results published yet</h2><p>The inventory below is real. Skills stay marked "Not evaluated" until a validated run is included in the site build.</p></div>' : ''}
