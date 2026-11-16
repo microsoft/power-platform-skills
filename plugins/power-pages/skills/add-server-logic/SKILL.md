@@ -468,6 +468,7 @@ Repeat this step for each approved server logic item. Create or update `<PROJECT
 5. **No imports or requires**: No `import`, `require`, or external dependencies.
 6. **No browser APIs**: No `fetch`, `XMLHttpRequest`, `setTimeout`, `setInterval`, `console.log`, or DOM APIs.
 7. **Async when needed**: Mark functions as `async` only when they use `await` (HttpClient calls). Dataverse connector methods (`Server.Connector.Dataverse.*`) are **synchronous** — do NOT use `async`/`await` with them.
+8. **Callbacks**: Use arrow functions (`rows.map(r => r.id)`, `rows.sort((a, b) => a.rank - b.rank)`) or named helpers nested inside a handler.
 
 #### Prohibited Script Patterns
 
@@ -475,7 +476,11 @@ The Power Pages server-side script validator rejects scripts containing certain 
 
 | Pattern | Regex | Caveat |
 |---------|-------|--------|
-| JavaScript `with` statement | `with\s*\(` | The regex matches the substring `with(` **anywhere** in the file — including inside string literals and inside other identifiers. OData filter functions like `startswith(`, `endswith(`, and `groupwith(` will trip it because they end with `with(`. |
+| JavaScript `with` statement | `with\s*\(` (case-insensitive) | The regex matches the substring `with(` **anywhere** in the file — including inside string literals and inside other identifiers. OData filter functions like `startswith(`, `endswith(`, and `groupwith(` will trip it because they end with `with(`. |
+| Anonymous functions and `Function` constructor | `Function\s*\(` (case-insensitive) | The runtime scans raw source, including comments, strings, and longer identifiers. Anonymous callbacks such as `.map(function (r) { ... })` are rejected. Use arrow callbacks or named nested helpers; top-level `function get()` remains valid. |
+
+These restrictions apply to server logic `.js` files, not frontend JavaScript.
+The local validator mirrors these runtime checks ([#870](https://github.com/microsoft/power-platform-skills/issues/870)).
 
 **Workaround for OData functions** — split the literal so `with(` is not contiguous in source:
 
@@ -542,7 +547,11 @@ function post() {
         const targetStatus = body.targetStatus;
 
         // 1. Read the current record from Dataverse
-        const current = Server.Connector.Dataverse.RetrieveRecord("<table-name>", entityId, "?$select=<status-field>");
+        const readResponse = JSON.parse(Server.Connector.Dataverse.RetrieveRecord("<table-name>", entityId, "$select=<status-field>"));
+        if (readResponse.IsSuccessStatusCode === false || !(readResponse.StatusCode >= 200 && readResponse.StatusCode < 300)) {
+            throw new Error("Dataverse read failed: " + readResponse.StatusCode);
+        }
+        const current = JSON.parse(readResponse.Body);
         const currentStatus = current["<status-field>"];
 
         // 2. Validate the transition
@@ -566,7 +575,10 @@ function post() {
         // 3. Execute the write — server performs the Dataverse update
         const updateData = {};
         updateData["<status-field>"] = targetStatus;
-        Server.Connector.Dataverse.UpdateRecord("<table-name>", entityId, JSON.stringify(updateData));
+        const writeResponse = JSON.parse(Server.Connector.Dataverse.UpdateRecord("<table-name>", entityId, JSON.stringify(updateData)));
+        if (writeResponse.IsSuccessStatusCode === false || !(writeResponse.StatusCode >= 200 && writeResponse.StatusCode < 300)) {
+            throw new Error("Dataverse update failed: " + writeResponse.StatusCode);
+        }
 
         Server.Logger.Log("<name> transition executed: " + currentStatus + " → " + targetStatus);
 
@@ -623,6 +635,10 @@ function post() {
             payload
         );
 
+        const response = JSON.parse(result);
+        if (response.IsSuccessStatusCode === false || !(response.StatusCode >= 200 && response.StatusCode < 300)) {
+            throw new Error("Dataverse custom action failed: " + response.StatusCode);
+        }
         Server.Logger.Log("<name> custom action completed successfully");
 
         return JSON.stringify({
@@ -660,6 +676,10 @@ function post() {
             payload
         );
 
+        const response = JSON.parse(result);
+        if (response.IsSuccessStatusCode === false || !(response.StatusCode >= 200 && response.StatusCode < 300)) {
+            throw new Error("Dataverse bound action failed: " + response.StatusCode);
+        }
         Server.Logger.Log("<name> bound action completed for entity " + entityId);
 
         return JSON.stringify({
@@ -694,6 +714,10 @@ function get() {
             null
         );
 
+        const response = JSON.parse(result);
+        if (response.IsSuccessStatusCode === false || !(response.StatusCode >= 200 && response.StatusCode < 300)) {
+            throw new Error("Dataverse custom function failed: " + response.StatusCode);
+        }
         Server.Logger.Log("<name> custom function completed successfully");
 
         return JSON.stringify({
@@ -721,9 +745,18 @@ function get() {
 
 #### Dataverse Response Shape (Critical for Frontend Integration)
 
-When a function returns the result of a `Server.Connector.Dataverse.*` method, the client sees a double-wrapped payload — the most common cause of broken frontend integrations. Before writing the function, pick one of three response shapes and record the choice for Phase 9: **Approach A — raw passthrough** (return the connector result as-is), **Approach B — envelope that wraps the connector result** (return `{ status, data: result }` without unwrapping `Body`), or **Approach C — fully normalized** (parse `Body` server-side and return a feature-specific shape — recommended for non-generic endpoints).
+`Server.Connector.Dataverse.*` returns a JSON string.
+Parse the connector result with `JSON.parse(result)` before accessing `StatusCode`, `Body`, or `Headers`; `Body` is another JSON string.
+Check the connector status before reporting success.
+Parse read bodies explicitly; an empty or malformed read body is an error, not an empty record set.
+Successful writes can have an empty body, so do not parse it unless the operation returns a payload.
+Pass read query options without a leading `?` (for example, `"$select=contactid,firstname"`); the connector inserts the query separator.
 
-See `${PLUGIN_ROOT}/skills/add-server-logic/references/frontend-integration-reference.md` → "Dataverse Connector Response Format" for the double-wrapping explanation, the `CreateRecord` / `entityid` header behavior, and server- and client-side examples for each shape.
+Before writing the function, pick a response shape and record it for Phase 9: **Approach A - raw passthrough** (return the connector string unchanged), **Approach B - wrapped passthrough** (return `{ status, data: result }`, where `data` remains a string), or **Approach C - normalized** (parse the connector result and its `Body` server-side, then return a feature-specific shape).
+Prefer Approach C for feature endpoints.
+
+Read `${PLUGIN_ROOT}/skills/add-server-logic/references/frontend-integration-reference.md` -> "Dataverse Connector Response Format" before implementing Dataverse reads or writes.
+It contains server/client parsing examples and explains how to extract a GUID from the `CreateRecord` connector's `OData-EntityId` URL.
 
 #### Referencing Secrets in Code
 
@@ -781,6 +814,8 @@ Before saving, verify the code against these constraints:
 | No external dependencies | No `import`, `require`, `module.exports` |
 | No browser APIs | No `fetch`, `XMLHttpRequest`, `setTimeout`, `console.log`, `document`, `window` |
 | Async only when needed | Only functions using `await` are marked `async` |
+| Runtime patterns | Apply the raw-source checks in "Prohibited Script Patterns" |
+| Dataverse results | Apply the parsing and status checks in "Dataverse Response Shape" |
 | ECMAScript 2023 compliant | Standard JS features only (optional chaining, nullish coalescing, etc. are fine) |
 
 ### 5.6 Git Commit
@@ -1202,7 +1237,7 @@ Provide testing instructions:
 Use the frontend integration reference from Phase 9 for the exact calling pattern that matches the site's stack.
 
 5. **Check diagnostics** — Server.Logger output can be viewed in Power Pages design studio diagnostics
-6. **If the endpoint returns an error or unexpected response** — see [Troubleshooting Server Logic Execution Errors](#troubleshooting-server-logic-execution-errors) for the Playwright + `X-Ms-UserTrace` debugging flow
+6. **If the endpoint returns an error or unexpected response** - see [Troubleshooting Server Logic Execution Errors](#troubleshooting-server-logic-execution-errors) for the Playwright and `x-ms-user-trace` debugging flow
 
 **Output**: Code validated, API URL provided, test guidance given
 
@@ -1297,7 +1332,9 @@ After deployment (or if skipped), remind the user:
 
 ## Troubleshooting Server Logic Execution Errors
 
-When a deployed server logic endpoint returns an error or unexpected response, the underlying cause is usually hidden inside the `X-Ms-UserTrace` response header — a base64-encoded blob containing the runtime diagnostic logs. The Power Pages Edge browser extension shows the same data, but inspecting the response header is the fastest path when iterating against a live site.
+When a deployed server logic endpoint returns an error or unexpected response, inspect the `x-ms-user-trace` response header, which contains base64-encoded JSON diagnostic logs when the payload fits inline.
+Larger traces use `x-ms-user-trace-id` instead; that value is an identifier, not base64-encoded logs.
+The Power Pages Edge browser extension shows the same data.
 
 Use this flow whenever a server logic call fails or returns a different response than expected:
 
@@ -1315,21 +1352,27 @@ Use `mcp__plugin_power-pages_playwright__browser_network_requests` to list netwo
 
 - The HTTP status code (e.g., 200, 400, 500)
 - The response body (often a generic error or empty payload when validation fails)
-- **Most importantly: the `X-Ms-UserTrace` response header** — this is where the actual diagnostic logs live
+- The `x-ms-user-trace` header (inline logs) or `x-ms-user-trace-id` header (a reference to a larger trace)
 
 If `browser_network_requests` does not surface the response headers directly, fall back to `mcp__plugin_power-pages_playwright__browser_evaluate` and read the headers from a `fetch()` call:
 
 ```javascript
 const res = await fetch('/_api/serverlogics/<name>', { method: 'GET', credentials: 'include' });
-const trace = res.headers.get('X-Ms-UserTrace');
-return { status: res.status, body: await res.text(), trace };
+const trace = res.headers.get('x-ms-user-trace');
+const traceId = res.headers.get('x-ms-user-trace-id');
+return { status: res.status, body: await res.text(), trace, traceId };
 ```
 
-### 3. Decode the `X-Ms-UserTrace` Header
+### 3. Inspect the trace
 
-The header value is base64-encoded JSON. Decode it.
+Decode `x-ms-user-trace` as base64-encoded JSON when present.
+If only `x-ms-user-trace-id` is present, use the Power Pages browser extension to inspect the trace; do not attempt to decode the identifier as logs.
+If neither header is present, report that response diagnostics are unavailable rather than treating the absence as success.
 
-The decoded payload contains the diagnostic log entries — including the actual error message, the prohibited pattern (if script validation failed).
+The decoded payload contains diagnostic log entries, including the prohibited pattern if script validation failed.
+For HTTP 200 responses with missing rows, log the connector result's type, parsed `StatusCode`, and record count.
+Confirm both JSON layers were parsed before investigating table permissions.
+Avoid logging record contents or secrets.
 
 After fixing, redeploy via `/deploy-site` and restart the site so the change is picked up immediately.
 
@@ -1359,7 +1402,10 @@ After fixing, redeploy via `/deploy-site` and restart the site so the change is 
 
 ### SDK Pattern Source of Truth
 
-Do not treat this skill file as the canonical SDK reference. The Phase 3 Microsoft Learn fetch is the source of truth for SDK usage patterns, supported methods, signatures, and connector behavior. Keep only task-specific decisions in the plan and implementation notes.
+Use the Phase 3 Microsoft Learn fetch for SDK methods and signatures.
+Apply the runtime constraints and response-shape corrections in Phase 5.3 even when a fetched sample omits them.
+If the deployed runtime differs, inspect its diagnostic headers and connector result type before changing the integration.
+Keep task-specific decisions in the plan and implementation notes.
 
 ### Progress Tracking
 
