@@ -33,3 +33,5 @@ First preview release: ships the `/pcf:pcf` skill, matrix-pinned templates and r
 - A `.ts` file with hundreds of `<Type>value` casts is now analyzed instead of being treated as unparseable, which had reported every Pages call in it as unguarded.
 - A local object literal named like the context, such as `const ctx = { device: { captureImage() { return 1; } } }`, is no longer mistaken for the PCF context when only its own simple functions are called.
 - The pcf evals report a case with nothing graded as unscored, not passed; exit status unchanged.
+- New projects' dependency lock moves minimatch from 9.0.9 to 11.0.8 (GHSA-g3hv-75wg-m249).
+- Generated projects find their Jest tests when the project path contains a dot-folder, and run only the tests in the project's `__tests__` folder (#849).

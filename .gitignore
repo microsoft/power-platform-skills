@@ -1,6 +1,7 @@
 # Eval artifacts (generated during test runs)
 evals/artifacts/
 evals/temp/
+evals/runtime/node_modules/
 
 # Eval reports (aggregated results)
 evals/reports/

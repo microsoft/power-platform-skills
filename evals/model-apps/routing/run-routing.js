@@ -40,7 +40,7 @@ const { spawn, spawnSync } = require('node:child_process');
 
 const { TIERS } = require('../lib/eval-args.js');
 const { TranscriptParser, AGENTS } = require('./lib/transcript.js');
-const { buildInvocation, quoteForCmd } = require('./lib/agents.js');
+const { buildInvocation, quoteForCmd, trialPrompt, TRIAL_NOTE } = require('./lib/agents.js');
 const { summarizeCase, validateEvals, decisionOf } = require('./lib/grade.js');
 
 const REPO_ROOT = path.resolve(__dirname, '..', '..', '..');
@@ -390,7 +390,7 @@ async function runTrialWithAgent(opts, evalCase, plugin) {
       bin,
       args: inv.args,
       env: inv.env,
-      prompt: evalCase.prompt,
+      prompt: trialPrompt(evalCase.prompt),
       cwd,
       timeoutMs: opts.timeout * 1000,
       plugin,
@@ -441,7 +441,7 @@ async function runRouting(opts, { runTrial = runTrialWithAgent, evalsData, write
   if (opts.dryRun) {
     const inv = buildInvocation(opts.agent, { pluginDir: PLUGIN_DIR, model: opts.model, copilotHome: '<temp COPILOT_HOME>' });
     write(`# dry run — would launch ${cases.length} case(s) × ${opts.runs} trial(s):`);
-    write(`#   ${opts.agentBin || inv.bin} ${inv.args.join(' ')}   (prompt on stdin, cwd = empty temp dir)`);
+    write(`#   ${opts.agentBin || inv.bin} ${inv.args.join(' ')}   (prompt on stdin, cwd = empty temp dir, each prompt follows this note: ${TRIAL_NOTE})`);
     for (const c of cases) write(`#   #${c.id} [${c.tier}] expect ${c.expect === null ? 'none' : c.expect}: ${c.prompt}`);
     return { exitCode: 0, results: null };
   }

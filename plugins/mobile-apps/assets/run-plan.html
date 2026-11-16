@@ -325,6 +325,9 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
         <span class="topbar-sep">|</span>
         <span id="updatedAt" data-generated="__ATTR_GENERATED_ISO__">Updated __HTML_GENERATED_AT__ UTC</span>
       </div>
+      <div class="topbar-sub">
+        <span id="refreshStatus" role="status"></span>
+      </div>
     </div>
   </div>
   <div class="topbar-right">
@@ -1844,22 +1847,10 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
   });
   renderSteps();
 
-  /**
-   * The agent rewrites this file in place, and the page is opened over file://, where fetch() is
-   * CORS-blocked - so there is no way to poll for changes and patch the DOM. A reload is the only
-   * mechanism available, which makes *when* it happens the whole design:
-   *
-   *  - Restore the open tab and scroll position through sessionStorage, so a reload never throws
-   *    the reader back to the top of Overview.
-   *  - Pause while the reader is actually using the page. Being yanked mid-sentence is worse than
-   *    seeing a slightly stale plan.
-   *  - Stop entirely once nothing is in progress.
-   */
+  // Both automatic and manual refreshes replace the document. Keep the reader's
+  // tab and scroll position; the shared controller below owns when to refresh.
   var STORE_TAB = 'mobile-plan-tab';
   var STORE_SCROLL = 'mobile-plan-scroll';
-  var RELOAD_MS = 10000;
-  var QUIET_MS = 30000;
-  var lastInteraction = 0;
 
   function showTab(tab) {
     var button = document.querySelector('.nav-btn[data-tab="' + tab + '"]');
@@ -1873,14 +1864,9 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
 
   document.querySelectorAll('.nav-btn').forEach(function (btn) {
     btn.addEventListener('click', function () {
-      lastInteraction = Date.now();
       showTab(btn.dataset.tab);
       try { sessionStorage.setItem(STORE_TAB, btn.dataset.tab); } catch (e) { /* private mode */ }
     });
-  });
-
-  ['scroll', 'keydown', 'pointerdown'].forEach(function (event) {
-    window.addEventListener(event, function () { lastInteraction = Date.now(); }, { passive: true });
   });
 
   window.addEventListener('beforeunload', function () {
@@ -1894,25 +1880,9 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
     if (savedScroll > 0) window.scrollTo(0, savedScroll);
   } catch (e) { /* sessionStorage unavailable; first-tab default is fine */ }
 
-  if (!summary.settled) {
-    setInterval(function () {
-      // Never interrupt someone who is reading. The next tick picks it up.
-      if (Date.now() - lastInteraction < QUIET_MS) return;
-      if (document.hidden) return;
-      try { sessionStorage.setItem(STORE_SCROLL, String(window.scrollY)); } catch (e) { /* ignore */ }
-      // A plain reload() is not enough. This page is opened over file://, so it carries no
-      // cache headers, and `render-template.js` publishes each rewrite with an atomic rename -
-      // a new inode at the same path. Browsers are free to serve the copy they already have,
-      // which is why the build animation could persist until a hard refresh. Reloading through
-      // a URL that differs every time is the only lever a file:// page has.
-      var fresh = location.href.split('#')[0].split('?')[0] + '?t=' + Date.now();
-      // replace(), not assign(): this fires every few seconds, and each one would otherwise be
-      // a back-button entry the reader has to escape.
-      location.replace(fresh);
-    }, RELOAD_MS);
-  }
 })();
 </script>
+<script nonce="__ATTR_CSP_NONCE__" id="planRefreshScript">__RAW_AUTO_REFRESH__</script>
 <footer class="ai-footer">AI-generated content may be incorrect</footer>
 </body>
 </html>

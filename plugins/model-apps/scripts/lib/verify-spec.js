@@ -48,7 +48,7 @@ const { formEmbedsOfPage, verifyFormPageEmbed } = require('./form-page-embeds.js
 const { answerOf, statusReasonChecks, alternateKeyChecks } = require('./status-reasons-keys.js');
 const { columnTypeChecks, declaredTableFlags, verifyTableFlags } = require('./schema-feature-contract.js');
 const { verifyDateBehaviors } = require('./date-behavior.js');
-const { isDeclaredView, compileViewIntent } = require('./view-reconcile.js');
+const { isDeclaredView, declaredViewKey, compileViewIntent } = require('./view-reconcile.js');
 const { expectedQuickFindProjection } = require('./quick-find.js');
 const { readXmlElements, XML_PREDEFINED } = require('./strict-xml.js');
 const { usesCommandStates, normalizeCommandStates } = require('./command-state-contract.js');
@@ -332,9 +332,52 @@ async function verifySpec(spec, read, opts = {}) {
   const readChoices = typeof read.choiceAttributes === 'function'
     ? memoizeChoiceReader((entity) => read.choiceAttributes(entity, { languageCode: spec.languageCode }))
     : null;
-  plan.each(spec.views || [], async ({ add }, views) => {
+  // #845: which row is the view. A DECLARED view (views[].reconcile "declared") is found as the build finds it (lib/view-reconcile.js
+  // planViewReconcile): by the row its managed binding in this workspace (`opts.managedManifest`) records, else by its `viewId` pin,
+  // and only then by its name on its table. Two declared views may share one name on one table under two keys (views[].key; a managed
+  // download writes one for each view), and the build makes and binds a row for each: the name finds only one of them, so the other
+  // view's columns and filters used to be held to its namesake's row and failed. A row read by id must be that id, on the view's
+  // table; when it is not there the view is missing, and a view of the same name is not taken in its place. A binding with an attempt
+  // still pending, a group record that is not usable, or a binding store that cannot be read at all (openBindingIn) proves nothing
+  // yet: the view is unverified (its managed listing says why), never read by its name in place of the row the store may bind.
+  // A keyed view that shares its table and name with another view of the spec, and has neither binding nor pin, is found by its name
+  // as before, but which of the rows of that name it is cannot be told, so its content is unverified rather than held to a row that
+  // may be the other view's; a check that fails on such a view names its key. Every other view is read by its name, as it always was.
+  const viewGuid = (g) => {
+    const s = String(g || '').trim().toLowerCase().replace(/^\{|\}$/g, '');
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(s) ? s : '';
+  };
+  const viewNameOn = (v) => `${String(v.entity).toLowerCase()}|${String(v.name).toLowerCase()}`;
+  const viewsByName = new Map();
+  for (const v of spec.views || []) if (v && v.entity != null) viewsByName.set(viewNameOn(v), (viewsByName.get(viewNameOn(v)) || 0) + 1);
+  const keyedNamesake = (v) => isDeclaredView(v) && typeof v.key === 'string' && !!v.key && viewsByName.get(viewNameOn(v)) > 1;
+  const viewIdentity = (v) => {
+    if (!isDeclaredView(v)) return null;
+    const key = declaredViewKey(v);
+    const pin = v.viewId === undefined ? '' : viewGuid(v.viewId);
+    const m = opts.managedManifest;
+    if (m && Array.isArray(m.groups)) {
+      const open = openBindingIn(m.pending, 'view', key) || openBindingIn(m.invalid, 'view', key);
+      if (open) return { key, open: notSettledDetail(key, open) };
+      const g = m.groups.find((x) => x && x.family === 'view' && x.key === key);
+      if (g) {
+        const id = viewGuid(g.root && g.root.id);
+        if (!id) return { key, open: `its managed binding (${key}) records no view id — unverified, not proven correct` };
+        if (pin && pin !== id) return { key, conflict: `its viewId ${String(v.viewId)} is not the view its managed binding (${key}) is bound to (${id}); correct or remove the viewId` };
+        return { key, id, by: `the view its managed binding (${key}) is bound to (${id})` };
+      }
+    }
+    return pin ? { key, id: pin, by: `the view its viewId pins (${pin})` } : null;
+  };
+  plan.each(spec.views || [], async ({ add: addCheck, unverified }, views) => {
   for (const v of views) {
     const viewName = `${String(v.entity).toLowerCase()}.${v.name}`;
+    // Two views of one name on one table are told apart in what fails by their keys; every other view reports as before.
+    const namesakeKey = keyedNamesake(v) ? declaredViewKey(v) : '';
+    const add = (kind, name, present, detail) => addCheck(kind, name, present, namesakeKey && !present ? `${detail ? `${detail} ` : ''}(view key ${namesakeKey})` : detail);
+    const who = viewIdentity(v);
+    if (who && who.open) { unverified.push(`view:${viewName} (${who.open})`); continue; }
+    if (who && who.conflict) { add('view', viewName, false, who.conflict); continue; }
     // Also select layoutxml so a CONTENT check can catch a spec column the view does not carry (an
     // added or renamed column that never landed would otherwise pass an existence-only verify). It
     // cannot catch a column REMOVED from the spec: reconcileView is additive-union, so the column stays
@@ -343,12 +386,21 @@ async function verifySpec(spec, read, opts = {}) {
     let rows = [];
     let readError = null;
     try {
-      rows = await read.queryRecords('savedquery', { select: ['savedqueryid', 'layoutxml', 'fetchxml'], filter: `returnedtypecode eq '${String(v.entity).toLowerCase()}' and name eq '${odataLit(v.name)}'`, top: 1 });
+      rows = who
+        ? await read.queryRecords('savedquery', { select: ['savedqueryid', 'returnedtypecode', 'layoutxml', 'fetchxml'], filter: `savedqueryid eq ${who.id}`, top: 1 })
+        : await read.queryRecords('savedquery', { select: ['savedqueryid', 'layoutxml', 'fetchxml'], filter: `returnedtypecode eq '${String(v.entity).toLowerCase()}' and name eq '${odataLit(v.name)}'`, top: 1 });
     } catch (error) {
       readError = error;
     }
-    const row = rows && rows[0];
-    add('view', viewName, row, readError ? String(readError.message || readError) : '');
+    let row = rows && rows[0];
+    // Read by id, the row is the view only when it IS that id (a reader that did not apply the filter answers another row), on the
+    // view's own table where the row says which.
+    if (who && row && (viewGuid(row.savedqueryid) !== who.id || (row.returnedtypecode != null && String(row.returnedtypecode).toLowerCase() !== String(v.entity).toLowerCase()))) row = undefined;
+    add('view', viewName, row, readError ? String(readError.message || readError) : who && !row ? `${who.by} was not found on its table; a view of the same name is not taken in its place` : '');
+    if (row && !who && namesakeKey) {
+      unverified.push(`view-content:${viewName} (several views on ${String(v.entity).toLowerCase()} have this name, and this one (${namesakeKey}) has neither a managed binding nor a viewId, so which of the rows it is cannot be told)`);
+      continue;
+    }
     const specCols = specViewColumnNames(v);
     if (row && row.layoutxml && specCols.length) {
       // Deployed column set from the saved view's layoutxml (<cell name="…"/> per column). We require
@@ -427,9 +479,10 @@ async function verifySpec(spec, read, opts = {}) {
   //
   // Which row is the chart: a DECLARED chart (charts[].reconcile "declared") that the managed bindings of this workspace
   // (`opts.managedManifest`) bind is the bound row, read by its id — the build resolves it so, and a namesake made since is not it. A
-  // bound row that is gone is missing; the name is not asked in its place. A group with an attempt still pending, or a stored record
-  // that is not usable, proves nothing about the chart: it is unverified (its managed listing says why). Every other chart is found by
-  // its name on its table, as before; two charts of that name are not told apart, so the chart is present but its content unverified.
+  // bound row that is gone is missing; the name is not asked in its place. A group with an attempt still pending, a stored record
+  // that is not usable, or a store that cannot be read at all (openBindingIn), proves nothing about the chart: it is unverified (its
+  // managed listing says why). Every other chart is found by its name on its table, as before; two charts of that name are not told
+  // apart, so the chart is present but its content unverified.
   //
   // The content columns are read only for the comparison; a reader that answers without them (the eval's synthesized reader answers
   // ids) has its charts checked for presence, and their content named unverified — a row's presence never stands in for what it holds.
@@ -439,9 +492,8 @@ async function verifySpec(spec, read, opts = {}) {
     const m = opts.managedManifest;
     if (!m || !Array.isArray(m.groups) || !isDeclaredChart(ch)) return null;
     const key = declaredChartKey(ch);
-    const unsettled = (list) => (Array.isArray(list) ? list : []).find((x) => x && ((x.family === 'chart' && x.key === key) || x.family === 'store'));
-    const open = unsettled(m.pending) || unsettled(m.invalid);
-    if (open) return { key, open: `its managed binding (${key}) is not settled (${open.code || open.reason || 'managed-binding-group-invalid'}) — unverified, not proven correct` };
+    const open = openBindingIn(m.pending, 'chart', key) || openBindingIn(m.invalid, 'chart', key);
+    if (open) return { key, open: notSettledDetail(key, open) };
     const g = m.groups.find((x) => x && x.family === 'chart' && x.key === key);
     if (!g) return null;
     const id = chartGuid(g.root && g.root.id);
@@ -528,16 +580,15 @@ async function verifySpec(spec, read, opts = {}) {
   // (committed root first), and keeps a maker's rename, so its spec name may find nothing, or a namesake made since. Every
   // check that asks ownDashboard (the dashboard check and its tile checks below, and the site map's dashboard subareas)
   // then reads the same row the managed check reads. A binding verify cannot use never falls back to the name: an
-  // authored dashboardId that is not the bound row fails, and a group with an attempt still pending, or a stored record
-  // that is not usable, is unverified (its managed listing says why).
+  // authored dashboardId that is not the bound row fails, and a group with an attempt still pending, a stored record
+  // that is not usable, or a store that cannot be read at all (openBindingIn), is unverified (its managed listing says why).
   const boundByName = new Map();
   if (opts.managedManifest && Array.isArray(opts.managedManifest.groups)) {
-    const unsettled = (list, key) => (Array.isArray(list) ? list : []).find((p) => p && p.family === 'dashboard' && p.key === key);
     for (const [key, d] of declaredDashboardsByKey(spec)) {
       if (!d.name) continue;
-      const open = unsettled(opts.managedManifest.pending, key) || unsettled(opts.managedManifest.invalid, key);
+      const open = openBindingIn(opts.managedManifest.pending, 'dashboard', key) || openBindingIn(opts.managedManifest.invalid, 'dashboard', key);
       if (open) {
-        boundByName.set(d.name, { detail: `its managed binding (${key}) is not settled (${open.code || open.reason || 'managed-binding-group-invalid'}) — unverified, not proven correct` });
+        boundByName.set(d.name, { detail: notSettledDetail(key, open) });
         continue;
       }
       const g = opts.managedManifest.groups.find((x) => x && x.family === 'dashboard' && x.key === key);
@@ -1544,7 +1595,8 @@ async function verifySpec(spec, read, opts = {}) {
       continue;
     }
     // A declared rule bound in this workspace's store, or one whose attempt is still pending, is checked by its own row id first
-    // (boundWorkflowOf), never by name: a namesake must not pass for it. Its key is the helper's (lib/rule-settlement.js ruleKey).
+    // (boundWorkflowOf), never by name: a namesake must not pass for it. One the store cannot settle (its record not usable, or the
+    // store unreadable) is unverified. Its key is the helper's (lib/rule-settlement.js ruleKey).
     const boundRule = boundWorkflowOf(opts.managedManifest, 'rule', rule.key ? String(rule.key) : `${entityLogical}/${rule.name}`, rule.reconcile === 'declared');
     if (boundRule) {
       await checkBoundWorkflow(read, 'business-rule', name, boundRule, (rule.status || 'Active') === 'Active', { add, unverified }, {
@@ -1605,7 +1657,8 @@ async function verifySpec(spec, read, opts = {}) {
     const entityLogical = String(flow.entity).toLowerCase();
     const name = `${entityLogical}.${flow.name}`;
     // A declared flow bound in this workspace's store, or one whose attempt is still pending, is checked by its own row id first
-    // (boundWorkflowOf), never by name: a namesake must not pass for it.
+    // (boundWorkflowOf), never by name: a namesake must not pass for it. One the store cannot settle (its record not usable, or the
+    // store unreadable) is unverified.
     const boundFlow = boundWorkflowOf(opts.managedManifest, 'bpf', `${entityLogical}/${flow.name}`, flow.reconcile === 'declared');
     if (boundFlow) {
       // An omitted status on a flow the store already holds means "keep the state its last build proved" (the build changes
@@ -2186,7 +2239,7 @@ async function verifySpec(spec, read, opts = {}) {
   // named `bpfUniqueName(flow.name)` (live-measured), and holding privileges on it is what lets a
   // persona run the process. Subset semantics as everywhere else — a persona legitimately holds far
   // more than this one grant.
-  plan.each(spec.businessProcessFlows || [], async ({ add }, flows) => {
+  plan.each(spec.businessProcessFlows || [], async ({ add, unverified }, flows) => {
   for (const f of flows) {
     if (!f || !f.securityRoles || !Array.isArray(f.securityRoles.personas)) continue;
     if (typeof read.rolePrivileges !== 'function' || typeof read.entityPrivileges !== 'function') continue;
@@ -2206,19 +2259,55 @@ async function verifySpec(spec, read, opts = {}) {
     // we could not look, so the derivation stands and the privilege read below fails closed anyway.
     let backingTable = bpfUniqueName(f.name);
     let flowMissing = false;
-    try {
-      const rows = await read.queryRecords('workflow', {
-        select: ['workflowid', 'uniquename'],
-        filter: bpfFilter(f.name, String(f.entity).toLowerCase()),
-        orderBy: 'createdon asc',
-        top: 5,
-      });
-      const row = rows && rows[0];
-      if (!row) flowMissing = true;
-      else if (row.uniquename) backingTable = String(row.uniquename).toLowerCase();
-      // A row WITHOUT a uniquename keeps the derivation: the flow demonstrably exists, so the
-      // derived name is the best available answer for anything this tool created.
-    } catch { /* could not look — keep the derivation; the privilege read below fails closed */ }
+    // A DECLARED flow is the row the presence check above holds it to (boundWorkflowOf), read here by its id, as the build grants its
+    // roles on the backing table of its settled row (sdk-build.js): a same-named flow found by name has another table, whose grants
+    // would prove nothing about this one. A binding the store cannot settle, a pending attempt that names no row, and a read that
+    // fails, answers another row or does not carry the row's stored backing table are unverified, never checked on a table found by
+    // name or derived from it.
+    const boundFlow = boundWorkflowOf(opts.managedManifest, 'bpf', `${String(f.entity).toLowerCase()}/${f.name}`, f.reconcile === 'declared');
+    if (boundFlow) {
+      if (!boundFlow.id) {
+        unverified.push(`bpf-roles:${f.name} (${boundFlow.open || 'an earlier build\'s change of it is still waiting to be proved, and the store does not name its row, so it is not looked up by name'})`);
+        continue;
+      }
+      const want = String(boundFlow.id).toLowerCase().replace(/^\{|\}$/g, '');
+      let list;
+      try {
+        list = Array.from((await read.queryRecords('workflow', { select: ['workflowid', 'uniquename'], filter: `workflowid eq ${boundFlow.id}`, top: 1 })) || []);
+      } catch (e) {
+        unverified.push(`bpf-roles:${f.name} (its bound row ${boundFlow.id} could not be read: ${String((e && e.message) || e).replace(/\s+/g, ' ').slice(0, 200)})`);
+        continue;
+      }
+      const row = list.find((w) => w && String(w.workflowid || '').toLowerCase().replace(/^\{|\}$/g, '') === want);
+      if (!row && list.length) { unverified.push(`bpf-roles:${f.name} (the read of its bound row ${boundFlow.id} answered another row)`); continue; }
+      if (!row) {
+        add('bpf-roles', f.name, false, `its bound row ${boundFlow.id} is not there, so its backing table cannot be identified and no role grant on it can be verified`);
+        continue;
+      }
+      // The build grants a declared flow's roles only on the backing table its row STORES (a table's logical name), never on one
+      // derived from the display name (an adopted or renamed flow keeps another), and stops when that name cannot be read
+      // (sdk-build.js bpf-backing-unproved). A row read without a usable stored name proves nothing about where the grants are.
+      const stored = typeof row.uniquename === 'string' ? row.uniquename.toLowerCase() : '';
+      if (!/^[a-z][a-z0-9_]{0,127}$/.test(stored)) {
+        unverified.push(`bpf-roles:${f.name} (its bound row ${boundFlow.id} was read without the name of its backing table, so no role grant on it can be verified)`);
+        continue;
+      }
+      backingTable = stored;
+    } else {
+      try {
+        const rows = await read.queryRecords('workflow', {
+          select: ['workflowid', 'uniquename'],
+          filter: bpfFilter(f.name, String(f.entity).toLowerCase()),
+          orderBy: 'createdon asc',
+          top: 5,
+        });
+        const row = rows && rows[0];
+        if (!row) flowMissing = true;
+        else if (row.uniquename) backingTable = String(row.uniquename).toLowerCase();
+        // A row WITHOUT a uniquename keeps the derivation: the flow demonstrably exists, so the
+        // derived name is the best available answer for anything this tool created.
+      } catch { /* could not look — keep the derivation; the privilege read below fails closed */ }
+    }
     if (flowMissing) {
       add('bpf-roles', f.name, false,
         `no business process flow named '${f.name}' exists on '${String(f.entity).toLowerCase()}', so its backing table cannot be identified and no role grant on it can be verified`);
@@ -2608,6 +2697,21 @@ function incompleteDuplicateRead(n) {
   return `the read answered ${n} definition row(s) and said more exist, so neither "deployed once" nor "not deployed" is proven`;
 }
 
+// The entry of a managed manifest's `pending` or `invalid` list that leaves the declared `family` artifact `key` unsettled: its own
+// group's, or the one entry readManagedManifest lists for a binding store it cannot read at all, e.g.
+//   { family: 'store', key: 'managed-bindings', reason: '…', code: 'managed-binding-store-unreadable' }
+// Such a store holds no group, so without this every declared artifact would look unbound and be found by its pin or name — a
+// namesake could pass for it. Views, charts, dashboards, business rules and process flows all ask this one helper, so a family cannot
+// miss the store case again. Null when nothing is open for the artifact.
+function openBindingIn(list, family, key) {
+  return (Array.isArray(list) ? list : []).find((x) => x && ((x.family === family && x.key === key) || x.family === 'store')) || null;
+}
+
+// What an artifact openBindingIn found unsettled reports: why, by the entry's code or reason, and that nothing about it is proven.
+function notSettledDetail(key, open) {
+  return `its managed binding (${key}) is not settled (${open.code || open.reason || 'managed-binding-group-invalid'}) — unverified, not proven correct`;
+}
+
 // The row a declared workflow (a business rule, family 'rule', or a process flow, 'bpf') is bound to in this workspace's store,
 // taken BEFORE any lookup by name: a name read cannot tell the bound row from a same-named one, so a pending rule renamed in Maker
 // beside an Active namesake would pass on the namesake's state. Answers
@@ -2619,7 +2723,9 @@ function incompleteDuplicateRead(n) {
 //                          a committed group whose declaration names the status its last build proved ('Active'|'Draft';
 //                          a process flow's `declaration.applied.status`). For a flow, an omitted `status` keeps that state
 //                          (lib/bpf-settlement.js editsOf), so it is the state verify expects; see the flow check;
-//   { id: null, pending }  a pending attempt whose row the view does not name: nothing can be checked safely, so it is unverified.
+//   { id: null, pending }  a pending attempt whose row the view does not name: nothing can be checked safely, so it is unverified;
+//   { id: null, open }     a declared entry whose group record is not usable, or a store that cannot be read at all (openBindingIn):
+//                          which row is its own is not known, so it is unverified and never looked up by name.
 // A committed group whose entry is no longer declared is left to the name check here: the build's legacy path reuses the oldest
 // namesake for it, and the managed section still holds the group to its bound id.
 function boundWorkflowOf(manifest, family, key, declared) {
@@ -2627,6 +2733,8 @@ function boundWorkflowOf(manifest, family, key, declared) {
   const p = (manifest.pending || []).find((x) => x && x.family === family && x.key === key);
   if (p) return { id: p.root && typeof p.root.id === 'string' && p.root.id ? p.root.id : null, pending: true };
   if (!declared) return null;
+  const open = openBindingIn(manifest.invalid, family, key);
+  if (open) return { id: null, pending: false, open: notSettledDetail(key, open) };
   const g = (manifest.groups || []).find((x) => x && x.family === family && x.key === key);
   if (g && g.root && typeof g.root.id === 'string' && g.root.id) {
     const applied = g.declaration && g.declaration.applied && g.declaration.applied.status;
@@ -2639,6 +2747,7 @@ function boundWorkflowOf(manifest, family, key, declared) {
 // reading by name: no id, a read that failed, or a reader that answered another row than the bound one is unverified, never a pass.
 // `words` = { draft, active } are the kind's own failure details.
 async function checkBoundWorkflow(read, kind, name, bound, wantActive, { add, unverified }, words) {
+  if (bound.open) { unverified.push(`${kind}:${name} (${bound.open})`); return; }
   const pendingNote = bound.pending ? 'an earlier build\'s change of it is still waiting to be proved, and ' : '';
   if (!bound.id) { unverified.push(`${kind}:${name} (${pendingNote}the store does not name its row, so it is not looked up by name)`); return; }
   const want = String(bound.id).toLowerCase().replace(/^\{|\}$/g, '');

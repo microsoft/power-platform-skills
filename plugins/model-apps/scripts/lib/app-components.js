@@ -289,6 +289,15 @@ function declaredForms(created) {
   return out;
 }
 
+// Every view id the build's result.created records: the `entity|name` entries, then each declared view that shares its name with another
+// one on its table and so has no entry of its own (sdk-build.js, the views step: `sameNamedViews`, { entity, name, key, id }). A spec
+// without such views has no `sameNamedViews`, so this is exactly the values of `created.views`, as before.
+function createdViewIds(created) {
+  const ids = Object.values((created && created.views) || {}).filter(Boolean);
+  for (const v of (created && created.sameNamedViews) || []) if (v && v.id && !ids.includes(v.id)) ids.push(v.id);
+  return ids;
+}
+
 // The components a NEW app is created with. The legacy projection (no `declared`) is what every existing spec sends: one
 // Main form per table, the views and the charts. `declared: true` (app.pinDeclaredArtifacts) lists every declared form —
 // other Main forms and Quick Create forms included — and the dashboards, still leaving out a Main form that a Main-form
@@ -301,7 +310,7 @@ function appComponentsFor(created, mainFormsByTable, { declared = false } = {}) 
     : Object.entries(created.forms || {}).filter(([table, id]) => id && allowed(table, id)).map(([, id]) => id);
   return {
     forms,
-    views: Object.values(created.views || {}).filter(Boolean),
+    views: createdViewIds(created),
     charts: Object.values(created.charts || {}).filter(Boolean),
     ...(declared ? { dashboards: Object.values(created.dashboards || {}).filter(Boolean) } : {}),
     ...(mainFormsByTable === undefined ? {} : { mainFormsByTable }),
@@ -348,7 +357,7 @@ async function applyAppMainForms(provision, appId, mainFormsByTable, { mainForms
 // declared form is listed (declaredForms); pinDeclaredArtifacts then drops a Main form the Main-form list leaves out.
 function declaredAppPins(created) {
   const values = (map) => Object.values(map || {}).filter(Boolean);
-  return { forms: declaredForms(created).map((form) => form.id), views: values(created && created.views), charts: values(created && created.charts), dashboards: values(created && created.dashboards) };
+  return { forms: declaredForms(created).map((form) => form.id), views: createdViewIds(created), charts: values(created && created.charts), dashboards: values(created && created.dashboards) };
 }
 
 // app.pinDeclaredArtifacts: add the declared ids to the app copy's explicit pins before a push. A fetch carries no
@@ -844,7 +853,7 @@ async function appEntityComponentsFor(sdk, appUnique, wanted) {
 
 module.exports = {
   currentAppLayer, currentLayerRows, currentLayerRow, savedPageRows, publishedAppLayer, appComponentRows, collectionRows, tableRefs, tableComponentIds, pinAppTables,
-  publishAppComponents, appComponentsFor, applyAppMainForms, explainAppPushWarnings, declaredAppPins, pinDeclaredArtifacts, exactMembershipOutcome,
+  publishAppComponents, appComponentsFor, applyAppMainForms, explainAppPushWarnings, declaredAppPins, pinDeclaredArtifacts, createdViewIds, exactMembershipOutcome,
   resolveMainForms, readMainFormMembership, publishedMainFormsProof, appMainFormsFor, appEntityComponentsFor,
   APP_COMPONENT_ENTITY_SOURCES, TABLE_NAME, readAppComponentInventory, appComponentEntities, downloadAppMainForms, setAppMembershipFloor, setAppThemeFloor,
 };

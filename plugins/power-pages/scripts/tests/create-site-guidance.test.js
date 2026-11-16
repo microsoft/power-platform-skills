@@ -135,6 +135,19 @@ test('template mutations preserve consent, result collection, cleanup and join b
   assert.match(entry, /otherwise execute sequentially/);
 });
 
+test('template previews retain responsive, inherited and legacy variant behavior', () => {
+  const selection = read('references/template-selection-workflow.md');
+  const importing = read('references/template-import-workflow.md');
+  assert.match(selection, /prefer `responsivePreviews` when present, including an empty array/);
+  assert.match(selection, /If either download returns `ok: false`.*omit that page/);
+  assert.match(selection, /variant's own preview definition overrides the family's/);
+  assert.match(selection, /Inherit family previews only when the variant defines neither field/);
+  assert.match(importing, /--responsivePreviewsJson/);
+  assert.match(importing, /legacy `previewImages`.*--previewImagesJson/);
+  assert.match(importing, /selected variant's effective previews, including inherited family previews/);
+  assert.match(importing, /Structured previews use explicit page\/device fields regardless of filenames/);
+});
+
 test('non-SPA disclosure, single accepted operation and verified baseline precede completion', () => {
   const workflow = readCreateSiteGuidance('non-spa');
   assert.ok(workflow.indexOf('## Preview disclosure') < workflow.indexOf('## Progress tracking'));

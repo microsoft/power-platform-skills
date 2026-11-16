@@ -3,7 +3,15 @@
 module.exports = {
   clearMocks: true,
   testEnvironment: "<rootDir>/test/pcf-jest-environment.cjs",
-  testMatch: ["<rootDir>/__tests__/**/*.test.ts"],
+  // Tests live in __tests__ at the project root, and only there: build output (out, obj,
+  // generated) and node_modules can hold copies of test files that must not run.
+  // roots is a directory path, so <rootDir> is safe in it. A testMatch glob that starts with
+  // <rootDir> is not (#849): Jest pastes the absolute project path into the glob and, on Windows,
+  // keeps a backslash before a dot as a glob escape, so a project under C:\work\.repo\ becomes
+  // "C:/work\.repo/..." and matches no file. testRegex is a plain RegExp tested against each path
+  // under roots, so the project's location never enters the pattern.
+  roots: ["<rootDir>/__tests__"],
+  testRegex: "\\.test\\.ts$",
   moduleNameMapper: {
     "\\.(css|scss)$": "<rootDir>/test/styleMock.js",
   },

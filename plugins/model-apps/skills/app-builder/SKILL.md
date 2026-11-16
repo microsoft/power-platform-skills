@@ -158,8 +158,8 @@ prod-ready** app; don't under-build (a bare table list) or over-build (surfaces 
   one existing view or chart the maker asks to change: a rebuild then applies its columns, filters, sort
   and joins (`linkEntities`) instead of only adding columns. Never set `title` on a new declared chart,
   and give a declared view its own name — not the stock `Active <plural>` or `Inactive <plural>`, which
-  every table already has, so changing one is an adoption. Two declared views on one table need different
-  names, and so do two declared charts: a `viewId` pin does not tell them apart, and the build refuses the
+  every table already has, so changing one is an adoption. Two declared charts on one table need different
+  names, and so do two declared views unless each has its own `key`: a `viewId` pin does not tell them apart, and the build refuses the
   pair (see Approvals in the advanced reference).
   For a new table you create, propose `entities[].quickFind.findColumns` (the primary name plus what a
   user types in the search box: a number, an email, a code) and confirm it with the maker; on an
@@ -720,9 +720,21 @@ gates the final *bulk* publish**, which also carries the edits made to existing 
 Without it those edits — and always an existing app's sitemap re-sync — still publish their one
 targeted artifact so the change takes effect (see *Notes & limits*).
 
+**Sensitive configuration in the workspace.** An earlier plugin version wrote environment-variable and
+connection-reference copies (which can hold values, defaults, Key Vault secret references and connection ids) into
+the workspace's `environment-variables` and `connection-references` folders and their `.metadata` folders. This
+version never deletes them for you. While such files remain, every command that opens that workspace prints one
+`WARNING:` naming the folders (never their content). A copy the plugin cannot prove is what the environment last
+held (an edit never sent, a file with no partner, a locked file) stops the step that needs it with
+`WORKSPACE_LEGACY_CONFIGURATION_COPY`, naming its two files. To clear either: when no build is running, move any
+change you still want into the App Spec or the deployment settings file (the build sends configuration only from
+those), close any program holding the files, delete the `.json` files in those folders, and run again. Tell the user
+what the warning or the stop names before deleting anything.
+
 **Recovery from a failed or halted build: run the full build again.** The build is idempotent — every
 phase re-uses what's already created and only fills the gaps. SDK metadata is persisted under
-`<working-dir>/.maker-workspace/` (override with `--workspace`). There is no apply-safe
+`<working-dir>/.maker-workspace/` (override with `--workspace`); environment-variable and connection-reference values,
+secret references and connection ids are never written there. There is no apply-safe
 `--from <phase>` shortcut; a full rerun is the correct and safe recovery path — after a `WEB_RESOURCE_UNVERIFIED`
 halt too: a web resource was written but its publication could not be confirmed (often because another customization
 held the environment's lock), the build recorded it, and a rerun using the **same writable workspace** writes it

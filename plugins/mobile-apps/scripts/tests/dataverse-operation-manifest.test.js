@@ -19,6 +19,7 @@ const {
   validateManifest,
 } = require('../build-dataverse-operation-manifest');
 const { operationFingerprint } = require('../dataverse-request');
+const { loadDetailedEntity } = require('../create-dataverse-snapshot');
 
 const NOW = '2026-08-19T00:00:00.000Z';
 const SNAPSHOT_AT = '2026-08-18T23:55:00.000Z';
@@ -495,6 +496,51 @@ function fullyAppliedSnapshot() {
     proposedCollisions: ['cr1_category', 'cr1_item'],
     exactUnavailable: ['cr1_deferred'],
   });
+}
+
+async function systemUserDetail(sourceEvidence = { SourceType: null }, attributeOverrides = {}) {
+  const attributes = ['systemuserid', 'azureactivedirectoryobjectid'].map((logicalName) => ({
+    LogicalName: logicalName,
+    SchemaName: logicalName,
+    AttributeType: 'Uniqueidentifier',
+    AttributeTypeName: { Value: 'UniqueidentifierType' },
+    RequiredLevel: { Value: logicalName === 'systemuserid' ? 'SystemRequired' : 'None' },
+    IsPrimaryId: logicalName === 'systemuserid',
+    ...sourceEvidence,
+    ...attributeOverrides,
+  }));
+  return loadDetailedEntity(async (method, apiPath) => {
+    assert.equal(method, 'GET');
+    return {
+      status: 200,
+      data: { value: apiPath.includes('/Attributes?$select=') ? attributes : [] },
+    };
+  }, {
+    LogicalName: 'systemuser',
+    SchemaName: 'SystemUser',
+    EntitySetName: 'systemusers',
+    PrimaryIdAttribute: 'systemuserid',
+    PrimaryNameAttribute: 'fullname',
+    OwnershipType: 'BusinessOwned',
+    IsCustomEntity: false,
+    IsCustomizable: { Value: true },
+    CanCreateAttributes: { Value: true },
+    CanBePrimaryEntityInRelationship: { Value: true },
+    CanBeRelatedEntityInRelationship: { Value: true },
+  });
+}
+
+function systemUserContract(type = 'uniqueidentifier') {
+  return {
+    schemaVersion: 1,
+    publisherPrefix: 'cr1',
+    tables: [
+      contractTable('systemuser', 'reuse', 0, [
+        contractColumn('systemuserid', type, 'reuse', { requiredLevel: 'SystemRequired' }),
+        contractColumn('azureactivedirectoryobjectid', type, 'reuse'),
+      ], { ownershipType: 'BusinessOwned' }),
+    ],
+  };
 }
 
 test('manifest output is deterministic with complete coverage and dependency order', () => {
@@ -1366,6 +1412,122 @@ test('ordinary-column reuse requires complete compatible behavior evidence', () 
       manifest.decisions.find((item) => item.itemType === 'column').verificationStatus,
       'unverified',
     );
+    assert.equal(manifest.summary.metadataOperationCount, 0);
+  }
+});
+
+test('standard GUID columns verify reuse without blocking 14 dependent relationships', async () => {
+  const contract = systemUserContract();
+  const relationships = Array.from({ length: 14 }, (_, index) => ({
+    kind: 'many-to-one',
+    schemaName: `cr1_item_user${index}`,
+    plannedDecision: 'reuse',
+    parentTable: 'systemuser',
+    childTable: 'cr1_item',
+    lookup: {
+      logicalName: `cr1_user${index}id`,
+      schemaName: `cr1_user${index}id`,
+      displayName: `User ${index}`,
+      requiredLevel: 'None',
+    },
+  }));
+  contract.tables.push(contractTable('cr1_item', 'reuse', 1, [
+    contractColumn('cr1_name', 'string', 'reuse', { primaryName: true }),
+    ...relationships.map((relationship) => contractColumn(
+      relationship.lookup.logicalName,
+      'lookup',
+      'reuse',
+      { lookupTarget: 'systemuser' },
+    )),
+  ], { relationships }));
+  const item = table('cr1_item', [
+    column('cr1_name', 'String', { primaryName: true }),
+    ...relationships.map((relationship) => column(relationship.lookup.logicalName, 'Lookup', {
+      lookupTargets: ['systemuser'],
+    })),
+  ], {
+    manyToOneRelationships: relationships.map((relationship) => ({
+      schemaName: relationship.schemaName,
+      lookupColumn: relationship.lookup.logicalName,
+      targetTable: 'systemuser',
+      targetColumn: 'systemuserid',
+      cascadeConfiguration: {
+        Assign: 'NoCascade',
+        Delete: 'RemoveLink',
+        Merge: 'NoCascade',
+        Reparent: 'NoCascade',
+        Share: 'NoCascade',
+        Unshare: 'NoCascade',
+        RollupView: 'NoCascade',
+      },
+    })),
+  });
+  const inputs = buildInputs(contract, snapshot({
+    tables: [await systemUserDetail(), item],
+  }));
+  const manifest = buildManifest(inputs);
+
+  assert.equal(manifest.executable, true, JSON.stringify(manifest.summary));
+  assert.equal(manifest.decisions.filter((decision) => decision.itemType === 'relationship').length, 14);
+  assert.ok(manifest.decisions.every((decision) => (
+    decision.decision === 'reuse'
+    && decision.verificationStatus === 'verified'
+    && decision.operation === 'none'
+  )));
+  assert.equal(manifest.summary.metadataOperationCount, 0);
+  const validation = validateManifest(manifest, { ...inputs, requireExecutable: true });
+  assert.equal(validation.valid, true, validation.errors.join('; '));
+});
+
+test('GUID plan spellings accept explicit null or zero SourceType from raw metadata', async () => {
+  for (const sourceType of [null, 0]) {
+    const user = await systemUserDetail({ SourceType: sourceType });
+    for (const type of ['uniqueidentifier', 'Uniqueidentifier', 'UNIQUEIDENTIFIER', 'Unique identifier']) {
+      const manifest = buildManifest(buildInputs(systemUserContract(type), snapshot({ tables: [user] })));
+      assert.equal(manifest.executable, true, `${type}, SourceType=${sourceType}`);
+      assert.equal(manifest.summary.metadataOperationCount, 0);
+    }
+  }
+});
+
+test('GUID reuse blocks missing or malformed raw SourceType instead of treating it as null', async () => {
+  const sourceEvidence = [
+    {},
+    ...[undefined, '', '0', 'invalid', false, true, {}, [], 0.5]
+      .map((SourceType) => ({ SourceType })),
+  ];
+  for (const evidence of sourceEvidence) {
+    const manifest = buildManifest(buildInputs(systemUserContract(), snapshot({
+      tables: [await systemUserDetail(evidence)],
+    })));
+    assert.equal(manifest.executable, false, JSON.stringify(evidence));
+    for (const decision of manifest.decisions.filter((item) => item.itemType === 'column')) {
+      assert.equal(decision.verificationStatus, 'unverified');
+      assert.match(decision.reason, /SourceType evidence is missing/);
+    }
+    assert.equal(manifest.summary.metadataOperationCount, 0);
+  }
+});
+
+test('GUID reuse still rejects specialized source types and incompatible column metadata', async () => {
+  const cases = [
+    ...[1, 2, 3, 4].map((SourceType) => ({
+      sourceEvidence: { SourceType },
+      reason: /ordinary column has SourceType/,
+    })),
+    { attributeOverrides: { AttributeType: 'String' }, reason: /type mismatch/ },
+    { attributeOverrides: { AttributeTypeName: { Value: 'StringType' } }, reason: /type-name mismatch/ },
+    { attributeOverrides: { AttributeTypeName: undefined }, reason: /type-name evidence is missing/ },
+    { attributeOverrides: { RequiredLevel: undefined }, reason: /RequiredLevel evidence is missing/ },
+  ];
+  for (const { sourceEvidence, attributeOverrides, reason } of cases) {
+    const manifest = buildManifest(buildInputs(systemUserContract(), snapshot({
+      tables: [await systemUserDetail(sourceEvidence, attributeOverrides)],
+    })));
+    assert.equal(manifest.executable, false);
+    assert.ok(manifest.decisions
+      .filter((decision) => decision.itemType === 'column')
+      .every((decision) => decision.verificationStatus !== 'verified' && reason.test(decision.reason)));
     assert.equal(manifest.summary.metadataOperationCount, 0);
   }
 });
