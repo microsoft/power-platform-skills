@@ -75,10 +75,11 @@ test('blank coercion, upstream status suppression and static demo values fail ex
   }
 });
 
-test('wrong response layer, missing CSRF and helper-only frontend fail', async t => {
+test('wrong response layer, missing CSRF, ignored HTTP status and helper-only frontend fail', async t => {
   for (const frontend of [
     client('sum').replace('JSON.parse(envelope.data)', 'envelope'),
     client('sum').replace("'__RequestVerificationToken': token", "'Accept': 'application/json'"),
+    client('sum').replace("if (!response.ok) throw new Error('HTTP failed');", ''),
     'async function loadResult() { return {sum: 1.5}; }',
   ]) {
     const checks = await grade(t, 'sum', sum, frontend);

@@ -26,18 +26,27 @@ export async function inspectServerLogic({ spec, workDir, signal }) {
         ? [
           { name: 'numeric strings', query: { a: '2.5', b: '-1' }, expected: 1.5 },
           { name: 'zero is valid', query: { a: '0', b: '4' }, expected: 4 },
-          ...['', ' ', 'nope', 'Infinity', '1x'].map(a => ({ name: `invalid ${JSON.stringify(a)}`, query: { a, b: '3' }, error: true })),
+          ...['a', 'b'].flatMap(field => ['', ' ', 'nope', 'Infinity', '1x'].map(value => ({
+            name: `invalid ${field} ${JSON.stringify(value)}`, query: { a: '2', b: '3', [field]: value }, error: true,
+          }))),
           { name: 'missing input', query: { b: '3' }, error: true },
+          { name: 'missing second input', query: { a: '2' }, error: true },
         ]
         : [
           { name: 'provider value A', query: { latitude: '0', longitude: '12' }, temperature: 7.25 },
           { name: 'provider value B', query: { latitude: '-23', longitude: '0' }, temperature: -4.5 },
+          { name: 'provider zero value', query: { latitude: '90', longitude: '180' }, temperature: 0, status: 201 },
           { name: 'provider unavailable', query: { latitude: '10', longitude: '12' }, status: 503, temperature: 19.8, error: true },
           { name: 'malformed provider body', query: { latitude: '10', longitude: '12' }, malformed: true, error: true },
           { name: 'missing provider value', query: { latitude: '10', longitude: '12' }, missing: true, error: true },
           ...['', ' ', 'bad', '91'].map(latitude => ({
             name: `invalid latitude ${JSON.stringify(latitude)}`, query: { latitude, longitude: '12' }, error: true, noProvider: true,
           })),
+          ...['', ' ', 'bad', '181'].map(longitude => ({
+            name: `invalid longitude ${JSON.stringify(longitude)}`, query: { latitude: '10', longitude }, error: true, noProvider: true,
+          })),
+          { name: 'missing latitude', query: { longitude: '12' }, error: true, noProvider: true },
+          { name: 'missing longitude', query: { latitude: '10' }, error: true, noProvider: true },
         ];
       for (const scenario of scenarios) {
         let providerCalls = 0;
@@ -109,7 +118,9 @@ export async function inspectServerLogic({ spec, workDir, signal }) {
       // Transport failures and a malformed platform envelope must also fail at
       // the client boundary, independently of server domain-error handling.
       for (const [name, response] of [
-        ['HTTP error', () => new Response('unavailable', { status: 502 })],
+        ['HTTP error', () => Response.json({
+          success: true, data: JSON.stringify({ sum: 3, temperatureC: 19.8 }),
+        }, { status: 502 })],
         ['platform error', () => Response.json({ success: false, data: null, error: 'denied' })],
         ['malformed envelope', () => Response.json({ success: true })],
       ]) {
