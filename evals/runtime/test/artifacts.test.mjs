@@ -195,6 +195,29 @@ test('document JavaScript cannot contact even a listening local endpoint', async
   assert.equal(requests, 0);
 });
 
+test('Arabic resource checks accept equivalent JSON escapes and inspect message values', async t => {
+  const root = await workspace(t);
+  const suiteDir = path.resolve(import.meta.dirname, '../../power-pages/add-localization');
+  const full = JSON.parse(await readFile(path.join(suiteDir, 'checks/rtl-preserving-routes.json'), 'utf8'));
+  const spec = full.files.find(file => file.path === 'proposals/ar.json');
+  await mkdir(path.join(root, 'proposals'));
+  const messages = { heading: '\u0627\u0644\u062d\u062c\u0648\u0632\u0627\u062a', greeting: '{name}', count: '{count}' };
+  const literal = JSON.stringify(messages);
+  const escaped = literal.replace(/[^\x00-\x7f]/g, character =>
+    '\\u' + character.charCodeAt(0).toString(16).padStart(4, '0'));
+  for (const [label, source, expected] of [
+    ['literal', literal, true],
+    ['escaped', escaped, true],
+    ['escaped interpolation', escaped.replace('{name}', '\\u007bname\\u007d').replace('{count}', '\\u007bcount\\u007d'), true],
+    ['English with Arabic metadata', JSON.stringify({ ...messages, heading: 'Bookings', note: messages.heading }), false],
+    ['non-string heading', JSON.stringify({ ...messages, heading: { text: messages.heading } }), false],
+  ]) {
+    await writeFile(path.join(root, spec.path), source);
+    const result = await gradeArtifacts({ contract: { files: [spec] }, workDir: root, suiteDir });
+    assert.equal(result.passed, expected, `${label}: ${result.evidence}`);
+  }
+});
+
 test('JSON/YAML parsing, preservation, and absence checks do not silently pass malformed evidence', async t => {
   const root = await workspace(t);
   await writeFile(path.join(root, 'original.txt'), 'original');
@@ -245,6 +268,10 @@ test('contracts reject unknown fields, vacuous checks, invalid regexes, and trav
     { output: { requiredPatterns: ['['] } },
     { files: [{ path: 'plan.html', type: 'html', responsive: 'false', requiredText: ['plan'] }] },
     { files: [{ path: 'plan.json', type: 'json', responsive: false, requiredKeys: ['plan'] }] },
+    { files: [{ path: 'plan.json', type: 'json', requiredValuePatterns: {} }] },
+    { files: [{ path: 'plan.json', type: 'json', requiredValuePatterns: { heading: 1 } }] },
+    { files: [{ path: 'plan.json', type: 'json', requiredValuePatterns: { heading: '[' } }] },
+    { files: [{ path: 'plan.txt', type: 'text', requiredValuePatterns: { heading: 'Arabic' } }] },
     { files: [{ path: 'x', type: 'html', diagram: { entities: [{ name: 'A' }], relationships: [{ from: 'A', to: 'B', cardinality: 'many' }] } }] },
   ]) assert.throws(() => validateContract(contract));
 });

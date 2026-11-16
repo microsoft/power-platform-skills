@@ -8,7 +8,7 @@ import { buildSite } from './site-build.mjs';
 import { inspectServerLogic } from './server-logic-checks.mjs';
 
 const textFields = ['requiredText', 'forbiddenText', 'requiredPatterns', 'forbiddenPatterns', 'minTextLength'];
-const fileFields = ['path', 'type', ...textFields, 'headings', 'requiredKeys', 'requiredValues', 'diagram', 'responsive'];
+const fileFields = ['path', 'type', ...textFields, 'headings', 'requiredKeys', 'requiredValues', 'requiredValuePatterns', 'diagram', 'responsive'];
 
 function strings(value, label) {
   if (!Array.isArray(value) || value.some(item => typeof item !== 'string' || !item.trim())) {
@@ -62,6 +62,16 @@ export function validateContract(contract) {
         throw new Error('requiredValues must contain scalar top-level values');
       }
     }
+    if (file.requiredValuePatterns !== undefined) {
+      if (file.type !== 'json') throw new Error('requiredValuePatterns requires a JSON artifact');
+      assertObject(file.requiredValuePatterns, 'requiredValuePatterns');
+      const entries = Object.entries(file.requiredValuePatterns);
+      if (!entries.length) throw new Error('requiredValuePatterns must contain top-level string patterns');
+      for (const [key, pattern] of entries) {
+        strings([key, pattern], 'requiredValuePatterns');
+        new RegExp(pattern, 'iu');
+      }
+    }
     if (file.diagram !== undefined) {
       assertKeys(file.diagram, ['entities', 'relationships'], 'diagram');
       if (file.type !== 'html') throw new Error('ER diagram checks require an HTML artifact');
@@ -85,7 +95,7 @@ export function validateContract(contract) {
       }
     }
     if (!textFields.some(key => file[key] !== undefined) &&
-        !file.headings?.length && !file.requiredKeys?.length && !file.requiredValues && !file.diagram) {
+        !file.headings?.length && !file.requiredKeys?.length && !file.requiredValues && !file.requiredValuePatterns && !file.diagram) {
       throw new Error(`Artifact ${file.path} needs more than an existence check`);
     }
   }
@@ -248,6 +258,15 @@ export async function gradeArtifacts({ contract, workDir, suiteDir, output = '',
         add(`${spec.path}: ${key} equals ${JSON.stringify(expected)}`,
           data !== null && typeof data === 'object' && !Array.isArray(data) &&
           Object.hasOwn(data, key) && data[key] === expected);
+      }
+      // JSON permits both "Arabic" literals and "\u0627..." escapes. Inspect the
+      // decoded message, not serialization or unrelated metadata containing Arabic.
+      // https://www.rfc-editor.org/rfc/rfc8259#section-7
+      for (const [key, pattern] of Object.entries(spec.requiredValuePatterns ?? {})) {
+        add(`${spec.path}: ${key} matches ${pattern}`,
+          data !== null && typeof data === 'object' && !Array.isArray(data) &&
+          Object.hasOwn(data, key) && typeof data[key] === 'string' &&
+          new RegExp(pattern, 'iu').test(data[key]));
       }
     }
     if (spec.type !== 'html') {

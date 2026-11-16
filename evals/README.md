@@ -55,6 +55,7 @@ Each `evals/power-pages/<skill>/eval.yaml` contains several capability tasks and
 Fixtures are synthetic local inputs.
 Hidden `checks/*.json` files describe required output and remain outside the agent workspace.
 They check content, parsed structures, preserved input, forbidden output and required relationships rather than file existence alone.
+JSON contracts can use `requiredValuePatterns` to match decoded top-level string values independently of Unicode escaping.
 
 Each pair gets fresh, separate workspaces.
 Both arms have the same contained file tools and read-only plugin assets, references and scripts.
