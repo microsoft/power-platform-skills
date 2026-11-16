@@ -87,6 +87,34 @@ test('wrong response layer, missing CSRF, ignored HTTP status and helper-only fr
   }
 });
 
+test('frontend validation cannot mask a handler that coerces blank inputs to zero', async t => {
+  const validatingFrontend = client('sum').replace('  const html', `
+  for (const field of ['a', 'b']) {
+    if (typeof query[field] !== 'string' || query[field].trim() === '' || !Number.isFinite(Number(query[field]))) {
+      throw new Error('Invalid client input');
+    }
+  }
+  const html`);
+  const checks = await grade(t, 'sum', sum.replace("value.trim() === '' || ", ''), validatingFrontend);
+  assert.ok(checks.some(check => !check.passed && check.name.includes('handler rejects')), JSON.stringify(checks));
+});
+
+test('explicit serialized domain errors pass, but empty responses are not server rejection', async t => {
+  for (const [payload, accepted] of [[{ error: { message: 'Invalid input' } }, true], [{ ok: false }, true], [{}, false]]) {
+    const source = `${number}
+function get() {
+  try {
+    const q = Server.Context.QueryParameters;
+    return JSON.stringify({sum: number(q.a) + number(q.b)});
+  } catch {
+    return ${JSON.stringify(JSON.stringify(payload))};
+  }
+}`;
+    const checks = await grade(t, 'sum', source);
+    assert.equal(checks.every(check => check.passed), accepted, JSON.stringify(checks));
+  }
+});
+
 test('arbitrary programs and escaping paths cannot be supplied as grader configuration', () => {
   assert.throws(() => validateContract({ serverLogic: { server: '../server.js', client: 'client.js', exercise: 'sum' } }));
   assert.throws(() => validateContract({ serverLogic: { server: 'server.js', client: 'client.js', exercise: 'custom-program' } }));

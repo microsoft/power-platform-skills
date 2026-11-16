@@ -75,6 +75,8 @@ Approval cases measure whether the output respects a supplied consent boundary, 
 
 The `add-server-logic` suite also executes generated handler/frontend pairs in isolated Chromium.
 It checks numeric input validation, zero handling, provider data changes, provider non-2xx/malformed/missing-data errors, CSRF and response unwrapping.
+Negative cases check server rejection independently, so early client validation cannot mask a permissive handler.
+The fixture accepts thrown failures or explicit serialized domain errors which the client also rejects.
 The fixture specifies the synthetic callable interfaces and provider adapter explicitly.
 Those interfaces are test inputs, not claims about every version of the preview Server Logic SDK.
 The checker never executes generated source in Node.js or allows real provider calls.

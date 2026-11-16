@@ -2,6 +2,7 @@
   "scope": "Synthetic, pinned offline test double, not live SDK verification or a universal preview API contract.",
   "server": {
     "handler": "get() returns a string (JSON for this feature), or throws on failure",
+    "domainErrors": "Invalid inputs/provider failures must independently throw or return serialized JSON with an explicit error: success/ok/valid false; status error/failed/failure; numeric statusCode/StatusCode/status 400-599; nonempty error string, error.message, or errors array. The matching client must reject it too. Empty objects and malformed strings are not explicit domain errors.",
     "context": "Server.Context.QueryParameters is a string-keyed object; missing keys are undefined.",
     "loggerMethods": [
       "Log",

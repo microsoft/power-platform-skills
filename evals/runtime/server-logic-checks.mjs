@@ -22,6 +22,20 @@ export async function inspectServerLogic({ spec, workDir, signal }) {
     return await page.evaluate(async ({ server, client, exercise }) => {
       const checks = [];
       const add = (name, passed) => checks.push({ name, passed: Boolean(passed) });
+      const domainFailure = value => {
+        if (typeof value !== 'string') return false;
+        let payload;
+        try { payload = JSON.parse(value); }
+        catch { return false; }
+        if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return false;
+        const status = payload.statusCode ?? payload.StatusCode ?? payload.status;
+        return payload.success === false || payload.ok === false || payload.valid === false ||
+          (typeof status === 'string' && ['error', 'failed', 'failure'].includes(status.toLowerCase())) ||
+          (typeof status === 'number' && status >= 400 && status <= 599) ||
+          (typeof payload.error === 'string' && payload.error.trim().length > 0) ||
+          (typeof payload.error?.message === 'string' && payload.error.message.trim().length > 0) ||
+          (Array.isArray(payload.errors) && payload.errors.length > 0);
+      };
       const scenarios = exercise === 'sum'
         ? [
           { name: 'numeric strings', query: { a: '2.5', b: '-1' }, expected: 1.5 },
@@ -74,14 +88,20 @@ export async function inspectServerLogic({ spec, workDir, signal }) {
           } } },
         };
         let envelope;
+        let handlerRejected = false;
         try {
           const handler = new Function('Server', `${server}\nreturn get;`)(Server);
           const value = await handler();
           add(`${scenario.name}: handler returns a string`, typeof value === 'string');
           envelope = { success: true, data: value, error: null, requestId: 'synthetic-request' };
         } catch {
+          handlerRejected = true;
           envelope = { success: false, data: null, error: 'Endpoint failed', requestId: 'synthetic-request' };
         }
+        // Client validation can reject before fetch, so client failure alone
+        // cannot prove that the server enforces the same boundary.
+        if (scenario.error) add(`${scenario.name}: handler rejects invalid outcome`,
+          handlerRejected || domainFailure(envelope.data));
         let csrf = false;
         let endpointCalls = 0;
         const fetch = async (url, options = {}) => {
