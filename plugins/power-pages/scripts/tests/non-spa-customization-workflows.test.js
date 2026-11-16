@@ -2,6 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const { readCreateSiteGuidance } = require('./helpers/create-site-guidance');
 
 const pluginRoot = path.join(__dirname, '..', '..');
 const classicReferences = new Map([
@@ -14,6 +15,12 @@ const classicReferences = new Map([
 ]);
 
 function read(relativePath) {
+  if (relativePath === path.join('skills', 'create-site', 'SKILL.md')) {
+    return readCreateSiteGuidance('spa');
+  }
+  if (relativePath === path.join('skills', 'create-site', 'references', 'non-spa-site-workflow.md')) {
+    return readCreateSiteGuidance('non-spa');
+  }
   return fs.readFileSync(path.join(pluginRoot, relativePath), 'utf8');
 }
 
@@ -212,7 +219,7 @@ test('all declarative preview entry points disclose once and propagate the hando
   const policy = read(path.join('references', 'non-spa-preview.md'));
   const createSkill = read(path.join('skills', 'create-site', 'SKILL.md'));
   const createWorkflow = read(
-    path.join('skills', 'create-site', 'workflows', 'non-spa-site.md')
+    path.join('skills', 'create-site', 'references', 'non-spa-site-workflow.md')
   );
   const coveredSkills = [
     path.join('skills', 'edit-site', 'SKILL.md'),
@@ -283,7 +290,7 @@ test('all declarative preview entry points disclose once and propagate the hando
 });
 
 test('non-SPA header planning reaches creation, approval and styling without widening narrow edits', () => {
-  const workflow = read(path.join('skills', 'create-site', 'workflows', 'non-spa-site.md'));
+  const workflow = read(path.join('skills', 'create-site', 'references', 'non-spa-site-workflow.md'));
   const customization = read(path.join('skills', 'edit-site', 'SKILL.md'));
   const composition = read(path.join('skills', 'edit-site', 'references', 'content-and-page-compositions.md'));
   const contract = read(path.join('skills', 'edit-site', 'references', 'customization-plan-contract.md'));
@@ -316,7 +323,7 @@ test('non-SPA header planning reaches creation, approval and styling without wid
 });
 
 test('every non-SPA header update includes a website-appropriate logo decision and native verification', () => {
-  const workflow = read(path.join('skills', 'create-site', 'workflows', 'non-spa-site.md'));
+  const workflow = read(path.join('skills', 'create-site', 'references', 'non-spa-site-workflow.md'));
   const customization = read(path.join('skills', 'edit-site', 'SKILL.md'));
   const composition = read(path.join('skills', 'edit-site', 'references', 'content-and-page-compositions.md'));
   const contract = read(path.join('skills', 'edit-site', 'references', 'customization-plan-contract.md'));
@@ -350,13 +357,14 @@ test('every non-SPA header update includes a website-appropriate logo decision a
 
 test('new non-SPA creation is Enhanced-only while customization remains model-neutral', () => {
   const skill = read(path.join('skills', 'create-site', 'SKILL.md'));
-  const workflow = read(path.join('skills', 'create-site', 'workflows', 'non-spa-site.md'));
+  const workflow = read(path.join('skills', 'create-site', 'references', 'non-spa-site-workflow.md'));
   const customization = read(path.join('skills', 'edit-site', 'SKILL.md'));
   const contract = read(
     path.join('skills', 'edit-site', 'references', 'customization-plan-contract.md'),
   );
 
-  assert.match(skill, /allowed-tools: [^\n]*\bSkill\b/);
+  assert.doesNotMatch(skill, /^allowed-tools:|^model:/m);
+  assert.match(workflow, /invoke `\/edit-site` using the available skill-invocation capability/);
   assert.doesNotMatch(skill, /create-site:non-spa-1-select-model/);
   assert.match(skill, /Which frontend framework\?[\s\S]*Non-SPA \(Liquid \+ Web Template\)/);
   assert.match(workflow, /create-site:non-spa-8-customize/);
@@ -376,7 +384,7 @@ test('new non-SPA creation is Enhanced-only while customization remains model-ne
   assert.match(workflow, /--modelVersion "<MODEL_VERSION>"/);
   assert.match(workflow, /verify the site reports `MODEL_VERSION`/);
   assert.match(workflow, /Would you like to customize the downloaded non-SPA template now\?/);
-  assert.match(workflow, /invoke `\/edit-site` through the `Skill` tool/);
+  assert.match(workflow, /invoke `\/edit-site` using the available skill-invocation capability/);
   assert.match(workflow, /validated, committed baseline/);
   assert.match(workflow, /Customization success is not a prerequisite/);
   assert.match(workflow, /Suggest `\/setup-datamodel` only when/);
@@ -502,7 +510,7 @@ test('deploy-site keeps code and declarative upload commands isolated', () => {
 
 test('non-SPA creation uses verified Bootstrap 5 and image-rich design without SPA preview requirements', () => {
   const skill = read(path.join('skills', 'create-site', 'SKILL.md'));
-  const workflow = read(path.join('skills', 'create-site', 'workflows', 'non-spa-site.md'));
+  const workflow = read(path.join('skills', 'create-site', 'references', 'non-spa-site-workflow.md'));
   const customization = read(path.join('skills', 'edit-site', 'SKILL.md'));
   const common = skill.split('## SPA-Site Workflow')[0];
   assert.match(common, /references\/site-design-quality\.md/);
@@ -582,7 +590,7 @@ test('creation image URL policy reaches content planning and the non-SPA design 
 
 test('non-SPA template selection and new-site handoff distinguish requirements from visual constraints', () => {
   const entry = read(path.join('skills', 'create-site', 'SKILL.md')).split('## SPA-Site Workflow')[0];
-  const workflow = read(path.join('skills', 'create-site', 'workflows', 'non-spa-site.md'));
+  const workflow = read(path.join('skills', 'create-site', 'references', 'non-spa-site-workflow.md'));
   const selection = workflow.split('## Phase 2:')[1].split('## Phase 3:')[0];
   const handoff = workflow.split('On **Customize now**')[1].split('On **Keep the template unchanged**')[0];
   for (const source of [entry, selection, handoff]) {
@@ -694,7 +702,7 @@ test('component reuse preserves existing source without forcing the surrounding 
 
 test('new-site layout work may remove unneeded starter sections and component placements without deleting records', () => {
   const shared = read(path.join('references', 'site-design-quality.md'));
-  const creation = read(path.join('skills', 'create-site', 'workflows', 'non-spa-site.md'));
+  const creation = read(path.join('skills', 'create-site', 'references', 'non-spa-site-workflow.md'));
   const customization = read(path.join('skills', 'edit-site', 'SKILL.md'));
   const planning = read(path.join('skills', 'edit-site', 'references', 'content-and-page-compositions.md'));
   const contract = read(path.join('skills', 'edit-site', 'references', 'customization-plan-contract.md'));
