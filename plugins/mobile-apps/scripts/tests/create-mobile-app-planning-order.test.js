@@ -248,9 +248,12 @@ test('SKILL.md stays small enough to keep Phase A fast', () => {
   // Counted as the model loads them: the two files themselves, without the shared steps they name.
   // A shared step is its own file, read when the run reaches it, and the only one Phase A reaches
   // (sign-in, at the preview gate) comes after the preview is already live.
+  // Line endings are normalised first: a Windows checkout writes CRLF, which adds a byte per line
+  // to the file on disk but nothing to what the model reads.
   const skillDir = path.join(pluginRoot, 'skills', 'create-mobile-app');
   const bytes = ['SKILL.md', path.join('references', 'screens-first.md')]
-    .reduce((total, file) => total + fs.statSync(path.join(skillDir, file)).size, 0);
+    .map((file) => fs.readFileSync(path.join(skillDir, file), 'utf8').replace(/\r\n?/g, '\n'))
+    .reduce((total, text) => total + Buffer.byteLength(text, 'utf8'), 0);
   assert.ok(bytes < 60 * 1024, `SKILL.md is ${bytes} bytes; move detail Phase A does not need into references/`);
   assert.ok(createSkillPhaseB().length > 0);
 });
