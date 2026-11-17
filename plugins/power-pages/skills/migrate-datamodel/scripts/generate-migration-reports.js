@@ -106,7 +106,7 @@ function parseArgs(args) {
 /**
  * Simple CSV parser for the customization report
  */
-function parseCSV(content) {
+function parseCSV(content, { strict = false } = {}) {
   const rows = [];
   let current = '';
   let row = [];
@@ -139,6 +139,7 @@ function parseCSV(content) {
     }
   }
 
+  if (strict && inQuotes) throw new SyntaxError('Customization CSV contains an unterminated quoted field.');
   if (current !== '' || row.length > 0) {
     row.push(current);
     rows.push(row);

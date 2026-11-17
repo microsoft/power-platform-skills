@@ -40,6 +40,11 @@ Keep migration instructions shell-independent: use `migration-runtime.js` for
 discovery, UTF-8 solution capture, delays, and bounded read-only polling, not
 PowerShell/Bash loops. PAC runs through the shared argument-array runner; retain
 complete verbose responses for agent-owned history/chunk report updates.
+Retain the guarded missing-customization-report fallback and its before/after
+tracker evidence. Exit 0 without a valid CSV is not success. Distinguish a refused
+references start from an active operation; reset requires separate explicit
+approval and verified status before one references-only retry. Never reset from
+a polling timeout alone or automatically edit Dataverse tracker fields.
 After report initialization, every skill-owned input/manual-action pause must
 show the report-wide required-action notice. Reuse approval gates for existing
 approvals; use `--set-input` for other questions and clear it when resolved.
@@ -59,7 +64,7 @@ user-controlled login. Keep input notices/progress synchronized and record only
 the current matching-site result; warnings, skipped scope, cancellation and
 unavailable tools are not an unconditional pass. Preserve earlier-result,
 defer/skip and final-status/rollback choices.
-Regression coverage lives in `scripts/tests/{diff-snapshots,snapshot-site,update-state,generate-migration-reports,apply-remediation,render-live-report,detect-template,migration-telemetry}.test.js`.
+Regression coverage lives in `scripts/tests/{diff-snapshots,snapshot-site,update-state,generate-migration-reports,apply-remediation,render-live-report,detect-template,migration-telemetry,migration-runtime}.test.js`.
 
 ## Non-SPA creation and shared design quality
 

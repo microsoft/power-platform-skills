@@ -786,9 +786,9 @@ This phase has **two completely different shapes** depending on the migration tr
    - **`outcome` is `CheckFailed`, or a non-running status exhausts the window**: show the diagnostic and latest `migration-status.txt`. Resolve the command/output issue or verify the tracker directly; do not mark the step completed or reset a migration merely because a status check failed.
 
    > **Unblocking a stuck `Running` tracker.** A top-level `Running` status with `ConfigurationDataCompleted` is expected after `configurationData`; proceed to customization remediation and Phase 3 rather than resetting it. For `all`, or when the current step has not reached the mode-specific milestone, wait first. If it is genuinely stuck for an extended period:
-   > 1. Try the supported reset: `pac pages migrate-datamodel --webSiteId "<WEBSITE_ID>" --resetMigration` (flips the tracker `Running → Failed`).
-   > 2. If that doesn't clear it, **ask the customer to reset the field manually in Dataverse**: on the `adx_websitemigrationtracker` record (find it by `adx_websiteid` = WebSiteId), set **`adx_migrationstatus`** to **Failed (`746610003`)** — or **NotStarted (`746610000`)** for a clean slate.
-   > 3. Re-run the migrate command and resume polling.
+   > 1. Preserve status/history/chunks and timestamps, show the reset warning from step 1.4, and obtain **explicit reset approval** using the report-wide required-action notice. A polling-window timeout alone never authorizes reset.
+   > 2. Only after approval, run the supported reset: `pac pages migrate-datamodel --webSiteId "<WEBSITE_ID>" --resetMigration`. Recheck status and verify that it actually cleared `Running` before retrying.
+   > 3. Retry only the interrupted, approved mode and resume polling. If reset fails or its result is uncertain, stop and retain diagnostics for support; do not automatically edit tracker fields in Dataverse.
    >
    > Reset only unblocks a new run — it does **not** undo already-migrated records.
 
@@ -808,19 +808,28 @@ This phase has **two completely different shapes** depending on the migration tr
 
 1. **Search for the auto-generated CSV**
 
-   Glob both `<OUTPUT_DIR>` and current working directory for `SiteCustomization*.csv`. Use the most recent file (highest auto-number) if multiple exist.
+   Search `<OUTPUT_DIR>`, its parent, and the current working directory for `SiteCustomization*.csv`. Reuse a report only when its originating run and applicability to the selected website are verified. A high filename number or recent timestamp alone is not proof: these locations can contain reports for other sites. If provenance is unclear, show the candidate paths and ask the user to select/confirm the applicable report using `--set-input`; clear it after the decision. Retain the original CSV and record whether it was generated or explicitly reused.
 
-2. **Fallback if not found**
+2. **Fallback if no applicable report is available**
+
+   Keep this compatibility fallback for older PAC builds and missing reports; do not rerun configuration migration merely to obtain a CSV. Use the helper so the explicit report request retains the tracker snapshots and verifies the artifact:
 
    ```text
    node update-state.js --output-dir "<OUTPUT_DIR>" --set-operation '{"label":"Generating customization report"}'
-   pac pages migrate-datamodel --webSiteId "<WEBSITE_ID>" --siteCustomizationReportPath "<OUTPUT_DIR>"
+   node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-datamodel/scripts/migration-runtime.js" report --website-id "<WEBSITE_ID>" --output-dir "<OUTPUT_DIR>"
    node update-state.js --output-dir "<OUTPUT_DIR>" --clear-operation
    ```
 
-   Then re-glob.
+   Clear the banner even if the helper fails. Read `customization-report-attempt.json`: it preserves `before`, the report `command` output/exit status, `after`, `trackerChanged`, and new/updated `csvPaths` / `invalidCsvPaths`. It never replaces `migration-status.json` or the already-verified step 2.2 milestone.
 
-   > **Note on file location quirks:** Some PAC builds drop the CSV in the parent dir or cwd rather than the path passed. Always glob both locations.
+   - **`ReportGenerated`**: verify that the CSV applies to the selected site before parsing. Header-only reports can legitimately contain zero findings; an absent, empty or invalid CSV cannot.
+   - **`ReportSelectionRequired`**: show the changed candidate paths and confirm provenance; do not silently take the newest file.
+   - **`ReportMissingOrInvalid` / `CommandFailed` / `CheckFailed`**: show the saved diagnostic. Exit `0` from PAC with only precheck output does **not** prove report generation. Offer a verified existing CSV or pause for investigation; do not mark step 2.3 completed, invent zero findings, or repeatedly invoke the fallback.
+   - **`TrackerChanged` or `trackerChanged=true`**: show both tracker snapshots, any CSV candidates, and the command result. For example, `Running / ConfigurationDataCompleted` may change to `Running / PrecheckCompleted`. Preserve the earlier metadata-completion evidence, but do not assume the new tracker is ready for references, reset it, or rerun metadata. Pause with `--set-input` for review/recheck or stop. If a references start is subsequently refused, follow [References start refusal recovery](#references-start-refusal-recovery).
+
+   If verbose status is unavailable and the current step cannot be verified, inspect the tracker read-only before proceeding; do not bypass the guard by invoking the report command directly.
+
+   > **Official ordering:** The [Microsoft guide](https://learn.microsoft.com/en-us/power-pages/admin/migrate-enhanced-data-model) places explicit report generation in prechecks, before configuration migration. Keep the existing auto-emitted-report-first flow and this guarded fallback until that reordering is validated against supported PAC builds; do not add another automatic report request.
 
 3. **Parse Report**
 
@@ -1278,11 +1287,13 @@ Phase 3 has **two different shapes** depending on the migration track. The Autho
 
 2. **Execute Migration Command**
 
+   After the existing pre-refs approval, use the wrapper to retain the command result and immediately capture status:
+
    ```text
-   pac pages migrate-datamodel --webSiteId "<WEBSITE_ID>" --mode configurationDataReferences
+   node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-datamodel/scripts/migration-runtime.js" start-references --website-id "<WEBSITE_ID>" --output-dir "<OUTPUT_DIR>"
    ```
 
-   Newer PAC versions auto-emit `SiteCustomization*.csv` into `<OUTPUT_DIR>` or cwd.
+   Read `references-start.json`. Only `outcome=StartAccepted` enters normal polling; this means the command was accepted, **not** that references completed. For `StartRefused`, `StartFailed`, or `CheckFailed`, clear the banner, surface the command output and captured tracker, and follow [References start refusal recovery](#references-start-refusal-recovery). Do not poll an unstarted operation for 30 minutes or silently retry it. Newer PAC versions may auto-emit `SiteCustomization*.csv`.
 
 3. **Poll Status with Verbose Output**
 
@@ -1309,7 +1320,7 @@ Phase 3 has **two different shapes** depending on the migration track. The Autho
    The helper owns timing, bounded attempts, and tracker terminal-state detection. Report updates and detailed history/chunk interpretation remain the agent's responsibility, just as before; do not replace them with fabricated zero counts or drop successful chunks. Pass real serialized JSON, not the literal text `<PARSED_JSON>`. For retry backoff use `node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-datamodel/scripts/migration-runtime.js" delay --seconds 60`.
 
    - **Completed**: clear the now-running banner (`--clear-operation`), proceed to step 3.3. The card now shows status=Completed.
-   - **Still `Running` (`outcome=TimedOut`, exit `2`)**: recommend the user **wait and keep polling** (refs migration on large sites can take a long time). Only if genuinely stuck for an extended period (`Modified On` not advancing, no newly completed chunks), unblock per **"Unblocking a stuck `Running` tracker"** in step 2.2 — `--resetMigration`, then a manual `adx_migrationstatus` = Failed (`746610003`) reset on the `adx_websitemigrationtracker` record — then re-run. The card shows the last captured running state.
+   - **Still `Running` (`outcome=TimedOut`, exit `2`)**: recommend the user **wait and keep polling** (refs migration on large sites can take a long time). A polling-window timeout is not a migration failure. Only if genuinely stuck for an extended period (`Modified On` not advancing, no newly completed chunks), follow the explicitly approved, verified supported-reset procedure in step 2.2. The card shows the last captured running state.
    - **Failed / Reverted**: surface error, ask user (retry / reset / exit). Add the top-level failure message to the `--set-refs-migration` payload's `error` field so the card logs it as an error banner (the card also shows chunk-level error details from the last poll).
    - **`CheckFailed` or any other unresolved status**: surface the saved diagnostic; do not continue to activation or treat a status-query failure as a migration failure requiring reset.
 
@@ -1329,6 +1340,17 @@ Phase 3 has **two different shapes** depending on the migration track. The Autho
 > When this step is skipped because mode=all, also emit a minimal `--set-refs-migration '{"status":"Completed","currentStep":"Skipped — covered by mode=all in Phase 2.2"}'` so the card shows a Completed pill instead of staying empty. Otherwise the polling loop above already emitted the final payload — no extra `--set-refs-migration` call needed here.
 
 ---
+
+#### References start refusal recovery
+
+This procedure applies to **both tracks**, and is distinct from polling an accepted references operation or retrying failed SQL chunks.
+
+1. Retain `references-start.json`, `customization-report-attempt.json` if present, and the earlier metadata-completion evidence. Use the captured verbose response to update the references card, including the refusal in `error`; preserve real history/chunks, not fabricated zero counts.
+2. Recheck status read-only and compare `Current Step`, `Created On` / `Modified On`, reference step history and chunks. `Running / PrecheckCompleted` after a report request, without evidence of references starting, is a **possible tracker gate**, not proof of an active references run or a confirmed PAC root cause. Missing verbose details are unknown, not evidence that no work exists.
+3. If references are progressing, continue read-only polling of that operation; do not reset or submit another start. If already `Completed`, verify the references history/result before continuing. For authentication/command/output errors or uncertain activity, investigate or stop rather than treating them as stale-tracker evidence.
+4. If the command is refused and repeated observations show no forward progress or active references work, show the evidence and offer **Recheck / Approve supported reset and retry references / Stop**. Set `--set-input` before asking, explain the step 1.4 reset warning, record the explicit decision, and clear the notice afterward. Earlier approval to migrate references is **not** reset approval.
+5. Only after reset approval, run `pac pages migrate-datamodel --webSiteId "<WEBSITE_ID>" --resetMigration` **once**. Recheck and verify the tracker is no longer `Running` and no active work remains. If the reset fails, status is uncertain, or the tracker is still `Running`, stop with diagnostics; do not retry mutations blindly or edit Dataverse tracker fields.
+6. Retry **only** `start-references` once, then poll only when `StartAccepted`. Do not rerun metadata, discard remediation, or automatically activate/restart the site. If refused again, stop and retain diagnostics for support instead of entering a reset loop. Require overall references `Completed` before activation.
 
 ### 3.3 Activate EDM (Update Data Model Version)
 
@@ -1563,11 +1585,13 @@ Phase 3 has **two different shapes** depending on the migration track. The Autho
 
 1. **Execute Migration Command**
 
+   After the existing pre-refs approval, use the same guarded start as Authoring Track 3.2:
+
    ```text
-   pac pages migrate-datamodel --webSiteId "<WEBSITE_ID>" --mode configurationDataReferences
+   node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-datamodel/scripts/migration-runtime.js" start-references --website-id "<WEBSITE_ID>" --output-dir "<OUTPUT_DIR>"
    ```
 
-   Newer PAC versions auto-emit `SiteCustomization*.csv` into `<OUTPUT_DIR>` or cwd.
+   Read `references-start.json`. Only `StartAccepted` enters normal polling; it is not proof of migration completion. Handle `StartRefused`, `StartFailed`, and `CheckFailed` using [References start refusal recovery](#references-start-refusal-recovery), including its explicit reset approval and one-retry limit. Newer PAC versions may auto-emit `SiteCustomization*.csv`.
 
 2. **Poll Status with Verbose Output**
 
@@ -1582,7 +1606,7 @@ Phase 3 has **two different shapes** depending on the migration track. The Autho
    Set the now-running banner before launching. While it runs, interpret every progress record's complete `rawOutput` and call `update-state.js --set-refs-migration` using the Authoring Track's field schema, followed by `--set-operation` with the record's serialized `operation`. Include all chunks, not just failures. Keep report updates sequential. Re-emit the final payload from `migration-status.json` and clear the banner after the helper exits. Report writes remain best-effort; status-check failures never imply migration success.
 
    - **Completed**: clear the now-running banner (`--clear-operation`), proceed to step 3.3. The card now shows status=Completed.
-   - **Still `Running` (`outcome=TimedOut`, exit `2`)**: recommend the user **wait and keep polling** (refs migration on large sites can take a long time). Only if genuinely stuck for an extended period (`Modified On` not advancing, no newly completed chunks), unblock per **"Unblocking a stuck `Running` tracker"** in step 2.2 — `--resetMigration`, then a manual `adx_migrationstatus` = Failed (`746610003`) reset on the `adx_websitemigrationtracker` record — then re-run. The card shows the last captured running state.
+   - **Still `Running` (`outcome=TimedOut`, exit `2`)**: recommend the user **wait and keep polling** (refs migration on large sites can take a long time). A polling-window timeout is not a migration failure. Only if genuinely stuck for an extended period (`Modified On` not advancing, no newly completed chunks), follow the explicitly approved, verified supported-reset procedure in step 2.2. The card shows the last captured running state.
    - **Failed / Reverted**: surface error, ask user; card shows the failed status and chunk-level errors from the last poll.
    - **`CheckFailed` or any other unresolved status**: show the saved diagnostic and resolve the status-query issue; do not activate EDM or reset based on a failed check.
 
@@ -1609,7 +1633,7 @@ Phase 3 has **two different shapes** depending on the migration track. The Autho
 
 **Actions**:
 
-Same logic as Authoring Track Phase 2.3 — glob `SiteCustomization*.csv` in `<OUTPUT_DIR>` + cwd; if missing, run explicit `--siteCustomizationReportPath`; parse and summarize findings.
+Follow **all** of Authoring Track Phase 2.3: verify CSV provenance, reuse an applicable report, and retain the guarded `migration-runtime.js report` fallback if missing. Honor every missing/invalid-report and changed-tracker pause; a post-references report request must not erase the verified references-completion evidence or silently proceed to activation after a tracker change.
 
 **Output**: Customization report located and parsed.
 

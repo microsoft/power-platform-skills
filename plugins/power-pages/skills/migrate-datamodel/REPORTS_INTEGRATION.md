@@ -74,8 +74,23 @@ for an explicit defer/skip does not mean runtime validation passed.
 
 On the Authoring Track, locate the CSV at step 2.3 and remediate at step 2.4.
 On the Downstream Track, these are steps 3.3 and 3.4; findings can indicate an
-upstream ALM gap. Use the actual CSV emitted by the approved PAC migration, not
-an additional migration command merely to obtain a report.
+upstream ALM gap. Reuse an applicable CSV emitted by the approved PAC migration;
+verify its run/site provenance rather than selecting by timestamp or filename.
+If missing, retain the explicit report-only compatibility fallback via
+`migration-runtime.js report` as specified in SKILL.md; do not rerun metadata
+migration merely to obtain a report. The helper validates new/updated CSVs and
+saves command output plus before/after tracker snapshots in
+`customization-report-attempt.json`, without replacing metadata/reference
+completion evidence in `migration-status.json`. A successful PAC exit without a
+valid CSV is not success. Missing artifacts or changed tracker status/current
+step must be surfaced and reviewed before the workflow continues.
+
+Both tracks start approved references migration with
+`migration-runtime.js start-references`, retaining `references-start.json`.
+A refused/failed start is not an active migration polling window. Follow the
+shared refusal-recovery procedure in SKILL.md: inspect activity, obtain separate
+reset approval, verify the supported reset, and retry references only once.
+Never infer reset consent from the pre-refs gate or a polling timeout.
 
 Generate the customization report:
 

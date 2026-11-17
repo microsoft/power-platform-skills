@@ -6,6 +6,7 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const {
   discoverSite, captureSolutions, parseTracker, pollMigration, parseArgs,
+  generateCustomizationReport, startReferences,
 } = require('../../skills/migrate-datamodel/scripts/migration-runtime');
 const { buildInitialState } = require('../../skills/migrate-datamodel/scripts/lib/migration-state-schema');
 
@@ -216,6 +217,235 @@ test('metadata-only fallback cannot infer a milestone from Running alone', async
   assert.match(result.error, /requires Current Step/);
 });
 
+const csvHeader = 'Type of customization,Guidance,Snippet,Location\n';
+
+function handoff(t, run) {
+  const root = fixture(t);
+  const outputDir = path.join(root, 'reports with spaces');
+  const cwd = path.join(root, 'working directory');
+  fs.mkdirSync(outputDir);
+  fs.mkdirSync(cwd);
+  const calls = [];
+  return {
+    root, outputDir, cwd, calls, args: { websiteId, outputDir },
+    deps: {
+      cwd,
+      runPac(args, options) {
+        calls.push({ args, options });
+        return run(args, options);
+      },
+    },
+  };
+}
+
+test('incident: report exits 0 without CSV, tracker regresses, and refs start is refused', async (t) => {
+  let step = 'ConfigurationDataCompleted';
+  const f = handoff(t, (args) => {
+    if (args.includes('--checkMigrationStatus')) return response('Running', step);
+    if (args.includes('--siteCustomizationReportPath')) {
+      // Assert that the known milestone was persisted before the report command.
+      const saved = JSON.parse(fs.readFileSync(path.join(f.outputDir, 'customization-report-attempt.json')));
+      assert.equal(saved.before.currentStep, 'ConfigurationDataCompleted');
+      step = 'PrecheckCompleted';
+      return { status: 0, stdout: 'Prechecks completed successfully.\n' };
+    }
+    return { status: 1, stderr: 'The website is already under migration.' };
+  });
+  const metadata = await pollMigration({ ...f.args, mode: 'configurationData' }, { ...f.deps, emit() {} });
+  assert.equal(metadata.outcome, 'ConfigurationDataCompleted');
+  const milestone = fs.readFileSync(path.join(f.outputDir, 'migration-status.json'), 'utf8');
+  const report = generateCustomizationReport(f.args, f.deps);
+  assert.equal(report.outcome, 'TrackerChanged');
+  assert.equal(report.command.status, 0);
+  assert.equal(report.before.currentStep, 'ConfigurationDataCompleted');
+  assert.equal(report.after.currentStep, 'PrecheckCompleted');
+  assert.deepEqual(report.csvPaths, []);
+  assert.equal(report.trackerChanged, true);
+  assert.equal(fs.readFileSync(path.join(f.outputDir, 'migration-status.json'), 'utf8'), milestone);
+  const refs = startReferences(f.args, f.deps);
+  assert.equal(refs.outcome, 'StartRefused');
+  assert.equal(refs.tracker.currentStep, 'PrecheckCompleted');
+  assert.match(refs.error, /already under migration/);
+  assert.ok(f.calls.every(({ args }) => !args.includes('--resetMigration')));
+  assert.equal(f.calls.filter(({ args }) => args.includes('--mode')).length, 1);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(f.outputDir, 'references-start.json'))).outcome, 'StartRefused');
+});
+
+for (const location of ['output', 'parent', 'cwd']) {
+  test(`report fallback validates a fresh CSV in ${location} without requiring any shell`, (t) => {
+    const f = handoff(t, (args, options) => {
+      assert.equal(options.captureAll, true);
+      if (args.includes('--checkMigrationStatus')) return response('Running', 'ConfigurationDataCompleted');
+      assert.deepEqual(args, [
+        'pages', 'migrate-datamodel', '--webSiteId', websiteId, '--siteCustomizationReportPath', f.outputDir,
+      ]);
+      assert.equal(options.cwd, f.cwd);
+      const directory = { output: f.outputDir, parent: f.root, cwd: f.cwd }[location];
+      // A header-only CSV is a valid zero-findings report, unlike an absent CSV.
+      fs.writeFileSync(path.join(directory, 'SiteCustomization1.csv'), '\uFEFF' + csvHeader);
+      return { status: 0, stdout: 'Report generated.' };
+    });
+    const result = generateCustomizationReport(f.args, f.deps);
+    assert.equal(result.outcome, 'ReportGenerated');
+    assert.equal(result.csvPaths.length, 1);
+    assert.equal(result.trackerChanged, false);
+    assert.equal(f.calls.length, 3);
+  });
+}
+
+test('report fallback cannot reuse a stale CSV or claim success from precheck output', (t) => {
+  const f = handoff(t, (args) => args.includes('--checkMigrationStatus')
+    ? response('Running', 'ConfigurationDataCompleted')
+    : { status: 0, stdout: 'Prechecks completed successfully.' });
+  fs.writeFileSync(path.join(f.cwd, 'SiteCustomization999.csv'), csvHeader);
+  const result = generateCustomizationReport(f.args, f.deps);
+  assert.equal(result.outcome, 'ReportMissingOrInvalid');
+  assert.match(result.error, /exit code 0 is not/);
+  assert.deepEqual(result.csvPaths, []);
+  assert.equal(f.calls.length, 3);
+});
+
+test('report fallback accepts a rewritten CSV but rejects empty or malformed artifacts', (t) => {
+  for (const [content, outcome] of [
+    [csvHeader + 'Liquid,Review,adx_name,web-templates/test.html\n', 'ReportGenerated'],
+    ['', 'ReportMissingOrInvalid'],
+    ['not,a,customization,report\n', 'ReportMissingOrInvalid'],
+    [csvHeader + 'Liquid,missing columns\n', 'ReportMissingOrInvalid'],
+    [csvHeader + 'Liquid,Review,adx_name,"unterminated', 'ReportMissingOrInvalid'],
+  ]) {
+    const f = handoff(t, (args) => {
+      if (args.includes('--checkMigrationStatus')) return response('Completed', 'StatusUpdated');
+      fs.writeFileSync(path.join(f.outputDir, 'SiteCustomization.csv'), content);
+      return { status: 0, stdout: 'Done' };
+    });
+    fs.writeFileSync(path.join(f.outputDir, 'SiteCustomization.csv'), csvHeader + 'old,old,old,old\n');
+    const result = generateCustomizationReport(f.args, f.deps);
+    assert.equal(result.outcome, outcome);
+    assert.equal(result.invalidCsvPaths.length, outcome === 'ReportGenerated' ? 0 : 1);
+  }
+});
+
+test('multiple fresh report candidates require selection instead of choosing the highest number', (t) => {
+  const f = handoff(t, (args) => {
+    if (args.includes('--checkMigrationStatus')) return response('Completed', 'StatusUpdated');
+    for (const name of ['SiteCustomization.csv', 'SiteCustomization99.csv']) {
+      fs.writeFileSync(path.join(f.outputDir, name), csvHeader);
+    }
+    return { status: 0, stdout: 'Done' };
+  });
+  assert.equal(generateCustomizationReport(f.args, f.deps).outcome, 'ReportSelectionRequired');
+});
+
+test('report fallback stops before mutation for active, failed or unverifiable trackers', (t) => {
+  for (const tracker of [
+    response('Running', 'ConfigurationDataReferencesStarted'),
+    response('Failed', 'ConfigurationDataCompleted'),
+    { status: 0, stdout: 'Current migration status is : Running\n' },
+    { status: 1, stderr: 'authentication failed' },
+  ]) {
+    const f = handoff(t, () => tracker);
+    assert.equal(generateCustomizationReport(f.args, f.deps).outcome, 'CheckFailed');
+    assert.equal(f.calls.length, 1);
+    assert.ok(f.calls[0].args.includes('--checkMigrationStatus'));
+  }
+});
+
+test('report command and post-report status failures remain explicit with both snapshots', (t) => {
+  for (const failure of ['command', 'status']) {
+    let checks = 0;
+    const f = handoff(t, (args) => {
+      if (args.includes('--checkMigrationStatus')) {
+        if (++checks === 2 && failure === 'status') return { status: 1, stderr: 'network unavailable' };
+        return response('Running', 'ConfigurationDataCompleted');
+      }
+      return failure === 'command' ? { status: 1, stderr: 'report generation failed' } : { status: 0, stdout: '' };
+    });
+    const result = generateCustomizationReport(f.args, f.deps);
+    assert.equal(result.outcome, failure === 'command' ? 'CommandFailed' : 'CheckFailed');
+    assert.ok(result.before.rawOutput);
+    assert.ok(result.after.rawOutput);
+    assert.ok(result.error);
+    assert.equal(f.calls.length, 3);
+  }
+});
+
+test('older PAC report fallback still works without verbose when status includes the current step', (t) => {
+  const f = handoff(t, (args) => {
+    if (args.includes('--verbose')) return { status: 1, stderr: 'An unknown argument --verbose was passed.' };
+    if (args.includes('--checkMigrationStatus')) return response('Running', 'ConfigurationDataCompleted');
+    fs.writeFileSync(path.join(f.outputDir, 'SiteCustomization.csv'), csvHeader);
+    return { status: 0, stdout: 'Done' };
+  });
+  const result = generateCustomizationReport(f.args, f.deps);
+  assert.equal(result.outcome, 'ReportGenerated');
+  assert.equal(result.after.verboseSupported, false);
+  assert.equal(f.calls.filter(({ args }) => args.includes('--verbose')).length, 1);
+});
+
+test('refused, failed and unverifiable reference starts do not retry or report migration success', (t) => {
+  for (const [command, tracker, outcome] of [
+    [{ status: 0, stdout: 'This website is already under migration.' }, response('Running', 'PrecheckCompleted'), 'StartRefused'],
+    [{ status: 1, stderr: 'This website is already under migration.' }, response('Running', 'ConfigurationDataReferencesStarted'), 'StartRefused'],
+    [{ status: 1, stderr: 'authentication failed' }, response('Running'), 'StartFailed'],
+    [{ status: 0, stdout: 'Submitted' }, { status: 1, stderr: 'status check failed' }, 'CheckFailed'],
+  ]) {
+    const f = handoff(t, (args) => args.includes('--checkMigrationStatus') ? tracker : command);
+    const result = startReferences(f.args, f.deps);
+    assert.equal(result.outcome, outcome);
+    assert.ok(result.error);
+    assert.equal(f.calls.length, 2);
+    assert.deepEqual(f.calls[0].args, [
+      'pages', 'migrate-datamodel', '--webSiteId', websiteId, '--mode', 'configurationDataReferences',
+    ]);
+    assert.ok(f.calls[1].args.includes('--checkMigrationStatus'));
+  }
+});
+
+test('accepted references start is not completion; polling still waits for top-level Completed', async (t) => {
+  const f = handoff(t, (args) => args.includes('--checkMigrationStatus')
+    ? response('Running', 'PrecheckCompleted') : { status: 0, stdout: 'Submitted' });
+  assert.equal(startReferences(f.args, f.deps).outcome, 'StartAccepted');
+  const poll = polling(t, [
+    response('Running', 'PrecheckCompleted'),
+    response('Running', 'ConfigurationDataReferencesCompleted'),
+    response('Completed', 'StatusUpdated'),
+  ]);
+  assert.equal((await pollMigration(poll.args, poll.deps)).outcome, 'Completed');
+  assert.equal(poll.calls.length, 3);
+  assert.equal(poll.sleeps.length, 2);
+});
+
+test('30 unchanged precheck observations never trigger a reset or another references start', async (t) => {
+  const f = polling(t, [response('Running', 'PrecheckCompleted')]);
+  assert.equal((await pollMigration(f.args, f.deps)).outcome, 'TimedOut');
+  assert.equal(f.calls.length, 30);
+  assert.ok(f.calls.every(({ args }) => args.includes('--checkMigrationStatus') &&
+    !args.includes('--resetMigration') && !args.includes('--mode')));
+});
+
+test('post-references report tracker change preserves Completed evidence and live state', async (t) => {
+  let step = 'StatusUpdated';
+  let status = 'Completed';
+  const f = handoff(t, (args) => {
+    if (args.includes('--checkMigrationStatus')) return response(status, step);
+    fs.writeFileSync(path.join(f.outputDir, 'SiteCustomization.csv'), csvHeader);
+    step = 'PrecheckCompleted';
+    status = 'Running';
+    return { status: 0, stdout: 'Prechecks completed.' };
+  });
+  const statePath = path.join(f.outputDir, 'migration-state.json');
+  fs.writeFileSync(statePath, 'state is owned by update-state.js');
+  assert.equal((await pollMigration({ ...f.args, mode: 'configurationDataReferences' }, { ...f.deps, emit() {} })).outcome, 'Completed');
+  const milestone = fs.readFileSync(path.join(f.outputDir, 'migration-status.json'), 'utf8');
+  const result = generateCustomizationReport(f.args, f.deps);
+  assert.equal(result.outcome, 'TrackerChanged');
+  assert.equal(result.csvPaths.length, 1);
+  assert.equal(result.before.status, 'Completed');
+  assert.equal(result.after.status, 'Running');
+  assert.equal(fs.readFileSync(path.join(f.outputDir, 'migration-status.json'), 'utf8'), milestone);
+  assert.equal(fs.readFileSync(statePath, 'utf8'), 'state is owned by update-state.js');
+});
+
 test('progress can update the existing report through Node without concurrent state writers', async (t) => {
   const f = polling(t, [response('Completed')]);
   const statePath = path.join(f.outputDir, 'migration-state.json');
@@ -282,6 +512,51 @@ test('polling CLI returns distinct success, migration-failure and elapsed-window
   }
 });
 
+test('report and references-start CLI return nonzero for missing artifacts, tracker changes and refusals', (t) => {
+  const root = fixture(t);
+  const preload = path.join(root, 'fake-handoff-pac.cjs');
+  fs.writeFileSync(preload, `
+    const fs = require('node:fs');
+    const path = require('node:path');
+    const assert = require('node:assert/strict');
+    let reported = false;
+    require('node:child_process').execFileSync = (command, args, options) => {
+      assert.equal(command, process.platform === 'win32' ? 'pac.exe' : 'pac');
+      assert.equal(options.shell, false);
+      let output;
+      if (args.includes('--checkMigrationStatus')) {
+        const step = reported && process.env.TEST_CASE === 'changed' ? 'PrecheckCompleted' : 'ConfigurationDataCompleted';
+        output = 'Current migration status is : Running\\nCurrent Step: ' + step + '\\n';
+      } else if (args.includes('--siteCustomizationReportPath')) {
+        const directory = args[args.indexOf('--siteCustomizationReportPath') + 1];
+        if (process.env.TEST_CASE === 'generated') {
+          fs.writeFileSync(path.join(directory, 'SiteCustomization.csv'), 'Type of customization,Guidance,Snippet,Location\\n');
+        }
+        reported = true;
+        output = 'Prechecks completed.';
+      } else {
+        output = process.env.TEST_CASE === 'refused' ? 'The website is already under migration.' : 'Submitted.';
+      }
+      fs.writeSync(options.stdio[1], output);
+    };
+  `);
+  for (const [action, scenario, outcome, code] of [
+    ['report', 'generated', 'ReportGenerated', 0],
+    ['report', 'missing', 'ReportMissingOrInvalid', 1],
+    ['report', 'changed', 'TrackerChanged', 1],
+    ['start-references', 'refused', 'StartRefused', 1],
+    ['start-references', 'accepted', 'StartAccepted', 0],
+  ]) {
+    const output = path.join(root, scenario);
+    fs.mkdirSync(output);
+    const result = spawnSync(process.execPath, [
+      '--require', preload, script, action, '--website-id', websiteId, '--output-dir', output,
+    ], { encoding: 'utf8', env: { ...process.env, TEST_CASE: scenario }, cwd: root });
+    assert.equal(result.status, code, result.stderr);
+    assert.equal(JSON.parse(result.stdout).outcome, outcome);
+  }
+});
+
 test('migration instructions use portable commands for both tracks', () => {
   const skillRoot = path.join(__dirname, '../../skills/migrate-datamodel');
   for (const filename of ['SKILL.md', 'DESIGN.md', 'REPORTS_INTEGRATION.md']) {
@@ -295,4 +570,15 @@ test('migration instructions use portable commands for both tracks', () => {
   assert.match(skill, /agent is the sole report-state writer/);
   assert.match(skill, /PowerShell is not a prerequisite/);
   assert.match(skill, /Always refresh the card once more from the final saved response/);
+  assert.equal((skill.match(/migration-runtime\.js" start-references /g) || []).length, 2);
+  assert.match(skill, /migration-runtime\.js" report /);
+  const recovery = skill.split('#### References start refusal recovery')[1].split('### 3.3 Activate EDM')[0];
+  assert.match(recovery, /both tracks/);
+  assert.match(recovery, /Earlier approval to migrate references is \*\*not\*\* reset approval/);
+  assert.match(recovery, /Only after reset approval/);
+  assert.match(recovery, /verify the tracker is no longer `Running`/);
+  assert.match(recovery, /Retry \*\*only\*\* `start-references` once/);
+  assert.match(recovery, /Do not rerun metadata/);
+  assert.match(recovery, /Require overall references `Completed` before activation/);
+  assert.doesNotMatch(skill, /set \*\*`adx_migrationstatus`\*\*|manual `adx_migrationstatus`/);
 });

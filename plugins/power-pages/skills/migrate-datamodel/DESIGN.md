@@ -39,7 +39,7 @@ On the **Downstream Track** (18 sub-steps total), **Phase 2 — Setting Up Metad
 - Environment-aware migration mode recommendation (Dev/Single → `configurationData` or approved `all`; Test/UAT/Prod → `configurationDataReferences`)
 - Customization report generation (always, for any environment)
 - Track-aware customization remediation (staged FetchXML rewrites and Liquid annotations; manual solution-package guidance for Data Model Extensions and plugins)
-- Migration execution with bounded polling (30-min ceiling + wait/reset/exit escape hatch)
+- Migration execution with bounded polling (30-minute windows; elapsed time alone never authorizes reset)
 - Data model version flip via Portal Id (captured from `pac pages list -v` when available; manual `/_services/about` fallback otherwise)
 - Rollback to SDM
 - HTML report generation (customization report + execution report)
@@ -100,7 +100,7 @@ The skill is organized into **4 high-level phases**. Each phase contains numbere
 | 1.5 | `pac solution list --includeSystemSolutions` |
 | 1.6 | `pac solution list --includeSystemSolutions`, `pac application install --application-name <…>` |
 | 1.7 | AskUserQuestion |
-| 2.1 | `pac pages migrate-datamodel --webSiteId <…> --siteCustomizationReportPath <OUTPUT_DIR>`, `node generate-migration-reports.js` |
+| 2.1 | Reuse a verified customization CSV or use the guarded `migration-runtime.js report` fallback, then `node generate-migration-reports.js` |
 | 2.2 | `pac pages download --webSiteId <…> --path ./mysite`, `node generate-migration-reports.js --automate-fetchxml --automate-liquid`, `pac pages upload --path <SITE_ROOT> --modelVersion 1` |
 | 3.1 | `pac pages migrate-datamodel --webSiteId <…> --mode <SELECTED>`, `--checkMigrationStatus` (polling) |
 | 3.2 | `pac pages migrate-datamodel --webSiteId <…> --updateDataModelVersion --portalId <…>` |
@@ -199,7 +199,7 @@ is not a prerequisite on Windows, macOS, or Linux.
 
 | File | Producer | Location |
 | --- | --- | --- |
-| `SiteCustomization.csv` (and auto-numbered `SiteCustomization<N>.csv`) | `pac pages migrate-datamodel --siteCustomizationReportPath` | `<OUTPUT_DIR>` (PAC sometimes writes to cwd instead — step 2.1 globs for it) |
+| `SiteCustomization.csv` (and auto-numbered `SiteCustomization<N>.csv`) | Approved PAC migration or guarded `migration-runtime.js report` fallback | `<OUTPUT_DIR>`, its parent or cwd; verify provenance at Authoring 2.3 / Downstream 3.3 |
 | `customization-report.html` | `generate-migration-reports.js` | `<OUTPUT_DIR>` |
 | `datamodel-migration-report.html` (live execution report) | `update-state.js` + `lib/render-live-report.js` | `<OUTPUT_DIR>` |
 | `remediation-staged/<rel path>` (proposed file copies) | `generate-migration-reports.js --automate-fetchxml --automate-liquid` | `<OUTPUT_DIR>/remediation-staged/` (mirrors `<SITE_ROOT>` layout; live source untouched until apply step) |
@@ -417,13 +417,26 @@ From PAC source (`bolt.module.paportal/sitecustomizations/configurations/Constan
 | Status | Value | Skill Behavior |
 | --- | --- | --- |
 | `NotStarted` | 746610000 | No prior migration; proceed normally |
-| `Running` | 746610001 | Prompt user: Wait / Reset / Exit |
+| `Running` | 746610001 | Inspect current step and mode; metadata-only `ConfigurationDataCompleted` is a handoff, otherwise keep polling active work |
 | `Completed` | 746610002 | Prior migration done; skip to step 3.2 if version not yet flipped |
 | `Failed` | 746610003 | Show last step + errors; offer Retry / Stop |
 | `Reverted` | 746610004 | Site was rolled back; proceed as fresh start |
 | `Unknown` | 0 | Warn user; ask whether to proceed |
 
 `--resetMigration` is non-destructive to migrated data — it only flips the tracker status from `Running` → `Failed` so a new migration can be triggered.
+
+Reset always requires explicit approval and a read-only verification of its
+result. A refused references start is handled separately from an accepted,
+running operation: retain `references-start.json`, inspect activity, then offer
+recheck / approved supported reset-and-retry / stop. Retry references only once
+after a verified reset; never automatically rerun metadata or edit tracker fields.
+
+Keep the missing-report compatibility fallback through `migration-runtime.js report`.
+It saves before/after status and command output in `customization-report-attempt.json`,
+checks for a new/updated valid CSV, and leaves prior milestone artifacts intact.
+Exit code 0 without a CSV or an unexpected status/current-step change is not a
+successful report handoff. The authoritative approval and pause rules for both
+tracks remain in SKILL.md.
 
 ---
 
@@ -434,7 +447,7 @@ From PAC source (`bolt.module.paportal/sitecustomizations/configurations/Constan
 3. **EDM template solutions required** — Every template needs its corresponding V2 solution installed in the environment (see SKILL.md step 1.6 mapping). Missing V2 solutions can be provisioned by creating a dummy EDM site with the same template (the dummy can be deleted after).
 4. **PAC CLI version dependency for D365 portals** — Migration of D365 portal templates (Community, Customer Self-Service, Employee Self-Service, Partner) requires a recent PAC CLI build. Older builds may still reject these templates.
 5. **Portal Id column** — Available in `pac pages list -v` output only on PAC CLI builds with the 2026-02-24 commit (PR 14824169) or later. Older builds fall back to manual `_services/about` lookup in step 3.2.
-6. **30-minute polling ceiling** — The skill polls migration status for 30 minutes, then escalates to a wait/reset/exit prompt. PAC's own server-side migration continues regardless of skill polling.
+6. **30-minute polling window** — An elapsed window is not migration failure. Keep polling active work; reset is only an explicitly approved recovery after investigating lack of progress. PAC's own server-side migration continues regardless of skill polling.
 
 ---
 
