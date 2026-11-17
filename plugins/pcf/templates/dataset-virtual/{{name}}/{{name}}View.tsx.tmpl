@@ -1,4 +1,7 @@
 import * as React from "react";
+// Fluent v9 Button comes from the declared Fluent platform library, so it is not bundled and
+// follows the host theme; it renders a native <button>, so disabled and aria-label behave as before.
+import { Button } from "@fluentui/react-components";
 
 type DataSetRecord = ComponentFramework.PropertyHelper.DataSetApi.EntityRecord;
 
@@ -87,7 +90,7 @@ function row(
     return React.createElement("tr", { key: id },
         React.createElement("td", null, text),
         React.createElement("td", null,
-            React.createElement("button", {
+            React.createElement(Button, {
                 type: "button",
                 "aria-label": props.openRecordLabel.replace("{0}", text),
                 onClick: () => props.onOpenRecord(record),
@@ -106,12 +109,12 @@ function pager(
 ): React.ReactElement {
     const busy = props.busy || dataSet.loading === true;
     return React.createElement("div", { className: "{{nameLower}}-pager" },
-        React.createElement("button", {
+        React.createElement(Button, {
             type: "button",
             disabled: busy || !dataSet.paging.hasPreviousPage,
             onClick: props.onPreviousPage,
         }, "Previous"),
-        React.createElement("button", {
+        React.createElement(Button, {
             type: "button",
             disabled: busy || !dataSet.paging.hasNextPage,
             onClick: props.onNextPage,

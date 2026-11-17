@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 2,
+  "minimumPluginVersion": "2.21.0",
+  "createIdentity": "stable-v1",
+  "solution": { "uniqueName": "ContosoEquipmentLoans", "publisherPrefix": "cnt" },
+  "app": {
+    "name": "Equipment Loans",
+    "description": "Equipment lent to staff, with the open loans and a chart of loans by status"
+  },
+  "entities": [
+    { "schemaName": "cnt_loan", "displayName": "Loan", "pluralName": "Loans",
+      "primaryAttribute": { "schemaName": "cnt_name", "displayName": "Name" },
+      "columns": [
+        { "schemaName": "cnt_status", "displayName": "Status", "type": "Choice", "options": ["Out", "Returned", "Overdue"] },
+        { "schemaName": "cnt_duedate", "displayName": "Due Date", "type": "DateTime", "dateTimeBehavior": "DateOnly" }
+      ] }
+  ],
+  "forms": [{ "entity": "cnt_loan", "name": "Information", "layout": "auto" }],
+  "views": [{ "entity": "cnt_loan", "name": "Open Loans", "reconcile": "declared", "columns": ["cnt_name", "cnt_status", "cnt_duedate"] }],
+  "charts": [{ "entity": "cnt_loan", "name": "Loans by Status", "reconcile": "declared", "groupBy": "cnt_status", "measure": "count", "chartType": "Column" }],
+  "appShell": { "areas": [{ "label": "Loans", "groups": [{ "label": "Equipment", "subAreas": [{ "entity": "cnt_loan", "title": "Loans" }] }] }] }
+}

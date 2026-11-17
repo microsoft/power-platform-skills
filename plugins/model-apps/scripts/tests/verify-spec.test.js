@@ -484,7 +484,7 @@ test('verifySpec pages: a residual PAGEREF_ in deployed nav code FAILS the no-pa
 // the lexer read only by guess proves no edge: after `of/2` it reads a regex up to the next `/`, and the `/*` inside it opens a comment that
 // ends inside a string, so the string's text — here a navigation call to the target — is read as code.
 test('verifySpec pages: an id in a call the lexer reads only by guess does not prove the nav edge', async () => {
-  const forgery = ['const of = 12;', 'const count = of/2; const re = /\\/*$/;', `const note = "*/ navigateTo({pageType:'generative', pageId:'${GP_DETAIL}'}) /*";`, ''].join('\n');
+  const forgery = ['const of = 12;', 'for (const x of of/2 + "") {} const re = /\\/*$/;', `const note = "*/ navigateTo({pageType:'generative', pageId:'${GP_DETAIL}'}) /*";`, ''].join('\n');
   const verify = async (code) => verifySpec(pageSpec(), pageRead({ sitemapIds: [GP_OVERVIEW, GP_DETAIL], existenceIds: [GP_OVERVIEW, GP_DETAIL], manifest: BOTH_MANIFEST, sitemap: SITEMAP_OK, code: { [GP_OVERVIEW]: code } }));
   const forged = await verify(forgery);
   assert.ok(forged.checks.some((c) => c.kind === 'page-nav' && c.name === 'Overview -> detail' && !c.present), 'the string is not a navigation');
@@ -3607,4 +3607,780 @@ test('verify tells a maker what the flag is for when a string caption is compare
   const spanish = await checkWith(readsEnglishWithIds(), inSpanish, inOrgAsking(exportOf(), undefined, 3082));
   assert.strictEqual(spanish.chk.present, true, spanish.chk.detail);
   assert.strictEqual(spanish.res.unverified, undefined);
+});
+
+// Column types: a declared column that exists is also held to its declared type, from the very rows the existence check reads through the
+// real SDK bundle — so the check costs no request, and a legacy spec's verification sends exactly what it sent before.
+test('REAL BUNDLE: verify fails a column deployed with another type, says so by both types, and sends only the reads it always sent', async () => {
+  const fsx = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const { readerFor } = require('../verify-model-app.js');
+  const B = require(path.resolve(__dirname, '..', 'vendor', 'cds-maker-sdk.cjs'));
+  const label = (l) => ({ UserLocalizedLabel: { Label: l, LanguageCode: 1033 }, LocalizedLabels: [{ Label: l, LanguageCode: 1033 }] });
+  const run = async (spec) => {
+    const dir = fsx.mkdtempSync(path.join(os.tmpdir(), 'verify-types-'));
+    const requests = [];
+    const get = async (url) => {
+      const u = new URL(url);
+      const p = decodeURIComponent(u.pathname + u.search).replace(/^\/api\/data\/v9\.\d+/, '');
+      requests.push(p.replace(/\?.*$/, ''));
+      if (/^\/EntityDefinitions\?/.test(p)) {
+        return { status: 200, headers: {}, body: { value: [{ LogicalName: 'new_ticket', SchemaName: 'new_Ticket', EntitySetName: 'new_tickets', MetadataId: '66666666-6666-6666-6666-666666666666', DisplayName: label('Ticket'), DisplayCollectionName: label('Tickets'), IsCustomEntity: true, PrimaryNameAttribute: 'new_name', PrimaryIdAttribute: 'new_ticketid', ObjectTypeCode: 10001 }] } };
+      }
+      if (/^\/EntityDefinitions\(LogicalName='new_ticket'\)\/Attributes\?/.test(p)) {
+        return { status: 200, headers: {}, body: { value: [
+          { LogicalName: 'new_name', SchemaName: 'new_Name', DisplayName: label('Name'), AttributeType: 'String', IsCustomAttribute: true },
+          { LogicalName: 'new_amount', SchemaName: 'new_Amount', DisplayName: label('Amount'), AttributeType: 'Money', IsCustomAttribute: true },
+          { LogicalName: 'new_due', SchemaName: 'new_Due', DisplayName: label('Due'), AttributeType: 'DateTime', IsCustomAttribute: true },
+        ] } };
+      }
+      return { status: 404, headers: {}, body: { error: { code: '0x80060888', message: 'Not found' } } };
+    };
+    const sdk = B.createMakerSdk({ workspaceStorage: B.createNodeWorkspaceStorage(dir), instanceUrl: 'https://contoso.crm.dynamics.com', httpClient: { get, post: get, put: get, patch: get, delete: get } });
+    try {
+      await sdk.initWorkspace();
+      requests.length = 0;
+      return { result: await verifySpec(spec, readerFor(sdk, 'new_app', {})), requests };
+    } finally { fsx.rmSync(dir, { recursive: true, force: true }); }
+  };
+  const wrong = await run({ entities: [{ schemaName: 'new_Ticket', columns: [{ schemaName: 'new_Amount', type: 'Decimal' }, { schemaName: 'new_Due', type: 'DateTime' }] }] });
+  assert.deepStrictEqual(wrong.result.checks.filter((c) => !c.present).map((c) => [c.kind, c.name, c.detail]), [
+    ['column-type', 'new_Ticket.new_Amount', 'declared Decimal, deployed Money: a column\'s type cannot be changed in place'],
+  ]);
+  assert.strictEqual(wrong.result.ok, false);
+  assert.strictEqual(wrong.result.unverified, undefined);
+  // A legacy spec that matches (and an untyped column, which is Text) passes as before, with the same reads — no further request.
+  const legacy = await run({ entities: [{ schemaName: 'new_Ticket', columns: [{ schemaName: 'new_Name' }, { schemaName: 'new_Due', type: 'DateTime' }] }] });
+  assert.strictEqual(legacy.result.ok, true);
+  assert.strictEqual(legacy.result.unverified, undefined);
+  assert.deepStrictEqual(legacy.result.checks.map((c) => c.kind), ['entity', 'column', 'column']);
+  assert.deepStrictEqual(legacy.requests, ['/EntityDefinitions', "/EntityDefinitions(LogicalName='appmodule')", "/EntityDefinitions(LogicalName='new_ticket')/Attributes"]);
+  assert.deepStrictEqual(wrong.requests, legacy.requests);
+});
+
+// Declared date behaviours, table flags, secured columns, field security profiles and their users: each is held to a fresh read of what
+// the environment holds, through the real SDK bundle. What a read cannot state is unverified, never a pass. (The legacy spec above pins
+// that a spec declaring none of them sends no request for them.)
+test('REAL BUNDLE: verify holds declared date behaviours, table flags and field security to what is deployed', async () => {
+  const fsx = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const { readerFor } = require('../verify-model-app.js');
+  const B = require(path.resolve(__dirname, '..', 'vendor', 'cds-maker-sdk.cjs'));
+  const PROFILE = '11111111-1111-4111-8111-111111111111';
+  const USER = '33333333-3333-4333-8333-333333333333';
+  const label = (l) => ({ UserLocalizedLabel: { Label: l, LanguageCode: 1033 }, LocalizedLabels: [{ Label: l, LanguageCode: 1033 }] });
+  const ok = (body) => ({ status: 200, headers: {}, body });
+  const run = async ({ flags = ok({ IsDuplicateDetectionEnabled: { Value: true }, ChangeTrackingEnabled: false, SyncToExternalSearchIndex: true, CanEnableSyncToExternalSearchIndex: { Value: true } }) } = {}) => {
+    const dir = fsx.mkdtempSync(path.join(os.tmpdir(), 'verify-features-'));
+    const requests = [];
+    const get = async (url) => {
+      const u = new URL(url);
+      const p = decodeURIComponent(u.pathname + u.search).replace(/^\/api\/data\/v9\.\d+/, '');
+      requests.push(p.replace(/\?.*$/, ''));
+      if (/^\/EntityDefinitions\?/.test(p)) {
+        return ok({ value: [{ LogicalName: 'new_ticket', SchemaName: 'new_Ticket', EntitySetName: 'new_tickets', MetadataId: '66666666-6666-6666-6666-666666666666', DisplayName: label('Ticket'), DisplayCollectionName: label('Tickets'), IsCustomEntity: true, PrimaryNameAttribute: 'new_name', PrimaryIdAttribute: 'new_ticketid', ObjectTypeCode: 10001 }] });
+      }
+      if (p === "/EntityDefinitions(LogicalName='new_ticket')/Attributes?$select=LogicalName,IsSecured") return ok({ value: [{ LogicalName: 'new_name', IsSecured: false }, { LogicalName: 'new_secret', IsSecured: true }] });
+      if (/^\/EntityDefinitions\(LogicalName='new_ticket'\)\/Attributes\?/.test(p)) {
+        return ok({ value: [
+          { LogicalName: 'new_name', SchemaName: 'new_Name', DisplayName: label('Name'), AttributeType: 'String', IsCustomAttribute: true },
+          { LogicalName: 'new_due', SchemaName: 'new_Due', DisplayName: label('Due'), AttributeType: 'DateTime', IsCustomAttribute: true },
+          { LogicalName: 'new_secret', SchemaName: 'new_Secret', DisplayName: label('Secret'), AttributeType: 'String', IsCustomAttribute: true },
+        ] });
+      }
+      if (/^\/EntityDefinitions\(LogicalName='new_ticket'\)\/Attributes\/Microsoft\.Dynamics\.CRM\.DateTimeAttributeMetadata\?/.test(p)) {
+        return ok({ value: [{ LogicalName: 'new_due', DateTimeBehavior: { Value: 'UserLocal' }, CanChangeDateTimeBehavior: { Value: true } }] });
+      }
+      if (/^\/EntityDefinitions\(LogicalName='new_ticket'\)\?\$select=IsDuplicateDetectionEnabled/.test(p)) return flags;
+      if (/^\/fieldsecurityprofiles\?/.test(p) && /\$filter=/.test(p)) return ok({ value: [{ fieldsecurityprofileid: PROFILE, name: 'HR' }] });
+      if (p === `/fieldsecurityprofiles(${PROFILE})?$select=name,description`) return ok({ name: 'HR', description: null });
+      if (/^\/fieldpermissions\?/.test(p)) return ok({ value: [{ fieldpermissionid: '22222220-2222-4222-8222-222222222222', entityname: 'new_ticket', attributelogicalname: 'new_secret', canread: 4, cancreate: 0, canupdate: 0, canreadunmasked: 0 }] });
+      if (p.startsWith(`/fieldsecurityprofiles(${PROFILE})/systemuserprofiles_association?`)) return ok({ value: [] });
+      return { status: 404, headers: {}, body: { error: { code: '0x80060888', message: 'Not found' } } };
+    };
+    const sdk = B.createMakerSdk({ workspaceStorage: B.createNodeWorkspaceStorage(dir), instanceUrl: 'https://contoso.crm.dynamics.com', httpClient: { get, post: get, put: get, patch: get, delete: get } });
+    const spec = {
+      entities: [{ schemaName: 'new_Ticket', duplicateDetectionEnabled: true, changeTrackingEnabled: true, columns: [
+        { schemaName: 'new_Name' },
+        { schemaName: 'new_Due', type: 'DateTime', dateTimeBehavior: 'DateOnly', dateFormat: 'DateOnly' },
+        { schemaName: 'new_Secret', isSecured: true },
+      ] }],
+      fieldSecurityProfiles: [{ key: 'hr', name: 'HR', permissions: [{ table: 'new_ticket', column: 'new_secret', read: true }], assignTo: { users: [USER] } }],
+    };
+    try {
+      await sdk.initWorkspace();
+      requests.length = 0;
+      return { result: await verifySpec(spec, readerFor(sdk, 'new_app', {})), requests };
+    } finally { fsx.rmSync(dir, { recursive: true, force: true }); }
+  };
+  const { result } = await run();
+  assert.strictEqual(result.ok, false);
+  assert.deepStrictEqual(result.checks.filter((c) => !['entity', 'column'].includes(c.kind)).map((c) => [c.kind, c.name, c.present, c.detail || '']), [
+    ['dateTimeBehavior', 'new_ticket.new_due', false, 'declared DateOnly, deployed UserLocal'],
+    ['tableFlag', 'new_ticket.changeTrackingEnabled', false, 'changeTrackingEnabled declared true, deployed false'],
+    ['tableFlag', 'new_ticket.duplicateDetectionEnabled', true, ''],
+    ['isSecured', 'new_ticket.new_secret', true, ''],
+    ['fieldSecurityProfile', 'hr', true, ''],
+    ['fieldSecurityAssignment', `hr:users:${USER}`, false, 'systemuser does not hold the profile'],
+  ]);
+  assert.strictEqual(result.unverified, undefined);
+  // A flags read that fails leaves each declared flag unverified — not passed, not failed.
+  const unread = await run({ flags: { status: 500, headers: {}, body: {} } });
+  assert.deepStrictEqual(unread.result.checks.filter((c) => c.kind === 'tableFlag'), []);
+  assert.deepStrictEqual(unread.result.unverified.filter((u) => u.startsWith('tableFlag:')), [
+    'tableFlag:new_ticket.changeTrackingEnabled (changeTrackingEnabled declared true, deployed unreadable)',
+    'tableFlag:new_ticket.duplicateDetectionEnabled (duplicateDetectionEnabled declared true, deployed unreadable)',
+  ]);
+});
+
+// The configuration kinds: verify asks the reader's configuration(spec, bindings) getter for one answer per declared item and aspect,
+// reports a pass as present, a drift with its code and fields, and an unproven Custom API implementation as unverified (the API is
+// deployed; whether it runs is not something a read can prove). A reader without the getter is said so; a spec without the fields reads nothing.
+const CONFIG_SPEC = {
+  minimumPluginVersion: '2.21.0', schemaVersion: 2,
+  solution: { uniqueName: 'ContosoSol', displayName: 'Contoso Sol', publisherPrefix: 'contoso' },
+  app: { name: 'Config App', uniqueName: 'contoso_configapp' }, entities: [],
+  environmentVariables: [{ schemaName: 'contoso_ApiBase', type: 'string' }],
+  customApis: [{ uniqueName: 'contoso_Calc' }],
+};
+// Every read other than the configuration getter answers null, so only the configuration section decides these results.
+const otherReadsNull = (own) => new Proxy(own, {
+  get: (o, k) => (k in o ? o[k] : (typeof k === 'string' && k !== 'then' && k !== 'configuration' ? async () => null : undefined)),
+  has: (o, k) => k in o || (typeof k === 'string' && k !== 'then' && k !== 'configuration'),
+});
+const configChecks = (r) => r.checks.filter((c) => c.kind === 'configuration');
+
+test('verifySpec: configuration items pass, drift with code and fields, and an unproven Custom API implementation is unverified', async () => {
+  let seen;
+  const bindings = { environmentVariables: new Map(), connectionReferences: new Map() };
+  const read = otherReadsNull({ configuration: async (s, b) => { seen = { s, b }; return [
+    { kind: 'environmentVariable', key: 'contoso_ApiBase', name: 'definition', ok: true },
+    { kind: 'environmentVariable', key: 'contoso_ApiBase', name: 'value', ok: false, code: 'ENVIRONMENT_VARIABLE_VALUE_DRIFT', fields: ['value'] },
+    { kind: 'customApi', key: 'contoso_Calc', name: 'implementation', ok: false, code: 'CUSTOM_API_IMPLEMENTATION_UNPROVEN' },
+  ]; } });
+  const r = await verifySpec(CONFIG_SPEC, read, { configurationBindings: bindings });
+  assert.strictEqual(seen.s, CONFIG_SPEC);
+  assert.strictEqual(seen.b, bindings, 'the bindings the build recorded are handed to the getter');
+  assert.deepStrictEqual(configChecks(r), [
+    { kind: 'configuration', name: 'environmentVariable contoso_ApiBase: definition', present: true, detail: '' },
+    { kind: 'configuration', name: 'environmentVariable contoso_ApiBase: value', present: false, detail: 'ENVIRONMENT_VARIABLE_VALUE_DRIFT (value)' },
+  ]);
+  assert.deepStrictEqual(r.unverified.filter((u) => /configuration/.test(u)), ['configuration:customApi contoso_Calc: implementation (CUSTOM_API_IMPLEMENTATION_UNPROVEN)']);
+  assert.strictEqual(r.ok, false, 'a drift fails the verify');
+});
+
+test('verifySpec: the configuration getter is handed the workspace binding store, and a protected item still being settled is unverified', async () => {
+  let seen;
+  const managedManifest = { revision: 1, groups: [], pending: [{ family: 'customApi', key: 'contoso_calc', code: 'managed-settlement-pending' }], invalid: [] };
+  const read = otherReadsNull({ configuration: async (s, b, m) => { seen = m; return [
+    { kind: 'environmentVariable', key: 'contoso_ApiBase', name: 'definition', ok: false, code: 'configuration-row-not-found' },
+    { kind: 'customApi', key: 'contoso_Calc', name: 'definition', ok: false, code: 'managed-settlement-pending' },
+  ]; } });
+  const r = await verifySpec({ ...CONFIG_SPEC, configurationIdentity: 'stable-v1' }, read, { managedManifest });
+  assert.strictEqual(seen, managedManifest);
+  assert.deepStrictEqual(configChecks(r), [
+    { kind: 'configuration', name: 'environmentVariable contoso_ApiBase: definition', present: false, detail: 'configuration-row-not-found' },
+  ]);
+  assert.ok(r.unverified.includes('configuration:customApi contoso_Calc: definition (managed-settlement-pending)'), r.unverified.join('\n'));
+  assert.strictEqual(r.ok, false);
+});
+
+test('verifySpec: a reader without the configuration getter reports the configuration items as unverified, not as passing', async () => {
+  const r = await verifySpec(CONFIG_SPEC, otherReadsNull({}), {});
+  assert.deepStrictEqual(configChecks(r), []);
+  assert.deepStrictEqual(r.unverified.filter((u) => /configuration/.test(u)), ['configuration (this reader cannot read configuration items)']);
+});
+
+test('verifySpec: a spec without configuration fields adds no configuration section and never calls the getter', async () => {
+  const plain = { ...CONFIG_SPEC };
+  delete plain.environmentVariables;
+  delete plain.customApis;
+  let called = false;
+  const r = await verifySpec(plain, otherReadsNull({ configuration: async () => { called = true; return []; } }), {});
+  assert.strictEqual(called, false);
+  assert.deepStrictEqual(configChecks(r), []);
+  assert.ok(!(r.unverified || []).some((u) => /configuration/.test(u)), 'nothing configuration-related is unverified');
+});
+
+// --- managed bindings (lib/managed-bindings.js readManagedManifest): a bound view or chart is held to its bound id ---------------------
+
+test('verifySpec: a bound view or chart is read by its bound id; a pending or unusable group is unverified, never a pass', async () => {
+  const VIEW_ID = '11111111-2222-4333-8444-555555555555';
+  const CHART_ID = '66666666-7777-4888-8999-aaaaaaaaaaaa';
+  const managedManifest = {
+    revision: 3,
+    groups: [
+      { family: 'view', key: 'new_o/V', root: { kind: 'view', key: 'new_o/V', id: VIEW_ID } },
+      { family: 'chart', key: 'new_o/C', root: { kind: 'chart', key: 'new_o/C', id: CHART_ID } },
+    ],
+    pending: [{ family: 'view', key: 'new_o/W', code: 'managed-settlement-pending' }],
+    invalid: [{ family: 'store', key: 'managed-bindings', reason: 'not valid JSON', code: 'managed-binding-store-unreadable' }],
+  };
+  const filters = [];
+  const read = (bound, { ignoreFilter = false } = {}) => ({
+    findTable: async () => null,
+    findColumns: async () => [],
+    sitemapXml: async () => '',
+    queryRecords: async (set, opts) => {
+      filters.push(`${set}: ${opts.filter}`);
+      // The row as the service answers it: its own id, a real GUID.
+      if (ignoreFilter) return bound.length ? [{ [idFor(set)]: bound[0] }] : [];
+      const hit = bound.find((id) => opts.filter.endsWith(id));
+      return hit ? [{ [idFor(set)]: hit }] : [];
+    },
+  });
+  const spec = { entities: [], appShell: { areas: [] } };
+  const both = await verifySpec(spec, read([VIEW_ID, CHART_ID]), { managedManifest });
+  assert.deepStrictEqual(both.checks.filter((c) => c.kind.startsWith('managed-')).map((c) => [c.kind, c.name, c.present]), [
+    ['managed-view', `new_o/V (${VIEW_ID})`, true],
+    ['managed-chart', `new_o/C (${CHART_ID})`, true],
+  ]);
+  assert.deepStrictEqual(filters.sort(), [`savedquery: savedqueryid eq ${VIEW_ID}`, `savedqueryvisualization: savedqueryvisualizationid eq ${CHART_ID}`]);
+  assert.deepStrictEqual(both.unverified.filter((u) => u.startsWith('managed:')), [
+    'managed:view new_o/W (managed-settlement-pending)',
+    'managed:store managed-bindings (managed-binding-store-unreadable)',
+  ]);
+  // The row a name check would find is not enough: the bound id is gone, so the bound view is missing.
+  const gone = await verifySpec(spec, read([CHART_ID]), { managedManifest });
+  assert.strictEqual(gone.ok, false);
+  assert.ok(gone.missing.some((m) => m.kind === 'managed-view' && m.name === `new_o/V (${VIEW_ID})`));
+  // A reader that answers another row (here the chart's id for the view's read) is not the bound row either.
+  const other = await verifySpec(spec, read([CHART_ID], { ignoreFilter: true }), { managedManifest });
+  assert.ok(other.missing.some((m) => m.kind === 'managed-view' && m.name === `new_o/V (${VIEW_ID})`));
+  // Control: no manifest (or an empty one) adds no check and no read.
+  filters.length = 0;
+  const none = await verifySpec(spec, read([]), { managedManifest: { revision: 0, groups: [], pending: [], invalid: [] } });
+  assert.strictEqual(none.checks.some((c) => c.kind.startsWith('managed-')), false);
+  assert.deepStrictEqual(filters, []);
+});
+
+test('readManagedManifest: read-only; no store and a non-https target are empty, an unusable store is one unverified entry', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const { makeTempDir } = require('./helpers/temp-dirs.js');
+  const { openManagedBindings, readManagedManifest, PREFIX } = require('../lib/managed-bindings.js');
+  const dir = makeTempDir('verify-managed-');
+  const args = { workspaceDir: dir, environment: 'https://contoso.crm.dynamics.com', appUniqueName: 'contoso_app', solutionUniqueName: 'Contoso' };
+  assert.deepStrictEqual(readManagedManifest(args), { revision: 0, groups: [], pending: [], invalid: [] });
+  assert.deepStrictEqual(fs.readdirSync(dir), [], 'reading creates nothing');
+  openManagedBindings(args).prepareAttempt({
+    family: 'view', key: 'new_o/V', baseGeneration: null, root: { kind: 'view', key: 'new_o/V', id: '11111111-2222-4333-8444-555555555555' },
+    expected: { proofVersion: 1, proofSchema: 'view-v1', rootId: '11111111-2222-4333-8444-555555555555', baseProofSha256: null, sentProjectionSha256: 'a'.repeat(64), preservationSha256: 'a'.repeat(64), baseObservation: null, children: [] },
+    knownScopes: [{ type: 'table', table: 'new_o' }], declarationSha256: 'b'.repeat(64),
+  });
+  const file = path.join(dir, fs.readdirSync(dir).find((f) => f.startsWith(PREFIX)));
+  const bytes = fs.readFileSync(file, 'utf8');
+  assert.deepStrictEqual(readManagedManifest(args).pending.map((p) => p.key), ['new_o/V']);
+  assert.deepStrictEqual(readManagedManifest({ ...args, environment: 'http://contoso.crm.dynamics.com' }), { revision: 0, groups: [], pending: [], invalid: [] });
+  fs.writeFileSync(file, '{ "not": "a store"');
+  const broken = readManagedManifest(args);
+  assert.deepStrictEqual(broken.invalid.map((i) => [i.family, i.key, i.code]), [['store', 'managed-bindings', 'managed-binding-store-unreadable']]);
+  assert.strictEqual(fs.readFileSync(file, 'utf8'), '{ "not": "a store"');
+  assert.notStrictEqual(bytes, '');
+});
+// CHART CONTENT (lib/chart-verify.js). The deployed row a chart's checks read: the SDK's own scratch datadescription and presentation
+// (ChartAdapter in scripts/vendor/cds-maker-sdk.cjs), with the parts each test varies.
+const chartData = ({ entity = 'new_o', group = 'new_status', agg = 'count', measureOn, inner = '', extraAttrs = '', categories } = {}) => '<datadefinition><fetchcollection>'
+  + `<fetch mapping="logical" aggregate="true"><entity name="${entity}"><attribute alias="agg_0" name="${measureOn || `${entity}id`}" aggregate="${agg}" />`
+  + `<attribute alias="grp_0" name="${group}" groupby="true"${extraAttrs} />${inner}</entity></fetch></fetchcollection>`
+  + `<categorycollection>${categories || '<category alias="grp_0"><measurecollection><measure alias="agg_0" /></measurecollection></category>'}</categorycollection></datadefinition>`;
+const chartPres = ({ type = 'Column', title, series } = {}) => `<Chart Palette="BrightPastel">${title === undefined ? '' : `<Titles><Title>${title}</Title></Titles>`}`
+  + `<Series>${series || `<Series ChartType="${type}" ChartArea="Default" IsValueShownAsLabel="True" />`}</Series><ChartAreas><ChartArea Name="Default" /></ChartAreas><Legends><Legend Name="Default" /></Legends></Chart>`;
+const chartRow = (over = {}) => ({ savedqueryvisualizationid: 'c-1', primaryentitytypecode: 'new_o', name: 'C', description: null, datadescription: chartData(), presentationdescription: chartPres(), ...over });
+const chartSpec = (chart) => ({ entities: [], views: [], forms: [], appShell: { areas: [] }, charts: [{ entity: 'new_o', name: 'C', chartType: 'Column', groupBy: 'new_status', ...chart }] });
+// A reader holding the given chart rows; records every chart read so a test can say which row was asked for.
+const chartReader = (rows, reads = []) => ({
+  sitemapXml: async () => '<SiteMap/>',
+  queryRecords: async (set, q) => {
+    reads.push({ set, ...q });
+    if (set !== 'savedqueryvisualization') return [];
+    const byId = /savedqueryvisualizationid eq (\S+)/.exec(q.filter || '');
+    return byId ? rows.filter((r) => r.savedqueryvisualizationid === byId[1]) : rows;
+  },
+});
+const chartChecks = (r) => r.checks.filter((c) => c.kind.startsWith('chart'));
+
+test('verifySpec charts: a present chart of another type, grouping or aggregate fails; the one the spec describes passes', async () => {
+  for (const declared of [false, true]) {
+    const extra = declared ? { reconcile: 'declared' } : {};
+    const good = await verifySpec(chartSpec(extra), chartReader([chartRow()]));
+    assert.strictEqual(good.ok, true, JSON.stringify(good.missing));
+    assert.deepStrictEqual(chartChecks(good).map((c) => [c.kind, c.present]), [['chart', true], ['chart-type', true], ['chart-data', true]]);
+    const cases = [
+      [{ presentationdescription: chartPres({ type: 'Pie' }) }, 'chart-type', /it is a Pie chart, not Column/],
+      [{ datadescription: chartData({ group: 'new_priority' }) }, 'chart-data', /groups by new_priority, not new_status/],
+      [{ datadescription: chartData({ agg: 'countcolumn' }) }, 'chart-data', /aggregates with countcolumn, not count/],
+    ];
+    for (const [over, kind, detail] of cases) {
+      const r = await verifySpec(chartSpec(extra), chartReader([chartRow(over)]));
+      assert.strictEqual(r.ok, false, `${kind} ${declared}`);
+      const miss = r.missing.find((m) => m.kind === kind);
+      assert.ok(miss && detail.test(miss.detail), JSON.stringify(r.missing));
+      assert.strictEqual(/not reconcile: "declared"/.test(miss.detail), !declared, 'a legacy chart says why a rebuild leaves it');
+      assert.ok(r.checks.some((c) => c.kind === 'chart' && c.present), 'the chart itself is present');
+    }
+  }
+});
+
+test('verifySpec charts: a filter, a join, a date grouping, a second measure, series or category are failures; another table too', async () => {
+  const twoMeasures = chartData({ inner: '<attribute alias="agg_1" name="new_oid" aggregate="count" />' });
+  const cases = [
+    [chartData({ inner: '<filter><condition attribute="statecode" operator="eq" value="0" /></filter>' }), /a filter narrows/],
+    [chartData({ inner: '<link-entity name="account" from="accountid" to="new_account" link-type="inner" />' }), /joins account/],
+    [chartData({ extraAttrs: ' dategrouping="month"' }), /by month/],
+    [twoMeasures, /2 measures/],
+    [chartData({ categories: '<category alias="grp_0"><measurecollection><measure alias="agg_0" /><measure alias="agg_0" /></measurecollection></category>' }), /2 series/],
+    [chartData({ categories: '<category alias="grp_0"><measurecollection><measure alias="agg_0" /></measurecollection></category><category alias="grp_0"><measurecollection><measure alias="agg_0" /></measurecollection></category>' }), /2 categories/],
+    [chartData({ entity: 'new_p', measureOn: 'new_oid' }), /reads new_p, not new_o/],
+  ];
+  for (const [datadescription, detail] of cases) {
+    const r = await verifySpec(chartSpec({ reconcile: 'declared' }), chartReader([chartRow({ datadescription })]));
+    const miss = r.missing.find((m) => m.kind === 'chart-data');
+    assert.ok(miss && detail.test(miss.detail), `${detail}: ${JSON.stringify(r.missing)} ${JSON.stringify(r.unverified)}`);
+  }
+});
+
+test('verifySpec charts: formatting, aliases and styling do not matter; what the verifier does not model is unverified, never a pass or a failure', async () => {
+  // An XML declaration, single quotes, another attribute order, an explicit end tag, white space, other aliases, a custom palette.
+  const reformatted = "<?xml version='1.0' encoding='utf-8'?>\n<datadefinition>\n  <fetchcollection>\n    <fetch aggregate='true' mapping='logical'>\n"
+    + "      <entity name='new_o'>\n        <attribute groupby='true' name='new_status' alias='g'></attribute>\n        <attribute aggregate='count' name='new_oid' alias='m'/>\n"
+    + "      </entity>\n    </fetch>\n  </fetchcollection>\n  <categorycollection><category alias='g'><measurecollection><measure alias='m'/></measurecollection></category></categorycollection>\n</datadefinition>";
+  const styled = "<Chart Palette='None' PaletteCustomColors='55,118,193'><Series><Series ChartArea='Default' ChartType='column' CustomProperties='PointWidth=0.75'></Series></Series><ChartAreas /></Chart>";
+  const ok = await verifySpec(chartSpec({ reconcile: 'declared' }), chartReader([chartRow({ datadescription: reformatted, presentationdescription: styled })]));
+  assert.strictEqual(ok.ok, true, JSON.stringify(ok.missing));
+  assert.strictEqual(ok.unverified, undefined);
+  assert.deepStrictEqual(chartChecks(ok).map((c) => [c.kind, c.present]), [['chart', true], ['chart-type', true], ['chart-data', true]]);
+  const unknown = [
+    [{ datadescription: chartData({ inner: '<order alias="grp_0" descending="false" />' }) }, /chart-data:C \(.*an order on its groups/],
+    [{ datadescription: chartData({ inner: '<link-entity name="account" from="accountid" to="new_account" link-type="outer" />' }) }, /chart-data:C \(.*an outer join/],
+    [{ datadescription: chartData({ agg: 'Count' }) }, /chart-data:C \(.*the aggregate "Count"/],
+    [{ datadescription: chartData({ extraAttrs: ' distinct="true"' }) }, /chart-data:C \(.*the attribute distinct/],
+    [{ datadescription: '<!DOCTYPE d [<!ENTITY x "y">]><datadefinition/>' }, /chart-data:C \(its datadescription is not XML the verifier reads/],
+    [{ datadescription: '<datadefinition><fetchcollection>' }, /chart-data:C \(its datadescription is not XML/],
+    [{ datadescription: null }, /chart-data:C \(the chart has no datadescription/],
+    [{ presentationdescription: chartPres({ series: '<Series ChartArea="Default" />' }) }, /chart-type:C \(its series states no chart type/],
+  ];
+  for (const [over, line] of unknown) {
+    const r = await verifySpec(chartSpec({ reconcile: 'declared' }), chartReader([chartRow(over)]));
+    assert.strictEqual(r.ok, true, `${line}: ${JSON.stringify(r.missing)}`);
+    assert.ok(r.unverified.some((u) => line.test(u)), `${line}: ${JSON.stringify(r.unverified)}`);
+  }
+  // A known contradiction is a failure whatever else the document holds.
+  const both = await verifySpec(chartSpec({}), chartReader([chartRow({ datadescription: chartData({ group: 'new_x', inner: '<order alias="grp_0" />' }) })]));
+  assert.ok(both.missing.some((m) => m.kind === 'chart-data' && /groups by new_x/.test(m.detail)));
+  // A legacy measure that is no FetchXML aggregate is not compared.
+  const odd = await verifySpec(chartSpec({ measure: 'Sum' }), chartReader([chartRow()]));
+  assert.strictEqual(odd.ok, true);
+  assert.ok(odd.unverified.some((u) => /^chart-data:C \(.*"Sum" is not an aggregate/.test(u)), JSON.stringify(odd.unverified));
+});
+
+test('verifySpec charts: a declared title and an explicit description are held; a legacy title is not', async () => {
+  const declared = { reconcile: 'declared', title: 'Open by status', description: 'Counts open rows' };
+  const right = await verifySpec(chartSpec(declared), chartReader([chartRow({ description: 'Counts open rows', presentationdescription: chartPres({ title: 'Open by status' }) })]));
+  assert.strictEqual(right.ok, true, JSON.stringify(right.missing));
+  assert.deepStrictEqual(chartChecks(right).map((c) => c.kind), ['chart', 'chart-type', 'chart-data', 'chart-description', 'chart-title']);
+  const noTitle = await verifySpec(chartSpec(declared), chartReader([chartRow({ description: 'Counts open rows' })]));
+  assert.ok(noTitle.missing.some((m) => m.kind === 'chart-title' && /no title element/.test(m.detail)), JSON.stringify(noTitle.missing));
+  const otherTitle = await verifySpec(chartSpec(declared), chartReader([chartRow({ description: 'Counts open rows', presentationdescription: chartPres({ title: 'Open &amp; closed' }) })]));
+  assert.ok(otherTitle.missing.some((m) => m.kind === 'chart-title' && /its title is "Open & closed"/.test(m.detail)));
+  const otherDescription = await verifySpec(chartSpec({ description: 'Counts open rows' }), chartReader([chartRow({ description: 'Something else' })]));
+  assert.ok(otherDescription.missing.some((m) => m.kind === 'chart-description'), JSON.stringify(otherDescription.missing));
+  const legacyTitle = await verifySpec(chartSpec({ title: 'Ignored by the legacy build' }), chartReader([chartRow()]));
+  assert.strictEqual(legacyTitle.ok, true);
+  assert.strictEqual(legacyTitle.checks.some((c) => c.kind === 'chart-title'), false);
+});
+
+test('verifySpec charts: an id-only reader proves presence and names the content unverified; a missing chart stays missing; a namesake pair is present but unverified', async () => {
+  const idOnly = await verifySpec(chartSpec({ reconcile: 'declared', title: 'T' }), { sitemapXml: async () => '<SiteMap/>', queryRecords: async () => [{ savedqueryvisualizationid: 'c-1' }] });
+  assert.strictEqual(idOnly.ok, true, 'content that was not read is unverified, not missing');
+  assert.deepStrictEqual(chartChecks(idOnly).map((c) => [c.kind, c.present]), [['chart', true]]);
+  assert.deepStrictEqual(idOnly.unverified, ['chart-type', 'chart-data', 'chart-title'].map((k) => `${k}:C (the read does not carry the chart\u2019s content)`));
+  // A declared description is still held when the row carries one, with or without the XML columns.
+  const described = (description) => verifySpec(chartSpec({ reconcile: 'declared', description: 'Counts open rows' }), { sitemapXml: async () => '<SiteMap/>', queryRecords: async () => [{ savedqueryvisualizationid: 'c-1', description }] });
+  assert.deepStrictEqual(chartChecks(await described('Counts open rows')).map((c) => [c.kind, c.present]), [['chart', true], ['chart-description', true]]);
+  assert.ok((await described('Something else')).missing.some((m) => m.kind === 'chart-description'));
+  const twoIdOnly = await verifySpec(chartSpec({}), { sitemapXml: async () => '<SiteMap/>', queryRecords: async () => [{ savedqueryvisualizationid: 'c-1' }, { savedqueryvisualizationid: 'c-2' }] });
+  assert.strictEqual(twoIdOnly.ok, true);
+  assert.deepStrictEqual(twoIdOnly.unverified, ['chart-data:C (several charts on new_o have this name, so which one the spec describes is not known)']);
+  const gone = await verifySpec(chartSpec({}), chartReader([]));
+  assert.deepStrictEqual(gone.missing.map((m) => m.kind), ['chart']);
+  const two = await verifySpec(chartSpec({}), chartReader([chartRow(), chartRow({ savedqueryvisualizationid: 'c-2', presentationdescription: chartPres({ type: 'Pie' }) })]));
+  assert.strictEqual(two.ok, true);
+  assert.deepStrictEqual(chartChecks(two).map((c) => c.kind), ['chart']);
+  assert.ok(two.unverified.some((u) => /^chart-data:C \(several charts on new_o have this name/.test(u)));
+  // A row on another table (a reader that did not filter) is not the chart.
+  const elsewhere = await verifySpec(chartSpec({}), chartReader([chartRow({ primaryentitytypecode: 'new_p' })]));
+  assert.deepStrictEqual(elsewhere.missing.map((m) => m.kind), ['chart']);
+});
+
+test('verifySpec charts: a declared chart with a managed binding is its bound row; a namesake is not taken in its place; an open binding is unverified', async () => {
+  const bound = '11111111-2222-4333-8444-555555555555';
+  const manifest = (over = {}) => ({ revision: 1, groups: [{ family: 'chart', key: 'new_o/C', root: { kind: 'chart', key: 'new_o/C', id: bound } }], pending: [], invalid: [], ...over });
+  const reads = [];
+  const r = await verifySpec(chartSpec({ reconcile: 'declared' }), chartReader([chartRow({ savedqueryvisualizationid: bound, name: 'Renamed by a maker' })], reads), { managedManifest: manifest() });
+  assert.strictEqual(r.ok, true, JSON.stringify(r.missing));
+  assert.ok(r.checks.some((c) => c.kind === 'chart-data' && c.present));
+  assert.ok(reads.some((q) => q.filter === `savedqueryvisualizationid eq ${bound}` && q.select.includes('datadescription')));
+  assert.strictEqual(reads.some((q) => /name eq/.test(q.filter || '')), false, 'the name is not asked');
+  const namesake = await verifySpec(chartSpec({ reconcile: 'declared' }), chartReader([chartRow()]), { managedManifest: manifest() });
+  const miss = namesake.missing.find((m) => m.kind === 'chart');
+  assert.ok(miss && /bound to \(11111111-2222-4333-8444-555555555555\) was not found; a chart of the same name is not taken/.test(miss.detail), JSON.stringify(namesake.missing));
+  for (const open of [
+    { pending: [{ family: 'chart', key: 'new_o/C', code: 'managed-settlement-pending' }], groups: [] },
+    { invalid: [{ family: 'store', key: 'managed-bindings', code: 'managed-binding-store-unreadable' }], groups: [] },
+  ]) {
+    const u = await verifySpec(chartSpec({ reconcile: 'declared' }), chartReader([chartRow({ presentationdescription: chartPres({ type: 'Pie' }) })]), { managedManifest: manifest(open) });
+    assert.strictEqual(u.checks.some((c) => c.kind.startsWith('chart')), false, JSON.stringify(u.checks));
+    assert.ok(u.unverified.some((x) => /^chart:C \(its managed binding \(new_o\/C\) is not settled/.test(x)), JSON.stringify(u.unverified));
+  }
+  // A legacy chart is found by its name, whatever the manifest holds.
+  const legacy = await verifySpec(chartSpec({}), chartReader([chartRow()]), { managedManifest: manifest() });
+  assert.ok(legacy.checks.some((c) => c.kind === 'chart' && c.present));
+});
+
+// A declared form (forms[].reconcile "declared") is identified by its managed binding: the committed root, read by that id alone, never a
+// row of its name. A binding that is not settled, names no id, or is contradicted by the form's pin reads no form at all.
+const DF_ID = '22222222-2222-4222-8222-222222222222';
+const DF_OTHER = '33333333-3333-4333-8333-333333333333';
+const DF_KEY = 'new_o/main/f';
+const declaredFormSpec = (form = {}) => ({
+  entities: [{ schemaName: 'new_o', columns: [{ schemaName: 'new_s' }] }],
+  forms: [{ entity: 'new_o', name: 'F', reconcile: 'declared', ...form }],
+});
+const boundFormManifest = (id = DF_ID, rest = {}, key = DF_KEY) => ({ groups: [{ family: 'form', key, root: { id } }], pending: [], invalid: [], ...rest });
+function declaredFormReader(answer) {
+  const queries = [];
+  const layouts = [];
+  return {
+    queries,
+    layouts,
+    findTable: async () => ({ logicalName: 'new_o' }),
+    findColumns: async () => [{ logicalName: 'new_s' }],
+    sitemapXml: async () => '',
+    formTopology: async (entity, id) => { layouts.push(id); return '<form><tabs><tab name="general"><columns><column><sections><section name="main"><rows><row><cell id="{c1}"><control id="new_s" datafieldname="new_s"/></cell></row></rows></section></sections></column></columns></tab></tabs></form>'; },
+    queryRecords: async (table, o) => {
+      if (table !== 'systemform') return [];
+      queries.push(o.filter);
+      return answer(o, queries.length);
+    },
+  };
+}
+const formOf = (r) => r.checks.filter((c) => c.kind === 'form').map((c) => [c.name, c.present, c.detail]);
+const dfRow = (o = {}) => ({ formid: DF_ID, objecttypecode: 'new_o', type: 2, ...o });
+
+test('verifySpec: a declared form is read by its bound id alone, and an answer that is not that form of its table and type proves nothing', async () => {
+  const by = `the form its managed binding (${DF_KEY}) is bound to (${DF_ID})`;
+  const incomplete = `its bound form ${DF_ID} was read without its table or type`;
+  for (const [what, answer, present, detail, form] of [
+    ['the bound row', () => [dfRow()], true, ''],
+    ['its id braced and in capitals, its type a numeric string', () => [dfRow({ formid: `{${DF_ID.toUpperCase()}}`, type: '2' })], true, ''],
+    ['a declared QuickView', () => [dfRow({ type: 6 })], true, '', { formType: 'QuickView' }],
+    ['a pin equal to the binding, braced and in capitals', () => [dfRow()], true, '', { formId: `{${DF_ID.toUpperCase()}}` }],
+    ['no row', () => [], false, `${by} was not found on its table; a form of the same name is not taken in its place`],
+    ['another row', () => [dfRow({ formid: DF_OTHER })], false, `the read of its bound form ${DF_ID} answered another row; a form of the same name is not taken in its place`],
+    ['two rows', () => [dfRow(), dfRow()], false, `its bound form ${DF_ID} could not be identified: the read did not return one form row`],
+    ['not a list', () => ({ value: [dfRow()] }), false, `its bound form ${DF_ID} could not be identified: the read did not return one form row`],
+    ['no table', () => [dfRow({ objecttypecode: undefined })], false, incomplete],
+    ['no type', () => [{ formid: DF_ID, objecttypecode: 'new_o' }], false, incomplete],
+    ['an empty type', () => [dfRow({ type: '' })], false, incomplete],
+    ['another table', () => [dfRow({ objecttypecode: 'new_x' })], false, `its bound form ${DF_ID} belongs to table 'new_x', not 'new_o'`],
+    ['another type', () => [dfRow({ type: 6 })], false, `its bound form ${DF_ID} is a type-6 form, not the declared Main form (type 2)`],
+    ['a failed read', () => { throw new Error('socket hang up'); }, false, `its bound form ${DF_ID} could not be read: socket hang up`],
+  ]) {
+    const read = declaredFormReader(answer);
+    const key = `new_o/${((form && form.formType) || 'Main').toLowerCase()}/f`;
+    const r = await verifySpec(declaredFormSpec(form), read, { managedManifest: boundFormManifest(`{${DF_ID.toUpperCase()}}`, {}, key) });
+    assert.deepStrictEqual(formOf(r), [['F', present, detail]], what);
+    assert.deepStrictEqual(read.queries, [`formid eq ${DF_ID}`, `formid eq ${DF_ID}`], `${what}: its presence and its layout each read the bound id, and nothing else`);
+    assert.deepStrictEqual(read.layouts, present ? [DF_ID] : [], `${what}: only the bound form's layout is read`);
+  }
+});
+
+test('verifySpec: a declared form whose binding is unsettled, names no id, or is contradicted by its pin reads no form, whatever answers its name', async () => {
+  const namesake = () => [dfRow({ formid: DF_OTHER, name: 'F' })];
+  const open = (code) => `its managed binding (${DF_KEY}) is not settled (${code}) — unverified, not proven correct`;
+  const noId = `its managed binding (${DF_KEY}) records no form id — unverified, not proven correct`;
+  for (const [what, manifest, why, form] of [
+    ['an invalid group', { groups: [], pending: [], invalid: [{ family: 'form', key: DF_KEY, code: 'managed-binding-group-invalid' }] }, open('managed-binding-group-invalid')],
+    ['an unreadable store', { groups: [], pending: [], invalid: [{ family: 'store', key: 'managed-bindings', code: 'managed-binding-store-unreadable' }] }, open('managed-binding-store-unreadable')],
+    ['a pending create, given a root and a pin', { groups: [], pending: [{ family: 'form', key: DF_KEY, code: 'managed-attempt-pending', root: { id: DF_ID } }], invalid: [] }, open('managed-attempt-pending'), { formId: DF_ID }],
+    ['a pending entry beside a committed group', boundFormManifest(DF_ID, { pending: [{ family: 'form', key: DF_KEY, reason: 'an attempt is not proved' }] }), open('an attempt is not proved')],
+    ['a group with no usable id', boundFormManifest('not-a-guid'), noId],
+  ]) {
+    const read = declaredFormReader(namesake);
+    const r = await verifySpec(declaredFormSpec(form), read, { managedManifest: manifest });
+    assert.deepStrictEqual(read.queries, [], `${what}: no form is read, by its id, its pin or its name`);
+    assert.deepStrictEqual(read.layouts, [], what);
+    assert.deepStrictEqual(r.checks.filter((c) => c.kind.startsWith('form')), [], `${what}: nothing about it passes or fails`);
+    assert.deepStrictEqual(r.unverified.filter((u) => u.startsWith('form')), [`form:F (${why})`, `form-identities:new_o.F (${why})`], what);
+    assert.strictEqual(r.ok, true, `${what}: unverified does not fail verify`);
+  }
+  const read = declaredFormReader(namesake);
+  const r = await verifySpec(declaredFormSpec({ formId: DF_OTHER }), read, { managedManifest: boundFormManifest() });
+  assert.deepStrictEqual(formOf(r), [['F', false, `its formId ${DF_OTHER} is not the form its managed binding (${DF_KEY}) is bound to (${DF_ID}); correct or remove the formId`]]);
+  assert.deepStrictEqual(read.queries, [], 'a contradicting pin reads neither row');
+  assert.deepStrictEqual(r.checks.filter((c) => c.kind.startsWith('form-')), [], 'no layout is held against another row');
+  assert.strictEqual(r.ok, false);
+});
+
+test('verifySpec: a declared form\'s layout read is its own: a second identity read that fails still fails the layout, and a reused reader follows a changed binding', async () => {
+  const read = declaredFormReader((o, n) => { if (n === 2) throw new Error('second read unavailable'); return [dfRow()]; });
+  const r = await verifySpec(declaredFormSpec(), read, { managedManifest: boundFormManifest(), concurrency: 1 });
+  assert.deepStrictEqual(formOf(r), [['F', true, '']]);
+  assert.deepStrictEqual(r.checks.filter((c) => c.kind === 'form-identities').map((c) => [c.present, c.detail]), [[false, `could not resolve the deployed form id (its bound form ${DF_ID} could not be read: second read unavailable) — the layout is unverified, not proven correct`]]);
+  // The same reader, two verifies, the binding moved between them: each reads the row its own manifest binds, nothing is remembered.
+  const rows = declaredFormReader((o) => [dfRow({ formid: o.filter.replace('formid eq ', '') })]);
+  for (const id of [DF_ID, DF_OTHER]) {
+    rows.queries.length = 0;
+    rows.layouts.length = 0;
+    const again = await verifySpec(declaredFormSpec(), rows, { managedManifest: boundFormManifest(id) });
+    assert.deepStrictEqual(formOf(again), [['F', true, '']], id);
+    assert.deepStrictEqual(rows.queries, [`formid eq ${id}`, `formid eq ${id}`], id);
+    assert.deepStrictEqual(rows.layouts, [id], id);
+  }
+  // One task at a time or four: the same checks, the same lists, the same reads.
+  const outcome = async (concurrency) => {
+    const reader = declaredFormReader(() => [dfRow()]);
+    const spec = declaredFormSpec();
+    spec.forms.push({ entity: 'new_o', name: 'G', reconcile: 'declared', formId: DF_OTHER }, { entity: 'new_o', name: 'H', reconcile: 'declared' });
+    const manifest = boundFormManifest(DF_ID, { groups: [{ family: 'form', key: DF_KEY, root: { id: DF_ID } }, { family: 'form', key: 'new_o/main/g', root: { id: DF_ID } }], invalid: [{ family: 'form', key: 'new_o/main/h', code: 'managed-binding-group-invalid' }] });
+    const res = await verifySpec(spec, reader, { managedManifest: manifest, concurrency });
+    return { checks: res.checks, missing: res.missing, unverified: res.unverified, queries: [...reader.queries].sort(), layouts: [...reader.layouts].sort() };
+  };
+  assert.deepStrictEqual(await outcome(4), await outcome(1));
+});
+
+test('verifySpec: an undeclared form, a declared one with nothing in the store, and any with the declared build off are still found by their names', async () => {
+  const { DECLARED_FEATURES } = require('../lib/declared-features.js');
+  const named = (o) => /name eq 'F'/.test(o.filter) ? [dfRow({ name: 'F' })] : [];
+  for (const [what, form, manifest, off] of [
+    ['undeclared, beside a binding of its key', { reconcile: undefined }, boundFormManifest(DF_OTHER)],
+    ['declared, nothing in the store', {}, { groups: [], pending: [], invalid: [] }],
+    ['declared, no manifest', {}, undefined],
+    ['declared, the declared build off', {}, boundFormManifest(DF_OTHER), true],
+  ]) {
+    const was = DECLARED_FEATURES.forms;
+    if (off) DECLARED_FEATURES.forms = false;
+    try {
+      const read = declaredFormReader(named);
+      const r = await verifySpec(declaredFormSpec(form), read, manifest ? { managedManifest: manifest } : {});
+      assert.deepStrictEqual(formOf(r), [['F', true, '']], what);
+      assert.strictEqual(read.queries.filter((q) => /name eq 'F'/.test(q)).length, 2, `${what}: ${JSON.stringify(read.queries)}`);
+      assert.deepStrictEqual((r.unverified || []).filter((u) => u.startsWith('form')), [], what);
+    } finally { DECLARED_FEATURES.forms = was; }
+  }
+});
+
+// A binding store that cannot be read holds no group, so every declared artifact would look unbound and be found by its name. A
+// declared dashboard, business rule and process flow are then unresolved, as declared views and charts are: a namesake never passes.
+test('verifySpec: an unreadable binding store, or an unusable group record, never lets a namesake pass for a declared dashboard, business rule or process flow', async () => {
+  const NAMESAKE = '77777777-7777-4777-8777-777777777777';
+  const store = { family: 'store', key: 'managed-bindings', reason: 'not valid JSON', code: 'managed-binding-store-unreadable' };
+  const manifest = (invalid) => ({ revision: 0, groups: [], pending: [], invalid });
+  const filters = [];
+  // Every name read answers one Active row of that name: the namesake a name fallback would take.
+  const read = {
+    findTable: async () => null,
+    findColumns: async () => [],
+    sitemapXml: async () => '',
+    queryRecords: async (set, q) => {
+      filters.push(`${set}: ${(q && q.filter) || ''}`);
+      if (set === 'systemform') return [{ formid: NAMESAKE, name: 'Twin' }];
+      if (set === 'workflow') return [{ workflowid: NAMESAKE, statecode: 1 }];
+      return [];
+    },
+  };
+  const spec = (reconcile) => ({
+    solution: { uniqueName: 's', publisherPrefix: 'new' }, app: { name: 'A' }, entities: [],
+    dashboards: [{ name: 'Twin', ...reconcile }],
+    businessRules: [{ name: 'Twin', entity: 'new_ticket', ...reconcile }],
+    businessProcessFlows: [{ name: 'Twin', entity: 'new_ticket', ...reconcile }],
+  });
+  const namesOf = (r) => r.checks.filter((c) => ['dashboard', 'business-rule', 'business-process-flow'].includes(c.kind)).map((c) => [c.kind, c.present]);
+  const nameReads = () => filters.filter((f) => /^(systemform|workflow): .*\bname eq\b/.test(f));
+  for (const [what, invalid, why] of [
+    ['an unreadable store', [store], 'managed-binding-store-unreadable'],
+    ['an unusable group record', [
+      { family: 'dashboard', key: 'twin', reason: 'its record is not usable' },
+      { family: 'rule', key: 'new_ticket/Twin', reason: 'its record is not usable' },
+      { family: 'bpf', key: 'new_ticket/Twin', reason: 'its record is not usable' },
+    ], 'its record is not usable'],
+  ]) {
+    filters.length = 0;
+    const r = await verifySpec(spec({ reconcile: 'declared' }), read, { managedManifest: manifest(invalid) });
+    // The dashboard keeps its check, failed with the reason (as a pending one does); the workflows are unverified, never a pass.
+    assert.deepStrictEqual(namesOf(r), [['dashboard', false]], `${what}: ${JSON.stringify(r.checks)}`);
+    assert.strictEqual(r.checks.find((c) => c.kind === 'dashboard').detail, `its managed binding (twin) is not settled (${why}) — unverified, not proven correct`);
+    for (const kind of ['business-rule', 'business-process-flow']) {
+      assert.ok(r.unverified.includes(`${kind}:new_ticket.Twin (its managed binding (new_ticket/Twin) is not settled (${why}) — unverified, not proven correct)`), `${what}: ${JSON.stringify(r.unverified)}`);
+    }
+    assert.deepStrictEqual(nameReads(), [], `${what}: never read by name`);
+    assert.strictEqual(r.ok, false);
+  }
+  // Controls: a legacy dashboard, rule and flow are found by their names whatever the store holds, and a declared one with no store
+  // entry at all (nothing bound yet) keeps its name lookup as before.
+  for (const [reconcile, m] of [[{}, manifest([store])], [{ reconcile: 'declared' }, manifest([])]]) {
+    filters.length = 0;
+    const r = await verifySpec(spec(reconcile), read, { managedManifest: m });
+    assert.deepStrictEqual(namesOf(r), [['dashboard', true], ['business-rule', true], ['business-process-flow', true]], JSON.stringify(r.checks));
+    assert.strictEqual(nameReads().length, 3);
+  }
+});
+// --- #845: declared views that share one name on one table under distinct keys are proven as a group ----------------------------------
+
+const TW1 = 'aaaaaaaa-0000-4000-8000-000000000001';
+const TW2 = 'aaaaaaaa-0000-4000-8000-000000000002';
+const TW3 = 'aaaaaaaa-0000-4000-8000-000000000003';
+const twinView = (key, columns, extra = {}) => ({ entity: 'contoso_item', name: 'Twin', key, reconcile: 'declared', columns, ...extra });
+const twinRow = (id, cells) => ({ savedqueryid: id, returnedtypecode: 'contoso_item', name: 'Twin', layoutxml: `<grid><row>${cells.map((c) => `<cell name="${c}"/>`).join('')}</row></grid>` });
+// A savedquery reader that applies verify's filters as the service does: by id (one row), or by table and name (every row of the name
+// for a paginated read, else up to `top`), with the SDK's non-enumerable `hasMore` report when `hasMore` is given. Every request is kept.
+function twinReader(rows, { hasMore, nameError, idError } = {}) {
+  const reads = [];
+  return {
+    reads,
+    findTable: async () => ({ logicalName: 'contoso_item' }),
+    findColumns: async () => [],
+    sitemapXml: async () => '',
+    queryRecords: async (set, q) => {
+      if (set !== 'savedquery') return [];
+      reads.push(q);
+      const byId = /^savedqueryid eq ([0-9a-f-]{36})$/.exec(q.filter);
+      if (byId) {
+        if (idError) throw new Error(idError);
+        return rows.filter((r) => r.savedqueryid === byId[1]);
+      }
+      if (nameError) throw new Error(nameError);
+      const named = /name eq 'Twin'/.test(q.filter) ? rows : [];
+      const out = q.paginate ? named.slice() : named.slice(0, q.top || 50);
+      if (hasMore !== undefined) Object.defineProperty(out, 'hasMore', { value: hasMore, enumerable: false });
+      return out;
+    },
+  };
+}
+const twinSpecOf = (views) => ({ entities: [], views, appShell: { areas: [] } });
+const viewRows = (r) => r.checks.filter((c) => c.kind.startsWith('view')).map((c) => [c.kind, c.present, c.detail, ...(c.note ? [c.note] : [])]);
+const viewUnverified = (r) => (r.unverified || []).filter((u) => u.startsWith('view'));
+const PRESENT_ONLY = (key) => `present only: a distinct row is available, but view key "${key}" is not attributed to a row`;
+const NOT_PROVEN = (key, tail = '') => `view-content:contoso_item.Twin (view key "${key}": no managed binding, viewId or observed stable id identifies its row; content is not proven for this key${tail})`;
+// The views' own reads: the managed listing reads each bound row by id too (select savedqueryid alone), and those are not the views'.
+const viewReads = (read) => read.reads.filter((q) => q.select.join() !== 'savedqueryid');
+const boundTo = (pairs) => ({ revision: 1, groups: pairs.map(([key, id]) => ({ family: 'view', key, root: { kind: 'view', key, id } })), pending: [], invalid: [] });
+
+test('#845: unattributed same-named declared views read every row of the name once; distinct rows make each present only, its content unverified', async () => {
+  const spec = twinSpecOf([twinView('a', ['contoso_a']), twinView('b', ['contoso_b'])]);
+  for (const [what, hasMore, tail] of [['complete', false, ''], ['unreported', undefined, ''], ['more reported', true, '; the candidate read was incomplete; additional rows may exist']]) {
+    const read = twinReader([twinRow(TW2, ['contoso_a', 'contoso_b']), twinRow(TW1, ['contoso_a', 'contoso_b'])], { hasMore });
+    const r = await verifySpec(spec, read);
+    assert.strictEqual(r.ok, true, `${what}: ${JSON.stringify(r.missing)}`);
+    assert.deepStrictEqual(viewRows(r), [['view', true, '', PRESENT_ONLY('a')], ['view', true, '', PRESENT_ONLY('b')]], what);
+    assert.deepStrictEqual(viewUnverified(r), [NOT_PROVEN('a', tail), NOT_PROVEN('b', tail)], what);
+    assert.deepStrictEqual(viewReads(read), [{
+      select: ['savedqueryid', 'returnedtypecode', 'name', 'layoutxml', 'fetchxml'],
+      filter: "returnedtypecode eq 'contoso_item' and name eq 'Twin'",
+      paginate: true,
+    }], `${what}: one paginated read of the name, no top`);
+  }
+});
+
+test('#845: one row of a name two declared views use fails the group; an incomplete read that finds too few is not proven, and a failed read says so', async () => {
+  const spec = twinSpecOf([twinView('a', ['contoso_a']), twinView('b', ['contoso_b'])]);
+  const one = await verifySpec(spec, twinReader([twinRow(TW1, ['contoso_a', 'contoso_b'])], { hasMore: false }));
+  assert.strictEqual(one.ok, false);
+  assert.deepStrictEqual(viewRows(one), [['view', false, 'only 1 distinct unclaimed row(s) named "Twin" on contoso_item were read for 2 declared view(s) (keys: "a", "b"); each declaration needs a row of its own']]);
+  assert.deepStrictEqual(viewUnverified(one), []);
+  const more = await verifySpec(spec, twinReader([twinRow(TW1, ['contoso_a']), { name: 'Twin' }], { hasMore: true }));
+  assert.deepStrictEqual(viewRows(more), [['view', false, 'a distinct row for each of the 2 declarations (keys: "a", "b") is not proven: the read identified only 1 unclaimed row(s); more rows were reported; some rows had no usable savedqueryid']]);
+  const failed = await verifySpec(spec, twinReader([], { nameError: 'service unavailable' }));
+  assert.deepStrictEqual(viewRows(failed), [['view', false, 'the rows named "Twin" on contoso_item could not be read: service unavailable; a distinct row for each declaration is not proven']]);
+});
+
+test('#845: content no one-to-one assignment can satisfy fails the declarations that cannot all be served, by name; the others stay unverified', async () => {
+  const spec = twinSpecOf([twinView('a', ['contoso_a']), twinView('b', ['contoso_b']), twinView('c', ['contoso_b'])]);
+  const rows = [twinRow(TW1, ['contoso_a']), twinRow(TW2, ['contoso_a', 'contoso_b']), twinRow(TW3, ['contoso_a'])];
+  const r = await verifySpec(spec, twinReader(rows, { hasMore: false }));
+  assert.strictEqual(r.ok, false);
+  assert.deepStrictEqual(viewRows(r), [
+    ['view', true, '', PRESENT_ONLY('a')],
+    ['view-content', false, 'only 1 distinct unclaimed row(s) can satisfy the 2 declarations with keys "b", "c"; no one-to-one content assignment exists'],
+    ['view', true, '', PRESENT_ONLY('b')],
+    ['view', true, '', PRESENT_ONLY('c')],
+  ]);
+  assert.deepStrictEqual(viewUnverified(r), [NOT_PROVEN('a')]);
+  // The same shortfall on a read that reported more rows cannot be decided: unverified, never a failure.
+  const open = await verifySpec(spec, twinReader(rows, { hasMore: true }));
+  assert.strictEqual(open.ok, true, JSON.stringify(open.missing));
+  const undecided = '; the candidate read was incomplete; additional rows may exist; a content assignment cannot be decided from this incomplete read';
+  assert.deepStrictEqual(viewUnverified(open), [NOT_PROVEN('a', undecided), NOT_PROVEN('b', undecided), NOT_PROVEN('c', undecided)]);
+});
+
+test('#845: a bound member keeps its read by id and its row is no namesake\'s; the rest are matched onto the rows nobody owns', async () => {
+  const spec = twinSpecOf([twinView('a', ['contoso_a']), twinView('b', ['contoso_b'])]);
+  const managedManifest = boundTo([['a', TW1]]);
+  const both = twinReader([twinRow(TW1, ['contoso_a', 'contoso_b']), twinRow(TW2, ['contoso_b'])], { hasMore: false });
+  const r = await verifySpec(spec, both, { managedManifest });
+  assert.strictEqual(r.ok, true, JSON.stringify(r.missing));
+  assert.deepStrictEqual(viewRows(r), [['view', true, ''], ['view-columns', true, ''], ['view', true, '', PRESENT_ONLY('b')]]);
+  assert.deepStrictEqual(viewReads(both).map((q) => q.filter), [`savedqueryid eq ${TW1}`, "returnedtypecode eq 'contoso_item' and name eq 'Twin'"]);
+  // Only the bound row carries the name: it is a's, so b has none.
+  const owned = await verifySpec(spec, twinReader([twinRow(TW1, ['contoso_a', 'contoso_b'])], { hasMore: false }), { managedManifest });
+  assert.deepStrictEqual(viewRows(owned).slice(2), [['view', false, 'only 0 distinct unclaimed row(s) named "Twin" on contoso_item were read for 1 declared view(s) (keys: "b"); each declaration needs a row of its own']]);
+  // A row bound to a key the spec no longer declares is not free either.
+  const stale = await verifySpec(spec, twinReader([twinRow(TW1, ['contoso_a']), twinRow(TW2, ['contoso_b'])], { hasMore: false }), { managedManifest: boundTo([['a', TW1], ['gone', TW2]]) });
+  assert.match(viewRows(stale)[2][2], /^only 0 distinct unclaimed row\(s\)/);
+});
+
+test('#845: two declarations naming one saved query fail before any read, whatever pins or bindings name it and however it is spelled', async () => {
+  const conflict = (a, b) => `identity conflict: savedquery ${TW1} is claimed by view keys ${a}, ${b}; each declaration needs a row of its own`;
+  for (const [what, views, managedManifest, text] of [
+    ['two pins', [twinView('a', ['contoso_a'], { viewId: TW1 }), twinView('b', ['contoso_b'], { viewId: `{${TW1.toUpperCase()}}` })], undefined, conflict('"a" (viewId)', '"b" (viewId)')],
+    ['a binding and a pin', [twinView('a', ['contoso_a']), twinView('b', ['contoso_b'], { viewId: TW1.toUpperCase() })], boundTo([['a', TW1]]), conflict('"a" (managed binding)', '"b" (viewId)')],
+    ['two bindings', [twinView('a', ['contoso_a']), twinView('b', ['contoso_b'])], boundTo([['a', TW1], ['b', TW1]]), conflict('"a" (managed binding)', '"b" (managed binding)')],
+    ['an implicit key', [{ entity: 'contoso_item', name: 'Twin', reconcile: 'declared', columns: ['contoso_a'], viewId: TW1 }, twinView('b', ['contoso_b'], { viewId: TW1 })], undefined, conflict('"contoso_item/Twin" (viewId)', '"b" (viewId)')],
+  ]) {
+    const read = twinReader([twinRow(TW1, ['contoso_a', 'contoso_b'])], { hasMore: false });
+    const r = await verifySpec(twinSpecOf(views), read, { managedManifest });
+    assert.strictEqual(r.ok, false, what);
+    assert.deepStrictEqual(viewRows(r), [['view', false, text]], what);
+    assert.deepStrictEqual(viewReads(read), [], `${what}: no read`);
+  }
+});
+
+test('#845: an unsettled binding in the group leaves the unattributed members unverified, with no read of the name', async () => {
+  const spec = twinSpecOf([twinView('a', ['contoso_a']), twinView('b', ['contoso_b'])]);
+  const read = twinReader([twinRow(TW1, ['contoso_a']), twinRow(TW2, ['contoso_b'])], { hasMore: false });
+  const r = await verifySpec(spec, read, { managedManifest: { revision: 1, groups: [], pending: [{ family: 'view', key: 'a', code: 'managed-attempt-pending' }], invalid: [] } });
+  assert.strictEqual(r.ok, true, JSON.stringify(r.missing));
+  assert.deepStrictEqual(viewRows(r), []);
+  assert.deepStrictEqual(viewUnverified(r), [
+    'view:contoso_item.Twin (its managed binding (a) is not settled (managed-attempt-pending) — unverified, not proven correct)',
+    'view:contoso_item.Twin (view key "b": another declaration\'s managed binding is unsettled, so a distinct-row assignment is not proven)',
+  ]);
+  assert.deepStrictEqual(viewReads(read), []);
+});
+
+test('#845 controls: a wholly bound or pinned group with distinct ids, a unique view, a legacy namesake and a repeated key keep their reads, request for request', async () => {
+  const byId = (id) => ({ select: ['savedqueryid', 'returnedtypecode', 'layoutxml', 'fetchxml'], filter: `savedqueryid eq ${id}`, top: 1 });
+  const byName = { select: ['savedqueryid', 'layoutxml', 'fetchxml'], filter: "returnedtypecode eq 'contoso_item' and name eq 'Twin'", top: 1 };
+  const rows = [twinRow(TW1, ['contoso_a']), twinRow(TW2, ['contoso_b'])];
+  for (const [what, views, managedManifest, reads, unverified] of [
+    ['bound', [twinView('a', ['contoso_a']), twinView('b', ['contoso_b'])], boundTo([['a', TW1], ['b', TW2]]), [byId(TW1), byId(TW2)], []],
+    ['pinned', [twinView('a', ['contoso_a'], { viewId: TW1 }), twinView('b', ['contoso_b'], { viewId: TW2 })], undefined, [byId(TW1), byId(TW2)], []],
+    ['unique', [twinView('a', ['contoso_a'])], undefined, [byName], []],
+    ['beside a legacy view', [twinView('a', ['contoso_a']), { entity: 'contoso_item', name: 'Twin', columns: ['contoso_a'] }], undefined, [byName, byName],
+      ['view-content:contoso_item.Twin (several views on contoso_item have this name, and this one (a) has neither a managed binding nor a viewId, so which of the rows it is cannot be told)']],
+    ['a repeated key', [twinView('a', ['contoso_a']), twinView('a', ['contoso_a'])], undefined, [byName, byName], [
+      'view-content:contoso_item.Twin (several views on contoso_item have this name, and this one (a) has neither a managed binding nor a viewId, so which of the rows it is cannot be told)',
+      'view-content:contoso_item.Twin (several views on contoso_item have this name, and this one (a) has neither a managed binding nor a viewId, so which of the rows it is cannot be told)',
+    ]],
+  ]) {
+    const read = twinReader(rows, { hasMore: false });
+    const r = await verifySpec(twinSpecOf(views), read, { managedManifest });
+    assert.strictEqual(r.ok, true, `${what}: ${JSON.stringify(r.missing)}`);
+    assert.deepStrictEqual(viewReads(read), reads, what);
+    assert.deepStrictEqual(viewUnverified(r), unverified, what);
+    assert.ok(r.checks.every((c) => !c.note), `${what}: no note`);
+  }
 });

@@ -420,6 +420,105 @@ test('the paths that re-upload a page after a browser-verify fix or a hand edit 
   assert.match(agents, /the build's pages phase halts as `pages-griffel-shorthand` in its pre-write scan/);
 });
 
+// The scroll-context check (AB#6793599) rides on the same command, so every flow above that checks a page gets it. These pins hold the one thing the command line cannot show: which
+// flows judge a page as generated (a missing scroll context is a problem: exit 3) and which as existing (`--existing`: it is a note for the maker). A generation flow that gained
+// `--existing` would ship clipped pages again with no error; an edit flow that lost it would refuse a maker's small edit over a layout they chose. page-scroll.test.js runs the rule.
+test('the generation flows judge a page\'s scroll context, and the flows that change an existing page report it as a note to offer the maker', () => {
+  const docs = griffelDocs();
+  const full = (text, target, name) => {
+    const at = text.indexOf(`node "\${PLUGIN_ROOT}/scripts/check-griffel-styles.js" --file ${target}`);
+    assert.ok(at >= 0, `${name} runs the checker`);
+    assert.doesNotMatch(text.slice(at, text.indexOf('\n', at)), /--existing/, `${name} judges a generated page in full`);
+  };
+  const skill = docs['create flow'];
+  const fastPath = skill.split(/#### 5b\. Single-page fast path/)[1].split(/#### 5c\. Multi-page/)[0];
+  full(fastPath, "'<working-dir>/<filename>.tsx'", 'single-page generation');
+  assert.match(squash(fastPath), /The same command checks that the page establishes a scroll context \(`references\/rules\.md`, \*\*Page Layout\*\*\)[^.]*\. `no-scroll-context`, `scroll-context-unproven` and `scroll-context-padding` are problems like any other, each with the edit that fixes it: apply it and run the check again\./);
+  const multiPage = skill.split(/#### 5c\. Multi-page/)[1].split(/### Phase 6: Deploy/)[0];
+  full(multiPage, "'<working-dir>/<filename>.tsx'", 'multi-page generation');
+  assert.match(squash(multiPage), /its scroll context included \(step 9\)/);
+  assert.match(squash(skill), /The upload does not check a page's scroll context: only `check-griffel-styles\.js` does \(Phase 5b step 9\)\./, 'the upload gate is not mistaken for this one');
+  const fix = readDoc(path.join(PLUGIN, 'skills', 'genpage', 'verify-flow.md')).split('## 7.5 Fix and Re-deploy')[1];
+  full(fix, "'<working-dir>/<file>.tsx'", 'the browser-verify fix');
+  assert.match(squash(fix), /The same command checks that the fixed page still establishes a scroll context/);
+  // The same fix step is also reached from the edit flow, for a page that was downloaded: there it keeps `--existing`, and the edit flow says so on the way in. Without it, a fix
+  // after an edit would be refused over a layout the maker chose (or the maker would be told to rewrite it).
+  assert.ok(fix.includes(`node "\${PLUGIN_ROOT}/scripts/check-griffel-styles.js" --file '<working-dir>/<page-id>/page.tsx' --existing`), 'a fix reached from the edit flow checks an existing page');
+  assert.match(squash(fix), /If you came from \*\*Edit Phase 7\*\*, the page was downloaded, not generated, so check it as Edit Phase 5 does — with `--existing`/);
+  assert.match(squash(fix), /Handle each note as Edit Phase 5 says: When the maker's requested edit/);
+  const appBuilder = docs['app-builder'];
+  full(appBuilder, '<working-dir>/<file>', 'app-builder generation');
+  assert.match(squash(appBuilder), /The same command checks that each page establishes a scroll context/);
+
+  const edit = docs['edit flow'];
+  assert.ok(edit.includes(`node "\${PLUGIN_ROOT}/scripts/check-griffel-styles.js" --file '<working-dir>/<page-id>/page.tsx' --existing`), 'an edited page is an existing one');
+  const editVerify = edit.split('## Edit Phase 7')[1].split('## Edit Phase 8')[0];
+  assert.match(squash(editVerify), /check the fix with the `--existing` command that 7\.5 gives for the edit flow, not the command for a generated page/, 'the edit flow enters the browser-verify fix as an existing page');
+  // A downloaded page's scroll note is the maker's to accept, with one exception: a layout the maker asked to rewrite is new code written in this run, so it follows the rule, and the
+  // maker is told. Both flows state it in the same words, and neither may read as leave to change a layout nobody asked to change.
+  const ruling = (text) => {
+    const s = squash(text);
+    const at = s.indexOf("When the maker's requested edit itself rewrites the page's top-level layout");
+    assert.ok(at >= 0, 'the ruling is stated');
+    return s.slice(at, s.indexOf('to change.', at) + 'to change.'.length);
+  };
+  const [inEdit, inFix] = [ruling(edit), ruling(fix)];
+  assert.equal(inFix, inEdit, 'the edit flow and the browser-verify fix state the ruling in the same words');
+  assert.match(inEdit, /^When the maker's requested edit itself rewrites the page's top-level layout, that layout is new code written in this run and must follow the scroll rule: apply the remedy as part of that edit, and tell the maker in one sentence that you did\./, 'a rewrite the maker asked for: the remedy is applied, and the maker is told');
+  assert.match(inEdit, /Any other scroll note on a downloaded page is offer-only: tell the maker that content below the fold may be cut off, offer the edit its message gives, and apply it only if they agree\./, 'any other note: offered, applied only on agreement');
+  assert.match(inEdit, /A note is never a reason to change a layout the maker did not ask to change\.$/);
+  for (const [name, text] of [['edit flow', edit], ['browser-verify fix', fix]]) {
+    assert.doesNotMatch(squash(text), /(?:note|remedy|layout|scroll)[^.]*without asking/, `${name} never applies a scroll note without asking`);
+    assert.doesNotMatch(text, /apply the\s+edit the note gives without asking/);
+    assert.doesNotMatch(text, /only if they agree[\s\S]{0,80}unless the fix itself rewrites/, `${name} gives no exception to agreement beyond the maker's own rewrite`);
+  }
+  const editing = appBuilder.split('## Editing a deployed app')[1].split('## What the builder does')[0];
+  assert.ok(editing.includes('node "${PLUGIN_ROOT}/scripts/check-griffel-styles.js" --file <page.tsx> --existing'), 'a page edited by hand is an existing one');
+  assert.match(squash(editing), /`--existing` reports the page's scroll context \(`references\/rules\.md`, \*\*Page Layout\*\*\) in `notes` without changing the exit code/);
+
+  // The rule the page builder writes from, and the worker's own instruction.
+  const rules = squash(docs.rules);
+  assert.match(rules, /\*\*The page must establish its own scroll context\.\*\*/);
+  assert.match(rules, /`height: "100%"` \(bounded by the host's container\), `overflowY: "auto"` \(it scrolls\) and `boxSizing: "border-box"`/);
+  assert.match(rules, /6\. \*\*A page with no scroll context is cut off below the fold, with no error\.\*\*/);
+  assert.match(squash(docs['page-builder']), /- \*\*A scroll context\*\* — [^]*`height: "100%"`, `overflowY: "auto"` and `boxSizing: "border-box"`[^]*The orchestrator's `check-griffel-styles\.js` refuses a page without one\./);
+});
+
+// In the host nothing above the page scrolls (the window stays at the top), so a check that scrolls the window or reads the document's height sees a clipped page as a short one,
+// and a snapshot lists cut-off elements too. These pins hold the browser check to the page's own scroller and to a measured proof that the last content can be seen.
+test('browser verify finds the page\'s own scroller and proves the last content is inside the visible area', () => {
+  const verify = readDoc(path.join(PLUGIN, 'skills', 'genpage', 'verify-flow.md'));
+  const structural = verify.split('## 7.2 ')[1].split('## 7.3 ')[0];
+  const visual = verify.split('## 7.4 ')[1].split('## 7.5 ')[0];
+  for (const [name, text] of [['7.2', structural], ['7.4', visual]]) {
+    assert.doesNotMatch(text, /window\.scroll(To|By)\(|document\.documentElement\.scrollHeight/, `${name} must not scroll or measure the window`);
+  }
+  assert.match(structural, /getComputedStyle\(el\)\.overflowY\)[^]*el\.scrollHeight > el\.clientHeight \+ 1/, 'the scroller is an element that scrolls and holds more than it shows');
+  assert.match(structural, /el\.scrollTop = el\.scrollHeight;/, 'it is scrolled to the end');
+  assert.match(structural, /lastContentVisible: lastContentBottom <= visibleBottom \+ 1/, 'the last content is measured against the lowest visible point');
+  assert.match(structural, /if \(a === el \|\| getComputedStyle\(a\)\.overflowY !== 'visible'\)/, 'the visible area is cut by every clipping ancestor (a padded root overhangs the host)');
+  assert.match(squash(structural), /A `browser_snapshot` is not proof that content can be seen/);
+  assert.match(squash(structural), /Any entry is content below the visible area that nothing can scroll to: the page has no scroll context\./);
+  assert.match(structural, /document\.querySelector\('\[data-verify-scroller\]'\)\.scrollTop = 0/, 'the reset scrolls the same element back');
+  // A scroll region inside the page's scroller (a list in a fixed-height panel) is not cut off until its own end is: its content is left out of the page's last content, and each
+  // region is scrolled to its end and measured the same way, so a padded region that overhangs its panel is still caught.
+  const scripts = [...structural.matchAll(/```javascript\n([^]*?)```/g)].map((m) => m[1]);
+  assert.equal(scripts.length, 6, 'find, cut-off, end of the scroller, its regions, one screen at a time, reset');
+  const [, , end, regions] = scripts;
+  const own = "const own = (d) => { for (let a = d.parentElement; a && a !== el; a = a.parentElement) if (scrolls(a)) return false; return true; };";
+  for (const [name, script] of [['the end of the scroller', end], ['each region', regions]]) {
+    assert.ok(script.includes(own), `${name} leaves out what a region of its own holds`);
+    assert.match(script, /\.querySelectorAll\('\*'\)\]\.filter\(own\)/, `${name} measures only its own content`);
+    assert.match(script, /lastContentVisible: lastContentBottom <= visibleBottom \+ 1/);
+    assert.match(script, /if \(a === el \|\| getComputedStyle\(a\)\.overflowY !== 'visible'\)/);
+  }
+  assert.match(end, /regions \};/, 'the end proof says how many regions to check');
+  assert.match(regions, /return regions\.map\(\(el\) => \{\s*el\.scrollTop = el\.scrollHeight;/, 'each region is scrolled to its own end');
+  assert.match(squash(structural), /Every entry's `lastContentVisible` must be `true`/);
+  assert.match(structural, /document\.querySelectorAll\('\[data-verify-scroller\] \*'\)\.forEach\(\(el\) => \{ if \(el\.scrollTop\) el\.scrollTop = 0; \}\)/, 'the reset scrolls the regions back too');
+  assert.match(squash(visual), /scrolling the page's scroller \(7\.2\), not the window/);
+});
+
 // A page deployed by an earlier release can already hold a key Griffel drops (its only guard was a grep for `borderWidth`), and it renders without it today. Sending the same bytes again
 // ships nothing new, and refusing them stops a rebuild over a page nobody touched — whose way through, the longhands, CHANGES how the page renders. So the gates hold a page to what a run
 // would ADD, and say what each way out does. These are instructions nothing executes, so a document that drops the distinction — or the advice that goes with it — is invisible until
@@ -1151,24 +1250,26 @@ test('every genpage-plan-provenance.js command the genpage flows document uses o
   assert.doesNotMatch(editFlow, /--require-assumptions|--require-observed-lookups|--lookup-metadata/, 'neighbour: an edit plan keeps its own comparison');
 });
 
-// Iteration that compiles to nothing (references/rules.md, Critical Rule 24 and Common Errors > 5). The SDK compiles a page to ES5 without
-// iterator downleveling, so a spread, a for...of loop or an array destructure of a Map, a Set or an iterator reads length and indices: the
-// values disappear with a clean compile (scripts/tests/iteration-emit.test.js runs that emit). Nothing executes these instructions, so as
-// with the Griffel rule the one rule text is stated in the same words in every document that writes or edits a page (whitespace aside), and
-// the WRONG/CORRECT examples live in rules.md alone.
+// Iteration that another page compiler can lose (references/rules.md, Critical Rule 24 and Common Errors > 5). The SDK compiles a page to ES5
+// with iterator support, but a tool that compiles the page again without it (an older maker portal, pac) reads a Map, a Set or an iterator
+// by length and indices: the values disappear with a clean compile (scripts/tests/iteration-emit.test.js runs both emits). Nothing executes
+// these instructions, so as with the Griffel rule the one rule text is stated in the same words in every document that writes or edits a
+// page (whitespace aside), and the WRONG/CORRECT examples live in rules.md alone.
 const ITERATION_RULE = [
-  'The page compiler targets ES5 without iterator downleveling or full type checking.',
-  'Spreading, looping over, or array-destructuring a Map, Set or iterator reads length and indices instead of the iterator:',
-  'values can disappear, defaults can replace them, or rest destructuring can throw.',
-  'This includes `[...new Set(xs)]`, `[...m.values()]`, `[...seen.values()]`, `for (const [k, v] of m)`, `new Set([...prev, id])`,',
-  '`[...selected]` and `[...text.matchAll(re)]`.',
-  'Convert with `Array.from(...)` before spreading, looping or destructuring; copy a Set with `new Set(prev)` then `.add(id)`.',
+  'Pages this plugin uploads are compiled with iterator support (ES5 with `downlevelIteration`), so a spread, a `for...of` loop or an array',
+  'destructure of a Map, Set, iterator, generator or string reads it as modern JavaScript does.',
+  'A tool that compiles the page again without that support — an older maker portal, or `pac` — reads length and indices instead:',
+  'values disappear, defaults replace them, and rest destructuring or a string spread throws, all with a clean compile.',
+  'Keep the page correct under every compiler: convert with `Array.from(...)` before spreading, looping or destructuring, for example',
+  '`[...new Set(xs)]`, `[...m.values()]`, `[...seen.values()]`, `for (const [k, v] of m)`, `new Set([...prev, id])`, `[...selected]` and',
+  '`[...text.matchAll(re)]`; copy a Set with `new Set(prev)` then `.add(id)`.',
   'Ordinary array spreads and loops remain valid. `Object.keys`, `Object.values` and `Object.entries` return arrays.',
-  'Spreads of `arguments` and ordinary indexed array-likes work; rest destructuring of an array-like without `slice` does not.',
-  'String spread throws, and an ES5 string loop visits UTF-16 code units rather than Unicode code points.',
-  'See **Common Errors > 5. Iteration that compiles to nothing** in `references/rules.md` for the pairs.',
+  'Rest destructuring of a non-iterable array-like without `slice` throws under every compiler.',
+  'A destructuring default must not write to the array being destructured: `const [a = (values[1] = 3), b] = values` leaves `b` at its old',
+  'value here, unlike modern JavaScript.',
+  'See **Common Errors > 5. Iteration that another page compiler can lose** in `references/rules.md` for the pairs.',
 ].join(' ');
-const ITERATION_SECTION = '**Common Errors > 5. Iteration that compiles to nothing**';
+const ITERATION_SECTION = '**Common Errors > 5. Iteration that another page compiler can lose**';
 
 test('every instruction that writes or edits a page states the iteration rule in the same words, where it reviews the page', () => {
   const docs = griffelDocs();
@@ -1176,7 +1277,7 @@ test('every instruction that writes or edits a page states the iteration rule in
     assert.ok(squash(text).includes(ITERATION_RULE), `${name} must state the iteration rule in the shared words`);
   }
   // rules.md: the section opens with it, after Common Errors 1-4, which keep their numbers.
-  const section = docs.rules.split('\n### 5. Iteration that compiles to nothing\n');
+  const section = docs.rules.split('\n### 5. Iteration that another page compiler can lose\n');
   assert.equal(section.length, 2, 'rules.md has one canonical section');
   assert.ok(squash(section[1]).trimStart().startsWith(ITERATION_RULE), 'the section opens with the rule');
   const errors = docs.rules.slice(docs.rules.indexOf('\n## Common Errors\n'));
@@ -1187,7 +1288,7 @@ test('every instruction that writes or edits a page states the iteration rule in
   assert.deepEqual([...critical.matchAll(/^(\d+)\. \*\*/gm)].map((match) => Number(match[1])), Array.from({ length: 24 }, (_, i) => i + 1));
   assert.match(critical, /\n22\. \*\*Consistent errors\*\*[^\n]*\n23\. \*\*Lookup identities\*\*[^\n]*\n24\. \*\*Convert iterables to arrays\*\*[^\n]*\n\n---\n/);
   // The page-builder has no shell: its Step 2.7 gives the rule and a self-review, and no command.
-  const builderStep = docs['page-builder'].split('## Step 2.7 — Iteration that compiles to nothing')[1].split('## Step 3')[0];
+  const builderStep = docs['page-builder'].split('## Step 2.7 — Iteration that another page compiler can lose')[1].split('## Step 3')[0];
   assert.ok(squash(builderStep).includes(ITERATION_RULE), 'the page-builder states it in its own step');
   assert.ok(docs['page-builder'].indexOf('## Step 2.6') < docs['page-builder'].indexOf('## Step 2.7'), 'after the Griffel step');
   assert.doesNotMatch(builderStep, /node\s+"\$\{PLUGIN_ROOT\}/, 'no command for a worker to run');
@@ -1201,6 +1302,8 @@ test('every instruction that writes or edits a page states the iteration rule in
   const editRule = squash(edit).indexOf(ITERATION_RULE);
   assert.ok(editRule > 0 && editRule < squash(edit).indexOf('## Edit Phase 6: Deploy Updated Page'), 'an edited page is reviewed before it is uploaded');
   assert.match(squash(edit), /Do not silently expand an unrelated edit: convert an existing form only when the requested change needs it or the user asks for it, and state any resulting behavior change in the summary\./);
+  assert.match(squash(edit), /`Array\.from` reads the whole iterable at once: where a loop stops early or a destructure reads only the first values of a generator or another iterator, the conversion reads the rest too/, 'converting an existing form is not said to be neutral');
+  assert.doesNotMatch(squash(edit), /changes nothing here/);
   // /app-builder: Phase 1.5 step 5, before promote-intent-pages.js commits the pages.
   const appBuilder = docs['app-builder'];
   const appRule = squash(appBuilder).indexOf(ITERATION_RULE);

@@ -167,3 +167,17 @@ test('normalizeSpecShape tolerates a non-object spec without throwing', () => {
     assert.strictEqual(r.spec, bad);
   }
 });
+
+// The configuration collections (environment variables, connection references, Custom APIs, duplicate-detection rules) are
+// optional and NOT materialized: a spec that omits them must stay byte-for-byte what it was, so every older spec builds as
+// before. A present value that is not an array is an error naming the field.
+test('normalizeSpecShape leaves the configuration collections absent when omitted, and refuses a non-array one', () => {
+  const { spec: out, errors } = normalizeSpecShape({ ...base, entities: [{ schemaName: 'new_t' }] });
+  assert.deepStrictEqual(errors, []);
+  for (const key of ['environmentVariables', 'connectionReferences', 'customApis', 'duplicateDetectionRules']) {
+    assert.strictEqual(key in out, false, `${key} is not invented`);
+    for (const bad of [null, {}]) {
+      assert.deepStrictEqual(normalizeSpecShape({ ...base, [key]: bad }).errors, [`${key} must be an array`], `${key}: ${JSON.stringify(bad)}`);
+    }
+  }
+});

@@ -4,6 +4,8 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const os = require('node:os');
+const { spawnSync } = require('node:child_process');
 
 const {
   TRACKED_SKILL_NAMES,
@@ -37,13 +39,34 @@ test('discovers every invocable top-level skill without tracking direct-read hel
   assert.equal(TRACKED_SKILL_NAMES.includes('add-table-to-offline-profile'), false);
 });
 
-test('hook manifest registers start telemetry surfaces only', () => {
+test('hook manifest registers start telemetry surfaces only', t => {
   const manifest = JSON.parse(fs.readFileSync(path.join(PLUGIN_ROOT, 'hooks', 'hooks.json'), 'utf8'));
   assert.deepEqual(Object.keys(manifest.hooks).sort(), ['PreToolUse', 'UserPromptSubmit']);
-  const pretoolCommand = manifest.hooks.PreToolUse[0].hooks[0].command;
-  const promptCommand = manifest.hooks.UserPromptSubmit[0].hooks[0].command;
-  assert.match(pretoolCommand, /run-telemetry\.js.+start\('pretool'\)/);
-  assert.match(promptCommand, /run-telemetry\.js.+start\('prompt'\)/);
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mobile hook modes '));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(root, 'hooks'));
+  // Substitute only the hook body to verify the registered command calls start
+  // with the correct mode, without PAC enrichment or telemetry transmission.
+  fs.writeFileSync(path.join(root, 'hooks/run-telemetry.js'),
+    'module.exports = { start(mode) { console.log(JSON.stringify({ mode })); } };');
+  const shell = process.platform === 'win32' ? 'powershell.exe' : '/bin/sh';
+  for (const [event, mode] of [['PreToolUse', 'pretool'], ['UserPromptSubmit', 'prompt']]) {
+    const groups = manifest.hooks[event];
+    assert.equal(groups.length, 1);
+    assert.equal(groups[0].hooks.length, 1);
+    const command = groups[0].hooks[0].command;
+    const args = process.platform === 'win32'
+      ? ['-NoLogo', '-NoProfile', '-Command', command]
+      : ['-c', command];
+    const result = spawnSync(shell, args, {
+      env: { ...process.env, PLUGIN_ROOT: root, CLAUDE_PLUGIN_ROOT: '' },
+      encoding: 'utf8',
+      timeout: 15000,
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stderr, '');
+    assert.deepEqual(JSON.parse(result.stdout), { mode });
+  }
 });
 
 test('accepts every tracked skill in bare and qualified forms regardless of cwd', () => {

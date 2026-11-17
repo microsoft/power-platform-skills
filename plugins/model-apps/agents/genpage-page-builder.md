@@ -192,21 +192,24 @@ and look at each match: one inside a `makeStyles` object is the defect, and one 
 a string, a comment or an inline `style={{ … }}` is fine. Do not return a file that
 still has one in a `makeStyles` object.
 
-## Step 2.7 — Iteration that compiles to nothing
+## Step 2.7 — Iteration that another page compiler can lose
 
-The page compiler targets ES5 without iterator downleveling or full type checking.
-Spreading, looping over, or array-destructuring a Map, Set or iterator reads length
-and indices instead of the iterator: values can disappear, defaults can replace them,
-or rest destructuring can throw. This includes `[...new Set(xs)]`, `[...m.values()]`,
-`[...seen.values()]`, `for (const [k, v] of m)`, `new Set([...prev, id])`,
-`[...selected]` and `[...text.matchAll(re)]`. Convert with `Array.from(...)` before
-spreading, looping or destructuring; copy a Set with `new Set(prev)` then `.add(id)`.
-Ordinary array spreads and loops remain valid. `Object.keys`, `Object.values` and
-`Object.entries` return arrays. Spreads of `arguments` and ordinary indexed array-likes
-work; rest destructuring of an array-like without `slice` does not. String spread
-throws, and an ES5 string loop visits UTF-16 code units rather than Unicode code
-points. See **Common Errors > 5. Iteration that compiles to nothing** in
-`references/rules.md` for the pairs.
+Pages this plugin uploads are compiled with iterator support (ES5 with
+`downlevelIteration`), so a spread, a `for...of` loop or an array destructure of a Map,
+Set, iterator, generator or string reads it as modern JavaScript does. A tool that
+compiles the page again without that support — an older maker portal, or `pac` — reads
+length and indices instead: values disappear, defaults replace them, and rest
+destructuring or a string spread throws, all with a clean compile. Keep the page correct
+under every compiler: convert with `Array.from(...)` before spreading, looping or
+destructuring, for example `[...new Set(xs)]`, `[...m.values()]`, `[...seen.values()]`,
+`for (const [k, v] of m)`, `new Set([...prev, id])`, `[...selected]` and
+`[...text.matchAll(re)]`; copy a Set with `new Set(prev)` then `.add(id)`. Ordinary
+array spreads and loops remain valid. `Object.keys`, `Object.values` and
+`Object.entries` return arrays. Rest destructuring of a non-iterable array-like without `slice`
+throws under every compiler. A destructuring default must not write to the array being
+destructured: `const [a = (values[1] = 3), b] = values` leaves `b` at its old value
+here, unlike modern JavaScript. See **Common Errors > 5. Iteration that another page
+compiler can lose** in `references/rules.md` for the pairs.
 
 Before returning, review every spread (`...`), `for...of` loop and array destructure
 you wrote. Wherever the value can be a Map, a Set, one of their `keys()`, `values()`
@@ -445,6 +448,15 @@ export default GeneratedComponent;
   });
   ```
 - **Responsive design** — flexbox, relative units, never `100vh`/`100vw`
+- **A scroll context** — the host shows the page in a container of fixed height and never scrolls
+  it, so a page that is taller than the container is cut off below the fold, with no error. Give the
+  page's top element (the first element your default export renders, through any error boundary or
+  body component) `height: "100%"`, `overflowY: "auto"` and `boxSizing: "border-box"` in its
+  `makeStyles` slot, or use the fixed-header layout or the themed two-div wrapper of
+  `references/rules.md` **Page Layout**; in a bounded flex column, give a `Card` `flexShrink: 0`.
+  Join classes with `mergeClasses`, not a string or a template, so the check can read them. Before
+  returning, follow the page from its default export to that element and confirm it. The orchestrator's
+  `check-griffel-styles.js` refuses a page without one.
 - **WCAG AA accessibility** — ARIA labels, keyboard navigation, semantic HTML
 - **Error handling** — every failed data operation goes through the page's one `reportPageError`
   with its five required arguments — `reportPageError(PAGE_NAME, '<operation>', code, error, '<kind>')`,

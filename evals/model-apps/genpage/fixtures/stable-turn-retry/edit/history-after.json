@@ -1,0 +1,18 @@
+[
+  {
+    "role": "user",
+    "text": "Build the pipeline page.\n"
+  },
+  {
+    "role": "agent",
+    "text": "Created the pipeline page.\n"
+  },
+  {
+    "role": "user",
+    "text": "Add sorting by revenue.\n"
+  },
+  {
+    "role": "agent",
+    "text": "Added sorting by revenue; kept the page's connector binding.\n"
+  }
+]

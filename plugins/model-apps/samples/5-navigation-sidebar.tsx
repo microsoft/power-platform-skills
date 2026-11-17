@@ -154,7 +154,7 @@ function PageBody(props: Props) {
     );
 
     return (
-        <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column' }}>
+        <div style={{ width: '100%', height: '100%', overflowY: 'auto', boxSizing: 'border-box', display: 'flex', flexDirection: 'column' }}>
             <style>
                 {`
           @media (max-width: 768px) {
@@ -173,6 +173,7 @@ function PageBody(props: Props) {
                     padding: '10px 20px',
                     color: 'white',
                     height: '60px',
+                    flexShrink: 0,
                     boxSizing: 'border-box',
                 }}
             >

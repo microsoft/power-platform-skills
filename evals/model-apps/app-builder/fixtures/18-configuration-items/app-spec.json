@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 2,
+  "minimumPluginVersion": "2.21.0",
+  "solution": { "uniqueName": "ContosoFieldRequests", "displayName": "Contoso Field Requests", "publisherPrefix": "contoso", "version": "1.2.0.0" },
+  "app": { "name": "Field Requests", "description": "Field requests, escalated through the dispatch service" },
+  "entities": [
+    { "schemaName": "contoso_request", "displayName": "Request", "pluralName": "Requests", "duplicateDetectionEnabled": true,
+      "primaryAttribute": { "schemaName": "contoso_name", "displayName": "Title" },
+      "columns": [
+        { "schemaName": "contoso_requesteremail", "displayName": "Requester Email", "type": "Text", "format": "Email" },
+        { "schemaName": "contoso_priority", "displayName": "Priority", "type": "Choice", "options": ["Low", "Normal", "High"] }
+      ] }
+  ],
+  "forms": [{ "entity": "contoso_request", "name": "Information", "layout": "auto" }],
+  "views": [{ "entity": "contoso_request", "name": "Open Requests", "columns": ["contoso_name", "contoso_requesteremail", "contoso_priority"] }],
+  "appShell": { "areas": [{ "label": "Requests", "groups": [{ "label": "Work", "subAreas": [{ "entity": "contoso_request", "title": "Requests" }] }] }] },
+  "environmentVariables": [
+    { "schemaName": "contoso_DispatchApiBase", "type": "string", "name": "Dispatch API base URL", "defaultValue": "https://dispatch.contoso.com/api" },
+    { "schemaName": "contoso_DispatchApiKey", "type": "secret", "name": "Dispatch API key" }
+  ],
+  "connectionReferences": [
+    { "logicalName": "contoso_sharepoint", "name": "Field notices (SharePoint)", "connectorId": "/providers/Microsoft.PowerApps/apis/shared_sharepointonline" }
+  ],
+  "customApis": [
+    { "uniqueName": "contoso_EscalateRequest", "displayName": "Escalate request", "binding": "entity", "boundEntityLogicalName": "contoso_request", "isFunction": false,
+      "requestParameters": [{ "uniqueName": "Reason", "type": "string", "displayName": "Reason" }],
+      "responseProperties": [{ "uniqueName": "Accepted", "type": "boolean", "displayName": "Accepted" }] }
+  ],
+  "duplicateDetectionRules": [
+    { "key": "same-requester-email", "name": "Requests with the same requester email", "entity": "contoso_request",
+      "conditions": [{ "key": "email", "column": "contoso_requesteremail", "match": "exact" }] }
+  ]
+}

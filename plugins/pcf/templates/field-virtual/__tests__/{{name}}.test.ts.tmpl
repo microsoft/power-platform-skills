@@ -102,3 +102,26 @@ test("two instances keep independent state and DOM", () => {
     expect(second.control.getOutputs()).toEqual({ sampleProperty: "Second" });
     expect(first.container.querySelector(".{{cssClass}}") === second.container.querySelector(".{{cssClass}}")).toBe(false);
 });
+
+test("the field renders a Fluent v9 Input bound to the value", () => {
+    const { container, input } = render({ sampleProperty: mockProperty("Existing") as IInputs["sampleProperty"] });
+    const wrapper = container.querySelector(".fui-Input") as HTMLElement;
+
+    // fui-Input is the stable class Fluent v9 puts on every Input root.
+    expect(wrapper.contains(input())).toBe(true);
+    expect(input().value).toBe("Existing");
+    expect(wrapper.hidden).toBe(false);
+    expect(wrapper.style.display).toBe("");
+});
+
+test("unreadable security hides the Fluent Input wrapper too", () => {
+    const { container } = render({
+        sampleProperty: mockProperty("Hidden", undefined, { readable: false }) as IInputs["sampleProperty"],
+    });
+    const wrapper = container.querySelector(".fui-Input") as HTMLElement;
+
+    expect(wrapper.hidden).toBe(true);
+    // Fluent's own class gives the wrapper `display: inline-flex`, which overrides the browser's
+    // `[hidden]` rule, so the attribute alone would leave an empty bordered box on screen.
+    expect(wrapper.style.display).toBe("none");
+});

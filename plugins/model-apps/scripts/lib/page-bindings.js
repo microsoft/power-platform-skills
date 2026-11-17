@@ -249,6 +249,8 @@ module.exports = {
   UNUSUAL_NAME,
   WHY_WORDS,
   pageBindingsProblem,
+  // The credential-shape test, shared with create-connection-reference.js, which must not print a server message that holds one.
+  tokenLike,
   statedPageBindings,
   statableBinding,
   statableBindings,

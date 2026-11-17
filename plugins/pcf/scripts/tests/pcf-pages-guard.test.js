@@ -4,6 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const Module = require('node:module');
 const { performance } = require('node:perf_hooks');
 const { scanSource, featureCoherence, gateSources } = require('../lib/pcf-code-gate.js');
 
@@ -835,45 +836,137 @@ test('Pages proof keeps lexical this in arrows but not rebinding functions or cl
   assert.match(findingsFor(THIS_CALL).find((finding) => finding.code === 'PCF_PAGES_API').message, /this\._ctx\?\.device\?\.captureImage/);
 });
 
-// These generous CI bounds distinguish indexed lookup from repeatedly scanning a guard's
-// deeply nested body. The smaller realistic fixture also catches per-call scope rescans.
-const NESTED_SCAN_LIMIT_MS = 1500;
-const CONTROL_SCAN_LIMIT_MS = 500;
+// Complexity guards. They exist to catch a rescan that turns linear work into quadratic (or
+// exponential) work, not to measure how fast a machine is, so none of them bounds a wall-clock time
+// that load alone can exceed (the old fixed 500-1500 ms bounds failed on a busy machine):
+//  - Where the gate exposes its work (lexer passes, the line-start table) the test counts that work.
+//    A count does not depend on load.
+//  - Otherwise the test times one fixture at a quarter of its size and at full size and bounds the
+//    growth. Linear work grows about 4x (2-6x measured); quadratic work grows 16x. A slow or busy
+//    machine slows both runs alike, so the ratio holds. Each side is the fastest of several runs, so
+//    a pause that hits one run is ignored, and a ratio over the limit is measured again (a real
+//    regression exceeds it every time).
+//  - Every timed test keeps an absolute ceiling, at least 10x the old bound, as a catastrophe guard.
+const GROWTH_RUNS = 5;
+const GROWTH_ATTEMPTS = 3;
+const GROWTH_LIMIT = 10;
+const CATASTROPHE_LIMIT_MS = 15000;
 
-function timedScan(text) {
-  const started = performance.now();
-  const findings = [...scanSource(FILE, text), ...findingsFor(text)];
-  return { elapsed: performance.now() - started, findings };
+function fastest(runs, fn) {
+  let best = Infinity;
+  for (let i = 0; i < runs; i += 1) {
+    const started = performance.now();
+    fn();
+    best = Math.min(best, performance.now() - started);
+    // Already past the catastrophe ceiling: more runs only make a failing test slower.
+    if (best > CATASTROPHE_LIMIT_MS) break;
+  }
+  return best;
+}
+
+// `build(scale)` returns the fixture at `scale` of its full size; `run(text)` returns the findings.
+// Returns the findings for the full-size fixture so the caller can keep asserting on them.
+function assertLinearGrowth(t, label, build, run) {
+  const small = build(0.25);
+  const full = build(1);
+  // The first runs pay for JIT compilation, which is not growth with size.
+  run(small);
+  run(small);
+  let growth = Infinity;
+  let fullMs = Infinity;
+  for (let attempt = 1; attempt <= GROWTH_ATTEMPTS && growth >= GROWTH_LIMIT; attempt += 1) {
+    const smallMs = fastest(GROWTH_RUNS, () => run(small));
+    fullMs = fastest(GROWTH_RUNS, () => run(full));
+    // Timer noise dominates below a millisecond, so do not divide by less.
+    growth = fullMs / Math.max(smallMs, 1);
+    t.diagnostic(`${label}: ${smallMs.toFixed(3)} ms at 1/4 size, ${fullMs.toFixed(3)} ms at full size, growth ${growth.toFixed(2)}x (attempt ${attempt})`);
+  }
+  assert.ok(growth < GROWTH_LIMIT, `${label}: work grew ${growth.toFixed(2)}x for 4x the input; linear work grows about 4x and quadratic work 16x`);
+  assert.ok(fullMs < CATASTROPHE_LIMIT_MS, `${label}: ${fullMs.toFixed(3)} ms exceeds ${CATASTROPHE_LIMIT_MS} ms`);
+  return run(full);
+}
+
+function scanBoth(text, feature, hosts) {
+  return [...scanSource(FILE, text), ...findingsFor(text, feature, hosts)];
+}
+
+// A second copy of the gate whose lexer calls are counted. The gate reads its lexer through a
+// destructured import, so the counting wrapper must be in place when the module loads; the shared
+// exports and the first copy (the one every other test uses) are restored straight after.
+// Lexer passes are the unit of work for .ts angle-bracket types: the file must be lexed a bounded
+// number of times however many types it holds, because each pass reads the whole file.
+function loadCountingGate() {
+  const literalsPath = require.resolve('../lib/source-literals.js');
+  const gatePath = require.resolve('../lib/pcf-code-gate.js');
+  const literals = require(literalsPath);
+  const original = literals.blankNonCodePreservingTemplateExpressions;
+  const stats = { calls: 0, chars: 0 };
+  const loaded = require.cache[gatePath];
+  literals.blankNonCodePreservingTemplateExpressions = function counting(text, options) {
+    stats.calls += 1;
+    stats.chars += text.length;
+    return original.call(this, text, options);
+  };
+  delete require.cache[gatePath];
+  try {
+    return { gate: require(gatePath), stats };
+  } finally {
+    literals.blankNonCodePreservingTemplateExpressions = original;
+    if (loaded) require.cache[gatePath] = loaded;
+    else delete require.cache[gatePath];
+  }
+}
+
+const counting = loadCountingGate();
+
+function lexWork(fn) {
+  counting.stats.calls = 0;
+  counting.stats.chars = 0;
+  const result = fn();
+  return { calls: counting.stats.calls, chars: counting.stats.chars, result };
+}
+
+// Measured: 2-4 lexer passes and 2-4 characters lexed per source character, however many casts the
+// file holds. Lexing once per type (the sequential loop) reads the whole file 31 to 601 times, so
+// 8 leaves room for another pass without letting that regression through.
+const MAX_LEX_PASSES = 8;
+function assertBoundedLexing(label, text, work) {
+  assert.ok(work.calls <= MAX_LEX_PASSES, `${label}: ${work.calls} lexer passes (limit ${MAX_LEX_PASSES})`);
+  assert.ok(work.chars <= MAX_LEX_PASSES * text.length,
+    `${label}: lexed ${work.chars} characters of a ${text.length}-character file (limit ${MAX_LEX_PASSES}x)`);
 }
 
 test('Pages proof indexes the 5000-line nested fixture without quadratic rescans', (t) => {
-  const text = [
-    `if (${PROOF}) {`,
-    ...Array(8).fill(`${CALL};`),
-    ...Array(2495).fill('run(() => {'),
-    ...Array(2495).fill('});'),
-    '}',
-  ].join('\n');
-  assert.equal(text.split('\n').length, 5000);
-  const { elapsed, findings } = timedScan(text);
-  t.diagnostic(`nested timing: ${elapsed.toFixed(3)} ms; ${Buffer.byteLength(text)} bytes`);
-  assert.ok(elapsed < NESTED_SCAN_LIMIT_MS, `${elapsed.toFixed(3)} ms exceeds ${NESTED_SCAN_LIMIT_MS} ms`);
-  assert.deepEqual(findings, []);
+  // The guard's body nests 2495 callbacks deep; a lookup that rebalances the body for each scope or
+  // call, instead of reading the index, makes this fixture quadratic.
+  const build = (scale) => {
+    const depth = Math.round(2495 * scale);
+    return [
+      `if (${PROOF}) {`,
+      ...Array(8).fill(`${CALL};`),
+      ...Array(depth).fill('run(() => {'),
+      ...Array(depth).fill('});'),
+      '}',
+    ].join('\n');
+  };
+  assert.equal(build(1).split('\n').length, 5000);
+  assert.deepEqual(assertLinearGrowth(t, 'nested', build, scanBoth), []);
 });
 
 test('Pages proof indexes a 3000-line realistic control with 40 guarded calls', (t) => {
-  const lines = ['class Control {', 'init(context: Context) {', `if (${PROOF}) {`];
-  for (let i = 0; i < 40; i += 1) {
-    lines.push('this.handlers.push((item: Item) => {', ...Array(70).fill('consume(item);'), `${CALL};`, '});');
-  }
-  while (lines.length < 2997) lines.push('consume(null);');
-  lines.push('}', '}', '}');
-  const text = lines.join('\n');
-  assert.equal(lines.length, 3000);
-  const { elapsed, findings } = timedScan(text);
-  t.diagnostic(`control timing: ${elapsed.toFixed(3)} ms; 40 guarded calls`);
-  assert.ok(elapsed < CONTROL_SCAN_LIMIT_MS, `${elapsed.toFixed(3)} ms exceeds ${CONTROL_SCAN_LIMIT_MS} ms`);
-  assert.deepEqual(findings, []);
+  // Calls and lines scale together, so a per-call rescan of the control grows with both.
+  const build = (scale) => {
+    const total = Math.round(3000 * scale);
+    const lines = ['class Control {', 'init(context: Context) {', `if (${PROOF}) {`];
+    for (let i = 0; i < Math.round(40 * scale); i += 1) {
+      lines.push('this.handlers.push((item: Item) => {', ...Array(70).fill('consume(item);'), `${CALL};`, '});');
+    }
+    while (lines.length < total - 3) lines.push('consume(null);');
+    lines.push('}', '}', '}');
+    return lines.join('\n');
+  };
+  assert.equal(build(1).split('\n').length, 3000);
+  assert.deepEqual(assertLinearGrowth(t, 'control', build, scanBoth), []);
 });
 
 const DEFAULT_CALLBACK = 'function render(cb = () => { if (true) { return 1; } }) { return cb(); }';
@@ -1305,32 +1398,134 @@ test('Fixed-id detection keeps later JSX after unmatched braces and inside templ
   }
 });
 
-// Pathological but finite input should stay bounded; CI runners can be much slower
-// than the local median target, so this catches rescans without enforcing machine speed.
-const PATHOLOGICAL_SCAN_LIMIT_MS = 1500;
+// The line-location tests place their verdict on the real scan path (scanSource and featureCoherence over a file
+// of 4000 calls), so quadratic work anywhere on it fails them - in the helper that finds a line or in its callers -
+// and the shipped gate carries no test hook or counter. Two checks, with different limits:
+//  1. A count, which does not depend on the machine: the characters read through slice, substring, split and
+//     matchAll while the scan runs. Re-splitting text.slice(0, offset), or rebuilding the line-start table, for
+//     every finding reads the text again each time, so it passes the limit by orders of magnitude. The count
+//     cannot see a loop that reads text[at] or a linear table search.
+//  2. A growth ratio (assertLinearGrowth) of the real scan, which catches the first of those. It reads the clock, so it is not
+//     load-independent: it compares the fastest of several runs at a quarter of the size with the same at full size,
+//     measures again before it fails, and keeps the 15 s catastrophe ceiling. A pause that hits one phase can
+//     still move the ratio, which is why the count above carries the cases it can see.
+// A linear search of the line-start table is quadratic too, but its few million probes cost far less than the
+// scan's own work per finding, so the ratio of the whole scan cannot see it. A third check measures lineOf alone,
+// on a test-only copy of the gate; the end-to-end check above is what proves the scan reaches the real lookup.
+// The old fixed 1500 ms bound is gone.
+function stringReadsDuring(scan) {
+  const read = { chars: 0 };
+  const proto = String.prototype;
+  const originals = { slice: proto.slice, substring: proto.substring, split: proto.split, matchAll: proto.matchAll };
+  // Slices count by the length they return (the scanner's own slices are a few characters long); split and
+  // matchAll count by the text they read. The methods are replaced only while the scan runs, and restored whatever happens.
+  proto.slice = function slice(...args) {
+    const piece = originals.slice.apply(this, args);
+    read.chars += piece.length;
+    return piece;
+  };
+  proto.substring = function substring(...args) {
+    const piece = originals.substring.apply(this, args);
+    read.chars += piece.length;
+    return piece;
+  };
+  proto.split = function split(...args) {
+    read.chars += this.length;
+    return originals.split.apply(this, args);
+  };
+  proto.matchAll = function matchAll(...args) {
+    read.chars += this.length;
+    return originals.matchAll.apply(this, args);
+  };
+  let result;
+  try {
+    result = scan();
+  } finally {
+    Object.assign(proto, originals);
+  }
+  return { chars: read.chars, result };
+}
 
-test('Pages diagnostics index line locations instead of rescanning per call', (t) => {
-  const count = 4000;
-  const text = `${CALL};\n`.repeat(count);
-  const { elapsed, findings } = timedScan(text);
-  t.diagnostic(`line-location timing: ${elapsed.toFixed(3)} ms; ${count} calls`);
-  assert.ok(elapsed < PATHOLOGICAL_SCAN_LIMIT_MS, `${elapsed.toFixed(3)} ms exceeds ${PATHOLOGICAL_SCAN_LIMIT_MS} ms`);
+// Measured on a 4000-line file: about 7 characters read per source character (the lexer's split and the
+// scanner's few-character slices). A split of the prefix reads about 2000 characters per source character and a
+// table rebuilt per finding about 4000. 20 leaves room for another pass without letting either through.
+const MAX_TEXT_READS = 20;
+const LINE_LOCATION_CALLS = 4000;
+const lineLocationSource = (scale) => `${CALL};\n`.repeat(Math.round(LINE_LOCATION_CALLS * scale));
+const scanLineLocations = (text) => [...scanSource(FILE, text), ...findingsFor(text)];
+const assertLineLocations = (findings, count) => {
   assert.equal(findings.length, count);
   assert.ok(findings.every((finding, i) => finding.code === 'PCF_PAGES_API' && finding.line === i + 1));
+};
+
+test('Pages diagnostics index line locations instead of rescanning per call', () => {
+  const text = lineLocationSource(1);
+  const { chars, result: findings } = stringReadsDuring(() => scanLineLocations(text));
+  assertLineLocations(findings, LINE_LOCATION_CALLS);
+  assert.ok(chars <= MAX_TEXT_READS * text.length, `the scan read ${chars} characters through slice, substring, split and matchAll for a ${text.length}-character file (limit ${MAX_TEXT_READS}x)`);
 });
 
-for (const [name, text, feature] of [
-  ['10000 unmatched angles', 'const value = ' + 'a<'.repeat(10000), null],
-  ['8000 guard parentheses', `if (${'('.repeat(8000)}${PROOF}${')'.repeat(8000)}) { ${CALL}; }`, 'Device.captureImage'],
-  ['8000 nested for statements', FOR_CHAIN, null],
+test('Pages diagnostics take time in proportion to the number of calls', (t) => {
+  assertLineLocations(assertLinearGrowth(t, 'line locations', lineLocationSource, scanLineLocations), LINE_LOCATION_CALLS);
+});
+
+// A test-only copy of the gate that also exports its private lineOf: the production source plus one appended line,
+// compiled outside require.cache, so the shipped module and every other test are untouched.
+function loadGateWithLineOf() {
+  const gatePath = require.resolve('../lib/pcf-code-gate.js');
+  const copy = new Module(gatePath, module);
+  copy.filename = gatePath;
+  copy.paths = Module._nodeModulePaths(path.dirname(gatePath));
+  copy._compile(`${fs.readFileSync(gatePath, 'utf8')}\nmodule.exports.lineOf = lineOf;\n`, gatePath);
+  return copy.exports;
+}
+
+test('Line lookups grow linearly with the number of lines', (t) => {
+  const { lineOf } = loadGateWithLineOf();
+  const lineLength = `${CALL};\n`.length;
+  const build = (scale) => `${CALL};\n`.repeat(Math.round(8000 * scale));
+  // The line of the first character of every line. lineOf keeps the table of the last text it saw, so reset it
+  // first: each run then builds the table and does every lookup, as a scan of a new file does.
+  const run = (text) => {
+    lineOf('', 0);
+    const lines = [];
+    for (let offset = 0; offset < text.length; offset += lineLength) lines.push(lineOf(text, offset));
+    return lines;
+  };
+  const lines = assertLinearGrowth(t, 'line lookups', build, run);
+  assert.equal(lines.length, 8000);
+  assert.ok(lines.every((line, i) => line === i + 1));
+});
+
+test('The test copy of the gate locates lines the way the shipped gate does', () => {
+  const { lineOf } = loadGateWithLineOf();
+  // LF, CR LF, a lone CR and the two Unicode separators each end a line; CR LF is one terminator.
+  const text = 'a\nb\r\nc\rd\u2028e\u2029f';
+  const lineAtEachCharacter = [...text].map((_, index) => text.slice(0, index).split(/\r\n|[\n\r\u2028\u2029]/).length);
+  for (let index = 0; index < text.length; index += 1) {
+    if (text[index] === '\n' && text[index - 1] === '\r') continue;
+    assert.equal(lineOf(text, index), lineAtEachCharacter[index], `offset ${index}`);
+  }
+  assert.equal(loadGateWithLineOf().scanSource(FILE, `${CALL};`).length, scanSource(FILE, `${CALL};`).length);
+});
+
+test('The shipped gate exports only its three entry points', () => {
+  assert.deepEqual(Object.keys(require('../lib/pcf-code-gate.js')).sort(), ['featureCoherence', 'gateSources', 'scanSource']);
+});
+
+// The tests below scale their fixture and bound the growth (see assertLinearGrowth), so a slow
+// or busy machine cannot fail them.
+
+for (const [name, build, feature] of [
+  ['10000 unmatched angles', (scale) => 'const value = ' + 'a<'.repeat(Math.round(10000 * scale)), null],
+  ['8000 guard parentheses', (scale) => {
+    const depth = Math.round(8000 * scale);
+    return `if (${'('.repeat(depth)}${PROOF}${')'.repeat(depth)}) { ${CALL}; }`;
+  }, 'Device.captureImage'],
+  ['8000 nested for statements', (scale) => 'for(;;)'.repeat(Math.round(8000 * scale)) + 'consume(1);', null],
 ]) {
   test(`Source analysis bounds ${name}`, (t) => {
-    const started = performance.now();
-    const findings = [...scanSource(FILE, text), ...findingsFor(text, feature)];
-    const elapsed = performance.now() - started;
-    t.diagnostic(`${name} timing: ${elapsed.toFixed(3)} ms`);
-    assert.ok(elapsed < PATHOLOGICAL_SCAN_LIMIT_MS, `${elapsed.toFixed(3)} ms exceeds ${PATHOLOGICAL_SCAN_LIMIT_MS} ms`);
-    assert.deepEqual(findings, []);
+    assert.deepEqual(assertLinearGrowth(t, name, build, (text) => scanBoth(text, feature)), []);
   });
 }
 
@@ -1450,14 +1645,9 @@ test('Pages unknown write targets expire only tracked roots inside the target', 
 
 for (const [name, receiver] of [['distinct receiver names', (i) => `p${i}`], ['one shared receiver name', () => 'p']]) {
   test(`Source binding analysis bounds 2000 functions with ${name}`, (t) => {
-    const text = Array.from({ length: 2000 }, (_, i) =>
+    const build = (scale) => Array.from({ length: Math.round(2000 * scale) }, (_, i) =>
       `function f${i}(${receiver(i)}) { ${receiver(i)}.context.webAPI.retrieveRecord(); }`).join('\n');
-    const started = performance.now();
-    const findings = [...scanSource(FILE, text), ...findingsFor(text, 'WebAPI', ['model'])];
-    const elapsed = performance.now() - started;
-    t.diagnostic(`${name} timing: ${elapsed.toFixed(3)} ms; ${Buffer.byteLength(text)} bytes`);
-    assert.ok(elapsed < PATHOLOGICAL_SCAN_LIMIT_MS, `${elapsed.toFixed(3)} ms exceeds ${PATHOLOGICAL_SCAN_LIMIT_MS} ms`);
-    assert.deepEqual(findings, []);
+    assert.deepEqual(assertLinearGrowth(t, name, build, (text) => scanBoth(text, 'WebAPI', ['model'])), []);
   });
 }
 
@@ -1574,8 +1764,8 @@ test('.ts angle-bracket types the gate cannot blank fall back fail closed', () =
 });
 
 test('Source analysis bounds a .ts control with many angle-bracket types', (t) => {
-  // Each blanked type costs one more lex of the whole file; a large control with 30 assertions
-  // must still finish well within the bound and keep its findings.
+  // Each blanked type used to cost one more lex of the whole file; a large control with 30 assertions
+  // must be lexed a bounded number of times and keep its findings.
   const lines = ['export class C {', '  public init(context: ComponentFramework.Context<IInputs>): void {'];
   for (let i = 0; i < 900; i += 1) {
     lines.push(i % 30 === 0
@@ -1585,11 +1775,13 @@ test('Source analysis bounds a .ts control with many angle-bracket types', (t) =
   lines.push(`    ${CALL};`, '  }', '}');
   const text = lines.join('\n');
   const started = performance.now();
-  const findings = findingsFor(text);
+  const work = lexWork(() => counting.gate.featureCoherence({ features: [{ name: 'Device.captureImage' }] },
+    [{ file: FILE, text }], ['pages']));
   const elapsed = performance.now() - started;
-  t.diagnostic(`.ts angle-type timing: ${elapsed.toFixed(3)} ms; ${Buffer.byteLength(text)} bytes`);
-  assert.ok(elapsed < PATHOLOGICAL_SCAN_LIMIT_MS, `${elapsed.toFixed(3)} ms exceeds ${PATHOLOGICAL_SCAN_LIMIT_MS} ms`);
-  assert.deepEqual(findings.map((finding) => [finding.code, finding.line]), [['PCF_PAGES_API', lines.length - 2]]);
+  t.diagnostic(`.ts angle-type work: ${work.calls} lexer passes, ${work.chars} characters lexed of ${text.length}; ${elapsed.toFixed(3)} ms`);
+  assertBoundedLexing('30 casts', text, work);
+  assert.ok(elapsed < CATASTROPHE_LIMIT_MS, `${elapsed.toFixed(3)} ms exceeds ${CATASTROPHE_LIMIT_MS} ms`);
+  assert.deepEqual(work.result.map((finding) => [finding.code, finding.line]), [['PCF_PAGES_API', lines.length - 2]]);
 });
 
 test('.ts files with hundreds of angle-bracket types stay analyzable', (t) => {
@@ -1612,11 +1804,13 @@ test('.ts files with hundreds of angle-bracket types stay analyzable', (t) => {
     ['a type longer than 4096 characters', `const shape = <${longType}>raw;\n${guarded}`],
   ]) {
     const started = performance.now();
-    const gated = gateSources({ manifestModel: { features: [{ name: 'Device.captureImage' }] }, sources: [{ file: FILE, text }], hosts: ['pages'] });
+    const work = lexWork(() => counting.gate.gateSources({ manifestModel: { features: [{ name: 'Device.captureImage' }] }, sources: [{ file: FILE, text }], hosts: ['pages'] }));
     const elapsed = performance.now() - started;
-    t.diagnostic(`${name}: ${elapsed.toFixed(3)} ms; ${Buffer.byteLength(text)} bytes`);
+    const gated = work.result;
+    t.diagnostic(`${name}: ${work.calls} lexer passes, ${work.chars} characters lexed of ${text.length}; ${elapsed.toFixed(3)} ms`);
     assert.deepEqual(gated, { ok: true, errors: [], warnings: [] }, name);
-    assert.ok(elapsed < PATHOLOGICAL_SCAN_LIMIT_MS, `${name}: ${elapsed.toFixed(3)} ms exceeds ${PATHOLOGICAL_SCAN_LIMIT_MS} ms`);
+    assertBoundedLexing(name, text, work);
+    assert.ok(elapsed < CATASTROPHE_LIMIT_MS, `${name}: ${elapsed.toFixed(3)} ms exceeds ${CATASTROPHE_LIMIT_MS} ms`);
     const unguarded = text.replace(guarded, `${CALL};`);
     const callLine = unguarded.split('\n').findIndex((line) => line.includes(CALL)) + 1;
     assert.deepEqual(findingsFor(unguarded).map((finding) => [finding.code, finding.line]), [['PCF_PAGES_API', callLine]], name);

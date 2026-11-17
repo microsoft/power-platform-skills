@@ -63,6 +63,7 @@
 // the identical phase-grouped, status-marked log.
 
 const { topoOrderEntities } = require('./_graph.js');
+const { serviceCodeOf, answeredErrorOf } = require('./retry-policy.js');
 const { appUniqueName, commandsByEntity, defaultViewColumns, enrichesDefaultViews, dashboardsInSolution, findDashboardsByName, findPinnedDashboard, resolveExistingFormId, resolveRoleBusinessUnit, roleBuClause, bpfFilter, partialEnrichment } = require('./sdk-build.js');
 const { manifestResourceName, parseManifestBase64 } = require('./page-manifest.js');
 const { relationshipSchemaName, manyToManySchemaName, lookupColumnsFor, SDK_ROLE_MARKER, canonicalPersonaName, FORM_GUID_RE } = require('./app-spec.js');
@@ -70,15 +71,18 @@ const { selectSummaryTables } = require('./ai-candidates.js');
 const { specOptsIntoAi } = require('./ai-app-settings.js');
 const { savedPageRows, currentLayerRow } = require('./app-components.js');
 const { isRestrictedSolution } = require('./system-solutions.js');
+const { readSystemFormRootPresence } = require('./systemform-published.js');
 const { unreadableAnswer } = require('./collection-answers.js');
 const { fetchSitemap, navigationProof } = require('./sitemap-pages.js');
 const { unescapePacName } = require('./genpage-sdk.js');
+const { assertPageDeletionSafe, pageDeletionReferences, formText } = require('./page-reference-guard.js');
 const { readPageOwnership, readPendingCreations, recordPageTeardown, completePageDeletions, completePendingCreations } = require('./page-ownership-records.js');
 const { danglingSitemapOf, deleteAppWithoutSitemap } = require('./app-sitemap-dangling.js');
 
 // OData v4 string-literal escaping lives in ./odata.js. `odataStr` is kept as a backward-compatible
 // alias because it is part of this module's exported (and unit-tested) surface.
 const { odataLit } = require('./odata.js');
+const { openStandaloneManagedFence } = require('./managed-standalone-fence.js');
 const odataStr = odataLit;
 
 // Extract a readable error message from an SDK error or exception.
@@ -129,6 +133,55 @@ function isUndeletable(err) {
   return /system-defined|system managed|system-managed/.test(msg);
 }
 
+// The answer a business process flow's delete is sent again for: HTTP 500 "There is no active transaction", the platform saying that the delete's own transaction was already
+// gone when it tried to carry on — "usually caused by custom plug-ins that ignore errors from service calls and continue processing". Seen live once, in a teardown whose
+// flow delete answered it (after 3 s) and which then stopped, with the flow's table, the global choice and the solution kept; running the same teardown again deleted everything.
+// The body is the platform's usual OData error, whose code is the documented TransactionNotStarted (the table lists that code with the words "Transaction not started."; the words
+// above are what the platform sends for it):
+//   {"error":{"code":"0x80040251","message":"There is no active transaction. This error is usually caused by custom plug-ins that ignore errors from service calls and continue processing."}}
+// https://learn.microsoft.com/power-apps/developer/data-platform/reference/web-service-error-codes
+// The live log kept only the message, so the pairing of code and message is not itself captured: the answer is matched by its CODE when its body carries one (any other code is
+// another failure, whatever its words), and by its words only when the body carries no code. Only a 500 counts, and only this step re-sends it; the HTTP client sends a record delete once on a 500
+// (its concurrent-delete guard), so the re-send is the teardown's.
+const LOST_TRANSACTION_CODE = '0x80040251';
+const LOST_TRANSACTION_WORDS = /^\s*There is no active transaction\b/i;
+// At most this many re-sends, 1 s / 2 s / 4 s apart (the schedule the HTTP client uses for a deadlock victim).
+const LOST_TRANSACTION_RESENDS = 3;
+function isLostTransactionAnswer(err) {
+  if (httpStatus(err) !== 500) return false;
+  const answered = answeredErrorOf(err);
+  if (!answered) return false;
+  const code = serviceCodeOf(err);
+  if (code !== null) return code === LOST_TRANSACTION_CODE;
+  return typeof answered.message === 'string' && LOST_TRANSACTION_WORDS.test(answered.message);
+}
+// A re-sent delete is safe here: the platform ANSWERED, so the first delete is not still running to race the second (the hazard the client's no-re-send rule is for), and one that did
+// commit before the answer is answered 404 by the re-send, which deleteStep reads as a flow already gone (tolerateNotFound).
+async function deleteFlowResendingLostTransaction(sdk, item) {
+  for (let resend = 0; ; resend++) {
+    try {
+      return await sdk.deleteRecord('workflow', item.id);
+    } catch (e) {
+      if (resend >= LOST_TRANSACTION_RESENDS || !isLostTransactionAnswer(e)) throw e;
+      await new Promise((r) => setTimeout(r, 1000 * 2 ** resend));
+    }
+  }
+}
+
+// The refusal of a form delete that would leave its table with no active Main form: HTTP 400, whose body is
+//   {"error":{"code":"0x8004F661","message":"This operation can’t be completed. You must have at least one active Main form."}}
+// (the apostrophe is U+2019; the SDK words the error `HTTP 400 from https://contoso.crm.dynamics.com/api/data/v9.0/systemforms(<formid>): <message>` and keeps the body in `cause`).
+// The code is the platform's FallbackFormDeactivation:
+//   https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/web-service-error-codes
+// A table the build created holds only its default Main form, which the build owns, so the explicit delete of that form is refused; the table's own delete, a few steps later,
+// removes the form with it. The refusal is recognised by its status and its CODE only, never by its words: the message is localized, and a validation rule or plug-in can quote
+// the same words under another code, which is another failure. A body with no code, or another code — including the related FallbackFormDeletion (0x8004F654), which is out of scope —
+// stays the failure it is. serviceCodeOf returns the code lower-cased.
+const LAST_MAIN_FORM_CODE = '0x8004f661';
+function isLastMainFormRefusal(err) {
+  return httpStatus(err) === 400 && serviceCodeOf(err) === LAST_MAIN_FORM_CODE;
+}
+
 // Marks an error FAIL-CLOSED: what the step could not prove is itself the failure, so deleteStep passes it on before any of its shortcuts. Those read
 // an error's WORDS and status — "not found", "referenced by", "system-managed", a 404 — and the words of such an error can be a maker's (an app named
 // "System Managed Ops") or a proxy's ("Resource not found for the segment …"): read as a shortcut, it turned the refusal of a live app into an
@@ -168,6 +221,18 @@ function warnDeferredResetPublishFailure(ctx, table, err) {
   if (typeof ctx.warn === 'function') ctx.warn(message);
 }
 
+// A reset whose table publish the managed fence withholds (lib/managed-standalone-fence.js): a build of this app left a managed change on that table
+// unproved, or a publication of it that may have been sent and is not confirmed, and a publish now would put that saved state live. The reset stays
+// saved; the relationship delete that follows may then report the lookup as still referenced, which is the failure a re-run can finish.
+function warnWithheldResetPublish(ctx, table, why) {
+  const message = `default-view reset for ${table} is saved and was not published: ${why} — `
+    + 'the next relationship delete may still report the lookup as still referenced; build the app again to settle the managed change, then rerun the teardown';
+  ctx.warnings.push(message);
+  if (typeof ctx.warn === 'function') ctx.warn(message);
+}
+
+const TEARDOWN_RESET_PUBLISH = 'the teardown publish of default-view resets';
+
 function publishFailure(outcome) {
   return outcome && outcome.publish && outcome.publish.kind === 'failed'
     ? (outcome.publish.error || new Error('publish failed'))
@@ -185,8 +250,14 @@ async function settleDeferredResetPublishes(sdk, ctx) {
   if (!ctx || ctx.flushing || !ctx.owedByTable.size || typeof (sdk && sdk.publishArtifact) !== 'function') return;
   ctx.flushing = true;
   try {
-    const owed = [...ctx.owedByTable.values()];
+    const owed = [];
+    for (const target of ctx.owedByTable.values()) {
+      if (ctx.managedFenceError) warnWithheldResetPublish(ctx, target.table, `the app's managed binding store could not be read (${errMsg(ctx.managedFenceError)})`);
+      else if (ctx.barrier && !ctx.barrier.allow(target.table, TEARDOWN_RESET_PUBLISH)) warnWithheldResetPublish(ctx, target.table, 'a managed change of this table, made by a build, is not yet proved or may have been sent and is not confirmed');
+      else owed.push(target);
+    }
     ctx.owedByTable.clear();
+    if (!owed.length) return;
     const publishOne = async (target) => {
       try {
         const failed = publishFailure(await sdk.publishArtifact(target.type, target.id));
@@ -397,14 +468,15 @@ const KIND_HANDLERS = {
   // removed AND published, or when the app+sitemap are deleted outright (which is what the step
   // before this one just did).
   //
-  // KNOWN GAP, measured rather than assumed: that graph covers SITEMAP references only. A page
-  // embedded in a FORM through the `MscrmControls.UxAgentControl` PCF is NOT tracked — a form was
-  // built with a page in its `RefId`, saved and published, and the page still reported ZERO
-  // dependents and deleted with a 204. The form's own required-components list names the PCF
-  // (component type 66) and never the page, because `RefId` is an opaque
-  // `static="true" type="SingleLine.Text"` value the platform cannot know is a reference.
-  // A formxml scan would be needed to detect those references; this step keeps the ownership
-  // gate independent of whether the platform reports dependencies.
+  // That graph covers SITEMAP references only. A page embedded in a FORM through the
+  // `MscrmControls.UxAgentControl` PCF is NOT tracked — a form was built with a page in its `RefId`,
+  // saved and published, and the page still reported ZERO dependents and deleted with a 204. The form's
+  // own required-components list names the PCF (component type 66) and never the page, because `RefId`
+  // is an opaque `static="true" type="SingleLine.Text"` value the platform cannot know is a reference.
+  // So before the app is deleted, runTeardown scans every form of every table in both layers
+  // (page-reference-guard.js, assertPageDeletionSafe) and stops when a form embeds one of the pages or
+  // cannot be read: nothing is deleted, and the app, the pages, the manifest and the solution are kept.
+  // A dry run runs the same scan on the pages it would delete and names each form that stops it (dryRunFormBlockers).
   genpage: {
     // A page another app still references is a SKIP, not a failure — see isDependencyBlocked.
     tolerateDependencyBlock: true,
@@ -866,7 +938,7 @@ const KIND_HANDLERS = {
         try { await sdk.updateRecord('workflow', item.id, { statecode: 0, statuscode: 1 }); } catch { /* fall through: the delete below reports the real failure */ }
       }
       try {
-        return await sdk.deleteRecord('workflow', item.id);
+        return await deleteFlowResendingLostTransaction(sdk, item);
       } catch (e) {
         // Because the delete cascades a TABLE drop, it is slow — MEASURED live at longer than the
         // client's 60s HTTP timeout on two of three runs. The server keeps working after the client
@@ -994,7 +1066,13 @@ const KIND_HANDLERS = {
       // A main form the build promoted to default can't be deleted until a stock form is restored
       // as the active default (reverse of Gap 2's promote) — otherwise Dataverse blocks the delete.
       if (item.isMain) await restoreStockMainForm(sdk, item.entity, item.id);
-      await sdk.deleteRemoteArtifact('form', item.id);
+      try {
+        await sdk.deleteRemoteArtifact('form', item.id);
+      } catch (err) {
+        // Tagged, not swallowed: the error still reaches the step as the failure it is, and runTeardownSteps decides whether the table's delete settles it.
+        if (isLastMainFormRefusal(err)) err.lastMainFormRefusal = { id: item.id, entity: item.entity };
+        throw err;
+      }
     },
   },
   chart: {
@@ -1130,10 +1208,19 @@ const KIND_HANDLERS = {
     //    table owned elsewhere; and
     //  · any non-custom/system table (account, contact, …) — never created by a build, and
     //    Dataverse refuses to delete it, so a delete attempt would only surface a noisy error.
-    // A table that can't be discovered is treated as already-gone: fall through to the delete
+    // A table the read answered and did not list is treated as already-gone: fall through to the delete
     // call, which tolerates the cosmetic/absent 404 (see tolerateNotFound).
     //
-    // One failure of that read is not "can't be discovered": an answer that is no list of tables — a
+    // A read that FAILED is not "not listed", and neither is a list the read could not finish. The bundled SDK reads
+    // the table list to its end and refuses an answer that says more rows exist without a link to them
+    // (`@Microsoft.Dynamics.CRM.morerecords`), or whose next page fails, e.g.
+    //   HTTP 200 from …/EntityDefinitions?$select=…: findTables: paginated read returned a page that says more rows exist (…)
+    //   HTTP 503 from …/EntityDefinitions?$skiptoken=…: Service Unavailable
+    // — a refusal of the read (403) is the same. After any of them nothing says the table is there, gone, or a
+    // system table, so the step fails CLOSED with the reason (a DELETE from half an answer could be the one sent
+    // to a system table the unread rest would have shown), and a re-run once the read answers finishes it.
+    //
+    // One failure of that read says more: an answer that is no list of tables — a
     // sign-in or proxy page, `{}`, `null`, which lib/maker-sdk.js turns into TABLES_UNREADABLE — says the
     // environment is not answering as Dataverse. The SDK reads it as "no tables", so the system-table check
     // below would go unmade; and where every answer is such a page, the DELETE that follows is answered
@@ -1147,20 +1234,24 @@ const KIND_HANDLERS = {
       }
       let table = null;
       // Whether the read said if the table was there before its delete: `true` it listed it, `false` it answered and listed no such
-      // table, `undefined` it could not tell — it failed, or its matches were cut at `top` (findTables reads every table and keeps the
+      // table, `undefined` it could not tell — its matches were cut at `top` (findTables reads every table and keeps the
       // first 50 whose names contain the query, so a list of 50 may have left the table out).
       let seen;
-      try {
-        const hits = await sdk.findTables(target.logical, { top: 50 });
-        table = (hits || []).find((t) => String(t.logicalName).toLowerCase() === target.logical) || null;
-        if (table) seen = true;
-        else if ((hits || []).length < 50) seen = false;
-      } catch (err) {
-        const unreadable = unreadableAnswer(err);
-        if (unreadable) {
-          throw Object.assign(new Error(`table '${target.logical}' was not deleted: ${unreadable.message}`), { code: unreadable.code, cause: unreadable, failClosed: true });
+      // Every SDK a script makes has findTables (tests/sdk-surface-contract.test.js); a stand-in without it makes no read, as before.
+      if (typeof (sdk && sdk.findTables) === 'function') {
+        try {
+          const hits = await sdk.findTables(target.logical, { top: 50 });
+          table = (hits || []).find((t) => String(t.logicalName).toLowerCase() === target.logical) || null;
+          if (table) seen = true;
+          else if ((hits || []).length < 50) seen = false;
+        } catch (err) {
+          const unreadable = unreadableAnswer(err);
+          if (unreadable) {
+            throw Object.assign(new Error(`table '${target.logical}' was not deleted: ${unreadable.message}`), { code: unreadable.code, cause: unreadable, failClosed: true });
+          }
+          const why = String((err && err.message) || err).trim();
+          throw Object.assign(new Error(`table '${target.logical}' was not deleted: the environment's tables could not be read, so whether it is there, and whether it is a system table, is unknown (${why}). Run the teardown again once the environment answers.`), { code: (err && err.code) || 'TABLE_LIST_UNREADABLE', cause: err, failClosed: true });
         }
-        table = null;
       }
       if (table && table.isCustom === false) {
         return { items: [], skipReason: 'system table — not created by this build' };
@@ -1649,6 +1740,46 @@ async function deleteStep(sdk, handler, items, ctx) {
   return { deletedIds, absentIds, skippedIds: skipped.map((s) => s.id), skipped };
 }
 
+// The dry run names what would stop the apply: the pages a dry run would delete are run through the same shared form scan the apply runs
+// (assertPageDeletionSafe in the apply's pre-loop below), so a page a form embeds is said to be kept, with the form named, instead of
+// "would delete" for a page the apply then keeps. It reads only when a page step has a page it would delete — the same +2 GETs as the
+// apply (one per form layer, plus one per continuation page), none on a plan with no such page. A preview only: the apply scans again
+// before it deletes anything, because a maker may change a form between the two runs.
+// Returns Map<step, { message, verdictOf(pageId) }> for each page step the apply would refuse; a step that would go ahead is absent.
+async function dryRunFormBlockers(sdk, plan, pageResolutions) {
+  const blockers = new Map();
+  for (const step of plan.filter((p) => p.kind === 'genpage')) {
+    const prepared = pageResolutions.get(step);
+    const resolved = prepared && !prepared.error && prepared.resolved;
+    if (!resolved || resolved.readError) continue;
+    const ids = (Array.isArray(resolved) ? resolved : resolved.items || []).map((item) => item.id);
+    if (!ids.length) continue;
+    let refs;
+    try {
+      refs = await pageDeletionReferences(sdk.dataverse, ids);
+    } catch (error) {
+      // A form the scan cannot read leaves it unknown whether one embeds a page: the apply refuses that too, so every page is kept.
+      const detail = errMsg(error);
+      blockers.set(step, { message: `the forms could not all be read, so the pages would be kept: ${detail}`, verdictOf: () => `kept — the forms could not all be read: ${detail}` });
+      continue;
+    }
+    if (refs.safe) continue;
+    const embeddedIn = (id) => refs.references.get(String(id).toLowerCase()) || refs.references.get(id) || [];
+    const embedded = ids.filter((id) => embeddedIn(id).length);
+    const unknown = refs.unknown.slice(0, 5).map((u) => `${formText(u)}: ${u.detail}`).join('; ') + (refs.unknown.length > 5 ? `; and ${refs.unknown.length - 5} more` : '');
+    const message = embedded.length
+      ? `${embedded.map((id) => `page ${id} is embedded in ${embeddedIn(id).map(formText).join(', ')}`).join('; ')} — the apply would keep every page, and the app`
+      : `it is not known whether a form embeds a page (${unknown}) — the apply would keep every page, and the app`;
+    blockers.set(step, {
+      message,
+      verdictOf: (id) => (embeddedIn(id).length
+        ? `kept — embedded in ${embeddedIn(id).map(formText).join(', ')}`
+        : embedded.length ? 'kept — another page of this app is embedded in a form' : `kept — it is not known whether a form embeds it: ${unknown}`),
+    });
+  }
+  return blockers;
+}
+
 // Execute a teardown. Dry-run discovers page candidates when an SDK reader is supplied, without writes.
 // Apply resolves each step's live id(s) and deletes them, emitting per-step status. Best-effort:
 // a failed step is recorded and teardown CONTINUES (halting mid-way would strand orphans), then
@@ -1658,6 +1789,11 @@ async function deleteStep(sdk, handler, items, ctx) {
 // could not be confirmed, and a deleted page whose conversation history could not be fully removed. This wrapper exists so the batched publish of those resets is settled however
 // the steps end — normally, through the app-delete stop, or because a callback threw — without wrapping
 // the step loop (and re-indenting every line of it) in a try/finally.
+//
+// `opts.publicationBarrier`: a barrier the caller already filled with the managed debt of the app's workspace (lib/managed-standalone-fence.js) — the one
+// its SDK's transport is gated by; `opts.managedFenceError`: the caller's discovery failed. Without either, an apply discovers that debt here. Either way a
+// table the debt withholds is not published by the resets' batched publish, in the step loop, the app-delete stop or the finally alike: that publish would put
+// live the saved state a build withheld. No store in the workspace changes nothing.
 async function runTeardown(spec, opts = {}, deps = {}) {
   const deferredResetPublishes = {
     deferPublish: canBatchResetDefaultViewPublishes(deps.sdk),
@@ -1665,7 +1801,16 @@ async function runTeardown(spec, opts = {}, deps = {}) {
     warnings: [],
     warn: deps.warn,
     flushing: false,
+    barrier: opts.publicationBarrier || null,
+    managedFenceError: opts.managedFenceError || null,
   };
+  if (opts.apply === true && !deferredResetPublishes.barrier && !deferredResetPublishes.managedFenceError) {
+    try {
+      deferredResetPublishes.barrier = openStandaloneManagedFence({ environment: opts.env, workspaceDir: opts.workspaceDir, appDir: opts.appDir, spec }).barrier;
+    } catch (error) {
+      deferredResetPublishes.managedFenceError = error;
+    }
+  }
   let result;
   try {
     result = await runTeardownSteps(spec, opts, deps, deferredResetPublishes);
@@ -1698,14 +1843,17 @@ async function runTeardownSteps(spec, opts, deps, deferredResetPublishes) {
   if (!apply) {
     const labels = [];
     const errors = [];
+    const formBlockers = await dryRunFormBlockers(sdk, plan, pageResolutions);
     plan.forEach((p, i) => {
       const prepared = pageResolutions.get(p);
       const resolved = prepared && prepared.resolved;
       const candidates = (resolved && resolved.candidates) || (prepared && prepared.error && prepared.error.candidates) || [];
       const readError = prepared && (prepared.error ? errMsg(prepared.error) : resolved && resolved.readError);
       if (readError) errors.push({ step: p.label, message: readError });
+      const blocked = formBlockers.get(p);
+      if (blocked) errors.push({ step: p.label, message: blocked.message });
       const lines = candidates.length
-        ? candidates.map((item) => `${p.label}: ${item.id} ${JSON.stringify(item.name)} (${readError ? `kept — page proof unreadable: ${readError}` : item.absent ? 'not found — manifest name only' : item.reason ? `kept — ${item.reason}` : 'would delete'})`)
+        ? candidates.map((item) => `${p.label}: ${item.id} ${JSON.stringify(item.name)} (${readError ? `kept — page proof unreadable: ${readError}` : item.absent ? 'not found — manifest name only' : item.reason ? `kept — ${item.reason}` : blocked ? blocked.verdictOf(item.id) : 'would delete'})`)
         : [readError ? `${p.label} (page discovery failed: ${readError})` : p.label];
       for (const label of lines) {
         labels.push(label);
@@ -1731,13 +1879,17 @@ async function runTeardownSteps(spec, opts, deps, deferredResetPublishes) {
         throw new Error(`${resolved.readError}; ${candidates}`);
       }
       const items = Array.isArray(resolved) ? resolved : (resolved && resolved.items) || [];
+      // A page a form still embeds is refused here, before the app (and with it the navigation proof) is deleted and before any
+      // record is written: one shared scan of every form in both layers (see the genpage handler). A refusal keeps everything.
+      if (items.length) await assertPageDeletionSafe(sdk.dataverse, items.map((item) => item.id));
       if (items.length) recordPageTeardown(opts.workspaceDir, step.target.appUnique, items, opts.env);
     } catch (e) {
       result.ok = false;
       result.errors.push({ step: step.label, message: errMsg(e) });
       emit({ phase: step.phase, status: 'error', label: step.label, n: plan.indexOf(step) + 1, total, detail: errMsg(e) });
+      const formBlocked = e && (e.code === 'GENPAGE_EMBEDDED_IN_FORM' || e.code === 'GENPAGE_FORM_REFERENCES_UNREADABLE');
       for (const p of plan) {
-        const label = `${p.label} (not attempted - page ownership could not be preserved before app deletion)`;
+        const label = `${p.label} (not attempted - ${formBlocked ? 'a form embeds a page of this app, or the forms could not all be read' : 'page ownership could not be preserved before app deletion'})`;
         result.skipped.push(label);
         emit({ phase: p.phase, status: 'skip', skip: 'not-attempted', label, n: plan.indexOf(p) + 1, total });
       }
@@ -1775,9 +1927,42 @@ async function runTeardownSteps(spec, opts, deps, deferredResetPublishes) {
   // that step, which comes before every step it can hold (the plan's `heldBy`: web resources, global choices and relationships to
   // themselves all follow the tables). What the platform would refuse while such a table exists is not sent.
   const keptTables = new Map();
+  // A form whose delete the platform refused because it is the last active Main form of its table (isLastMainFormRefusal) is not yet a failure: the table's own delete,
+  // which comes later, removes the form with it. Each is recorded with the error entry it provisionally adds, and settled once the tables step is over
+  // (settleDeferredForms): the entry stands unless this run deleted the form's table AND a fresh read of the form's exact id shows it gone.
+  const deferredForms = [];
+  // The tables this run deleted, or found already gone: lower-cased logical names.
+  const tablesGone = new Set();
+  const settleDeferredForms = async () => {
+    let cleared = false;
+    for (const d of deferredForms.splice(0)) {
+      let removed = false;
+      if (tablesGone.has(d.entity)) {
+        try {
+          // Both layers of the row, each answered 404 with the missing-row code (lib/systemform-published.js); any other answer, or a read that cannot be made, proves nothing.
+          removed = (await readSystemFormRootPresence(sdk.dataverse, d.id)) === 'absent';
+        } catch {
+          removed = false;
+        }
+      }
+      if (removed) {
+        const at = result.errors.indexOf(d.entry);
+        if (at >= 0) result.errors.splice(at, 1);
+        (result.deleted.form = result.deleted.form || []).push(d.id);
+        cleared = true;
+        emit({ phase: d.step.phase, status: 'ok', label: `${d.step.label} (1 deleted — removed with its table ${d.entity})`, n: d.n, total });
+      } else {
+        emit({ phase: d.step.phase, status: 'error', label: d.step.label, n: d.n, total, detail: d.entry.message });
+      }
+    }
+    if (cleared && !result.errors.length) result.ok = true;
+  };
+  // The tables step ends with the last table of the plan; a plan with none settles at the step after the form.
+  const stepsBeforeTablesEnd = plan.reduce((last, p, i) => (p.kind === 'table' ? i + 1 : last), 0);
   let n = 0;
   for (const step of plan) {
     const myN = (n += 1);
+    if (deferredForms.length && myN > stepsBeforeTablesEnd) await settleDeferredForms();
     // The barrier for the batched default-view resets: nothing past the resets may run before they are
     // published (the relationship deletes that follow them are what the resets unblock).
     if (step.kind !== 'resetDefaultViews') await settleDeferredResetPublishes(sdk, deferredResetPublishes);
@@ -1864,6 +2049,7 @@ async function runTeardownSteps(spec, opts, deps, deferredResetPublishes) {
         continue;
       }
       const { deletedIds, absentIds, skipped } = await deleteStep(sdk, handler, items, step.kind === 'resetDefaultViews' || step.kind === 'genpage' || step.kind === 'app' ? deferredResetPublishes : undefined);
+      if (step.kind === 'table' && (deletedIds.length || absentIds.length)) tablesGone.add(String(step.target.logical).toLowerCase());
       // A removal that looked for its artifact itself and found none is a step that found nothing — the line and the counts a resolver that finds none gets — and not a deletion.
       if (!deletedIds.length && !skipped.length && absentIds.length) {
         result.skipped.push(step.label);
@@ -1906,8 +2092,14 @@ async function runTeardownSteps(spec, opts, deps, deferredResetPublishes) {
     } catch (err) {
       result.ok = false;
       const message = errMsg(err);
-      result.errors.push({ step: step.label, message });
-      emit({ phase: step.phase, status: 'error', label: step.label, n: myN, total, detail: message });
+      const entry = { step: step.label, message };
+      result.errors.push(entry);
+      // The last Main form of a table: reported once the tables step has decided (settleDeferredForms), not as a failure now.
+      if (step.kind === 'form' && err && err.lastMainFormRefusal) {
+        deferredForms.push({ step, n: myN, id: err.lastMainFormRefusal.id, entity: String(err.lastMainFormRefusal.entity).toLowerCase(), entry });
+      } else {
+        emit({ phase: step.phase, status: 'error', label: step.label, n: myN, total, detail: message });
+      }
       if (step.kind === 'genpage') pagesFailed = true;
       if (step.kind === 'businessRules') {
         // Whichever read or delete failed, the rule may still have an activated copy, and that copy
@@ -1936,6 +2128,7 @@ async function runTeardownSteps(spec, opts, deps, deferredResetPublishes) {
       }
     }
   }
+  if (deferredForms.length) await settleDeferredForms();
   return result;
 }
 

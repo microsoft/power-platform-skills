@@ -195,6 +195,9 @@ The no-CDN runtime is committed at
 `assets/self-contained/mcp-app-runtime.min.js`. It is generated code; do not edit it by
 hand. Its pinned build inputs live under `scripts/_vendor-build/`.
 
+The build imports the peer-dependent App entry and bundles the SDK and Zod from the lockfile.
+Do not use `app-with-deps`: it embeds upstream dependency copies that our lockfile updates cannot replace.
+
 After intentionally changing a dependency version:
 
 ```bash

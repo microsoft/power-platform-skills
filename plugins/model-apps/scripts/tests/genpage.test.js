@@ -24,6 +24,8 @@ function scratch(label) {
   return dir;
 }
 after(() => { for (const dir of roots) fs.rmSync(dir, { recursive: true, force: true }); });
+// The folder whose .maker-workspace holds the pages lease add-to-app and remove-from-app take: one of this file's own, never the folder the tests run in.
+const LEASE_DIR = scratch('lease');
 
 // One command line through `main`, with the backend and the three ways out replaced: what was emitted (with how often the backend had been disposed at that moment), what went to stderr, and
 // the usage errors.
@@ -34,6 +36,7 @@ async function run(argv, genpage = fakeGenpage()) {
     emit: (ok, payload) => { seen.emitted.push({ ok, payload, disposedWhenEmitted: genpage.disposed }); },
     usageError: (message, verb) => { seen.usage.push({ message, verb }); },
     stderr: (text) => { seen.stderr.push(text); },
+    appDir: LEASE_DIR,
   });
   seen.genpage = genpage;
   seen.result = seen.emitted[0];
@@ -45,8 +48,8 @@ const pageOf = (id, over = {}) => ({ pageId: id, name: 'Overview', source: SOURC
 
 // ── the command line ───────────────────────────────────────────────────────────────────────────────────────────────
 
-test('the six commands are the verbs this script has — and nothing else', () => {
-  assert.deepStrictEqual(Object.keys(VERBS), ['list', 'download', 'types', 'add-to-app', 'remove-from-app', 'delete']);
+test('the seven commands are the verbs this script has — and nothing else', () => {
+  assert.deepStrictEqual(Object.keys(VERBS), ['list', 'download', 'types', 'add-to-app', 'remove-from-app', 'delete', 'prepare-compiler-refresh']);
   for (const [name, spec] of Object.entries(VERBS)) {
     assert.ok(spec.usage.startsWith(`${name} --env <envUrl>`), `${name}: usage names the command and --env`);
     for (const flag of spec.needValue) assert.ok(spec.known.includes(flag), `${name}: --${flag} is a known flag`);
@@ -56,8 +59,8 @@ test('the six commands are the verbs this script has — and nothing else', () =
 });
 
 const BAD_COMMAND_LINES = [
-  [[], /a command is required: list, download, types, add-to-app, remove-from-app or delete/, undefined],
-  [['frob', '--env', ENV], /unknown command 'frob': list, download, types, add-to-app, remove-from-app or delete/, undefined],
+  [[], /a command is required: list, download, types, add-to-app, remove-from-app, delete or prepare-compiler-refresh/, undefined],
+  [['frob', '--env', ENV], /unknown command 'frob': list, download, types, add-to-app, remove-from-app, delete or prepare-compiler-refresh/, undefined],
   [['list'], /--env is required/, 'list'],
   [['list', '--env'], /--env requires a value/, 'list'],
   [['list', '--env', '  '], /--env requires a value/, 'list'],

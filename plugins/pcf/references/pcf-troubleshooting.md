@@ -182,13 +182,13 @@ If project lint reports that no `ControlManifest.Input.xml` files were found, pa
 
 ### Push fails while publishing all customizations with SQL 1205
 
-**Symptom**: `pac pcf push` imports the temporary solution, then fails at `Publishing All Customizations...` with `Sql error: Generic SQL error. CRM ErrorCode: -2147204784 Sql ErrorCode: -2146232060 Sql Number: 1205`. `pcf-push.js` returns `ok: false` with a deadlock hint.
+**Symptom**: `pac pcf push` imports the temporary solution, then fails at `Publishing All Customizations...` with `Sql error: Generic SQL error. CRM ErrorCode: -2147204784 Sql ErrorCode: -2146232060 Sql Number: 1205`. `pcf-push.js` has already sent that publish again (Web API `PublishAllXml`) at most twice, 5 and 15 seconds apart, and every attempt lost a deadlock; it returns `ok: false` with a deadlock hint and `publishAttempts: 3`. A re-sent publish answered with another error, or whose answer never arrived, is not sent again: the result carries `publishRetryError` and the attempts made.
 
 **Candidate causes**: SQL Server error 1205 means the server chose this transaction as a deadlock victim ([MSSQLSERVER_1205](https://learn.microsoft.com/en-us/sql/relational-databases/errors-events/mssqlserver-1205-database-engine-error)). On a shared environment this happens when another import or publish is running at the same time. Observed on 2026-09-29 on a shared test environment during a concurrent publish. It is not caused by the project.
 
 **Discriminating checks**: The pac output shows `Importing the temporary solution wrapper into the current org: done.` before the error, so the build and import succeeded. `pcf-inventory.js --env <url> --control <prefix>_<namespace>.<constructor>` shows whether the control is already registered. HTTP 429 responses from the same environment around the same time point to the same contention.
 
-**Fix**: Wait a minute, then re-run the same `pcf-push.js` command. If the environment stays busy, publish from Maker (**Publish all customizations**) once it is quiet, or push to a less contended development environment. Do not change the project to work around it.
+**Fix**: Wait a minute, then re-run the same `pcf-push.js` command. A push whose re-sent publish succeeded returns `ok: true` with `publishAttempts` and needs nothing more. If the environment stays busy, publish from Maker (**Publish all customizations**) once it is quiet, or push to a less contended development environment. Do not change the project to work around it.
 
 **Verify**: The re-run push returns `ok: true` with a registration read-back whose version matches the manifest.
 

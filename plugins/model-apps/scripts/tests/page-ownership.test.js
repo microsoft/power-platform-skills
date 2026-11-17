@@ -8,8 +8,10 @@ const { reconcilePageIds } = require('../lib/page-manifest.js');
 const { runTeardown: realRunTeardown } = require('../lib/sdk-teardown.js');
 const { runSdkBuild } = require('../lib/sdk-build.js');
 const { loadCli } = require('./helpers/cli-harness.js');
+const { shortRenameWait } = require('./helpers/short-rename-wait.js');
 const { fakeGenpage } = require('./helpers/fake-genpage.js');
 const { withPageType } = require('./helpers/page-component-type.js');
+const { isFormScan, noFormRows } = require('./helpers/form-scan.js');
 const { recordPageCreation, readPageOwnership, recordPagePending, readPendingCreations, checkPageOwnershipClearable, recordPageTeardown } = require('../lib/page-ownership-records.js');
 const { sha256 } = require('../lib/hash.js');
 
@@ -177,6 +179,7 @@ function sdkForPages(opts = {}) {
   if (!opts.noDataverse) {
     sdk.dataverse = {
       get: withPageType(async (url) => {
+        if (isFormScan(url)) return noFormRows();
         // The pages in their saved layer, whichever of the rows the platform answers (see `rows` above). Not a read of the navigation, so it is not counted in `draftReads`.
         if (url.startsWith('/uxagentprojects/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()')) {
           state.pageReads.push(url);
@@ -871,6 +874,7 @@ test('no workspace refuses app deletion when navigation proof cannot be preserve
 });
 
 test('a failed ownership-record write leaves the app and its pages intact', async (t) => {
+  shortRenameWait(t);
   const workspaceDir = workspace();
   const rename = fs.renameSync;
   t.mock.method(fs, 'renameSync', (from, to) => {

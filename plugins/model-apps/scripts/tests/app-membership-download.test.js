@@ -24,6 +24,7 @@ function downloadSdk({
   sdkNavigation = navigation, sdkPage = page, missingSitemap = false, unpublishedOnly = false,
   identity = 'contoso_membership', identitySpelling = 'uniqueName', displayName = 'Membership', unknownCustom = [],
   currentExtraXml = '', sdkExtraSubAreas = [],
+  attributes = [{ logicalName: 'contoso_unrelated', attributeType: 'String', isCustomAttribute: true }], capabilityReads = null,
 } = {}) {
   const calls = [];
   const metadataReads = [];
@@ -51,7 +52,7 @@ function downloadSdk({
       return {
         logicalName: logical, schemaName: logical, displayName: logical, isCustomEntity: custom.includes(logical),
         primaryNameAttribute: logical === 'annotation' ? '' : 'name',
-        attributes: [{ logicalName: 'contoso_unrelated', attributeType: 'String', isCustomAttribute: true }], relationships: [],
+        attributes, relationships: [],
       };
     },
     queryRecords: async (set, opts = {}) => {
@@ -89,6 +90,12 @@ function downloadSdk({
         return { status: 200, body: { value: draft
           ? [{ sitemapid: SITEMAP, sitemapxml: publishedXml, componentstate: 0 }, current] : [current] } };
       }
+      // The --include-capabilities reads (lib/date-behavior.js, lib/schema-feature-contract.js readTableFlags), answered per table.
+      const capability = /^\/EntityDefinitions\(LogicalName='([^']+)'\)(\/Attributes\/Microsoft\.Dynamics\.CRM\.DateTimeAttributeMetadata)?\?\$select=(IsDuplicateDetectionEnabled|LogicalName,DateTimeBehavior)/.exec(url);
+      if (capability && capabilityReads) {
+        calls.push({ capability: `${capability[2] ? 'dates' : 'flags'} ${capability[1]}` });
+        return capabilityReads[capability[2] ? 'dates' : 'flags'](capability[1]);
+      }
       const byId = /^\/EntityDefinitions\(([0-9a-f-]+)\)/i.exec(url);
       if (byId) {
         const logical = logicalOfId[byId[1].toLowerCase()];
@@ -119,18 +126,22 @@ async function download(t, options = {}, priorFloor) {
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
   if (priorFloor) fs.writeFileSync(path.join(directory, 'app-spec.json'), JSON.stringify({ minimumPluginVersion: priorFloor }));
   const fake = downloadSdk(options);
+  if (options.wrapSdk) fake.sdk = options.wrapSdk(fake.sdk, directory);
   const warnings = [];
   const original = process.stderr.write;
   process.stderr.write = (text) => { warnings.push(String(text)); return true; };
   let result;
   try {
     result = await runDownload({
-      sdk: fake.sdk, appId: APP, appUnique: options.unpublishedOnly ? undefined : 'contoso_membership', outDir: directory,
+      sdk: fake.sdk, appId: APP, appUnique: options.unpublishedOnly ? undefined : 'contoso_membership', outDir: directory, includeCapabilities: options.includeCapabilities, allowLossy: options.allowLossy,
+      // This fake serves no theme reads, so the theme capture that --include-capabilities also does is off unless a test
+      // asks for it (the app.theme tests below; `captureTheme: undefined` leaves runDownload's own default).
+      ...('captureTheme' in options ? (options.captureTheme === undefined ? {} : { captureTheme: options.captureTheme }) : { captureTheme: false }),
       genpage: fakeGenpage({ pages: options.page ? [{ pageId: PAGE, name: 'Draft Overview', source: 'export default function Page() { return null; }', dataSources: [] }] : [] }),
     });
   } finally { process.stderr.write = original; }
   assert.equal(result.ok, options.expectRefusal ? false : true, JSON.stringify(result));
-  return { ...fake, result, warnings };
+  return { ...fake, result, warnings, directory };
 }
 
 test('nine type-1 members round-trip seven hidden stock references without adopting their schema', async (t) => {
@@ -434,4 +445,263 @@ test('authored-option preservation also protects the membership floor without in
   const legacy = { app: {} };
   preserveAuthoredLanguageCode(legacy, 'app-spec.json', deps);
   assert.equal(legacy.minimumPluginVersion, undefined);
+});
+
+// ------------------------------------------------------------------------------------------------ --include-capabilities and the 2.21.0 floor
+
+const DATED = [
+  { logicalName: 'contoso_due', displayName: 'Due', attributeType: 'DateTime', isCustomAttribute: true },
+  { logicalName: 'contoso_seen', displayName: 'Seen', attributeType: 'DateTime', isCustomAttribute: true },
+  { logicalName: 'contoso_note', displayName: 'Note', attributeType: 'String', isCustomAttribute: true },
+];
+const dateRows = (rows) => ({ status: 200, body: { value: rows.map(([LogicalName, behavior]) => ({ LogicalName, DateTimeBehavior: { Value: behavior }, CanChangeDateTimeBehavior: { Value: true } })) } });
+const flagsBody = (dup, tracking, search) => ({ status: 200, body: { IsDuplicateDetectionEnabled: { Value: dup }, ChangeTrackingEnabled: tracking, SyncToExternalSearchIndex: search, CanEnableSyncToExternalSearchIndex: { Value: true } } });
+const capabilityReads = (dates, flags) => ({ dates, flags });
+const capabilityCalls = (calls) => calls.filter((c) => c.capability).map((c) => c.capability).sort();
+
+test('--include-capabilities off: the download makes the reads it always made and writes no date behaviour or table flag', async (t) => {
+  const reads = capabilityReads(() => assert.fail('no date read without the flag'), () => assert.fail('no flags read without the flag'));
+  const { result, calls } = await download(t, { attributes: DATED, capabilityReads: reads });
+  assert.deepEqual(capabilityCalls(calls), []);
+  const account = result.spec.entities.find((e) => e.schemaName === 'account');
+  assert.deepEqual(account.columns.filter((c) => c.type === 'DateTime').map((c) => c.dateTimeBehavior), [undefined, undefined]);
+  assert.equal(account.searchEnabled, undefined);
+  assert.equal(result.spec.minimumPluginVersion, '2.13.0', 'a spec with no 2.21.0 field keeps the floor it had');
+});
+
+test('--include-capabilities on: one date read and one flags read per table, only the non-default answers are written, and the spec asks for 2.21.0', async (t) => {
+  const reads = capabilityReads(
+    (table) => dateRows(table === 'account' ? [['contoso_due', 'DateOnly'], ['contoso_seen', 'UserLocal']] : [['contoso_due', 'TimeZoneIndependent'], ['contoso_seen', 'UserLocal']]),
+    (table) => (table === 'account' ? flagsBody(true, true, true) : flagsBody(false, false, false)));
+  const { result, calls } = await download(t, { attributes: DATED, capabilityReads: reads, includeCapabilities: true });
+  assert.deepEqual(capabilityCalls(calls), ['dates account', 'dates contact', 'flags account', 'flags contact']);
+  const byName = (table) => result.spec.entities.find((e) => e.schemaName === table);
+  const behaviours = (table) => Object.fromEntries(byName(table).columns.filter((c) => c.type === 'DateTime').map((c) => [c.schemaName, c.dateTimeBehavior]));
+  assert.deepEqual(behaviours('account'), { contoso_due: 'DateOnly', contoso_seen: undefined });
+  assert.deepEqual(behaviours('contact'), { contoso_due: 'TimeZoneIndependent', contoso_seen: undefined });
+  assert.deepEqual([byName('account').searchEnabled, byName('account').changeTrackingEnabled, byName('account').duplicateDetectionEnabled], [true, true, true]);
+  assert.deepEqual([byName('contact').searchEnabled, byName('contact').changeTrackingEnabled, byName('contact').duplicateDetectionEnabled], [undefined, undefined, undefined], 'an off flag is left out: turning one off is never asked for');
+  assert.equal(result.spec.minimumPluginVersion, '2.21.0');
+});
+
+test('--include-capabilities on: a read that gives no answer leaves its facts out and says which table and why; a table with no Date and Time column gets no date read', async (t) => {
+  const reads = capabilityReads(() => ({ status: 503, body: {} }), (table) => (table === 'account' ? { status: 503, body: {} } : flagsBody(true, false, false)));
+  const { result, calls, warnings } = await download(t, { attributes: DATED, capabilityReads: reads, includeCapabilities: true });
+  const account = result.spec.entities.find((e) => e.schemaName === 'account');
+  assert.deepEqual(account.columns.filter((c) => c.type === 'DateTime').map((c) => c.dateTimeBehavior), [undefined, undefined]);
+  assert.equal(account.duplicateDetectionEnabled, undefined);
+  assert.equal(result.spec.entities.find((e) => e.schemaName === 'contact').duplicateDetectionEnabled, true);
+  const warning = warnings.find((w) => w.includes('--include-capabilities could not read'));
+  assert.match(warning, /account \(Date and Time behaviours: HTTP 503; table flags: the read gave no answer\), contact \(Date and Time behaviours: HTTP 503\)/);
+  assert.equal(capabilityCalls(calls).filter((c) => c.startsWith('dates')).length, 2);
+  const plain = await download(t, { capabilityReads: capabilityReads(() => assert.fail('no Date and Time column, no date read'), () => flagsBody(false, false, false)), includeCapabilities: true });
+  assert.deepEqual(capabilityCalls(plain.calls), ['flags account', 'flags contact']);
+  assert.equal(plain.result.spec.minimumPluginVersion, '2.13.0');
+});
+
+test('--include-capabilities on: an answered read that leaves a Date and Time column or a table flag unstated names it in the warning, with no extra read', async (t) => {
+  const capabilityWarning = (warnings) => warnings.find((w) => w.includes('--include-capabilities could not read'));
+  // account: the typed list omits contoso_seen and states no behaviour for contoso_due; its flags answer states nothing.
+  // contact: every column and flag is stated (UserLocal and off flags are the quiet defaults).
+  const reads = capabilityReads(
+    (table) => (table === 'account'
+      ? { status: 200, body: { value: [{ LogicalName: 'contoso_due', DateTimeBehavior: null, CanChangeDateTimeBehavior: { Value: true } }] } }
+      : dateRows([['contoso_due', 'UserLocal'], ['contoso_seen', 'UserLocal']])),
+    (table) => (table === 'account' ? { status: 200, body: {} } : flagsBody(false, false, false)));
+  const { result, calls, warnings } = await download(t, { attributes: DATED, capabilityReads: reads, includeCapabilities: true });
+  assert.deepEqual(capabilityCalls(calls), ['dates account', 'dates contact', 'flags account', 'flags contact'], 'one date read and one flags read per table');
+  const account = result.spec.entities.find((e) => e.schemaName === 'account');
+  assert.deepEqual(account.columns.filter((c) => c.type === 'DateTime').map((c) => c.dateTimeBehavior), [undefined, undefined]);
+  assert.deepEqual([account.searchEnabled, account.changeTrackingEnabled, account.duplicateDetectionEnabled], [undefined, undefined, undefined]);
+  const warning = capabilityWarning(warnings);
+  assert.ok(warning, 'an unstated capability is reported, not taken as the default');
+  assert.match(warning, /account \([^)]*contoso_due[^)]*\)/);
+  assert.match(warning, /account \([^)]*contoso_seen[^)]*\)/);
+  assert.match(warning, /account \([^)]*table flags[^)]*duplicateDetectionEnabled[^)]*\)/);
+  assert.doesNotMatch(warning, /contact \(/, 'stated defaults stay quiet');
+
+  // A flags answer that states only some flags keeps the ones it states and names the rest.
+  const partial = await download(t, {
+    capabilityReads: capabilityReads(() => assert.fail('no Date and Time column, no date read'),
+      () => ({ status: 200, body: { IsDuplicateDetectionEnabled: { Value: true }, ChangeTrackingEnabled: 'yes' } })),
+    includeCapabilities: true,
+  });
+  assert.equal(partial.result.spec.entities.find((e) => e.schemaName === 'account').duplicateDetectionEnabled, true);
+  assert.match(capabilityWarning(partial.warnings), /account \(table flags: the answer does not state changeTrackingEnabled, searchEnabled\)/);
+
+  // Every column and flag stated: no warning at all.
+  const quiet = await download(t, { attributes: DATED, capabilityReads: capabilityReads(() => dateRows([['contoso_due', 'DateOnly'], ['contoso_seen', 'UserLocal']]), () => flagsBody(false, false, false)), includeCapabilities: true });
+  assert.equal(capabilityWarning(quiet.warnings), undefined);
+});
+
+test('a downloaded secured column asks for 2.21.0 without the flag, and a higher floor on disk is kept', async (t) => {
+  const secured = [{ logicalName: 'contoso_salary', displayName: 'Salary', attributeType: 'Money', isCustomAttribute: true, isSecured: true }];
+  const { result } = await download(t, { attributes: secured });
+  assert.equal(result.spec.entities.find((e) => e.schemaName === 'account').columns.find((c) => c.schemaName === 'contoso_salary').isSecured, true);
+  assert.equal(result.spec.minimumPluginVersion, '2.21.0');
+  const kept = await download(t, { attributes: secured }, '2.24.0');
+  assert.equal(kept.result.spec.minimumPluginVersion, '2.24.0');
+});
+
+// app.theme (Preview). lib/app-theme.js downloadAppTheme (its reads are pinned in app-theme*.test.js) is replaced by an
+// answer; what is pinned is where runDownload asks for it, and what it writes, refuses or exports with that answer.
+const appTheme = require('../lib/app-theme.js');
+const OWN_LOGO = 'contoso_/images/logo.svg';
+const themeAnswer = (t, answer) => {
+  const asked = [];
+  t.mock.method(appTheme, 'downloadAppTheme', async (ctx) => { asked.push(ctx); return answer; });
+  return asked;
+};
+const captured = (theme, logo) => ({ status: 'captured', theme, pendingPublish: false, ...(logo ? { logo: { webResourceName: logo, webResourceType: 11 } } : {}) });
+const withLogoRow = (name, row) => (sdk) => ({ ...sdk, queryRecords: async (set, opts = {}) => (set === 'webresource' && String(opts.filter || '').includes(name) ? (row ? [row] : []) : sdk.queryRecords(set, opts)) });
+const filesIn = (directory) => fs.readdirSync(directory, { recursive: true });
+
+test('app.theme: no --include-capabilities, no theme read and no field; the flag reads it once and writes it with the 2.21.0 floor', async (t) => {
+  const asked = themeAnswer(t, captured({ basePaletteColor: '#0f6cbd' }));
+  const plain = await download(t, { captureTheme: undefined });
+  assert.equal(asked.length, 0);
+  assert.equal(plain.result.spec.app.theme, undefined);
+  assert.equal(plain.result.spec.minimumPluginVersion, '2.13.0');
+  const flagged = await download(t, { captureTheme: undefined, includeCapabilities: true, capabilityReads: capabilityReads(() => dateRows([]), () => flagsBody(false, false, false)) });
+  assert.equal(asked.length, 1);
+  assert.equal(asked[0].appId, APP);
+  assert.deepEqual(flagged.result.spec.app.theme, { basePaletteColor: '#0f6cbd' });
+  assert.equal(flagged.result.spec.minimumPluginVersion, '2.21.0');
+});
+
+test('app.theme: a theme that cannot be stated exactly refuses a strict download before anything is written', async (t) => {
+  themeAnswer(t, { status: 'refused', code: 'APP_THEME_UNREPRESENTABLE' });
+  const { result, directory } = await download(t, { captureTheme: true, page: true, expectRefusal: true });
+  assert.equal(result.code, 'APP_THEME_UNREPRESENTABLE');
+  assert.match(result.error, /--allow-lossy-download/);
+  assert.deepEqual(filesIn(directory), [], 'no page, no spec, nothing');
+});
+
+test('app.theme: --allow-lossy-download leaves the field out, names the loss, and the rest of the spec is written', async (t) => {
+  themeAnswer(t, { status: 'refused', code: 'APP_THEME_READ_INCOMPLETE' });
+  const { result, warnings } = await download(t, { captureTheme: true, allowLossy: true });
+  assert.equal(result.spec.app.theme, undefined);
+  assert.ok(warnings.some((w) => /app\.theme was LEFT OUT \(APP_THEME_READ_INCOMPLETE\)/.test(w)), warnings.join(''));
+  assert.equal(result.spec.minimumPluginVersion, '2.13.0', 'no theme, no theme floor');
+});
+
+test('app.theme: a removal pending its publish is written as null and said to be unpublished', async (t) => {
+  themeAnswer(t, { status: 'captured', theme: null, pendingPublish: true });
+  const { result, warnings } = await download(t, { captureTheme: true });
+  assert.equal(result.spec.app.theme, null);
+  assert.ok(warnings.some((w) => /SAVED theme, which is not published yet: the removal/.test(w)));
+});
+
+test('app.theme: this publisher\'s logo is exported as an external image, which a teardown keeps', async (t) => {
+  themeAnswer(t, captured({ logo: { webResourceName: OWN_LOGO } }, OWN_LOGO));
+  const { result } = await download(t, { captureTheme: true, wrapSdk: withLogoRow(OWN_LOGO, { name: OWN_LOGO, webresourcetype: 11, content: 'PHN2Zz4=', ismanaged: false }) });
+  assert.deepEqual(result.spec.app.theme, { logo: { webResourceName: OWN_LOGO } });
+  const logo = (result.spec.webResources || []).find((wr) => wr.name === OWN_LOGO);
+  assert.equal(logo && logo.external, true, JSON.stringify(result.spec.webResources));
+  assert.equal(logo.contentBase64, 'PHN2Zz4=');
+});
+
+test('app.theme: a logo of this publisher that cannot be exported refuses a strict download, and is left out with the theme when lossy', async (t) => {
+  themeAnswer(t, captured({ logo: { webResourceName: OWN_LOGO } }, OWN_LOGO));
+  const strict = await download(t, { captureTheme: true, expectRefusal: true, wrapSdk: withLogoRow(OWN_LOGO, null) });
+  assert.equal(strict.result.code, 'APP_THEME_LOGO_UNEXPORTABLE');
+  assert.equal(fs.existsSync(path.join(strict.directory, 'app-spec.json')), false);
+  const lossy = await download(t, { captureTheme: true, allowLossy: true, wrapSdk: withLogoRow(OWN_LOGO, null) });
+  assert.equal(lossy.result.spec.app.theme, undefined);
+  assert.ok(!(lossy.result.spec.webResources || []).some((wr) => wr.name === OWN_LOGO));
+  assert.ok(lossy.warnings.some((w) => /APP_THEME_LOGO_UNEXPORTABLE/.test(w)));
+});
+
+test('app.theme: a strict download whose logo of this publisher cannot be exported refuses before any page is written', async (t) => {
+  themeAnswer(t, captured({ logo: { webResourceName: OWN_LOGO } }, OWN_LOGO));
+  const { result, directory } = await download(t, { captureTheme: true, page: true, expectRefusal: true, wrapSdk: withLogoRow(OWN_LOGO, null) });
+  assert.equal(result.code, 'APP_THEME_LOGO_UNEXPORTABLE');
+  assert.deepEqual(filesIn(directory), [], 'no page, no spec, nothing');
+});
+
+test('app.theme: the logo is read once, before the pages, and that read is what is exported', async (t) => {
+  themeAnswer(t, captured({ logo: { webResourceName: OWN_LOGO } }, OWN_LOGO));
+  const reads = [];
+  const row = { name: OWN_LOGO, webresourcetype: 11, content: 'PHN2Zz4=', ismanaged: false };
+  const wrapSdk = (sdk, directory) => {
+    const inner = withLogoRow(OWN_LOGO, row)(sdk);
+    return { ...inner, queryRecords: async (set, opts = {}) => { if (set === 'webresource' && String(opts.filter || '').includes(OWN_LOGO)) reads.push(filesIn(directory).length); return inner.queryRecords(set, opts); } };
+  };
+  const { result } = await download(t, { captureTheme: true, page: true, wrapSdk });
+  assert.deepEqual(reads, [0], 'one logo read, made while the output folder was still empty');
+  assert.equal(result.spec.webResources.find((wr) => wr.name === OWN_LOGO).contentBase64, 'PHN2Zz4=');
+});
+
+test('app.theme: another publisher\'s logo stays a bare reference that must exist where the spec is built', async (t) => {
+  const foreign = 'msdyn_/images/logo.svg';
+  themeAnswer(t, captured({ logo: { webResourceName: foreign } }, foreign));
+  const { result, warnings } = await download(t, { captureTheme: true });
+  assert.deepEqual(result.spec.app.theme, { logo: { webResourceName: foreign } });
+  assert.ok(!(result.spec.webResources || []).some((wr) => wr.name === foreign));
+  assert.ok(warnings.some((w) => /referenced, not exported/.test(w)));
+});
+
+// A logo that is not exported is kept as a reference only when it is KNOWN to be another publisher's or managed. When the
+// app's publisher cannot be read, a missing or empty image is neither: the strict download refuses it before writing.
+const publisherUnread = (row) => (sdk) => {
+  const inner = withLogoRow(OWN_LOGO, row)(sdk);
+  return { ...inner, queryRecords: async (set, opts = {}) => {
+    if (set === 'solutioncomponent') throw new Error('solution membership unreadable');
+    return inner.queryRecords(set, opts);
+  } };
+};
+const LOGO_ROW = { name: OWN_LOGO, webresourcetype: 11, content: 'PHN2Zz4=', ismanaged: false };
+for (const [label, row] of [
+  ['an empty unmanaged image', { ...LOGO_ROW, content: '' }],
+  ['an image gone before the export', null],
+  ['a readable image whose management is not stated', { ...LOGO_ROW, ismanaged: undefined }],
+]) {
+  test(`app.theme: publisher unknown, ${label}: a strict download refuses before anything is written, and leaves an earlier spec as it was`, async (t) => {
+    themeAnswer(t, captured({ logo: { webResourceName: OWN_LOGO } }, OWN_LOGO));
+    const { result, directory, warnings } = await download(t, { captureTheme: true, page: true, expectRefusal: true, wrapSdk: publisherUnread(row) }, '2.13.0');
+    assert.equal(result.code, 'APP_THEME_LOGO_UNEXPORTABLE', JSON.stringify(result));
+    assert.match(result.error, /--allow-lossy-download/);
+    assert.deepEqual(filesIn(directory), ['app-spec.json'], 'no page, no new file');
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(directory, 'app-spec.json'), 'utf8')), { minimumPluginVersion: '2.13.0' });
+    assert.ok(!warnings.some((w) => /referenced, not exported/.test(w)), 'never called another publisher\'s or managed');
+  });
+  test(`app.theme: publisher unknown, ${label}: --allow-lossy-download leaves the theme out and names the loss`, async (t) => {
+    themeAnswer(t, captured({ logo: { webResourceName: OWN_LOGO } }, OWN_LOGO));
+    const { result, warnings } = await download(t, { captureTheme: true, page: true, allowLossy: true, wrapSdk: publisherUnread(row) });
+    assert.equal(result.spec.app.theme, undefined);
+    assert.ok(!(result.spec.webResources || []).some((wr) => wr.name === OWN_LOGO));
+    assert.ok(warnings.some((w) => /app\.theme was LEFT OUT \(APP_THEME_LOGO_UNEXPORTABLE\)/.test(w)), warnings.join(''));
+  });
+}
+
+test('app.theme: publisher unknown, a readable managed logo stays a reference, and is said to be managed', async (t) => {
+  themeAnswer(t, captured({ logo: { webResourceName: OWN_LOGO } }, OWN_LOGO));
+  const { result, warnings } = await download(t, { captureTheme: true, page: true, wrapSdk: publisherUnread({ ...LOGO_ROW, ismanaged: true }) });
+  assert.deepEqual(result.spec.app.theme, { logo: { webResourceName: OWN_LOGO } });
+  assert.ok(!(result.spec.webResources || []).some((wr) => wr.name === OWN_LOGO));
+  assert.ok(warnings.some((w) => /header logo '[^']+' is managed, so it is referenced, not exported/.test(w)), warnings.join(''));
+});
+
+test('app.theme: publisher unknown, a readable unmanaged logo is refused, as it was', async (t) => {
+  themeAnswer(t, captured({ logo: { webResourceName: OWN_LOGO } }, OWN_LOGO));
+  const { result, directory } = await download(t, { captureTheme: true, page: true, expectRefusal: true, wrapSdk: publisherUnread(LOGO_ROW) });
+  assert.equal(result.code, 'APP_THEME_LOGO_UNEXPORTABLE');
+  assert.deepEqual(filesIn(directory), []);
+});
+
+test('app.theme: publisher known, an empty logo of this publisher is refused, and a managed one with content stays a reference', async (t) => {
+  themeAnswer(t, captured({ logo: { webResourceName: OWN_LOGO } }, OWN_LOGO));
+  const empty = await download(t, { captureTheme: true, page: true, expectRefusal: true, wrapSdk: withLogoRow(OWN_LOGO, { ...LOGO_ROW, content: '' }) });
+  assert.equal(empty.result.code, 'APP_THEME_LOGO_UNEXPORTABLE');
+  assert.deepEqual(filesIn(empty.directory), []);
+  const managed = await download(t, { captureTheme: true, wrapSdk: withLogoRow(OWN_LOGO, { ...LOGO_ROW, ismanaged: true }) });
+  assert.deepEqual(managed.result.spec.app.theme, { logo: { webResourceName: OWN_LOGO } });
+  assert.ok(!(managed.result.spec.webResources || []).some((wr) => wr.name === OWN_LOGO));
+  assert.ok(managed.warnings.some((w) => /is managed, so it is referenced, not exported/.test(w)), managed.warnings.join(''));
+});
+
+test('app.theme: a spec that keeps app.theme on re-download keeps a higher floor its author set', async (t) => {
+  themeAnswer(t, captured({ basePaletteColor: '#0f6cbd' }));
+  const { result } = await download(t, { captureTheme: true }, '2.30.0');
+  assert.equal(result.spec.minimumPluginVersion, '2.30.0');
 });

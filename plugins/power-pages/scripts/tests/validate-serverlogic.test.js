@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
+const vm = require('node:vm');
 
 const { createTempProject, writeProjectFile } = require('./test-utils');
 
@@ -266,4 +267,281 @@ test('split startswith( workaround passes validation', (t) => {
 
   const result = runValidator(projectRoot);
   assert.equal(result.status, 0, result.stderr);
+});
+
+test('with-pattern rejects mixed-case substrings in raw source', (t) => {
+  const projectRoot = createTempProject(t);
+  setupProject(projectRoot);
+  writeServerLogic(projectRoot, 'test-endpoint', VALID_JS.replace(
+    '"test-endpoint GET called"', '"STARTSWITH(name)"'
+  ), VALID_YML);
+  const result = runValidator(projectRoot);
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /contains the substring 'with\('/);
+});
+
+test('runtime function pattern is rejected in callbacks and raw non-code text', (t) => {
+  for (const source of [
+    'const rows = [1].map(function (r) { return r; });',
+    'const rows = [1].sort(function(a, b) { return a - b; });',
+    'const callback = function\n(r) { return r; };',
+    'const factory = Function ("return 1");',
+    'const text = "FUNCTION(";',
+    '// callback: function (r)',
+    'const text = "myFunction(";',
+  ]) {
+    const projectRoot = createTempProject(t);
+    setupProject(projectRoot);
+    writeServerLogic(projectRoot, 'test-endpoint', VALID_JS.replace(
+      '        return JSON.stringify',
+      `        ${source}\n        return JSON.stringify`
+    ), VALID_YML);
+
+    const result = runValidator(projectRoot);
+    assert.equal(result.status, 2, source);
+    assert.match(result.stderr, /prohibited pattern.*Function\\s\*\\\(/);
+    assert.match(result.stderr, /line\(s\) 4/);
+    assert.match(result.stderr, /arrow functions/);
+  }
+});
+
+test('arrow callbacks and named nested helpers pass validation', (t) => {
+  const projectRoot = createTempProject(t);
+  setupProject(projectRoot);
+  writeServerLogic(projectRoot, 'test-endpoint', VALID_JS.replace(
+    '        return JSON.stringify',
+    '        function double(r) { return r * 2; }\n' +
+    '        const rows = [2, 1].map(r => double(r)).sort((a, b) => a - b);\n' +
+    '        return JSON.stringify'
+  ), VALID_YML);
+  const result = runValidator(projectRoot);
+  assert.equal(result.status, 0, result.stderr);
+});
+
+const SKILL_DIR = path.join(__dirname, '../../skills/add-server-logic');
+const frontendReference = fs.readFileSync(path.join(
+  SKILL_DIR, 'references/frontend-integration-reference.md'
+), 'utf8');
+const skill = fs.readFileSync(path.join(SKILL_DIR, 'SKILL.md'), 'utf8');
+
+function exampleAfter(document, heading) {
+  const start = document.indexOf(heading);
+  assert.notEqual(start, -1, `Missing heading: ${heading}`);
+  // Git can check Markdown out with CRLF on Windows; accept either newline at both fences.
+  const example = document.slice(start).match(/```javascript\r?\n([\s\S]*?)\r?\n```/);
+  assert.ok(example, `Missing example: ${heading}`);
+  return example[1];
+}
+
+function runExample(source, method, dataverse, context = {}) {
+  const errors = [];
+  const sandbox = {
+    Server: {
+      Context: context,
+      Connector: { Dataverse: dataverse },
+      Logger: { Log() {}, Error(message) { errors.push(message); } },
+    },
+  };
+  vm.createContext(sandbox);
+  vm.runInContext(source, sandbox);
+  const payload = JSON.parse(vm.runInContext(`${method}()`, sandbox));
+  return { payload, errors };
+}
+
+// The connector returns serialized HTTP metadata, with another JSON string in Body:
+//   '{"StatusCode":200,"Body":"{\"value\":[...]}","Headers":{...}}'
+// Writes can have an empty Body; malformed read bodies must reach the handler's catch.
+function connectorResponse(status, body, headers = {}) {
+  return JSON.stringify({
+    StatusCode: status,
+    Body: body,
+    IsSuccessStatusCode: status >= 200 && status < 300,
+    Headers: headers,
+  });
+}
+
+test('documentation examples execute with LF and CRLF line endings', () => {
+  for (const newline of ['\n', '\r\n']) {
+    const document = frontendReference.replace(/\r\n/g, '\n').replace(/\n/g, newline);
+    const source = exampleAfter(document, '**Approach C');
+    const { payload, errors } = runExample(source, 'get', {
+      RetrieveMultipleRecords: () => connectorResponse(200, '{"value":[]}'),
+    });
+    assert.equal(payload.status, 'success');
+    assert.deepEqual(payload.contacts, []);
+    assert.deepEqual(errors, []);
+  }
+});
+
+test('normalized read example returns rows from a serialized connector response', () => {
+  const source = exampleAfter(frontendReference, '**Approach C');
+  const { payload, errors } = runExample(source, 'get', {
+    RetrieveMultipleRecords: (entitySet, options) => {
+      assert.equal(entitySet, 'contacts');
+      assert.equal(options, '$select=contactid,firstname,lastname,emailaddress1,telephone1');
+      return connectorResponse(200, JSON.stringify({
+        value: [
+          { contactid: '1', firstname: 'Alex' },
+          { contactid: '2', firstname: 'Sam' },
+          { contactid: '3', firstname: 'Taylor' },
+        ],
+      }));
+    },
+  });
+  assert.equal(payload.status, 'success');
+  assert.deepEqual(payload.contacts.map(row => row.id), ['1', '2', '3']);
+  assert.deepEqual(errors, []);
+});
+
+test('normalized read example logs HTTP and malformed payload failures', () => {
+  const source = exampleAfter(frontendReference, '**Approach C');
+  for (const response of [
+    connectorResponse(403, '{"error":{"message":"Forbidden"}}'),
+    connectorResponse(200, 'not-json'),
+    connectorResponse(200, ''),
+    connectorResponse(200, '{}'),
+    'not-json',
+  ]) {
+    const { payload, errors } = runExample(source, 'get', {
+      RetrieveMultipleRecords: () => response,
+    });
+    assert.equal(payload.status, 'error', response);
+    assert.equal(errors.length, 1, response);
+  }
+});
+
+test('create example extracts a GUID from the connector header without parsing an empty body', () => {
+  const source = exampleAfter(frontendReference, 'For writes, return the new id');
+  const id = '11111111-2222-3333-4444-555555555555';
+  for (const headerName of ['OData-EntityId', 'odata-entityid']) {
+    const { payload, errors } = runExample(source, 'post', {
+      CreateRecord: () => connectorResponse(204, '', {
+        [headerName]: `https://contoso.crm.dynamics.com/api/data/v9.2/contacts(${id})`,
+      }),
+    }, { Body: '{"firstname":"Alex"}' });
+    assert.equal(payload.status, 'success');
+    assert.equal(payload.id, id);
+    assert.deepEqual(errors, []);
+  }
+});
+
+test('create example logs failed writes and missing or malformed record URLs', () => {
+  const source = exampleAfter(frontendReference, 'For writes, return the new id');
+  for (const response of [
+    connectorResponse(403, ''),
+    connectorResponse(204, ''),
+    connectorResponse(204, '', { 'OData-EntityId': 'contacts(not-a-guid)' }),
+  ]) {
+    const { payload, errors } = runExample(source, 'post', {
+      CreateRecord: () => response,
+    }, { Body: '{"firstname":"Alex"}' });
+    assert.equal(payload.status, 'error', response);
+    assert.equal(errors.length, 1, response);
+  }
+});
+
+test('validate-and-execute example reads the record body before checking a transition', () => {
+  const source = exampleAfter(skill, '#### Validate-and-Execute Template');
+  for (const updateStatus of [204, 403]) {
+    const writes = [];
+    const { payload, errors } = runExample(source, 'post', {
+      RetrieveRecord: (table, id, options) => {
+        assert.equal(table, '<table-name>');
+        assert.equal(id, 'record-id');
+        assert.equal(options, '$select=<status-field>');
+        return connectorResponse(200, '{"<status-field>":"Draft"}');
+      },
+      UpdateRecord: (table, id, body) => {
+        writes.push({ table, id, body: JSON.parse(body) });
+        return connectorResponse(updateStatus, '');
+      },
+    }, { Body: '{"entityId":"record-id","targetStatus":"Submitted"}' });
+    assert.deepEqual(writes, [{
+      table: '<table-name>', id: 'record-id', body: { '<status-field>': 'Submitted' },
+    }]);
+    assert.equal(payload.status, updateStatus === 204 ? 'success' : 'error');
+    assert.equal(errors.length, updateStatus === 204 ? 0 : 1);
+  }
+});
+
+test('wrapped passthrough server and client examples preserve and parse the connector string', async () => {
+  const section = frontendReference.slice(frontendReference.indexOf('**Approach B'));
+  const server = exampleAfter(section, 'Server logic:');
+  const client = exampleAfter(section, 'Client -');
+  for (const status of [200, 403]) {
+    const { payload, errors } = runExample(server, 'get', {
+      RetrieveMultipleRecords: () => connectorResponse(status, '{"value":[{"contactid":"1"}]}'),
+    }, { QueryParameters: { entitySetName: 'contacts' } });
+    const result = vm.runInNewContext(`(async () => { ${client}\nreturn records; })()`, {
+      powerPagesFetch: async () => ({ success: true, data: JSON.stringify(payload) }),
+    });
+    if (status === 200) {
+      assert.equal(typeof payload.data, 'string');
+      assert.deepEqual(JSON.parse(JSON.stringify(await result)), [{ contactid: '1' }]);
+      assert.deepEqual(errors, []);
+    } else {
+      await assert.rejects(result, /Dataverse read failed/);
+      assert.equal(errors.length, 1);
+    }
+  }
+});
+
+test('custom API templates parse connector status before reporting success', () => {
+  const section = skill.slice(skill.indexOf('#### Custom Action Wrapping Template'));
+  for (const [heading, method] of [
+    ['**Unbound action:', 'post'],
+    ['**Entity-bound action:', 'post'],
+    ['**Unbound function (read-only, GET):', 'get'],
+  ]) {
+    const source = exampleAfter(section, heading);
+    for (const status of [204, 403]) {
+      const response = connectorResponse(status, '');
+      const { payload, errors } = runExample(source, method, {
+        InvokeCustomApi: () => response,
+      }, { Body: '{"entityId":"record-id"}', QueryParameters: { param1: 'value' } });
+      assert.equal(payload.status, status === 204 ? 'success' : 'error');
+      if (status === 204) assert.equal(payload.data, response);
+      assert.equal(errors.length, status === 204 ? 0 : 1);
+    }
+  }
+});
+
+test('server-side guidance examples pass the local validator', (t) => {
+  const customSection = skill.slice(skill.indexOf('#### Custom Action Wrapping Template'));
+  for (const source of [
+    exampleAfter(frontendReference, '**Approach A'),
+    exampleAfter(frontendReference, '**Approach B'),
+    exampleAfter(frontendReference, '**Approach C'),
+    exampleAfter(frontendReference, 'For writes, return the new id'),
+    exampleAfter(skill, '#### Validate-and-Execute Template'),
+    exampleAfter(customSection, '**Unbound action:'),
+    exampleAfter(customSection, '**Entity-bound action:'),
+    exampleAfter(customSection, '**Unbound function (read-only, GET):'),
+  ]) {
+    const projectRoot = createTempProject(t);
+    setupProject(projectRoot);
+    writeServerLogic(projectRoot, 'test-endpoint', source, VALID_YML);
+    const result = runValidator(projectRoot);
+    assert.equal(result.status, 0, result.stderr);
+  }
+});
+
+test('troubleshooting example captures inline logs or a trace identifier', async () => {
+  const source = exampleAfter(skill, 'If `browser_network_requests`');
+  for (const responseHeaders of [
+    { 'x-ms-user-trace': Buffer.from('{"logs":[]}').toString('base64') },
+    { 'x-ms-user-trace-id': 'example-trace-id' },
+    {},
+  ]) {
+    const result = await vm.runInNewContext(`(async () => { ${source} })()`, {
+      fetch: async () => ({
+        status: 400,
+        headers: new Headers(responseHeaders),
+        text: async () => '{"success":false}',
+      }),
+    });
+    assert.equal(result.status, 400);
+    assert.equal(result.trace, responseHeaders['x-ms-user-trace'] ?? null);
+    assert.equal(result.traceId, responseHeaders['x-ms-user-trace-id'] ?? null);
+  }
 });

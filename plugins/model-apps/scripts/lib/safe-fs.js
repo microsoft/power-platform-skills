@@ -244,6 +244,47 @@ function assertPlainFileTarget(filePath, opts) {
   return resolved;
 }
 
+// Inspect only, for a caller that must know BEFORE other work whether writeFileSafe(filePath) would be refused: it makes the same
+// refusals writeFileSafe makes before it writes (a folder that is a link, a target that is a link, a folder, a hard link or read-only),
+// and one more that writeFileSafe only meets as a failed write: a folder in which no new file can be made, so that its temporary
+// sibling cannot be created. That is found by creating, then removing, an empty sibling of the same shape: a look at the permission
+// bits cannot answer it (on Windows the folder's access list decides, and an access check for W_OK reads only the read-only attribute).
+// A probe that cannot then be removed is refused too (`probe-not-removed`), naming it.
+// Like every look beforehand, it says nothing about the moment of the write: a full disk, a lock taken later or a crash still fail
+// the write itself.
+function assertFileReplaceable(filePath, opts) {
+  if (typeof filePath !== 'string' || !filePath.trim()) unsafe('refusing to write: no path was given', 'uninspectable');
+  const fsImpl = (opts && opts.fs) || fs;
+  const resolved = path.resolve(filePath);
+  const realDir = assertSafeOutputDir(path.dirname(resolved), { fs: fsImpl });
+  const target = path.join(realDir, path.basename(resolved));
+  assertWritableTarget(target, fsImpl);
+  const probe = siblingTempName(realDir, path.basename(resolved));
+  let fd;
+  try {
+    fd = fsImpl.openSync(probe, 'wx');
+  } catch (err) {
+    const e = new Error(`refusing to write ${target}: a new file cannot be made in its folder ${realDir} (${(err && err.code) || err}), and the file is written by making a new one there`);
+    e.code = 'IO_ERROR';
+    e.reason = 'folder-not-writable';
+    throw e;
+  }
+  // The probe is empty and named for this process and call only (made by an exclusive create), so removing it touches nothing of
+  // anyone else's. A lock on it is waited out (unlinkWithRetry, on Windows); one that outlasts that wait does not let the look
+  // pass: a look that leaves a file of its own behind has not answered cleanly, and stopping here, before anything is replaced,
+  // is the one point where the file can be named and nothing else has changed.
+  try { fsImpl.closeSync(fd); } catch { /* the descriptor is gone either way; the removal below says whether the file is */ }
+  try {
+    unlinkWithRetry(fsImpl, probe);
+  } catch (err) {
+    const e = new Error(`refusing to write ${target}: ${probe}, an empty file this download made to learn whether its folder takes a new file, could not be removed (${(err && err.code) || err}); it holds nothing of the maker's and can be deleted`, { cause: err });
+    e.code = 'IO_ERROR';
+    e.reason = 'probe-not-removed';
+    throw e;
+  }
+  return target;
+}
+
 function writeFileSafe(filePath, data, opts) {
   if (typeof filePath !== 'string' || !filePath.trim()) unsafe('refusing to write: no path was given', 'uninspectable');
   ({ data, opts } = checkedForTokens(data, opts));
@@ -507,11 +548,43 @@ function removeFileSafe(filePath, opts) {
   return true;
 }
 
+// Whether two names reach the same file — the question a writer asks when its output must never be its input. Spelling cannot answer it: on Windows `source.tsx` and
+// `SOURCE.tsx` are one file, so is its 8.3 short name (`REVIEW~1.TSX`), and a junction or symbolic link to the folder, a hard link, or an input that is itself a link
+// reaches it under a name that shares nothing with the original. So the file system is asked: `stat` (which follows links, as the read and the write will) gives each
+// name's device and file id, read with `bigint` because a Windows file id is 64 bits. A file system that gives no id (0) is answered by the canonical names instead
+// (`realpath.native`, which on Windows returns the long name in its stored case). Either signal saying "same" is enough: refusing a write is the safe side.
+// A name that does not exist is not the other file (a write creates it); a name that cannot be inspected is refused, as everywhere in this module.
+function sameFile(a, b, opts) {
+  const fsImpl = (opts && opts.fs) || fs;
+  const first = path.resolve(a);
+  const second = path.resolve(b);
+  const look = (name) => {
+    try {
+      return fsImpl.statSync(name, { bigint: true });
+    } catch (e) {
+      if (e && (e.code === 'ENOENT' || e.code === 'ENOTDIR')) return null;
+      return unsafe(`refusing to write ${first}: whether it is the same file as ${second} could not be inspected (${(e && e.code) || e})`, 'uninspectable');
+    }
+  };
+  const one = look(first);
+  const other = look(second);
+  if (!one || !other) return false;
+  if (one.ino !== 0n && one.ino === other.ino && one.dev === other.dev) return true;
+  try {
+    return realpathNative(fsImpl, first) === realpathNative(fsImpl, second);
+  } catch (e) {
+    return unsafe(`refusing to write ${first}: whether it is the same file as ${second} could not be inspected (${(e && e.code) || e})`, 'uninspectable');
+  }
+}
+
 module.exports = {
+  sameFile,
   assertSafeOutputDir,
   assertPlainFileTarget,
+  assertFileReplaceable,
   writeFileSafe,
   appendFileSafe,
   removeFileSafe,
   removeTreeWithRetry,
+  unlinkWithRetry,
 };

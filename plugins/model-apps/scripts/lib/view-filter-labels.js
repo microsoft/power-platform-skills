@@ -30,7 +30,9 @@
 
 const { choiceValueMap, labelText, labelAliases, lookupColumnsFor } = require('./app-spec.js');
 const { odataLit } = require('./odata.js');
+const { isChoiceOptionObject } = require('./schema-feature-contract.js');
 const { labelsByLcid, readMetadata } = require('./lookup-labels.js');
+const { isDeclaredView } = require('./view-reconcile.js');
 
 // A value that is already an option VALUE (or any other number) is not a label, so an integer string — or a
 // comma-separated list of them, the form a multi-select's value takes — is never resolved and never read for.
@@ -68,7 +70,7 @@ function declaredLabels(spec, column) {
   const shared = !inline && column && column.globalChoice
     ? (((spec.globalChoices || []).find((g) => g && lc(g.name) === lc(column.globalChoice)) || {}).options || [])
     : [];
-  return (inline || shared).map((o) => labelText(o, spec && spec.languageCode)).filter(Boolean);
+  return (inline || shared).map((o) => labelText(isChoiceOptionObject(o) ? o.label : o, spec && spec.languageCode)).filter(Boolean);
 }
 
 // What the spec says about an attribute of the view's table: a declared column (its App Spec type), the
@@ -624,9 +626,36 @@ function labelLintWarnings(spec, view) {
   return out;
 }
 
+// The views whose filter labels the build resolves, and lint checks. A declared view (lib/view-reconcile.js) can also filter on a table it
+// joins — a join's own `filters`, or a filter whose `relatedEntity` names a join — and such a label is an option of the
+// JOINED table, so each of those groups is read as a view of that table; the view's other filters stay on its own table.
+// Any other view is handed on as it is, so a spec without a declared join reads exactly what it read before.
+function viewsForLabels(spec) {
+  const out = [];
+  for (const v of spec.views || []) {
+    const joins = v && isDeclaredView(v) && Array.isArray(v.linkEntities) ? v.linkEntities.filter((l) => l && typeof l.name === 'string') : [];
+    if (!joins.length) { out.push(v); continue; }
+    const tableOf = new Map(joins.map((l) => [String(l.alias || l.name).toLowerCase(), l.name.toLowerCase()]));
+    const related = new Map();
+    const own = [];
+    for (const f of Array.isArray(v.filters) ? v.filters : []) {
+      const table = f && f.relatedEntity !== undefined ? tableOf.get(String(f.relatedEntity).toLowerCase()) : undefined;
+      if (f && f.relatedEntity !== undefined) {
+        // A relatedEntity that names no join is the view's validation error (compileViewIntent), not a label to read.
+        if (table) related.set(table, [...(related.get(table) || []), f]);
+      } else own.push(f);
+    }
+    out.push(own.length === (v.filters || []).length ? v : { ...v, filters: own });
+    for (const l of joins) if (Array.isArray(l.filters) && l.filters.length) out.push({ name: v.name, entity: l.name.toLowerCase(), filters: l.filters });
+    for (const [table, filters] of related) out.push({ name: v.name, entity: table, filters });
+  }
+  return out;
+}
+
 module.exports = {
   labelUses,
   hasLabelUses,
+  viewsForLabels,
   labelLintWarnings,
   readChoiceAttributes,
   readGlobalChoiceOptions,

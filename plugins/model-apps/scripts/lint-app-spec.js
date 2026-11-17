@@ -20,7 +20,8 @@
 //
 // Exit codes: 0 when there are no errors from either step (warnings alone do not fail, so a CI job
 // can gate on correctness without being blocked by advice), 1 otherwise. `--strict` also fails on
-// warnings, for a pipeline that wants them treated as errors.
+// warnings, for a pipeline that wants them treated as errors — which includes the warning for an unknown key on a view or one of its
+// filters (a misspelled `filters` would otherwise be built without its filter, #799).
 //
 // `--profile` selects validateAppSpec's strictness and DEFAULTS TO `plan`, not `deploy`. The deploy
 // profile requires every generative page to be IMPLEMENTED (`source.kind: 'tsx'` with a codeFile),

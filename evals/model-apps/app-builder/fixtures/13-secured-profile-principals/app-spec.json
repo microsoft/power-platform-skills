@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 2,
+  "minimumPluginVersion": "2.21.0",
+  "solution": { "uniqueName": "ContosoPeopleRecords", "publisherPrefix": "cnt" },
+  "app": { "name": "People Records", "description": "Salary and medical notes visible only to the HR team" },
+  "entities": [
+    { "schemaName": "cnt_employee", "displayName": "Employee", "pluralName": "Employees",
+      "primaryAttribute": { "schemaName": "cnt_name", "displayName": "Name" },
+      "columns": [
+        { "schemaName": "cnt_department", "displayName": "Department", "type": "Text" },
+        { "schemaName": "cnt_salary", "displayName": "Salary", "type": "Money", "isSecured": true },
+        { "schemaName": "cnt_medicalnotes", "displayName": "Medical Notes", "type": "Memo", "isSecured": true }
+      ] }
+  ],
+  "fieldSecurityProfiles": [
+    { "key": "hr", "name": "HR Confidential", "description": "Read and update salary and medical notes",
+      "permissions": [
+        { "table": "cnt_employee", "column": "cnt_salary", "read": true, "update": true },
+        { "table": "cnt_employee", "column": "cnt_medicalnotes", "read": true, "create": true, "update": true }
+      ],
+      "assignTo": { "teams": ["11111111-1111-4111-8111-111111111111"] } },
+    { "key": "payroll", "name": "Payroll Read", "permissions": [{ "table": "cnt_employee", "column": "cnt_salary", "read": true }] }
+  ],
+  "forms": [{ "entity": "cnt_employee", "name": "Information", "layout": "auto" }],
+  "views": [{ "entity": "cnt_employee", "name": "Directory", "columns": ["cnt_name", "cnt_department"] }],
+  "sampleData": { "cnt_employee": [{ "cnt_name": "Avery", "cnt_department": "Sales", "cnt_salary": 50000 }] },
+  "appShell": { "areas": [{ "label": "People", "groups": [{ "label": "Records", "subAreas": [{ "entity": "cnt_employee", "title": "Employees" }] }] }] }
+}

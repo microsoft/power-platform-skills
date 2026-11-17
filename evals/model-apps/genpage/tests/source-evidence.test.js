@@ -363,6 +363,17 @@ export default GeneratedComponent;
   for (const [label, code] of Object.entries(refused)) assert.equal(receiverOk(code), false, label);
 });
 
+// Type arguments are erased before React renders, so `<PageBody<GeneratedComponentProps> {...props} />` hands PageBody the
+// page props exactly as `<PageBody {...props} />` does, and the proof reads it alike. A tag whose type arguments are not
+// names only cannot be read for certain (lib/tsx-structure.js unreadableElements), so a page with one proves nothing.
+test('the boundary wrapper is read through type arguments of names only; a tag the reader cannot read proves nothing', () => {
+  const run = helper('client', 'client') + body(DESTRUCTURED);
+  assert.equal(receiverOk(run + wrapper('<PageErrorBoundary>\n    <PageBody<GeneratedComponentProps> {...props} />\n  </PageErrorBoundary>')), true, 'PageBody with a type argument');
+  assert.equal(receiverOk(run + wrapper('<PageErrorBoundary>\n    <PageBody<keyof GeneratedComponentProps> {...props} />\n  </PageErrorBoundary>')), false, 'PageBody with a type operator in its type argument');
+  assert.equal(receiverOk(run + wrapper(CANONICAL) + 'const Note = () => <Text<keyof Row>>x</Text>;\n'), false, 'an unreadable tag elsewhere in the page');
+  assert.equal(receiverOk(run + wrapper(CANONICAL) + 'const Note = () => <Text<Row>>x</Text>;\n'), true, 'a readable generic tag elsewhere in the page');
+});
+
 // ---------- the boundary wrapper's proof on a whole page (fixture 27) ----------
 // Only the documented boundary class lets PageBody's props be the page props: a PageErrorBoundary function, or a class of
 // that name changed after it was copied, can hand PageBody another object — so neither proves a receiver, and the Custom API

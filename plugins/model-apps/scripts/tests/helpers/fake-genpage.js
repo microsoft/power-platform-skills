@@ -30,6 +30,8 @@
 //                   real one the page table's component type `pageType` (default 10372); `solutionTargetError`: an Error it throws instead
 //   solutionAdd     (pageId, target) => void | throw: what `addToSolution` does; default nothing. Every page it adds is in `backend.inSolution` ({ pageId, solution, componentType })
 //   left            the folders `dispose` answers it could not remove, as the real backend's `{ left }` (default none)
+//   appUniqueNames  { [appId]: name | null }: what `appUniqueName` answers (default 'contoso_app'; null: the app is not there). The read names the pages lease an
+//                   edit outside a build takes (lib/standalone-page-lease.js); it is no page operation, so it is kept out of `calls` and listed in `appNameReads`
 //   `describe` answers from `pages`: a page with `raw: true` is not editable and its tables are not known (`null`)
 const DEFAULT_SOURCE = 'export default function Page() { return null; }\n';
 const { sha256 } = require('../../lib/hash.js');
@@ -144,6 +146,14 @@ function fakeGenpage(options = {}) {
         fileRows: page.fileRows === undefined ? 4 : page.fileRows,
         conversationMessages: page.conversation.length,
       };
+    },
+
+    appNameReads: [],
+    async appUniqueName(appId) {
+      backend.appNameReads.push(appId);
+      const names = options.appUniqueNames;
+      if (names && Object.prototype.hasOwnProperty.call(names, appId)) return names[appId];
+      return 'contoso_app';
     },
 
     async baseLanguage() {

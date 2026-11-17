@@ -140,4 +140,11 @@ function readOptional(dir, fileName) {
   return fs.readFileSync(full, 'utf8');
 }
 
-module.exports = { loadFixtures, listTsxFiles, readOptional, ENTITY_CREATION_LOG, LEGACY_ENTITY_CREATION_LOG };
+// One contract-2 fixture read from its own folder, with the same path and JSON checks as the corpus. For an evidence folder that
+// is selected by name and kept out of the default corpus (a folder name with no eval id, which loadFixtures passes over).
+function loadFixtureDir(dir) {
+  const dirName = path.basename(dir);
+  return { id: null, dirName, dir, files: listTsxFiles(dir), ...fixtureEvidence(dir, dirName, {}) };
+}
+
+module.exports = { loadFixtures, loadFixtureDir, listTsxFiles, readOptional, ENTITY_CREATION_LOG, LEGACY_ENTITY_CREATION_LOG };

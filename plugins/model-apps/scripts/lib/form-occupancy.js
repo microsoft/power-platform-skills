@@ -57,4 +57,54 @@ function strandedRows(rows, rowIndex, span = 1) {
   return stranded;
 }
 
-module.exports = { rowOccupancy, fitsGrid, strandedRows };
+// Column-slot occupancy: WHERE each cell of a section sits, not just how much of each row is used.
+// A section lays its cells out as a table does: a cell takes the first free column of its row at or
+// after the cell before it, a cell spanning rows reserves its columns in the rows beneath, and a later
+// row's cells flow AROUND those reservations. In a 2-column section:
+//   rows: [a rowspan=2, b] / [c]
+//   grid: row 0 = a b, row 1 = a c     (c lands in column 1: column 0 is a's reservation)
+// rowOccupancy only counts widths, so it cannot say that c sits beside a rather than under it; a
+// declared layout that keeps a maker's cells fixed while it repacks its own needs exactly that.
+//
+// grid[r][c] is the index into `placed` of the cell covering that slot, or -1 when the slot is free.
+// A cell that does not fit where the flow puts it (it would run past the grid, or onto a slot a span
+// already covers) is listed in `overflow` instead of being placed; such a section renders
+// unpredictably, so callers treat it as a layout they cannot reason about.
+function slotGrid(rows, width) {
+  const w = Math.max(1, Math.floor(Number(width)) || 1);
+  const grid = [];
+  const placed = [];
+  const overflow = [];
+  const rowAt = (r) => {
+    while (grid.length <= r) grid.push(new Array(w).fill(-1));
+    return grid[r];
+  };
+  const free = (r, c, span, rowspan) => {
+    if (c + span > w) return false;
+    for (let y = r; y < r + rowspan; y += 1) {
+      for (let x = c; x < c + span; x += 1) if (rowAt(y)[x] !== -1) return false;
+    }
+    return true;
+  };
+  (rows || []).forEach((row, r) => {
+    rowAt(r);
+    let c = 0;
+    ((row && row.cells) || []).forEach((cell, i) => {
+      const span = cellWidth(cell);
+      const rowspan = Math.max(1, Number(cell && cell.rowspan) || 1);
+      while (c < w && grid[r][c] !== -1) c += 1;
+      if (!free(r, c, span, rowspan)) {
+        overflow.push({ row: r, cell: i });
+        return;
+      }
+      for (let y = r; y < r + rowspan; y += 1) {
+        for (let x = c; x < c + span; x += 1) grid[y][x] = placed.length;
+      }
+      placed.push({ row: r, cell: i, r, c, colspan: span, rowspan });
+      c += span;
+    });
+  });
+  return { width: w, grid, placed, overflow };
+}
+
+module.exports = { rowOccupancy, fitsGrid, strandedRows, slotGrid };

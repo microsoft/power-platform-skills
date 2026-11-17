@@ -20,7 +20,7 @@ test('public plugin identity and lockfile match the marketplace entry', async ()
   const lock = await json(path.join(root, 'package-lock.json'));
   assert.equal(lock.name, 'process-intelligence');
   assert.equal(lock.packages[''].name, 'process-intelligence');
-  assert.equal(lock.packages[''].dependencies['@modelcontextprotocol/sdk'], '1.31.0');
+  assert.equal(lock.packages[''].dependencies['@modelcontextprotocol/sdk'], '1.32.1');
   assert.deepEqual(Object.keys((await json(path.join(root, '.mcp.json'))).mcpServers), ['process-intelligence']);
   for (const file of ['marketplace.json', '.claude-plugin/marketplace.json']) {
     const index = await json(path.join(workspace, file));
@@ -31,6 +31,21 @@ test('public plugin identity and lockfile match the marketplace entry', async ()
     assert.deepEqual(entries, [{ name: 'process-intelligence', source: './plugins/process-intelligence' }]);
     assert.ok(index.plugins.length > 1);
   }
+});
+
+test('Node.js engine metadata and setup guidance use an open-ended minimum', async () => {
+  const manifest = await json(path.join(root, 'package.json'));
+  const lock = await json(path.join(root, 'package-lock.json'));
+  assert.deepEqual(manifest.engines, { node: '>=22' });
+  assert.deepEqual(lock.packages[''].engines, manifest.engines);
+  for (const file of ['README.md', 'AGENTS.md', 'skills/setup/SKILL.md',
+    'references/development.md', '../../README.md']) {
+    const text = await fs.readFile(path.join(root, file), 'utf8');
+    assert.match(text, /Node\.js 22\+/);
+    assert.doesNotMatch(text, /Node\.js 22(?:\/24| or 24 LTS)/);
+  }
+  const build = await fs.readFile(path.join(root, 'scripts', 'build.mjs'), 'utf8');
+  assert.match(build, /target: 'node22'/);
 });
 
 test('plugin CI is path-filtered, read-only and runs the local build and test entrypoints', async () => {
@@ -44,7 +59,7 @@ test('plugin CI is path-filtered, read-only and runs the local build and test en
   // Match the complete trigger block, not a stray path in a comment or another event.
   const triggers = /^on:\n([\s\S]*?)(?=^\S)/m.exec(workflow)?.[1].trimEnd();
   const paths = ['plugins/process-intelligence/**', 'LICENSE', workflowFile,
-    'marketplace.json', '.claude-plugin/marketplace.json', 'README.md',
+    'marketplace.json', '.claude-plugin/marketplace.json', 'README.md', 'docs/development.md',
     '.github/ISSUE_TEMPLATE/bug_report.yml', '.github/ISSUE_TEMPLATE/feature_request.yml',
     'shared/telemetry/README.md'];
   assert.equal(triggers, ['pull_request', 'push'].flatMap(event => [
@@ -62,7 +77,7 @@ test('plugin CI is path-filtered, read-only and runs the local build and test en
   assert.match(workflow, /runs-on: \$\{\{ matrix\.os \}\}/);
   assert.match(workflow, /node-version: \$\{\{ matrix\.node \}\}/);
   assert.match(workflow, /os:\n\s+- ubuntu-latest\n\s+- windows-latest\n\s+- macos-latest\n/);
-  assert.match(workflow, /node:\n\s+- 22\n\s+- 24\n/);
+  assert.match(workflow, /node:\n\s+- 22\n\s+- 24\n\s+- 26\n/);
   assert.match(workflow, /timeout-minutes: 15/);
   assert.match(workflow, /working-directory: plugins\/process-intelligence/);
   assert.match(workflow, /shell: bash/);
@@ -76,11 +91,13 @@ test('plugin CI is path-filtered, read-only and runs the local build and test en
   }
 });
 
-test('repository README includes installation, local loading and every Process Intelligence skill', async () => {
+test('repository docs include installation, local loading and every Process Intelligence skill', async () => {
   const readme = await fs.readFile(path.join(workspace, 'README.md'), 'utf8');
   assert.match(readme, /\/plugin install process-intelligence@power-platform-skills/);
   assert.doesNotMatch(readme, /\b(?:dev(?:elopment)?[- ]only|unpublished|prototype)\b/i);
-  const localDevelopment = readme.split('## Local Development')[1]?.split('\n## ')[0];
+  // Local loading is for people working on the plugins, so it lives in the developer guide.
+  const development = await fs.readFile(path.join(workspace, 'docs', 'development.md'), 'utf8');
+  const localDevelopment = development.split('## Local Development')[1]?.split('\n## ')[0];
   assert.ok(localDevelopment?.includes('claude --plugin-dir /path/to/power-platform-skills/plugins/process-intelligence'));
   const catalog = readme.split('### [Process Intelligence]')[1]?.split('\n## ')[0];
   assert.ok(catalog, 'Process Intelligence is missing from Available Plugins');

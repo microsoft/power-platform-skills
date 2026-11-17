@@ -58,7 +58,7 @@ const JS_CONSTRUCTS = [
   { name: 'a division after an object literal', kind: 'brace', code: 'const n1 = {valueOf(){return 12;}}/2; const r1 = /\\/*$/;' },
   { name: 'a regex after a block', kind: 'brace', code: 'if (true) { }\n/ab+c/.test("x");' },
   { name: 'a regex after a parenthesis out of reach', kind: 'paren', code: `if (true /*${'x'.repeat(2100)}*/) /x+/.test("y");` },
-  { name: 'a division by a name that can be a keyword', kind: 'keyword', code: 'const of = 12; const n2 = of/2; const r2 = /\\/*$/;' },
+  { name: 'a division by a name that can be a keyword', kind: 'keyword', code: 'const yield = 12; const n2 = yield/2; const r2 = /\\/*$/;' },
   { name: 'an identifier written with an escape', kind: 'identifier', code: 'var a\\u0062 = 1; var n3 = a\\u0062/2; var r3 = /\\/*$/;' },
   { name: 'a regex after a spread', kind: 'operator', code: 'var s1 = [.../ab/.exec("ab")];' },
   { name: 'a regex after three signs', kind: 'operator', code: 'var i3 = 1; var n4 = i3+++/x/.test("x");' },
@@ -218,10 +218,10 @@ const TS_PAYLOADS = [
 // a spread. The members after a guess are not read for certain, so the call is not trusted — its token is not rewritten, though it lies before
 // the guess — and a page that is accepted must have its generative calls rewritten and every other call as it was. With the guess before the
 // `pageId` the false comment it opens covers the `pageId` itself. Each page also holds a real call after the object.
-const NEST_PREAMBLE = 'const typeKey = "pageType"; const of = 12; const override = { pageType: "entityrecord" }; const flag = false;';
+const NEST_PREAMBLE = 'const typeKey = "pageType"; const yield = 12; const override = { pageType: "entityrecord" }; const flag = false;';
 const NEST_GUESSES = [
   { name: 'a division after an object literal', kind: 'brace', code: 'data: {valueOf(){return 12;}}/2, r: /\\/*$/,' },
-  { name: 'a division by a name that can be a keyword', kind: 'keyword', code: 'data: of/2, r: /\\/*$/,' },
+  { name: 'a division by a name that can be a keyword', kind: 'keyword', code: 'data: yield/2, r: /\\/*$/,' },
   { name: 'no guess', kind: null, code: 'data: 12 / 2, r: /\\/*$/,' },
 ];
 const NEST_OVERRIDES = [

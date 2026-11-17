@@ -8,6 +8,7 @@ const { commandDef, chartDef, runSdkBuild: runSdkBuildWithRealWaits, planFor, re
 const { validateAppSpec } = require('../lib/app-spec.js');
 const { makeTempDir } = require('./helpers/temp-dirs.js');
 const { withPageType } = require('./helpers/page-component-type.js');
+const { RETRY } = require('../lib/retry-policy.js');
 // The AI phase's proof after a publish waits 500 ms between reads of an override row that is not there yet, as --verify
 // does. No test below is about that wait (it is pinned through `proofBudget`), and every one that leaves a row absent
 // would otherwise sleep a second for it.
@@ -192,6 +193,12 @@ function mockSdk(opts = {}) {
         const smId = (filter.match(/sitemapid eq (\S+)/) || [])[1];
         if (smId === SELF_SITEMAP_ID) return [{ sitemapxml: opts.liveSitemapXml || EMPTY_SITEMAP_XML }];
         const idx = Number(String(smId).replace('sm-', '')) - 2;
+        // `readPlan`: what each of the app's published sitemap reads does, in order — 'ok' answers, 'fail' throws (a 5xx while another build changes the app), and a
+        // function is called with the app (to change what it holds from then on) and throws. Reads past the plan answer.
+        const planned = opts.otherApps && opts.otherApps[idx] && opts.otherApps[idx].readPlan;
+        const step = planned && planned.shift();
+        if (step === 'fail') throw new Error('sitemap read failed');
+        if (typeof step === 'function') { step(opts.otherApps[idx]); throw new Error('sitemap read failed'); }
         return [{ sitemapxml: (opts.otherApps && opts.otherApps[idx] && opts.otherApps[idx].sitemapxml) || '<SiteMap/>' }];
       }
       // systemform queries come from THREE build paths, distinguished by their filter:
@@ -675,9 +682,195 @@ test('idempotent: an existing table is reused — no createTable, and only missi
 });
 
 test('idempotent: an existing relationship is skipped', async () => {
-  const { sdk, calls } = mockSdk({ existingTables: { new_customer: { entitySetName: 'new_customers', columns: [], relationships: [{ schemaName: 'new_customer_new_ticket', type: 'OneToMany', relatedEntity: 'new_ticket', relatedAttribute: 'new_customerid' }] } } });
+  // The table already has the spec's columns: a table that took a new column would first have its Date and Time behaviours read, which this double cannot answer.
+  const { sdk, calls } = mockSdk({ existingTables: { new_customer: { entitySetName: 'new_customers', columns: ['new_name', 'new_tier'], relationships: [{ schemaName: 'new_customer_new_ticket', type: 'OneToMany', relatedEntity: 'new_ticket', relatedAttribute: 'new_customerid' }] } } });
   await runSdkBuild(makeSpec(), { sdk, apply: true });
   assert.strictEqual(find(calls, 'createRelationship').length, 0, 'existing relationship not re-created');
+});
+
+// A run that seeds without the data-model phase never secured the spec's columns, so it reads, before the first row, whether each column
+// the spec declares isSecured: true on a seeded table is secured now — and writes no row when one is not, or when the read cannot say.
+function seedOnlySecured(answer) {
+  const base = makeSpec();
+  const spec = makeSpec({
+    entities: [{ ...base.entities[0], columns: [...base.entities[0].columns, { schemaName: 'new_secret', displayName: 'Secret', type: 'Text', isSecured: true }] }, base.entities[1]],
+    sampleData: { ...base.sampleData, new_customer: [{ new_name: 'Acme', new_tier: 'Pro', new_secret: 'x' }] },
+  });
+  const { sdk, calls } = mockSdk({ existingTables: { new_customer: { entitySetName: 'new_customers', columns: ['new_name', 'new_tier', 'new_secret'], relationships: [] } } });
+  const reads = [];
+  sdk.dataverse = { get: async (url) => { reads.push(url); return answer(url); } };
+  return { spec, sdk, calls, reads };
+}
+const IS_SECURED = /\/EntityDefinitions\(LogicalName='new_customer'\)\/Attributes\?\$select=LogicalName,IsSecured$/;
+
+test('seed only: a declared secured column that is not secured stops the run before any sample record is written', async () => {
+  const run = seedOnlySecured(() => ({ status: 200, body: { value: [{ LogicalName: 'new_name', IsSecured: false }, { LogicalName: 'new_secret', IsSecured: false }] } }));
+  await assert.rejects(runSdkBuild(run.spec, { sdk: run.sdk, apply: true, sampleData: true, phases: ['sample-data'] }),
+    (e) => e.code === 'COLUMN_NOT_SECURED' && /new_customer\.new_secret/.test(e.message) && e.phase === 'sample-data');
+  assert.strictEqual(find(run.calls, 'seedRecordGraph').length, 0, 'no record written');
+  assert.strictEqual(run.reads.filter((u) => IS_SECURED.test(u)).length, 1, 'one read of the seeded table');
+});
+
+test('seed only: an unreadable security state stops the run before any sample record is written', async () => {
+  const run = seedOnlySecured(() => ({ status: 503, body: {} }));
+  await assert.rejects(runSdkBuild(run.spec, { sdk: run.sdk, apply: true, sampleData: true, phases: ['sample-data'] }), (e) => e.code === 'COLUMN_SECURITY_UNREAD');
+  assert.strictEqual(find(run.calls, 'seedRecordGraph').length, 0);
+});
+
+test('seed only: a secured column seeds as before; a spec that secures no column reads nothing new', async () => {
+  const secured = seedOnlySecured(() => ({ status: 200, body: { value: [{ LogicalName: 'new_secret', IsSecured: true }] } }));
+  await runSdkBuild(secured.spec, { sdk: secured.sdk, apply: true, sampleData: true, phases: ['sample-data'] });
+  assert.ok(find(secured.calls, 'seedRecordGraph').length > 0, 'records seeded');
+  const { sdk, calls } = mockSdk({ existingTables: { new_customer: { entitySetName: 'new_customers', columns: ['new_name', 'new_tier'], relationships: [] } } });
+  const reads = [];
+  sdk.dataverse = { get: async (url) => { reads.push(url); return { status: 404, body: {} }; } };
+  await runSdkBuild(makeSpec(), { sdk, apply: true, sampleData: true, phases: ['sample-data'] });
+  assert.ok(find(calls, 'seedRecordGraph').length > 0);
+  assert.deepStrictEqual(reads.filter((u) => /IsSecured/.test(u)), []);
+});
+
+// Field security profiles through the build: created through the create port in the data-model phase, after the columns are secured and
+// before any sample row; given to the users and teams the spec names in the security phase, only once the profile is proven as declared.
+const FSP_ID = '11111111-1111-4111-8111-111111111111';
+const FSP_USER = '33333333-3333-4333-8333-333333333333';
+const FSP_TEAM = '44444444-4444-4444-8444-444444444444';
+function fieldSecuritySpec(assignTo = { users: [FSP_USER], teams: [FSP_TEAM] }) {
+  const base = makeSpec();
+  return makeSpec({
+    entities: [{ ...base.entities[0], columns: [...base.entities[0].columns, { schemaName: 'new_secret', displayName: 'Secret', type: 'Text', isSecured: true }] }, base.entities[1]],
+    sampleData: { ...base.sampleData, new_customer: [{ new_name: 'Acme', new_tier: 'Pro', new_secret: 'x' }] },
+    fieldSecurityProfiles: [{ key: 'hr', name: 'HR', permissions: [{ table: 'new_customer', column: 'new_secret', read: true }], ...(assignTo ? { assignTo } : {}) }],
+  });
+}
+// `found`: the profile exists (the name finds FSP_ID); `held` lists the permissions the server holds for it (default: as declared);
+// `pushed`: the SDK push's answer; `head`: the status of the profile read.
+function fieldSecurityRun({ found = false, held, pushed = { saved: true }, head = 200, port = true } = {}) {
+  const { sdk, calls } = mockSdk();
+  const find = sdk.findArtifact;
+  const create = sdk.createArtifact;
+  const push = sdk.pushArtifact;
+  sdk.findArtifact = async (kind, q) => (kind === 'fieldSecurityProfile' ? (calls.push({ name: 'findProfile', args: [q] }), found ? FSP_ID : null) : find(kind, q));
+  sdk.createArtifact = (kind, a) => (kind === 'fieldSecurityProfile' ? (calls.push({ name: 'createProfile', args: [a] }), a) : create(kind, a));
+  sdk.pushArtifact = async (kind, id, ...rest) => (kind === 'fieldSecurityProfile' ? (calls.push({ name: 'pushProfile', args: [id] }), pushed) : push(kind, id, ...rest));
+  const rows = held || [{ fieldpermissionid: '22222220-2222-4222-8222-222222222222', entityname: 'new_customer', attributelogicalname: 'new_secret', canread: 4, cancreate: 0, canupdate: 0, canreadunmasked: 0 }];
+  sdk.dataverse = {
+    get: async (url) => {
+      calls.push({ name: 'dataverse.get', args: [url] });
+      if (url.startsWith(`/fieldsecurityprofiles(${FSP_ID})?`)) return { status: head, body: head === 200 ? { name: 'HR', description: null } : {} };
+      if (url.startsWith('/fieldpermissions?')) return { status: 200, body: { value: rows } };
+      if (/\/(systemuserprofiles_association|teamprofiles_association)\?/.test(url)) return { status: 200, body: { value: [] } };
+      return { status: 404, body: {} };
+    },
+  };
+  const creates = {
+    runs: [],
+    run: async (desc, fn) => {
+      creates.runs.push(desc);
+      const childIds = Object.fromEntries(desc.childKeys.map((k, i) => [k, `2222222${i}-2222-4222-8222-222222222222`]));
+      await fn({ id: FSP_ID, childIds });
+      return { outcome: 'created', id: FSP_ID, childIds };
+    },
+  };
+  const events = [];
+  const go = (spec, opts) => runSdkBuild(spec, { sdk, apply: true, ...(port ? { creates } : {}), emit: (e) => events.push(e), ...opts });
+  return { sdk, calls, creates, events, go };
+}
+const DATA_STAGE = ['solution', 'data-model', 'sample-data'];
+
+test('field security: the plan names who each profile is given to, says when no one is named, and adds nothing for a spec without one', () => {
+  const labels = planFor(fieldSecuritySpec(), {}).map((i) => `${i.phase}: ${i.label}`);
+  assert.ok(labels.includes(`data-model: field security profile "HR" (1 permission; to be given to user ${FSP_USER}, team ${FSP_TEAM})`), labels.join('\n'));
+  assert.ok(labels.includes(`security: give field security profile "HR" to user ${FSP_USER}, team ${FSP_TEAM}`));
+  const seeded = planFor(fieldSecuritySpec(), { sampleData: true }).map((i) => `${i.phase}: ${i.label}`);
+  const firstSeed = seeded.findIndex((l) => /^sample-data:/.test(l));
+  assert.ok(firstSeed > 0 && seeded.indexOf(`data-model: field security profile "HR" (1 permission; to be given to user ${FSP_USER}, team ${FSP_TEAM})`) < firstSeed, seeded.join('\n'));
+  const none = planFor(fieldSecuritySpec(null), {}).map((i) => i.label);
+  assert.ok(none.includes('field security profile "HR" (1 permission; no assignment requested)'));
+  assert.ok(!none.some((l) => /^give field security profile/.test(l)));
+  // A data-only run plans the assignment as deferred work, not as security it will do.
+  const data = planFor(fieldSecuritySpec(), { phases: DATA_STAGE, sampleData: true }).map((i) => `${i.phase}: ${i.label}`);
+  assert.ok(data.includes(`data-model: give field security profile "HR" to user ${FSP_USER}, team ${FSP_TEAM} (deferred: this run does not include the security phase)`), data.join('\n'));
+  assert.ok(!data.some((l) => /^security:/.test(l)));
+  // A table that declares a flag has exactly one step, run or skipped.
+  const flagged = makeSpec();
+  flagged.entities[1] = { ...flagged.entities[1], duplicateDetectionEnabled: true };
+  assert.deepStrictEqual(planFor(flagged, {}).filter((i) => /^table flags /.test(i.label)).map((i) => i.label), ['table flags new_ticket']);
+  // An existing spec plans exactly what it did.
+  assert.deepStrictEqual(planFor(makeSpec(), {}).filter((i) => /field security|table flags/.test(i.label)), []);
+});
+
+test('field security: a full build creates the profile through the create port before any sample row, adds it to the solution, then gives it to the named users and teams', async () => {
+  const run = fieldSecurityRun();
+  const r = await run.go(fieldSecuritySpec(), { sampleData: true });
+  assert.strictEqual(r.ok, true, JSON.stringify(r));
+  assert.deepStrictEqual(run.creates.runs, [{ kind: 'fieldSecurityProfile', key: 'hr', identity: { name: 'HR' }, childKeys: ['new_customer.new_secret'] }]);
+  const names = run.calls.map((c) => c.name);
+  assert.ok(names.indexOf('createProfile') >= 0 && names.indexOf('createProfile') < names.indexOf('seedRecordGraph'), 'the profile exists before the first sample row');
+  assert.deepStrictEqual(find(run.calls, 'addSolutionComponent').filter((c) => c.args[0].componentType === 70).map((c) => c.args[0]), [{ componentId: FSP_ID, componentType: 70, solutionUniqueName: 'ContosoSD' }]);
+  assert.deepStrictEqual(find(run.calls, 'associateRecords').map((c) => [c.args[0], c.args[1], c.args[2].targetEntity, c.args[2].targetId]), [
+    ['fieldsecurityprofile', FSP_ID, 'systemuser', FSP_USER], ['fieldsecurityprofile', FSP_ID, 'team', FSP_TEAM],
+  ]);
+  assert.deepStrictEqual(r.created.fieldSecurityProfiles, { hr: { id: FSP_ID, origin: 'created' } });
+  assert.ok(run.events.some((e) => e.status === 'ok' && e.label === `give field security profile "HR" to user ${FSP_USER}, team ${FSP_TEAM}`));
+  const total = run.events[0].total;
+  assert.ok(run.events.every((e) => e.n <= total), 'the field security steps are in the plan the progress counts');
+});
+
+test('field security: a data-only run creates the profile and reports its assignment deferred, not done', async () => {
+  const run = fieldSecurityRun();
+  const r = await run.go(fieldSecuritySpec(), { phases: DATA_STAGE });
+  assert.strictEqual(r.ok, true, JSON.stringify(r));
+  assert.strictEqual(run.creates.runs.length, 1);
+  assert.deepStrictEqual(find(run.calls, 'associateRecords'), []);
+  assert.deepStrictEqual(r.skipped.fieldSecurityAssignments, [{ profile: 'hr', principals: [`user ${FSP_USER}`, `team ${FSP_TEAM}`], deferredTo: 'security' }]);
+  assert.ok(run.events.some((e) => e.status === 'skip' && /\(deferred: this run does not include the security phase\)$/.test(e.label)));
+});
+
+test('field security: a security-only run gives a profile the environment holds as declared, and refuses one it does not', async () => {
+  const held = fieldSecurityRun({ found: true });
+  const r = await held.go(fieldSecuritySpec(), { phases: ['security'] });
+  assert.strictEqual(r.ok, true, JSON.stringify(r));
+  assert.deepStrictEqual(held.creates.runs, [], 'nothing is created in the security phase');
+  assert.strictEqual(find(held.calls, 'associateRecords').length, 2);
+  const missing = fieldSecurityRun({ found: false });
+  await assert.rejects(missing.go(fieldSecuritySpec(), { phases: ['security'] }), (e) => e.code === 'FIELD_SECURITY_PROFILE_UNRESOLVED' && e.phase === 'security' && /run the data-model phase first/.test(e.message));
+  assert.deepStrictEqual(find(missing.calls, 'associateRecords'), []);
+  const differs = fieldSecurityRun({ found: true, held: [{ fieldpermissionid: '22222220-2222-4222-8222-222222222222', entityname: 'new_customer', attributelogicalname: 'new_secret', canread: 4, cancreate: 0, canupdate: 4, canreadunmasked: 0 }] });
+  await assert.rejects(differs.go(fieldSecuritySpec(), { phases: ['security'] }), (e) => e.code === 'FIELD_SECURITY_PROFILE_DIFFERS');
+  assert.deepStrictEqual(find(differs.calls, 'associateRecords'), []);
+});
+
+test('field security: a created profile whose content is not proven stops the build before any sample row and is given to no one', async () => {
+  const run = fieldSecurityRun({ pushed: { saved: true, warnings: ['the answer did not echo every permission'] }, head: 503 });
+  await assert.rejects(run.go(fieldSecuritySpec(), { sampleData: true }), (e) => e.code === 'FIELD_SECURITY_PROFILE_UNREAD' && e.phase === 'data-model');
+  assert.deepStrictEqual(find(run.calls, 'seedRecordGraph'), []);
+  assert.deepStrictEqual(find(run.calls, 'associateRecords'), []);
+  // A build with no create port creates nothing.
+  const noPort = fieldSecurityRun({ port: false });
+  await assert.rejects(noPort.go(fieldSecuritySpec(), { phases: DATA_STAGE }), (e) => e.code === 'FIELD_SECURITY_PROFILE_UNKNOWN');
+  assert.deepStrictEqual(find(noPort.calls, 'createProfile'), []);
+});
+
+test('field security: through the pass-through create port the profile carries the ids the port minted, and a lost create answer halts the build', async () => {
+  const { createPassthroughCreates } = require('../lib/creates-passthrough.js');
+  const MINTED = '55555555-5555-4555-8555-555555555555';
+  const ids = [MINTED, '66666666-6666-4666-8666-666666666666'];
+  const run = fieldSecurityRun({ port: false });
+  const r = await run.go(fieldSecuritySpec(), { sampleData: true, creates: createPassthroughCreates({ newId: () => ids.shift() }) });
+  assert.strictEqual(r.ok, true, JSON.stringify(r));
+  const [created] = find(run.calls, 'createProfile').map((c) => c.args[0]);
+  assert.deepStrictEqual([created.id, created.permissions.map((p) => p.id)], [MINTED, ['66666666-6666-4666-8666-666666666666']]);
+  assert.deepStrictEqual(r.created.fieldSecurityProfiles, { hr: { id: MINTED, origin: 'created' } });
+  assert.deepStrictEqual(find(run.calls, 'associateRecords').map((c) => c.args[1]), [MINTED, MINTED]);
+  // The port neither swallows nor re-sends: a create whose answer was lost reaches the build's halt once, before any sample row.
+  const lost = Object.assign(new Error('socket hang up'), { code: 'ECONNRESET' });
+  const failing = fieldSecurityRun({ port: false });
+  const push = failing.sdk.pushArtifact;
+  failing.sdk.pushArtifact = async (kind, ...rest) => (kind === 'fieldSecurityProfile' ? (failing.calls.push({ name: 'pushProfile', args: rest }), Promise.reject(lost)) : push(kind, ...rest));
+  await assert.rejects(failing.go(fieldSecuritySpec(), { sampleData: true, creates: createPassthroughCreates() }), (e) => e.phase === 'data-model');
+  assert.strictEqual(find(failing.calls, 'createProfile').length, 1);
+  assert.deepStrictEqual(find(failing.calls, 'seedRecordGraph'), []);
+  assert.deepStrictEqual(find(failing.calls, 'associateRecords'), []);
 });
 
 test('existing-table entity-set name comes from findTables (sample-data binding works)', async () => {
@@ -3450,6 +3643,24 @@ test('resolveExistingFormId treats a "not found in the MetadataCache" 400 (brand
   // preflight must NOT halt on this) — mirroring the SDK findArtifact this replaced.
   const provision = { queryRecords: async () => { const e = new Error("The entity with a name = 'ftx_widget' was not found in the MetadataCache"); e.statusCode = 400; throw e; } };
   assert.strictEqual(await resolveExistingFormId(provision, { entityLogicalName: 'ftx_widget', name: 'Information', formType: 'Main' }), null);
+});
+
+test('resolveExistingFormId (#796): the same answer is also the lag of a table created moments ago, so a caller that would create on a miss gets the failure back', async () => {
+  // Live, a table that exists answered the form lookup with
+  //   HTTP 400 {"error":{"code":"0x80041102","message":"The entity with a name = 'contoso_ticket' with namemapping = 'Logical' was not found in the MetadataCache.LazyDynamicMetadataCache with version 9495075 and timestamp 9495075"}}
+  // and the build read that as "no form" and created a second form of the same name.
+  const lag = () => Object.assign(new Error("The entity with a name = 'contoso_ticket' with namemapping = 'Logical' was not found in the MetadataCache.LazyDynamicMetadataCache"), { statusCode: 400, code: '0x80041102' });
+  const def = { entityLogicalName: 'contoso_ticket', name: 'Information', formType: 'Main' };
+  const lagging = { queryRecords: async () => { throw lag(); } };
+  await assert.rejects(() => resolveExistingFormId(lagging, def, { tableNotInCache: 'fail' }), /not found in the MetadataCache/);
+  const proofs = [];
+  await assert.rejects(() => resolveExistingFormId(lagging, def, { tableNotInCache: async (err) => { proofs.push(err.code); return false; } }), /not found in the MetadataCache/, 'the table is not proved absent');
+  assert.strictEqual(await resolveExistingFormId(lagging, def, { tableNotInCache: async (err) => { proofs.push(err.code); return true; } }), null, 'the table is proved absent');
+  assert.deepStrictEqual(proofs, ['0x80041102', '0x80041102']);
+  assert.strictEqual(await resolveExistingFormId(lagging, def), null, 'a read-only caller keeps "not found"');
+  // A successful read with no row is "not found" for every caller, and any other failure stays a failure.
+  assert.strictEqual(await resolveExistingFormId({ queryRecords: async () => [] }, def, { tableNotInCache: 'fail' }), null);
+  await assert.rejects(() => resolveExistingFormId({ queryRecords: async () => { throw Object.assign(new Error('503 Service Unavailable'), { statusCode: 503 }); } }, def, { tableNotInCache: async () => true }), /503/);
 });
 
 test('resolveExistingFormId RE-THROWS a non-metadata error (a transient failure must still fail closed)', async () => {
@@ -7452,7 +7663,8 @@ test('pages: another app\'s saved navigation that cannot be read HALTS pages-sha
     for (const [what, [extra, message]] of Object.entries(cases)) {
       const { sdk } = mockSdk({ pageManifest: existing, manifestId: 'wr-manifest', selfAppUnique: appUnique, liveSitemapXml: sitemapWithO, ...extra });
       await assert.rejects(
-        runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: ['solution', 'data-model', 'app-shell', 'pages'] }),
+        // The waits before the scans again of an unreadable app are not taken here (`sleep`): what is read again is pinned by the tests after the never-published ones.
+        runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: ['solution', 'data-model', 'app-shell', 'pages'], sleep: async () => {} }),
         (e) => {
           assert.strictEqual(e.phase, 'pages', what);
           assert.strictEqual(e.code, 'pages-shared-check-failed', what);
@@ -7623,10 +7835,13 @@ test('pages: a never-published app whose navigation cannot be read HALTS pages-s
       'its saved row did not come back': { uniquename: 'contoso_draftapp', savedRows: [] },
       'its saved XML is cut short': { uniquename: 'contoso_draftapp', savedRows: [{ sitemapxml: '<SiteMap><Area', componentstate: 1 }] },
     };
+    // The scan is taken again three times before each halt (`waits`), except the cut-short XML: a stored sitemap that is malformed only changes when someone edits that app.
+    const waits = { 'its sitemap component read fails': [5000, 10000, 20000], 'its saved row did not come back': [5000, 10000, 20000], 'its saved XML is cut short': [] };
     for (const [what, draft] of Object.entries(cases)) {
       const { sdk } = mockSdk({ pageManifest: s.existing, manifestId: 'wr-manifest', selfAppUnique: s.appUnique, liveSitemapXml: s.sitemapWithO, draftApps: [draft] });
+      const sleeps = [];
       await assert.rejects(
-        runPagesUpdate(s, sdk),
+        runPagesUpdate(s, sdk, { sleep: async (ms) => { sleeps.push(ms); } }),
         (e) => {
           assert.strictEqual(e.code, 'pages-shared-check-failed', what);
           assert.match(e.message, /1 app\(s\) had an unreadable sitemap \(contoso_draftapp\)/, what);
@@ -7634,7 +7849,168 @@ test('pages: a never-published app whose navigation cannot be read HALTS pages-s
         },
         what
       );
+      assert.deepStrictEqual(sleeps, waits[what], what);
     }
+    assert.deepStrictEqual(s.uploads, []);
+  } finally { fs.rmSync(s.appDir, { recursive: true, force: true }); }
+});
+
+// Another app's navigation that cannot be read for a moment — while another build or maker changes that app — halted the build, and the same build run minutes later passed.
+// The scan that halts is taken again WHOLE — every app read afresh — after 5 s, 10 s and 20 s; one still unreadable halts as before, and one that is read and holds the page halts as shared.
+const OTHER_PAGE_SITEMAP = '<SiteMap><Area><Group><SubArea GenPageId="00000000-0000-4000-8000-0000000000aa" Title="Other"/></Group></Area></SiteMap>';
+const UNREADABLE_HALT = 'cannot verify pages are not shared across apps — 1 app(s) had an unreadable sitemap (contoso_secondapp); one of them could share a page we are about to UPDATE. Fix or remove the unreadable app(s), then rebuild.';
+// What `more` has that `base` has not, by request, as a multiset; and asserts `base` has nothing `more` has not.
+const extraRequests = (more, base) => {
+  const key = (c) => JSON.stringify([c.name, c.args]);
+  const left = more.map(key);
+  for (const k of base.map(key)) {
+    const i = left.indexOf(k);
+    assert.ok(i >= 0, `a request of the steady run was not sent: ${k}`);
+    left.splice(i, 1);
+  }
+  return left.map((k) => JSON.parse(k));
+};
+const shortRequest = ([name, [first, o]]) => (name === 'queryRecords' ? `${first} ${(o && o.filter) || '(all)'}` : first);
+// `onSleep` is what happens in the environment during each wait: another maker or build at work on another app.
+const updateWithOtherApps = async (s, otherApps, { onSleep = () => {} } = {}) => {
+  const sleeps = [];
+  const { sdk, calls } = mockSdk({ pageManifest: s.existing, manifestId: 'wr-manifest', selfAppUnique: s.appUnique, liveSitemapXml: s.sitemapWithO, otherApps });
+  let halt = null;
+  try { await runPagesUpdate(s, sdk, { sleep: async (ms) => { sleeps.push(ms); onSleep(sleeps.length); } }); } catch (e) { halt = e; }
+  return { calls, sleeps, halt };
+};
+
+test('pages: another app whose sitemap read fails for a moment makes the scan run again WHOLE — every app afresh — and the update goes ahead; the requests are today\'s plus one whole scan', async () => {
+  const s = stageUpdate();
+  try {
+    const apps = (readPlan) => [{ uniquename: 'contoso_secondapp', sitemapxml: OTHER_PAGE_SITEMAP, readPlan }, { uniquename: 'contoso_thirdapp', sitemapxml: OTHER_PAGE_SITEMAP }];
+    const steady = await updateWithOtherApps(s, apps([]));
+    assert.strictEqual(steady.halt, null);
+    assert.deepStrictEqual(steady.sleeps, [], 'nothing unreadable: no wait');
+    const flaky = await updateWithOtherApps(s, apps(['fail']));
+    assert.strictEqual(flaky.halt, null, `the build goes ahead: ${flaky.halt && flaky.halt.message}`);
+    assert.deepStrictEqual(flaky.sleeps, [5000], 'one wait, then the scan again, which reads every app');
+    assert.deepStrictEqual(s.uploads.map((u) => u.pageId), [GP_O, GP_O], 'the page is updated in place in both builds');
+    // The scan again is the WHOLE scan: the two lists the apps are found in, EVERY other app's three reads (the one read before the wait too), and the saved layer.
+    assert.deepStrictEqual(extraRequests(flaky.calls, steady.calls).map(shortRequest).sort(), [
+      APPS_LIST_URL,
+      SAVED_URL,
+      'appmodule (all)',
+      'appmodule uniquename eq \'contoso_secondapp\'',
+      'appmodulecomponent _appmoduleidunique_value eq uv-2 and componenttype eq 62',
+      'sitemap sitemapid eq sm-2',
+      'appmodule uniquename eq \'contoso_thirdapp\'',
+      'appmodulecomponent _appmoduleidunique_value eq uv-3 and componenttype eq 62',
+      'sitemap sitemapid eq sm-3',
+    ].sort());
+  } finally { fs.rmSync(s.appDir, { recursive: true, force: true }); }
+});
+
+test('pages: another app whose sitemap read fails every time makes the scan run again three times, then HALTS pages-shared-check-failed exactly as before; a malformed one is not waited for', async () => {
+  const s = stageUpdate();
+  try {
+    const cases = {
+      'every read fails': [{ uniquename: 'contoso_secondapp', sitemapxml: OTHER_PAGE_SITEMAP, readPlan: ['fail', 'fail', 'fail', 'fail', 'ok'] }, [5000, 10000, 20000]],
+      'its stored sitemap is malformed': [{ uniquename: 'contoso_secondapp', sitemapxml: '<SiteMap><Area' }, []],
+    };
+    for (const [what, [app, waits]] of Object.entries(cases)) {
+      const { sleeps, halt } = await updateWithOtherApps(s, [app]);
+      assert.ok(halt, what);
+      assert.deepStrictEqual({ phase: halt.phase, code: halt.code, recoverable: halt.recoverable, retry: halt.retry, message: halt.message },
+        { phase: 'pages', code: 'pages-shared-check-failed', recoverable: true, retry: RETRY.NEVER, message: UNREADABLE_HALT }, what);
+      assert.deepStrictEqual(sleeps, waits, what);
+      if (app.readPlan) assert.deepStrictEqual(app.readPlan, ['ok'], `${what}: the first scan and three more, no more`);
+    }
+    assert.deepStrictEqual(s.uploads, [], 'nothing was uploaded while sharing could not be ruled out');
+  } finally { fs.rmSync(s.appDir, { recursive: true, force: true }); }
+});
+
+test('pages: another app read on a scan again that HOLDS the page halts pages-shared-across-apps — before any write, and right before the first write in place', async () => {
+  const s = stageUpdate();
+  try {
+    // Before any write: its first read fails, and the scan again finds the page.
+    const before = await updateWithOtherApps(s, [{ uniquename: 'contoso_secondapp', sitemapxml: s.sitemapWithO, readPlan: ['fail'] }]);
+    assert.ok(before.halt);
+    assert.strictEqual(before.halt.code, 'pages-shared-across-apps');
+    assert.match(before.halt.message, new RegExp(`^generative page\\(s\\) shared across apps: ${GP_O} \\(also in contoso_secondapp\\)`));
+    assert.deepStrictEqual(before.sleeps, [5000]);
+    // The scan right before the first write in place: the first scan reads the app, the second cannot, and by the scan again the app holds the page.
+    const during = await updateWithOtherApps(s, [{ uniquename: 'contoso_secondapp', sitemapxml: OTHER_PAGE_SITEMAP, readPlan: ['ok', (app) => { app.sitemapxml = s.sitemapWithO; }] }]);
+    assert.ok(during.halt);
+    assert.strictEqual(during.halt.code, 'pages-shared-across-apps');
+    assert.match(during.halt.message, new RegExp(`^generative page\\(s\\) became shared across apps while this build ran: ${GP_O} \\(also in contoso_secondapp\\)`));
+    assert.deepStrictEqual(during.sleeps, [5000]);
+    assert.deepStrictEqual(s.uploads, [], 'the shared page was never uploaded');
+  } finally { fs.rmSync(s.appDir, { recursive: true, force: true }); }
+});
+
+test('pages: the scan right before the first write in place runs again too — the build goes ahead when the app is read, and halts exactly as before when it never is', async () => {
+  const s = stageUpdate();
+  try {
+    const passes = await updateWithOtherApps(s, [{ uniquename: 'contoso_secondapp', sitemapxml: OTHER_PAGE_SITEMAP, readPlan: ['ok', 'fail'] }]);
+    assert.strictEqual(passes.halt, null, `the build goes ahead: ${passes.halt && passes.halt.message}`);
+    assert.deepStrictEqual(passes.sleeps, [5000]);
+    assert.deepStrictEqual(s.uploads.map((u) => u.pageId), [GP_O]);
+    s.uploads.length = 0;
+    const app = { uniquename: 'contoso_secondapp', sitemapxml: OTHER_PAGE_SITEMAP, readPlan: ['ok', 'fail', 'fail', 'fail', 'fail', 'ok'] };
+    const halts = await updateWithOtherApps(s, [app]);
+    assert.ok(halts.halt);
+    assert.deepStrictEqual({ phase: halts.halt.phase, code: halts.halt.code, recoverable: halts.halt.recoverable, retry: halts.halt.retry, message: halts.halt.message },
+      { phase: 'pages', code: 'pages-shared-check-failed', recoverable: true, retry: RETRY.NEVER, message: UNREADABLE_HALT });
+    assert.deepStrictEqual(halts.sleeps, [5000, 10000, 20000]);
+    assert.deepStrictEqual(app.readPlan, ['ok'], 'the read of each scan and three scans again, no more');
+    assert.deepStrictEqual(s.uploads, []);
+  } finally { fs.rmSync(s.appDir, { recursive: true, force: true }); }
+});
+
+// An app the scan COULD read before a wait may take the page in during it. Merging the apps read again into the answers from before the wait let the scan right before the
+// first write in place pass on a stale answer for that app, and the page was written though another app now held it. The scan again reads every app, so it halts.
+test('pages: another app that was readable and takes the page in DURING the wait for an unreadable one halts pages-shared-across-apps — before any write, and right before the first write in place; nothing is uploaded', async () => {
+  const s = stageUpdate();
+  try {
+    const takesThePage = (apps) => () => { Object.assign(apps[1], { sitemapxml: s.sitemapWithO, savedSitemapXml: s.sitemapWithO }); };
+    const cases = {
+      'before any write': [['fail'], /^generative page\(s\) shared across apps: /],
+      'right before the first write in place': [['ok', 'fail'], /^generative page\(s\) became shared across apps while this build ran: /],
+    };
+    for (const [what, [readPlan, words]] of Object.entries(cases)) {
+      const apps = [{ uniquename: 'contoso_secondapp', sitemapxml: OTHER_PAGE_SITEMAP, readPlan }, { uniquename: 'contoso_thirdapp', sitemapxml: OTHER_PAGE_SITEMAP }];
+      const out = await updateWithOtherApps(s, apps, { onSleep: takesThePage(apps) });
+      assert.ok(out.halt, `${what}: the build must not go ahead`);
+      assert.strictEqual(out.halt.code, 'pages-shared-across-apps', `${what}: ${out.halt.message}`);
+      assert.match(out.halt.message, words, what);
+      assert.match(out.halt.message, new RegExp(`${GP_O} \\(also in contoso_thirdapp\\)`), what);
+      assert.deepStrictEqual(out.sleeps, [5000], what);
+      assert.deepStrictEqual(s.uploads, [], `${what}: the page another app now holds is never uploaded`);
+    }
+  } finally { fs.rmSync(s.appDir, { recursive: true, force: true }); }
+});
+
+// A scan that fails AS A WHOLE after a wait is not an answer: it is waited out like an unreadable app, and the last one halts as a failed scan (retried by its cause, as a
+// first scan that fails is) — never on the answers of an older scan.
+test('pages: a scan again that fails as a whole is waited out; the last one halts pages-shared-check-failed as a failed scan, and nothing is uploaded', async () => {
+  const s = stageUpdate();
+  try {
+    const failingLists = (from) => {
+      const { sdk } = mockSdk({ pageManifest: s.existing, manifestId: 'wr-manifest', selfAppUnique: s.appUnique, liveSitemapXml: s.sitemapWithO,
+        otherApps: [{ uniquename: 'contoso_secondapp', sitemapxml: OTHER_PAGE_SITEMAP, readPlan: ['fail'] }] });
+      const query = sdk.queryRecords;
+      let lists = 0;
+      sdk.queryRecords = async (entity, o) => {
+        if (entity === 'appmodule' && !(o && o.filter) && ++lists >= from) throw new Error('appmodule list failed');
+        return query.call(sdk, entity, o);
+      };
+      return { sdk };
+    };
+    // The lists fail from the first scan again on: three waits, and the halt of a scan that failed.
+    const { sdk } = failingLists(2);
+    const sleeps = [];
+    let halt = null;
+    try { await runPagesUpdate(s, sdk, { sleep: async (ms) => { sleeps.push(ms); } }); } catch (e) { halt = e; }
+    assert.ok(halt);
+    assert.strictEqual(halt.code, 'pages-shared-check-failed');
+    assert.match(halt.message, /^could not scan the environment for pages shared across apps \(appmodule list failed\)/);
+    assert.deepStrictEqual(sleeps, [5000, 10000, 20000]);
     assert.deepStrictEqual(s.uploads, []);
   } finally { fs.rmSync(s.appDir, { recursive: true, force: true }); }
 });
@@ -9772,4 +10148,149 @@ test('form topology: an authored section named like a sub-grid host never takes 
   await runSdkBuild(spec, { sdk, apply: true, phases: formsOnly });
   assert.deepStrictEqual(sectionMoves(calls), [], 'the host stays where it is');
   assert.deepStrictEqual(sectionAdds(calls).map((c) => c.args[3].name), ['section_grid_new_ticket'], 'the authored section is created');
+});
+
+// --- --preview-push (build-model-app.js): the dry run hands lib/push-preview.js the artifacts its live probe found ---
+const PUSH_PREVIEW_PATH = require.resolve('../lib/push-preview.js');
+// Stands a fake runPushPreview in for the real one for the length of `fn`; the dry run requires the module lazily, so
+// it gets these exports. The real previewItemsFromPlan stays: the items the build makes are the ones it would send.
+async function withPushPreviewStub(runPushPreview, fn) {
+  require('../lib/push-preview.js');
+  const mod = require.cache[PUSH_PREVIEW_PATH];
+  const real = mod.exports;
+  mod.exports = { ...real, runPushPreview };
+  try { return await fn(); } finally { mod.exports = real; }
+}
+const PREVIEW_FORM_ID = '7a1c0de0-0000-4000-8000-0000000000f1';
+const PREVIEW_VIEW_ID = '7a1c0de0-0000-4000-8000-0000000000f2';
+// A live environment where both tables, the main form "Customer" and the view "Active Tickets" exist; the form read
+// answers `formid`, the view lookup its id.
+function previewEnvironment(formid = PREVIEW_FORM_ID.toUpperCase(), savedqueryid = PREVIEW_VIEW_ID.toUpperCase()) {
+  const { sdk } = mockSdk({ existingTables: {
+    new_customer: { entitySetName: 'new_customers', columns: ['new_name', 'new_tier'] },
+    new_ticket: { entitySetName: 'new_tickets', columns: ['new_subject', 'new_priority', 'new_customerid'] },
+  } });
+  const query = sdk.queryRecords;
+  sdk.queryRecords = async (e, o) => (e === 'systemform' ? [{ formid, objecttypecode: 'new_customer', type: 2, name: 'Customer' }] : query(e, o));
+  // A view's probe is the build's own lookup (findArtifact), which answers the view's id.
+  const find = sdk.findArtifact;
+  sdk.findArtifact = async (type, q) => (type === 'view' && q && q.name === 'Active Tickets' ? savedqueryid : (find ? find(type, q) : null));
+  return sdk;
+}
+const PREVIEW_OPTS = { apply: false, emit: () => {}, previewPush: true, env: 'https://contoso.crm.dynamics.com', httpClient: { get: async () => ({}) } };
+
+test('--preview-push: a dry run previews a reused view by the id its live probe read WITH the build\'s reconcile, and lists a reused form as not evaluated', async () => {
+  const sdk = previewEnvironment();
+  const seen = [];
+  const answer = { ok: true, previews: [], notPrepared: [], requiresSchema: [], notEvaluated: [], allEvaluated: true, summary: {}, writeAttempts: 0, disclaimer: 'x' };
+  const r = await withPushPreviewStub(async (o) => { seen.push(o); return answer; }, () => runSdkBuild(makeSpec(), { sdk, ...PREVIEW_OPTS }));
+  assert.strictEqual(seen.length, 1, 'the preview ran once');
+  const view = seen[0].items.find((i) => i.type === 'view');
+  assert.ok(view, JSON.stringify(seen[0].items));
+  assert.strictEqual(view.id, PREVIEW_VIEW_ID, 'the id the probe read, in lower case');
+  assert.strictEqual(view.key, 'view:new_ticket:Active Tickets');
+  assert.deepStrictEqual(view.liveEdits({ columns: [{ name: 'new_subject', width: 150, order: 0 }] }),
+    [{ op: 'update', pointer: '/columns', value: [{ name: 'new_subject', width: 150, order: 0 }, { name: 'new_priority', width: 100, order: 1 }] }],
+    'the column the build would add, over the fetched copy');
+  // An existing form is reconciled only while the build runs, so it has no typed change: never its unedited live copy.
+  const form = seen[0].items.find((i) => /^form:/.test(i.key));
+  assert.deepStrictEqual(form, { key: form.key, notEvaluated: 'noTypedTarget' });
+  assert.ok(!seen[0].items.some((i) => i.type === 'form' || i.type === 'app'), JSON.stringify(seen[0].items));
+  assert.strictEqual(seen[0].env, PREVIEW_OPTS.env);
+  assert.strictEqual(seen[0].httpClient, PREVIEW_OPTS.httpClient, 'the client the CLI hands over (wrapped read-only there and again in the helper)');
+  assert.strictEqual(seen[0].solutionUniqueName, 'ContosoSD');
+  // Nothing is made up: what has no typed target is listed by its reason, never as an item to preview.
+  assert.ok(seen[0].items.every((i) => i.type || i.notEvaluated || i.requiresSchema), JSON.stringify(seen[0].items));
+  assert.ok(seen[0].items.some((i) => i.notEvaluated === 'noTypedTarget'), 'a plan step with no typed target is reported, not dropped');
+  assert.strictEqual(new Set(seen[0].items.map((i) => i.key)).size, seen[0].items.length, 'every key is unique');
+  assert.strictEqual(r.dryRun, true);
+  assert.strictEqual(r.pushPreview, answer, 'the result carries the preview');
+  assert.ok(r.planItems.every((p) => !('liveId' in p)), 'the plan items keep the fields they had');
+});
+
+test('--preview-push: a probe answer that is not a GUID names nothing — the reused view is not evaluated', async () => {
+  const seen = [];
+  await withPushPreviewStub(async (o) => { seen.push(o); return { ok: true }; }, () => runSdkBuild(makeSpec(), { sdk: previewEnvironment(undefined, 'view-existing'), ...PREVIEW_OPTS }));
+  const view = seen[0].items.find((i) => /^view:/.test(i.key));
+  assert.deepStrictEqual(view, { key: view.key, notEvaluated: 'noTypedTarget' });
+});
+
+test('--preview-push: a preview that fails is reported by its code and HTTP status, and the dry run stands', async () => {
+  const SENTINEL = 'SENTINEL-record-value-7f3a';
+  const r = await withPushPreviewStub(async () => {
+    throw Object.assign(new Error(`HTTP 403 from https://contoso.crm.dynamics.com/api/data/v9.2/systemforms: ${SENTINEL}`), { statusCode: 403 });
+  }, () => runSdkBuild(makeSpec(), { sdk: previewEnvironment(), ...PREVIEW_OPTS }));
+  assert.strictEqual(r.ok, true);
+  assert.strictEqual(r.dryRun, true);
+  assert.strictEqual(r.pushPreview.ok, false);
+  assert.strictEqual(r.pushPreview.allEvaluated, false);
+  assert.strictEqual(r.pushPreview.error.statusCode, 403);
+  assert.ok(r.pushPreview.error.code, JSON.stringify(r.pushPreview.error));
+  assert.ok(!JSON.stringify(r).includes(SENTINEL), 'the service\'s words are not carried');
+});
+
+test('--preview-push: without the flag, or on a plan with no live probe, the preview is never loaded and the result has no preview', async () => {
+  for (const opts of [{ apply: false, emit: () => {} }, { ...PREVIEW_OPTS, livePlan: false }]) {
+    delete require.cache[PUSH_PREVIEW_PATH];
+    const r = await runSdkBuild(makeSpec(), { sdk: previewEnvironment(), ...opts });
+    assert.strictEqual(r.dryRun, true);
+    assert.ok(!('pushPreview' in r), JSON.stringify(Object.keys(r)));
+    assert.ok(!(PUSH_PREVIEW_PATH in require.cache), 'lib/push-preview.js was not required');
+  }
+});
+
+test('--preview-push: the target of each plan item — a reused view with the build\'s reconcile edits, a created chart by its definition, nothing else', () => {
+  const { previewTargetOf } = require('../lib/sdk-build.js');
+  const spec = makeSpec();
+  const id = PREVIEW_FORM_ID;
+  const viewKey = { kind: 'view', entity: 'new_ticket', name: 'Active Tickets' };
+  const view = previewTargetOf({ key: viewKey, state: 'reuse', liveId: id }, spec);
+  assert.deepStrictEqual(Object.keys(view).sort(), ['id', 'liveEdits', 'type']);
+  assert.strictEqual(view.type, 'view');
+  assert.strictEqual(view.id, id);
+  // The same edits the apply makes (reconcileView): the fetched columns verbatim plus the spec's missing ones; the
+  // description only when the spec sets one and it differs from the live text.
+  const live = { columns: [{ name: 'new_subject', width: 120, order: 0 }, { name: 'new_priority', width: 80, order: 1 }], description: 'Theirs' };
+  assert.deepStrictEqual(view.liveEdits(live), [{ op: 'update', pointer: '/columns', value: live.columns }], 'nothing to add: the copy stays equal to its snapshot');
+  const described = makeSpec();
+  described.views[0].description = 'Open work';
+  described.views[0].columns.push('New_CustomerId');
+  assert.deepStrictEqual(previewTargetOf({ key: viewKey, state: 'reuse', liveId: id }, described).liveEdits(live), [
+    { op: 'update', pointer: '/columns', value: [...live.columns, { name: 'new_customerid', width: 100, order: 2 }] },
+    { op: 'update', pointer: '/description', value: 'Open work' },
+  ]);
+  assert.deepStrictEqual(previewTargetOf({ key: viewKey, state: 'reuse', liveId: id }, described).liveEdits({ ...live, description: 'Open work' }).map((e) => e.pointer), ['/columns']);
+  // An existing form, chart, app or command bar: the build makes its change only while it runs (or, for a chart, never
+  // pushes it), so there is no typed target — never its live copy alone, which would preview as an unedited noChange.
+  for (const kind of ['form', 'chart', 'app', 'command', 'dashboard', 'businessRule', 'bpf', 'fieldSecurityProfile']) {
+    assert.strictEqual(previewTargetOf({ key: { kind, entity: 'new_ticket', name: 'By Priority' }, state: 'reuse', liveId: id }, spec), null, kind);
+  }
+  assert.strictEqual(previewTargetOf({ key: viewKey, state: 'reuse' }, spec), null, 'view: no live id, no target');
+  assert.strictEqual(previewTargetOf({ key: { ...viewKey, name: 'Not in the spec' }, state: 'reuse', liveId: id }, spec), null, 'no spec view, no edits to state');
+  assert.deepStrictEqual(previewTargetOf({ key: { kind: 'chart', entity: 'new_ticket', name: 'By Priority' }, state: 'create' }, spec),
+    { type: 'chart', create: chartDef(spec, spec.charts[0]) });
+  for (const item of [
+    { key: viewKey, state: 'create' },
+    { key: { kind: 'form', entity: 'new_customer', name: 'Customer' }, state: 'create' },
+    { key: viewKey, state: 'unknown', liveId: id },
+    { key: { kind: 'environmentVariable', name: 'x' }, state: 'reuse', liveId: id },
+    { key: { kind: 'table', entity: 'new_ticket' }, state: 'reuse', liveId: id },
+  ]) assert.strictEqual(previewTargetOf(item, spec), null, JSON.stringify(item));
+});
+
+test('--preview-push: repeated plan keys are made unique without taking a key another plan step carries, in either order', () => {
+  const { previewItemsForPlan } = require('../lib/sdk-build.js');
+  const { previewItemsFromPlan, validatePreviewItems } = require('../lib/push-preview.js');
+  const spec = makeSpec();
+  const form = (name) => ({ key: { kind: 'form', entity: 'new_customer', name }, state: 'reuse', liveId: PREVIEW_FORM_ID });
+  for (const [names, keys] of [
+    [['Customer', 'Customer'], ['Customer', 'Customer#2']],
+    [['Customer', 'Customer', 'Customer#2'], ['Customer', 'Customer#3', 'Customer#2']],
+    [['Customer#2', 'Customer', 'Customer'], ['Customer#2', 'Customer', 'Customer#3']],
+    [['Customer', 'Customer#2', 'Customer', 'Customer'], ['Customer', 'Customer#2', 'Customer#3', 'Customer#4']],
+  ]) {
+    const items = previewItemsForPlan(names.map(form), spec, previewItemsFromPlan);
+    assert.deepStrictEqual(items.map((i) => i.key), keys.map((k) => `form:new_customer:${k}`), names.join(', '));
+    assert.deepStrictEqual(validatePreviewItems(items).errors, [], 'the preview accepts the input');
+  }
 });

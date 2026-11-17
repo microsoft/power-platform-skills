@@ -4,7 +4,7 @@
 // row landed — verified clean. This is a metadata read, not a runtime check.
 const { test } = require('node:test');
 const assert = require('node:assert');
-const { declaredPrivileges, compareRolePrivileges, depthFromMask } = require('../lib/role-privileges.js');
+const { declaredPrivileges, compareRolePrivileges, compileRolePrivileges, depthFromMask } = require('../lib/role-privileges.js');
 const { verifySpec } = require('../lib/verify-spec.js');
 
 // A realistic privilege set as EntityDefinitions returns it.
@@ -228,4 +228,37 @@ test('depthFromMask: fails closed on an undecodable mask', () => {
 test('depthFromMask: tolerates a numeric string', () => {
   assert.strictEqual(depthFromMask('8'), 'Global');
   assert.strictEqual(depthFromMask('7'), 'Deep');
+});
+
+// compileRolePrivileges compiles a persona's requests as the vendored SDK does before ReplacePrivilegesRole: what the managed
+// download's persona proof (lib/persona-restore.js) compares a role's held privileges to. The privileges are getEntityPrivileges rows.
+const sdkPrivs = (entity, id, scopes = ['user', 'businessUnit', 'parentChild', 'organization']) => [
+  { name: `prvRead${entity}`, privilegeId: `{${id}-read}`, privilegeType: 'Read', scopes },
+  { name: `prvWrite${entity}`, privilegeId: `${id}-write`, privilegeType: 'Write', scopes },
+];
+const compiled = (m) => Object.fromEntries([...m].map(([id, v]) => [id, v.depth]));
+
+test('compileRolePrivileges keys each privilege by its bare id at the depth its scope maps to, user scope by default', () => {
+  const tables = new Map([['account', sdkPrivs('Account', 'A')], ['contact', sdkPrivs('Contact', 'C')]]);
+  const m = compileRolePrivileges([{ entity: 'account', access: ['read', 'write'] }, { entity: 'contact', access: ['read'], scope: 'organization' }], tables);
+  assert.deepStrictEqual(compiled(m), { 'a-read': 'Basic', 'a-write': 'Basic', 'c-read': 'Global' });
+  assert.strictEqual(m.get('a-read').name, 'prvReadAccount');
+});
+
+test('compileRolePrivileges merges a privilege tables share at one scope, takes the deeper scope for one table, and refuses two tables at two', () => {
+  const shared = (entity) => [{ name: 'prvReadActivity', privilegeId: 'S-read', privilegeType: 'Read', scopes: ['user', 'organization'] }];
+  const tables = new Map([['email', shared('email')], ['task', shared('task')]]);
+  assert.deepStrictEqual(compiled(compileRolePrivileges([{ entity: 'email', access: ['read'] }, { entity: 'task', access: ['read'] }], tables)), { 's-read': 'Basic' });
+  assert.deepStrictEqual(compiled(compileRolePrivileges([{ entity: 'email', access: ['read'] }, { entity: 'email', access: ['read'], scope: 'organization' }], tables)), { 's-read': 'Global' });
+  assert.throws(() => compileRolePrivileges([{ entity: 'email', access: ['read'] }, { entity: 'task', access: ['read'], scope: 'organization' }], tables), /share the privilege 'prvReadActivity' at different scopes/);
+});
+
+test('compileRolePrivileges refuses what a build would refuse: no access, an unknown scope or access, an access or scope the table lacks', () => {
+  const tables = new Map([['account', sdkPrivs('Account', 'A')], ['flow', sdkPrivs('Flow', 'F', ['organization'])]]);
+  assert.throws(() => compileRolePrivileges([{ entity: 'account', access: [] }], tables), /asks for no access/);
+  assert.throws(() => compileRolePrivileges([{ entity: 'account', access: ['read'], scope: 'global' }], tables), /unknown scope 'global'/);
+  assert.throws(() => compileRolePrivileges([{ entity: 'account', access: ['own'] }], tables), /unknown access 'own'/);
+  assert.throws(() => compileRolePrivileges([{ entity: 'account', access: ['delete'] }], tables), /does not support 'delete' access/);
+  assert.throws(() => compileRolePrivileges([{ entity: 'flow', access: ['read'] }], tables), /does not support the 'user' scope/);
+  assert.throws(() => compileRolePrivileges([{ entity: 'lead', access: ['read'] }], tables), /privileges of 'lead' are not known/);
 });

@@ -42,6 +42,7 @@ const bundledLicensePackages = [
   '@standard-schema/spec',
   '@swc/helpers',
   'zod',
+  'zod-to-json-schema',
 ];
 const licenseFileNames = {
   '@fluentui/tokens': 'fluentui-tokens.txt',
@@ -50,6 +51,7 @@ const licenseFileNames = {
   '@standard-schema/spec': 'standard-schema-spec.txt',
   '@swc/helpers': 'swc-helpers.txt',
   zod: 'zod.txt',
+  'zod-to-json-schema': 'zod-to-json-schema.txt',
 };
 
 function packageLicense(packageName) {
@@ -76,6 +78,7 @@ async function buildBundle() {
     format: 'iife',
     legalComments: 'none',
     minify: true,
+    metafile: true,
     platform: 'browser',
     target: 'es2022',
     write: false,
@@ -84,6 +87,14 @@ async function buildBundle() {
     },
   });
   assert.strictEqual(result.outputFiles.length, 1, 'expected one JavaScript bundle');
+  const inputs = Object.keys(result.metafile.inputs);
+  assert.ok(!inputs.some((input) => input.endsWith('/app-with-deps.js')),
+    'use the peer-dependent App entry so security updates come from the lockfile');
+  for (const packageName of ['@modelcontextprotocol/sdk', 'zod']) {
+    assert.ok(inputs.some((input) => input.includes(`/node_modules/${packageName}/`)
+      || input.startsWith(`node_modules/${packageName}/`)),
+    `${packageName} must be bundled from the installed dependency tree`);
+  }
   return result.outputFiles[0].text;
 }
 
@@ -109,6 +120,14 @@ function expectedProvenance(bundle) {
       '@modelcontextprotocol/ext-apps': {
         version: packageVersion('@modelcontextprotocol/ext-apps'),
         source: 'https://github.com/modelcontextprotocol/ext-apps',
+      },
+      '@modelcontextprotocol/sdk': {
+        version: packageVersion('@modelcontextprotocol/sdk'),
+        source: 'https://github.com/modelcontextprotocol/typescript-sdk',
+      },
+      zod: {
+        version: packageVersion('zod'),
+        source: 'https://github.com/colinhacks/zod',
       },
     },
     licenses: 'THIRD-PARTY-NOTICES.md',

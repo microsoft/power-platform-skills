@@ -1,0 +1,10 @@
+[
+  {
+    "role": "user",
+    "text": "Build the Revenue summary for the sales app.\n"
+  },
+  {
+    "role": "agent",
+    "text": "Created the approved Revenue summary.\n"
+  }
+]

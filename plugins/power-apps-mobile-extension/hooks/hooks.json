@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node -e \"const path=require('node:path');const root=process.env.PLUGIN_ROOT||process.env.CLAUDE_PLUGIN_ROOT;if(!root)process.exit(0);try{require(path.resolve(root,'hooks','run-telemetry.js')).start('pretool');}catch{}\"",
+            "command": "node -e 'process.on(process.argv[1],()=>{process.exitCode=0});const root=process.env.PLUGIN_ROOT||process.env.CLAUDE_PLUGIN_ROOT;if(!root)process.exit(0);try{require(require(process.argv[2]).resolve(root,process.argv[3])).start(process.argv[4])}catch{}' exit node:path hooks/run-telemetry.js pretool",
             "timeout": 30
           }
         ]
@@ -17,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node -e \"const path=require('node:path');const root=process.env.PLUGIN_ROOT||process.env.CLAUDE_PLUGIN_ROOT;if(!root)process.exit(0);try{require(path.resolve(root,'hooks','run-telemetry.js')).start('prompt');}catch{}\"",
+            "command": "node -e 'process.on(process.argv[1],()=>{process.exitCode=0});const root=process.env.PLUGIN_ROOT||process.env.CLAUDE_PLUGIN_ROOT;if(!root)process.exit(0);try{require(require(process.argv[2]).resolve(root,process.argv[3])).start(process.argv[4])}catch{}' exit node:path hooks/run-telemetry.js prompt",
             "timeout": 30
           }
         ]

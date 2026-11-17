@@ -26,6 +26,7 @@
 // Wire shapes mirrored (abridged):
 //   GET  /savedqueries(<id>)?$select=savedqueryid                                    -> ETag header (the row token)
 //   GET  /savedqueries(<id>)/Microsoft.Dynamics.CRM.RetrieveUnpublished()?$select=…  -> the row + "@odata.etag"
+//   GET  /savedqueries(<id>)?$select=name,…                                          -> the published layer (404 if never published)
 //   GET  /savedqueries/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()?$select=…&$filter=returnedtypecode eq 'x' or …  -> the saved layer, `componentstate` 0 or 1 (`$filter` by table, or by id: `savedqueryid eq <guid> or …`)
 //   GET  /EntityDefinitions(LogicalName='x')?$select=MetadataId,EntitySetName        -> the table's metadata
 //   GET  /solutioncomponents?$select=objectid,componenttype,rootcomponentbehavior&$filter=_solutionid_value eq <id> and (componenttype eq 26 or …)
@@ -151,6 +152,13 @@ function createFakeDataverse({ entities = {}, solution = { uniqueName: 'ContosoS
       if (!row) return notFound();
       const body = { ...clone(row.data), '@odata.etag': etagOf(row) };
       if (m[3]) return reply(200, body, { etag: etagOf(row) });
+      // A plain read that selects more than the id answers the PUBLISHED layer, as the platform does: the row as its
+      // table was last published, and 404 for a row no publish has named (lib/savedquery-published.js reads both layers).
+      const selected = String(query.get('$select') || '').split(',').filter(Boolean);
+      if (selected.some((f) => f !== KINDS[m[1]].id)) {
+        if (!row.publishedData) return notFound();
+        return reply(200, { ...clone(row.publishedData), '@odata.etag': etagOf(row) }, { etag: etagOf(row) });
+      }
       return reply(200, { [KINDS[m[1]].id]: row.data[KINDS[m[1]].id], '@odata.etag': etagOf(row) }, { etag: etagOf(row) });
     }
     if ((m = /^\/(savedqueries|systemforms|savedqueryvisualizations)$/.exec(p))) {
@@ -232,6 +240,7 @@ function createFakeDataverse({ entities = {}, solution = { uniqueName: 'ContosoS
             // its own because it does), so a copy held across a publish the SDK did not make is stale.
             if (publishBumpsVersion) row.version += 1;
             row.publishedVersion = row.version;
+            row.publishedData = clone(row.data);
           }
         }
       }
@@ -299,6 +308,7 @@ function createFakeDataverse({ entities = {}, solution = { uniqueName: 'ContosoS
             layoutxml: grid(`${entity}_name`) },
           version: 1, publishedVersion: 1,
         });
+        tables.savedqueries.get(id).publishedData = clone(tables.savedqueries.get(id).data);
       }
     },
     mark: () => requests.length,

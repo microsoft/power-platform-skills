@@ -277,3 +277,14 @@ test("omitted --plugin fails closed when the manifest has no name", () => {
     assert.match(stdout, /Usage:/);
   });
 });
+
+test("status discloses the Model Apps completion event, and that it carries no names", () => {
+  const { status, stdout } = run(["--action", "status", "--plugin", "model-apps"], mkTmp());
+  assert.equal(status, 0);
+  assert.match(stdout, /excludes the signed-in user's Entra object ID/);
+  assert.match(stdout, /an app\s+build or a page upload finishes/);
+  assert.match(stdout, /outcome, duration, a\s+fixed error class and per-phase step counts/);
+  assert.match(stdout, /tenant IDs of the environment it targeted/);
+  assert.match(stdout, /never app, table, page or\s+environment names/);
+  assert.doesNotMatch(stdout, /eventInfo\.aadObjectId|eventInfo\.framework/);
+});

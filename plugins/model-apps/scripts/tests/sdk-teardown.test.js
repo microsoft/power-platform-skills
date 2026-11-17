@@ -10,6 +10,7 @@ const { planTeardown, runTeardown: engineTeardown, deleteStep, odataStr, KIND_HA
 const runTeardown = (spec, opts, deps) => engineTeardown(spec, { env: 'https://contoso.crm.dynamics.com', ...opts }, deps);
 const { appUniqueName } = require(path.join(__dirname, '..', 'lib', 'sdk-build.js'));
 const { SDK_ROLE_MARKER } = require(path.join(__dirname, '..', 'lib', 'app-spec.js'));
+const { isFormScan, noFormRows } = require('./helpers/form-scan.js');
 const pageWorkspaces = [];
 function pageWorkspace() {
   const dir = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'contoso-page-teardown-'));
@@ -1169,10 +1170,17 @@ test('the table read says whether the table was there before its delete: seen, l
   assert.deepStrictEqual(await resolveWith(async () => [{ logicalName: 'new_x', isCustom: true }]), [{ id: 'new_x', logical: 'new_x', seen: true }]);
   assert.deepStrictEqual(await resolveWith(async () => [{ logicalName: 'new_xy', isCustom: true }]), [{ id: 'new_x', logical: 'new_x', seen: false }]);
   assert.deepStrictEqual(await resolveWith(async () => []), [{ id: 'new_x', logical: 'new_x', seen: false }]);
-  // A read that failed, or a list cut at the 50 matches it asks for, does not say the table is absent.
-  assert.deepStrictEqual(await resolveWith(async () => { throw new Error('HTTP 503'); }), [{ id: 'new_x', logical: 'new_x' }]);
+  // A list cut at the 50 matches it asks for does not say the table is absent.
   const fifty = Array.from({ length: 50 }, (_, i) => ({ logicalName: `new_x${i}`, isCustom: true }));
   assert.deepStrictEqual(await resolveWith(async () => fifty), [{ id: 'new_x', logical: 'new_x' }]);
+  // A read that failed says nothing about the table, so nothing is deleted on it: the step fails closed, with the reason and the error kept.
+  const failed = new Error('HTTP 503 from https://contoso.crm.dynamics.com/api/data/v9.0/EntityDefinitions?$skiptoken=2: Service Unavailable');
+  await assert.rejects(resolveWith(async () => { throw failed; }), (err) => {
+    assert.strictEqual(err.failClosed, true);
+    assert.strictEqual(err.cause, failed);
+    assert.match(err.message, /^table 'new_x' was not deleted: the environment's tables could not be read, so whether it is there, and whether it is a system table, is unknown \(HTTP 503 from /);
+    return true;
+  });
 });
 
 test('a default-view reset that finds no default view says not found; one that finds views, or fails after finding them, reads as before', async () => {
@@ -1744,6 +1752,130 @@ test('a failed business PROCESS FLOW keeps no table — the keep is scoped to bu
   assert.deepStrictEqual(res.skipped.filter((s) => s.startsWith('table ')), []);
   assert.deepStrictEqual(res.deleted.table, ['new_ticket']);
   assert.deepStrictEqual([...sdk.db.tables], []);
+});
+
+// A flow's delete is answered HTTP 500 "There is no active transaction" by the platform now and then (seen live: the teardown then stopped at the flow, kept the table, the global
+// choices and the solution, and a second run deleted everything). That one answer — by its code, or by its words when the body has no code — is sent again for the flow only, a few times.
+const NO_TRANSACTION_WORDS = 'There is no active transaction. This error is usually caused by custom plug-ins that ignore errors from service calls and continue processing.';
+const serviceAnswer = (status, error) => {
+  const url = 'https://contoso.crm.dynamics.com/api/data/v9.0/workflows(flow-def)';
+  const text = error && error.message ? error.message : 'An unexpected error occurred.';
+  return Object.assign(new Error(`HTTP ${status} from ${url}: ${text}`), { code: 'CONNECTION_ERROR', statusCode: status, url, cause: { error } });
+};
+const noTransaction = (error = { code: '0x80040251', message: NO_TRANSACTION_WORDS }) => serviceAnswer(500, error);
+const flowWorld = (answers) => {
+  const sdk = ruleEnvironment({
+    tables: ['new_ticket'],
+    rules: [{ workflowid: 'flow-def', name: 'Flow', primaryentity: 'new_ticket', category: 4, type: 1, statecode: 0 }],
+  });
+  const delivered = sdk.deleteRecord;
+  const queue = [...answers];
+  sdk.deleteRecord = async (entitySet, id) => {
+    if (id !== 'flow-def' || !queue.length) return delivered(entitySet, id);
+    sdk.calls.push({ method: 'deleteRecord', entitySet, id });
+    throw queue.shift();
+  };
+  sdk.flowDeletes = () => sdk.calls.filter((c) => c.method === 'deleteRecord' && c.id === 'flow-def').length;
+  return sdk;
+};
+const flowSpec = () => ruleSpec({
+  entities: [{ schemaName: 'new_ticket', primaryAttribute: { schemaName: 'new_name' } }],
+  views: [],
+  webResources: [],
+  businessRules: [],
+  businessProcessFlows: [{ entity: 'new_ticket', name: 'Flow' }],
+});
+// The waits between sends are real timers; none of these tests may sit through them.
+async function runFlowTeardown(sdk) {
+  const realDelay = global.setTimeout;
+  const waits = [];
+  global.setTimeout = (fn, ms) => { waits.push(ms); return realDelay(fn, 0); };
+  try {
+    return { res: await runTeardown(flowSpec(), { apply: true }, { sdk, emit: () => {} }), waits };
+  } finally {
+    global.setTimeout = realDelay;
+  }
+}
+
+test('a flow delete answered "There is no active transaction" once is sent again, and the table and the solution are then deleted in the same run', async () => {
+  const sdk = flowWorld([noTransaction()]);
+  const { res, waits } = await runFlowTeardown(sdk);
+  assert.strictEqual(res.ok, true, JSON.stringify(res.errors));
+  assert.strictEqual(sdk.flowDeletes(), 2);
+  assert.deepStrictEqual(waits.filter((ms) => ms >= 1000), [1000], 'a short wait before the one re-send');
+  assert.deepStrictEqual(res.deleted.table, ['new_ticket']);
+  assert.deepStrictEqual(sdk.workflowIds(), []);
+  assert.deepStrictEqual([...sdk.db.tables], []);
+  assert.deepStrictEqual(Object.keys(sdk.db.solutions), [], 'the solution is not kept: no step failed');
+});
+
+test('a flow delete answered that twice is sent a third time, on a growing wait', async () => {
+  const sdk = flowWorld([noTransaction(), noTransaction()]);
+  const { res, waits } = await runFlowTeardown(sdk);
+  assert.strictEqual(res.ok, true, JSON.stringify(res.errors));
+  assert.strictEqual(sdk.flowDeletes(), 3);
+  assert.deepStrictEqual(waits.filter((ms) => ms >= 1000), [1000, 2000]);
+});
+
+test('a body with no code is matched by its words', async () => {
+  const sdk = flowWorld([noTransaction({ message: NO_TRANSACTION_WORDS })]);
+  const { res } = await runFlowTeardown(sdk);
+  assert.strictEqual(res.ok, true, JSON.stringify(res.errors));
+  assert.strictEqual(sdk.flowDeletes(), 2);
+});
+
+test('the answer past the bound is the error it always was: the step fails, and the table and the solution are kept as before', async () => {
+  const sdk = flowWorld([noTransaction(), noTransaction(), noTransaction(), noTransaction(), noTransaction()]);
+  const { res } = await runFlowTeardown(sdk);
+  assert.strictEqual(sdk.flowDeletes(), 4, 'one send and three re-sends');
+  assert.deepStrictEqual(res.errors.map((e) => e.step), ['business process flow "Flow" (new_ticket)']);
+  assert.match(res.errors[0].message, /HTTP 500 .*There is no active transaction/);
+  assert.deepStrictEqual(Object.keys(sdk.db.solutions), ['S']);
+  assert.ok(res.skipped.some((s) => /^solution S \(kept — 1 earlier step\(s\) failed/.test(s)), JSON.stringify(res.skipped));
+});
+
+test('every other answer to the flow delete is sent once: another 500, the same words under another code, a 503, the code on another status', async () => {
+  for (const [what, answer] of [
+    ['another 500', serviceAnswer(500, { code: '0x80040216', message: 'An unexpected error occurred.' })],
+    ['the words under another code', noTransaction({ code: '0x80044150', message: NO_TRANSACTION_WORDS })],
+    ['a body with no OData error', serviceAnswer(500, undefined)],
+    ['a 503', serviceAnswer(503, { code: '0x80040251', message: NO_TRANSACTION_WORDS })],
+    ['an error that is no answer', Object.assign(new Error(`HTTP 500: ${NO_TRANSACTION_WORDS}`), { statusCode: 500 })],
+  ]) {
+    const sdk = flowWorld([answer]);
+    const { res } = await runFlowTeardown(sdk);
+    assert.strictEqual(sdk.flowDeletes(), 1, what);
+    assert.deepStrictEqual(res.errors.map((e) => e.step), ['business process flow "Flow" (new_ticket)'], what);
+  }
+});
+
+test('the same answer on any other step is not sent again', async () => {
+  const sdk = ruleWorld();
+  const deleted = sdk.deleteRecord;
+  let sends = 0;
+  sdk.deleteRecord = async (entitySet, id) => {
+    if (id !== 'gate-def') return deleted(entitySet, id);
+    sends++;
+    throw noTransaction();
+  };
+  const realDelay = global.setTimeout;
+  global.setTimeout = (fn) => realDelay(fn, 0);
+  try {
+    const res = await runTeardown(ruleSpec(), { apply: true }, { sdk, emit: () => {} });
+    assert.deepStrictEqual(res.errors.map((e) => e.step), ['business rule "Gate" (new_ticket)']);
+  } finally {
+    global.setTimeout = realDelay;
+  }
+  assert.strictEqual(sends, 1, 'a business rule delete is sent once');
+});
+
+test('a re-send answered 404 means the first delete had committed: the flow is gone and the run goes on', async () => {
+  const gone = Object.assign(new Error('HTTP 404 from https://contoso.crm.dynamics.com/api/data/v9.0/workflows(flow-def): Does Not Exist'), { code: 'CONNECTION_ERROR', statusCode: 404, cause: { error: { code: '0x80040217', message: 'Does Not Exist' } } });
+  const sdk = flowWorld([noTransaction(), gone]);
+  const { res } = await runFlowTeardown(sdk);
+  assert.strictEqual(res.ok, true, JSON.stringify(res.errors));
+  assert.strictEqual(sdk.flowDeletes(), 2);
+  assert.deepStrictEqual(Object.keys(sdk.db.solutions), []);
 });
 
 test('a dry run is unchanged: the same plan, nothing read or written, nothing kept', async () => {
@@ -2412,6 +2544,7 @@ function genpageSdk({ manifestPages = [], livePages = [], files = {} } = {}) {
     // The saved layer of the page table: { value: [{ uxagentprojectid, name, componentstate }] }. Any other read is refused, as it is when no Dataverse client is there.
     dataverse: {
       async get(url) {
+        if (isFormScan(url)) return noFormRows();
         if (!url.startsWith('/uxagentprojects/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()')) throw new Error(`unexpected read ${url}`);
         queried.push('uxagentproject (saved layer)');
         const asked = (url.match(/uxagentprojectid eq [0-9a-f-]{36}/gi) || []).map((clause) => clause.slice('uxagentprojectid eq '.length).toLowerCase());
@@ -2633,6 +2766,7 @@ function pageTeardownRun({ pageDelete, manifestRead, liveQuery, declareManifest 
     // The pages in their saved layer, which is where teardown looks for them.
     dataverse: {
       get: async (url) => {
+        if (isFormScan(url)) return noFormRows();
         if (!url.startsWith('/uxagentprojects/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()')) throw new Error(`unexpected read ${url}`);
         if (liveQuery) liveQuery();
         return { status: 200, body: { value: [...state.pages].map((id) => ({ uxagentprojectid: id, name: 'Overview', componentstate: 0 })) } };
@@ -3179,4 +3313,197 @@ test('#587 a non-GUID role id still resolves — the GUID test is an injection g
   };
   assert.deepStrictEqual(await KIND_HANDLERS.role.resolve(sdk, { name: 'Dispatcher' }),
     [{ id: 'r1', name: 'Dispatcher' }]);
+});
+
+// The only active Main form of a table the build created: the platform refuses the explicit form delete (HTTP 400, "You must have at least one active
+// Main form"), and the table's own delete, a few steps later, removes the form with it. The refusal alone used to fail the run and keep the solution, so a
+// second run was needed. Now the refusal waits for the tables step, and stands as a failure unless this run deleted the form's table AND a fresh read of
+// the form's exact id shows it gone.
+const MAIN_FORM_ID = 'f33a200d-0a76-4c52-b1d2-4d0a7c230991';
+const LAST_MAIN_FORM_MESSAGE = 'This operation can’t be completed. You must have at least one active Main form.';
+// FallbackFormDeactivation, https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/web-service-error-codes — the code alone names the refusal.
+const LAST_MAIN_FORM_CODE = '0x8004F661';
+const lastMainFormAnswer = (over = {}) => serviceAnswer(400, { code: LAST_MAIN_FORM_CODE, message: LAST_MAIN_FORM_MESSAGE, ...over });
+const mainFormSpec = (entityOver = {}) => ({
+  solution: { uniqueName: 'S', publisherPrefix: 'new' },
+  entities: [{ schemaName: 'new_ticket', primaryAttribute: { schemaName: 'new_name' }, ...entityOver }],
+  forms: [{ entity: 'new_ticket', name: 'Information', formType: 'Main' }],
+});
+// `refuse` is what the form delete answers; `read` is how the form's exact id answers after the run's table delete: 'gone' (404 with the missing-row
+// code, in both layers), 'present' (the row), 'unreadable' (HTTP 500), or 'throws'. `tableDelete: 'fails'` makes the table's delete answer HTTP 500.
+function mainFormWorld({ refuse = lastMainFormAnswer(), read = 'gone', tableDelete = 'works', extraForms = {} } = {}) {
+  const sdk = mockSdk({
+    solutions: { S: { solutionid: 'sol-1', uniquename: 'S' } },
+    tables: ['new_ticket'],
+    forms: { 'new_ticket:Information': { formid: MAIN_FORM_ID, name: 'Information' }, ...extraForms },
+  });
+  const realDeleteTable = sdk.deleteTable;
+  sdk.deleteTable = async (logical) => {
+    if (tableDelete === 'fails') { sdk.calls.push({ method: 'deleteTable', logical }); throw serviceAnswer(500, { message: 'Service Unavailable' }); }
+    try { return await realDeleteTable(logical); } finally {
+      // The table takes its forms with it, except when the run is set up to read the row as still there.
+      if (read !== 'present') for (const key of Object.keys(sdk.db.forms)) if (key.startsWith(`${logical}:`)) delete sdk.db.forms[key];
+    }
+  };
+  const realDelete = sdk.deleteRemoteArtifact;
+  sdk.deleteRemoteArtifact = async (type, id) => {
+    if (type === 'form' && refuse) { sdk.calls.push({ method: 'deleteRemoteArtifact', type, id }); throw refuse; }
+    return realDelete(type, id);
+  };
+  sdk.formReads = [];
+  sdk.dataverse = {
+    async get(url) {
+      sdk.formReads.push(url);
+      if (read === 'throws') throw new Error('socket hang up');
+      if (read === 'unreadable') return { status: 500, headers: {}, body: { error: { code: '0x80044150', message: 'Service Unavailable' } } };
+      if (read === 'present') return { status: 200, headers: {}, body: { formid: MAIN_FORM_ID, name: 'Information', description: null, formxml: '<form />' } };
+      return { status: 404, headers: {}, body: { error: { code: '0x80040217', message: `systemform With Id = ${MAIN_FORM_ID} Does Not Exist` } } };
+    },
+  };
+  return sdk;
+}
+async function runMainFormTeardown(sdk, spec = mainFormSpec()) {
+  const events = [];
+  const counts = { ok: 0, skip: 0, error: 0 };
+  const lines = [];
+  const logEmit = require(path.join(__dirname, '..', 'teardown-model-app.js')).cliEmit((line) => lines.push(line), { apply: true, counts });
+  const res = await runTeardown(spec, { apply: true }, { sdk, emit: (e) => { events.push(e); logEmit(e); } });
+  return { res, events, counts, lines };
+}
+const solutionLeft = (sdk) => Object.keys(sdk.db.solutions);
+
+test('the refusal of a table\'s only Main form is settled by the table delete: one run deletes the solution, reports the form removed with its table, and succeeds', async () => {
+  const sdk = mainFormWorld();
+  const { res, events, counts, lines } = await runMainFormTeardown(sdk);
+  assert.strictEqual(res.ok, true, JSON.stringify(res.errors));
+  assert.deepStrictEqual(res.errors, []);
+  assert.deepStrictEqual(res.deleted.form, [MAIN_FORM_ID]);
+  assert.deepStrictEqual(res.deleted.table, ['new_ticket']);
+  assert.deepStrictEqual(solutionLeft(sdk), [], 'the solution is deleted in the same run');
+  assert.deepStrictEqual(sdk.calls.filter((c) => /^delete/.test(c.method)).map((c) => `${c.method} ${c.type || c.logical || ''}`.trim()),
+    ['deleteRemoteArtifact form', 'deleteTable new_ticket', 'deleteSolution'], 'the form delete is still sent first, and sent once');
+  assert.strictEqual(events.filter((e) => e.status === 'error').length, 0, 'no failure is reported, not even for a moment');
+  assert.deepStrictEqual(events.filter((e) => e.label && e.label.startsWith('form ')).map((e) => [e.status, e.label]),
+    [['start', 'form "Information" (new_ticket)'], ['ok', 'form "Information" (new_ticket) (1 deleted — removed with its table new_ticket)']]);
+  assert.deepStrictEqual(counts, { ok: 3, skip: 0, error: 0 }, 'form, table and solution are all deleted: the closing summary reads 3 deleted, 0 failed');
+  assert.ok(lines.some((l) => l.includes('✓') && l.includes('form "Information"')), lines.join('\n'));
+  assert.deepStrictEqual(sdk.formReads.length, 2, 'the exact id is read once per layer');
+  assert.ok(sdk.formReads.every((u) => u.includes(`/systemforms(${MAIN_FORM_ID})`)));
+});
+
+test('the same refusal does not settle when the form\'s table is retained: the failure stands, nothing is sent to the form\'s id again, and the solution is kept', async () => {
+  const sdk = mainFormWorld();
+  const { res, counts } = await runMainFormTeardown(sdk, mainFormSpec({ existing: true }));
+  assert.strictEqual(res.ok, false);
+  assert.strictEqual(res.errors.length, 1);
+  assert.match(res.errors[0].message, /You must have at least one active Main form/);
+  assert.strictEqual(res.deleted.form, undefined);
+  assert.strictEqual(sdk.calls.filter((c) => c.method === 'deleteTable').length, 0);
+  assert.deepStrictEqual(sdk.formReads, [], 'no table was deleted, so there is nothing to confirm');
+  assert.deepStrictEqual(solutionLeft(sdk), ['S']);
+  assert.strictEqual(counts.error, 1);
+});
+
+test('the refusal stands when the table delete failed: the form is not read, the table and the solution are kept', async () => {
+  const sdk = mainFormWorld({ tableDelete: 'fails' });
+  const { res } = await runMainFormTeardown(sdk);
+  assert.strictEqual(res.ok, false);
+  assert.deepStrictEqual(res.errors.map((e) => e.step), ['form "Information" (new_ticket)', 'table new_ticket']);
+  assert.deepStrictEqual(sdk.formReads, []);
+  assert.deepStrictEqual(solutionLeft(sdk), ['S']);
+});
+
+for (const [read, what] of [['present', 'still there (200)'], ['unreadable', 'unreadable (HTTP 500)'], ['throws', 'unreadable (the read throws)']]) {
+  test(`the refusal stands when the table was deleted but the form's exact id is ${what}: exit 1 and the solution is kept`, async () => {
+    const sdk = mainFormWorld({ read });
+    const { res, events, counts } = await runMainFormTeardown(sdk);
+    assert.strictEqual(res.ok, false);
+    assert.strictEqual(res.errors.length, 1);
+    assert.strictEqual(res.errors[0].step, 'form "Information" (new_ticket)');
+    assert.match(res.errors[0].message, /HTTP 400 from .*You must have at least one active Main form/);
+    assert.strictEqual(res.deleted.form, undefined, 'not counted as removed');
+    assert.deepStrictEqual(res.deleted.table, ['new_ticket']);
+    assert.deepStrictEqual(solutionLeft(sdk), ['S']);
+    const formEvents = events.filter((e) => e.label === 'form "Information" (new_ticket)').map((e) => e.status);
+    assert.deepStrictEqual(formEvents, ['start', 'error']);
+    assert.strictEqual(counts.error, 1);
+  });
+}
+
+test('a form is read as gone only when BOTH layers answer the missing-row 404: a published 404 beside a saved row stands as a failure', async () => {
+  const sdk = mainFormWorld();
+  sdk.dataverse.get = async (url) => (/RetrieveUnpublished/.test(url)
+    ? { status: 200, headers: {}, body: { formid: MAIN_FORM_ID, name: 'Information', description: null, formxml: '<form />' } }
+    : { status: 404, headers: {}, body: { error: { code: '0x80040217', message: 'Does Not Exist' } } });
+  const { res } = await runMainFormTeardown(sdk);
+  assert.strictEqual(res.ok, false);
+  assert.deepStrictEqual(solutionLeft(sdk), ['S']);
+});
+
+test('the refusal is recognised by its code alone: a localized message, or the code in another case, settles with the table', async () => {
+  for (const refuse of [
+    lastMainFormAnswer({ message: 'Diese Operation kann nicht abgeschlossen werden. Es muss mindestens ein aktives Hauptformular vorhanden sein.' }),
+    lastMainFormAnswer({ code: LAST_MAIN_FORM_CODE.toLowerCase(), message: 'Something else entirely' }),
+  ]) {
+    const sdk = mainFormWorld({ refuse });
+    const { res, counts } = await runMainFormTeardown(sdk);
+    assert.strictEqual(res.ok, true, JSON.stringify(res.errors));
+    assert.deepStrictEqual(res.deleted.form, [MAIN_FORM_ID]);
+    assert.deepStrictEqual(solutionLeft(sdk), []);
+    assert.deepStrictEqual(counts, { ok: 3, skip: 0, error: 0 });
+  }
+});
+
+for (const [name, answer] of [
+  ['another HTTP 400 of a form delete', () => serviceAnswer(400, { message: 'The form is referenced by 1 other component.' })],
+  ['the same code and words under another status', () => serviceAnswer(403, { code: LAST_MAIN_FORM_CODE, message: LAST_MAIN_FORM_MESSAGE })],
+  ['an error that is no answer of the platform', () => new Error(`You must have at least one active Main form`)],
+  ['an unrelated coded HTTP 400 that quotes the words', () => serviceAnswer(400, { code: '0x80040265', message: 'Delete blocked by validation rule "You must have at least one active Main form": approval is required.' })],
+  ['the right message with no code', () => serviceAnswer(400, { message: LAST_MAIN_FORM_MESSAGE })],
+  ['the right message with an empty code', () => serviceAnswer(400, { code: '', message: LAST_MAIN_FORM_MESSAGE })],
+  ['the related FallbackFormDeletion code (0x8004F654)', () => serviceAnswer(400, { code: '0x8004F654', message: LAST_MAIN_FORM_MESSAGE })],
+]) {
+  test(`${name} stays a failure exactly as before: reported at once, never read back, solution kept`, async () => {
+    const sdk = mainFormWorld({ refuse: answer() });
+    const { res, events } = await runMainFormTeardown(sdk);
+    assert.strictEqual(res.ok, false);
+    assert.strictEqual(res.errors.length, 1);
+    assert.strictEqual(res.errors[0].message, answer().message, 'the original error is kept');
+    assert.deepStrictEqual(sdk.formReads, []);
+    assert.deepStrictEqual(solutionLeft(sdk), ['S']);
+    const formEvents = events.filter((e) => e.label === 'form "Information" (new_ticket)');
+    assert.deepStrictEqual(formEvents.map((e) => e.status), ['start', 'error']);
+    assert.deepStrictEqual(res.deleted.table, ['new_ticket'], 'the table step still runs, as before');
+  });
+}
+
+test('a table with several Main forms is unchanged: every form is deleted explicitly, nothing is read back, and the request order is the old one', async () => {
+  const second = '0a0b0c0d-0000-4000-8000-000000000002';
+  const sdk = mainFormWorld({ refuse: null, extraForms: { 'new_ticket:Second': { formid: second, name: 'Second' } } });
+  const spec = mainFormSpec();
+  spec.forms.push({ entity: 'new_ticket', name: 'Second', formType: 'Main' });
+  const { res, events } = await runMainFormTeardown(sdk, spec);
+  assert.strictEqual(res.ok, true, JSON.stringify(res.errors));
+  assert.deepStrictEqual(res.deleted.form, [MAIN_FORM_ID, second]);
+  assert.deepStrictEqual(sdk.formReads, []);
+  assert.deepStrictEqual(sdk.calls.filter((c) => /^delete/.test(c.method)).map((c) => `${c.method} ${c.id || c.logical || ''}`.trim()),
+    [`deleteRemoteArtifact ${MAIN_FORM_ID}`, `deleteRemoteArtifact ${second}`, 'deleteTable new_ticket', 'deleteSolution sol-1']);
+  assert.ok(events.filter((e) => e.status === 'ok').every((e) => !/removed with its table/.test(e.label)));
+});
+
+test('a refused last Main form of one table settles with its table while another form of the run fails for its own reason', async () => {
+  const other = '0a0b0c0d-0000-4000-8000-000000000003';
+  const sdk = mainFormWorld({ extraForms: { 'new_ticket:Quick': { formid: other, name: 'Quick' } } });
+  const realDelete = sdk.deleteRemoteArtifact;
+  sdk.deleteRemoteArtifact = async (type, id) => {
+    if (type === 'form' && id === other) { sdk.calls.push({ method: 'deleteRemoteArtifact', type, id }); throw serviceAnswer(400, { message: 'The form is referenced by 1 other component.' }); }
+    return realDelete(type, id);
+  };
+  const spec = mainFormSpec();
+  spec.forms.push({ entity: 'new_ticket', name: 'Quick', formType: 'Main' });
+  const { res } = await runMainFormTeardown(sdk, spec);
+  assert.strictEqual(res.ok, false, 'the other form\'s failure is not cleared by the first form\'s settlement');
+  assert.deepStrictEqual(res.errors.map((e) => e.step), ['form "Quick" (new_ticket)']);
+  assert.deepStrictEqual(res.deleted.form, [MAIN_FORM_ID]);
+  assert.deepStrictEqual(solutionLeft(sdk), ['S']);
 });

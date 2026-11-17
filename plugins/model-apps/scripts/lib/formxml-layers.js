@@ -112,4 +112,99 @@ function sameFormXmlAcrossLayers(published, saved, versions) {
   return withoutCaptionsOutside(published, publishedCaptions, none) === withoutCaptionsOutside(saved, savedCaptions, none);
 }
 
-module.exports = { sameFormXmlAcrossLayers };
+// The captions of one FormXML and, for each <labels> element that holds a caption of a valid language, the languages its captions are in; null when
+// the text is not one well-formed XML document. The reader answers elements in the order their start tags are in the text, so the <labels> elements
+// still open at a caption are the ones whose span has not ended before it, and the innermost of them is the caption's parent.
+function captionSetsOf(xml) {
+  const read = readXmlElements(xml, (name) => name === 'label' || name === 'labels', { spans: true });
+  if (!read.ok) return null;
+  const captions = [];
+  const sets = [];
+  const open = [];
+  for (const element of read.elements) {
+    while (open.length && open[open.length - 1].end <= element.start) open.pop();
+    if (element.name === 'labels') {
+      const set = { end: element.end, languages: new Set() };
+      sets.push(set);
+      open.push(set);
+      continue;
+    }
+    if (!isCaption(element)) continue;
+    captions.push(element);
+    const lcid = languageOf(element);
+    if (lcid !== null && open.length) open[open.length - 1].languages.add(lcid);
+  }
+  return { captions, sets: sets.filter((s) => s.languages.size > 0) };
+}
+
+/**
+ * A systemform's SAVED FormXML as the build compares it with the PUBLISHED one (lib/systemform-published.js), with the captions the published read
+ * cannot carry set aside. Unlike sameFormXmlAcrossLayers this is a function of the saved text and of the languages the published read carries, and
+ * the PUBLISHED text is never changed: a managed group records the hash of this text as what its publish must put live (`publication.desiredSha256`),
+ * often before the row has any published layer (a create), and a later read must hash the published text to that same value.
+ *
+ * Measured live, in an organization with a second language (3082) provisioned beside its base one (1033), the saved read of every form and dashboard
+ * carries a 3082 caption beside the 1033 one on SOME of its <labels> elements — those whose field, view or sub-grid has a name in that language — and
+ * the published read carries none, nothing else differing; e.g. a form's cell:
+ *   saved      <labels><label description="Site Name" languagecode="1033" /><label description="Site Name" languagecode="3082" /></labels>
+ *   published  <labels><label description="Site Name" languagecode="1033" /></labels>
+ * Compared as text, no publish of a form or dashboard in such an organization could ever be confirmed.
+ *
+ * THE RULE. A caption of the saved text is set aside — its own empty-element `<label … />` tag and nothing else — only when its language (a valid
+ * LCID, normalizeLanguageCode) is BOTH:
+ *   - not on every <labels> element of the saved text that holds a caption: the base language is on every one (the platform keeps a label of it on
+ *     each), so a language on only some is a translation the platform or a maker added, never the one every reader is shown; and
+ *   - carried by no caption of the published read (`published` null: the row has no published layer, so none is).
+ * Everything else is compared byte for byte as before, so a language both layers carry is always compared: a caption of it added, removed or changed
+ * is a difference, as is anything that is not a caption. A text that is not one well-formed document, or a saved text where no language is on every
+ * <labels> element, sets nothing aside. In an organization of one language nothing is ever set aside, and the text is returned unchanged.
+ *
+ * NOT COMPARED, by this rule: a caption (a form's, a dashboard's tab, section or cell label) in a language the published read does not return and that
+ * is not on every label of the saved form — so a change only to such a translation is neither seen as unpublished nor stops a publish as drift.
+ * A saved form that carries a second language on EVERY label, or a published read in more than one language (a user whose own language is not the
+ * base one), sets nothing aside the other read lacks, so its publish stays unconfirmed: fail closed, as before.
+ *
+ * This is the PUBLICATION VIEW — the saved layer as the saved/published comparison sees it (the layer readers' savedSha256 and a managed group's
+ * `publication.desiredSha256`) — and nothing else. It certifies no content, and no proof is made of it. A declared DASHBOARD's proof that its saved
+ * row is what the build sent (dashboard-reconcile.js proveDashboard) holds the row as read, every caption in every language, so a caption with text
+ * this sets aside (a maker's caption in 3082 or 1036, say) still fails it. That is the dashboard's proof, and no claim about forms: what a declared
+ * form's read-back compares is its own (form-layout-reconcile.js), and a Maker edit made to a form while it is being written is a known limitation.
+ *
+ *   comparableSavedFormXml('<form>…<labels><label description="Name" languagecode="1033" /><label description="Nombre" languagecode="3082" /></labels>…'
+ *                          + '<labels><label description="Code" languagecode="1033" /></labels>…</form>',
+ *                          '<form>…<labels><label description="Name" languagecode="1033" /></labels>…<labels><label description="Code" languagecode="1033" /></labels>…</form>')
+ *     → the saved text without `<label description="Nombre" languagecode="3082" />`
+ *
+ * @param {*} saved the saved read's FormXML; anything that is not text is returned as it is
+ * @param {string|null} published the published read's FormXML, or null when the row has no published layer
+ * @returns {*} `saved`, with the captions the rule sets aside taken out
+ */
+function comparableSavedFormXml(saved, published) {
+  const { own, kept } = captionsKeptOf(saved, published);
+  return own ? withoutCaptionsOutside(saved, own.captions, kept) : saved;
+}
+
+// THE RULE of comparableSavedFormXml: { own, kept } — the saved text's captions (captionSetsOf) and the languages compared — or { own: null } when it
+// sets nothing aside (a saved text that is not text or not one document, or a published read that is not either, or no language on every <labels>).
+function captionsKeptOf(saved, published) {
+  const nothing = { own: null, kept: null };
+  if (typeof saved !== 'string') return nothing;
+  if (published !== null && typeof published !== 'string') return nothing;
+  const own = captionSetsOf(saved);
+  if (!own || !own.sets.length) return nothing;
+  let common = null;
+  for (const { languages } of own.sets) common = common ? new Set([...common].filter((lcid) => languages.has(lcid))) : new Set(languages);
+  if (!common.size) return nothing;
+  const kept = new Set(common);
+  if (published !== null) {
+    const theirs = captionsOf(published);
+    if (!theirs) return nothing;
+    for (const caption of theirs) {
+      const lcid = languageOf(caption);
+      if (lcid !== null) kept.add(lcid);
+    }
+  }
+  return { own, kept };
+}
+
+module.exports = { sameFormXmlAcrossLayers, comparableSavedFormXml };

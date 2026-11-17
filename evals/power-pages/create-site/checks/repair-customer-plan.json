@@ -1,0 +1,43 @@
+{
+  "files": [
+    {
+      "path": "docs/repair-customer-plan.html",
+      "type": "html",
+      "responsive": false,
+      "requiredText": [
+        "Contoso Repairs",
+        "/book",
+        "/track",
+        "React",
+        "#175a40"
+      ],
+      "headings": ["Design"],
+      "requiredPatterns": [
+        "keyboard|focus",
+        "loading",
+        "approval|approve|proposed",
+        "typograph|font",
+        "palette|colour|color",
+        "hero",
+        "signature",
+        "contrast",
+        "reduced.motion"
+      ],
+      "minTextLength": 200,
+      "forbiddenPatterns": [
+        "\\{\\{[A-Z_][A-Z_0-9]*\\}\\}",
+        "__[A-Z][A-Z_]+__"
+      ]
+    }
+  ],
+  "unchanged": [
+    {
+      "path": "inputs/repair-customer-plan.json",
+      "source": "fixtures/repair-customer-plan.json"
+    }
+  ],
+  "absent": [
+    "package.json",
+    "src/App.tsx"
+  ]
+}

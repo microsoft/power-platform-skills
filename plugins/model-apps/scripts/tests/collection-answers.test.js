@@ -225,7 +225,7 @@ const recording = (response) => {
 };
 const TABLE = { LogicalName: 'new_widget', SchemaName: 'new_Widget', EntitySetName: 'new_widgets', IsCustomEntity: true, DisplayName: { UserLocalizedLabel: { Label: 'Widget' } } };
 
-test('REAL BUNDLE: an SDK made through lib/maker-sdk.js fails findTables() on an answer that is no list — as an SdkError with its own code, not the SDK\u2019s ConnectionError — and the bundle\u2019s own factory reads it as no tables', async (t) => {
+test('REAL BUNDLE: an SDK made through lib/maker-sdk.js fails findTables() on an answer that is no list — as an SdkError with its own code, not the SDK\u2019s ConnectionError — and the bundle\u2019s own factory refuses it too, without that code', async (t) => {
   const noValue = [answerOf(200, '{}'), answerOf(200, null), answerHtml, answerOf(200, 'Service Unavailable')];
   for (const response of [...noValue, answerOf(200, { value: 'x' })]) {
     const sdk = createMakerSdk({ workspaceStorage: withWorkspace(t), instanceUrl: ORIGIN, httpClient: recording(response) });
@@ -237,10 +237,19 @@ test('REAL BUNDLE: an SDK made through lib/maker-sdk.js fails findTables() on an
       return true;
     }, JSON.stringify(response.body));
   }
-  // The premise, which is the hole: the bundle on its own reads each of those answers as an environment with no table at all.
+  // The bundle on its own used to read each of those answers as an environment with no table at all — the hole the guard was made for.
+  // The bundled SDK now refuses them itself, as a ConnectionError of the 200 it read ("paginated read returned a malformed page"). The
+  // guard stays in front of it: it answers first, so every script still gets TABLES_UNREADABLE — the code the callers recognise
+  // (unreadableAnswer) — and the words that say this is not an empty environment and that signing in again is the remedy.
   for (const response of noValue) {
     const unguarded = bundle.createMakerSdk({ workspaceStorage: withWorkspace(t), instanceUrl: ORIGIN, httpClient: recording(response) });
-    assert.deepStrictEqual(await unguarded.findTables('new_widget'), [], JSON.stringify(response.body));
+    await assert.rejects(unguarded.findTables('new_widget'), (err) => {
+      assert.ok(err instanceof ConnectionError, 'the bundle refuses it as a ConnectionError');
+      assert.strictEqual(err.code, 'CONNECTION_ERROR');
+      assert.strictEqual(err.statusCode, 200);
+      assert.match(err.message, /malformed page/);
+      return true;
+    }, JSON.stringify(response.body));
   }
 });
 

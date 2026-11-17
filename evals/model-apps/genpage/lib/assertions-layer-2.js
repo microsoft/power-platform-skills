@@ -30,8 +30,9 @@ const {
   reviewSummaryProblems, formFieldLabelProblems, searchAndFilterProblems,
   translateCoverageProblems, choiceEnumProblems,
 } = require('./page-checks.js');
-const { nestedDefinitionProblems, renderedSource } = require('./tsx-structure.js');
+const { nestedDefinitionProblems, renderedSource, unreadableElementProblems } = require('./tsx-structure.js');
 const { columnProblems } = require('./column-contract.js');
+const { SCROLL_CONTEXT_ASSERTION, gradeScrollContext } = require('./scroll-context.js');
 
 let _verifiedIcons = null;
 function getVerifiedIcons() {
@@ -528,6 +529,12 @@ ASSERTIONS.set(
   }
 );
 
+// ── scroll context (AB#6793599) ──
+// Graded by the plugin's own rule (lib/scroll-context.js), with the pages captured before the rule
+// reported as skips that name their verdict.
+ASSERTIONS.set(SCROLL_CONTEXT_ASSERTION, gradeScrollContext);
+// ── end scroll context ──
+
 const PHASE5_EXPECTATIONS = new Map();
 
 PHASE5_EXPECTATIONS.set(
@@ -758,7 +765,11 @@ function objectProperties(content, keep, isLiteral, name) {
   return out;
 }
 
+// A page with an element whose type arguments this reader cannot read (unreadableElementProblems) fails: its attribute
+// strings are not decoded, and which characters after it are text is the lexer's guess, so a symbol could hide there.
 function hardcodedFormatProblem(content) {
+  const [unreadable] = unreadableElementProblems(content);
+  if (unreadable) return unreadable;
   const keep = blankNonCodePreservingTemplateExpressions(content);
   const comment = new Uint8Array(content.length);
   for (const { start, end } of commentRanges(content)) comment.fill(1, start, end);

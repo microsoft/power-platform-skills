@@ -285,3 +285,37 @@ test("nested tree item keyboard handling does not bubble to ancestors", () => {
     visibleTreeItems()[1].dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
     expect(document.activeElement?.textContent).toBe("GrandchildOpen");
 });
+
+test("focus stays on a non-first tree item across updateView", () => {
+    const { container, control, context } = mount(deepHierarchyDataSet());
+    const visibleTreeItems = () => Array.from(container.querySelectorAll('[role="treeitem"]')) as HTMLElement[];
+
+    visibleTreeItems()[0].focus();
+    visibleTreeItems()[0].dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+    expect(document.activeElement?.textContent).toBe("ChildOpenGrandchildOpen");
+
+    control.updateView(context);
+
+    // The re-render replaces the tree's elements, so the focused element must be the new "Child" node,
+    // and it must keep the single roving tab stop rather than handing it back to the first item.
+    expect(container.contains(document.activeElement)).toBe(true);
+    expect((document.activeElement as HTMLElement).getAttribute("aria-level")).toBe("2");
+    expect(document.activeElement?.textContent).toBe("ChildOpenGrandchildOpen");
+    expect(visibleTreeItems().map((item) => item.tabIndex)).toEqual([-1, 0, -1]);
+});
+
+test("buttons nested in tree items stay out of the tab order", () => {
+    const { container, control, context } = mount(deepHierarchyDataSet());
+    const treeButtons = () => Array.from(container.querySelectorAll('[role="tree"] button')) as HTMLButtonElement[];
+
+    expect(treeButtons().length).toBeGreaterThan(0);
+    expect(treeButtons().map((button) => button.tabIndex)).toEqual(treeButtons().map(() => -1));
+
+    const visibleTreeItems = () => Array.from(container.querySelectorAll('[role="treeitem"]')) as HTMLElement[];
+    visibleTreeItems()[0].focus();
+    visibleTreeItems()[0].dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true }));
+    control.updateView(context);
+
+    expect(treeButtons().map((button) => button.tabIndex)).toEqual(treeButtons().map(() => -1));
+    expect(Array.from(container.querySelectorAll('[role="tree"] [tabindex="0"]')).map((item) => item.getAttribute("role"))).toEqual(["treeitem"]);
+});

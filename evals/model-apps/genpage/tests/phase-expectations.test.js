@@ -613,6 +613,33 @@ test('eval 13: a currency symbol or a date format spelled with character referen
   assertPass(gradeCode(text, page("const label = '&#36;' + total; return null;")));
 });
 
+// The page compiler erases a component's type arguments, so the string of a generic component's attribute renders like any
+// other: `<DataGridRow<Row> title="&euro;" />` shows "€". A tag whose type arguments are not names only (a function, string,
+// template or other type) is one the reader cannot bound for certain (lib/tsx-structure.js), so the check fails on it
+// rather than pass a symbol it could not see.
+test('eval 13: a currency symbol in a generic component\u2019s attribute is hardcoded too, and a tag the reader cannot read fails', () => {
+  const text = 'Phase 5 (Page Builder): Generated .tsx does NOT hardcode currency symbols or date formats';
+  const page = (body) => [{ name: 'page.tsx', content: `export default function GeneratedComponent() {\n  ${body}\n}\n` }];
+  for (const tag of ['<DataGridRow<Row>', '<A <Row>', '<A /* row */ <Row>', '<A\n<Row>', '<A\r\n<Row>', '<Grid<Map<string, Row[]>>', '<A.B<T | U, V & W>', '<A<B>']) {
+    assertFail(gradeCode(text, page(`return ${tag} title="&euro;" />;`)), /hardcoded currency symbol "\u20ac"/);
+  }
+  assertFail(gradeCode(text, page('return <DataGridRow<Row> title="&#36;100" />;')), /hardcoded "\$" currency symbol/);
+  assertPass(gradeCode(text, page('return <DataGridRow<Row> title={t("total")} aria-label="&amp;" />;')));
+  const unreadable = [
+    '<A<() => () => "<B<() => string>>"> title="&euro;">Hello</A>',
+    '<DataGridRow<() => () => string /* <B<() => string>> */> title="&euro;" />',
+    '<A<() => "a\\\nb"> title="&euro;" />',
+    '<A<() => "a\\\r\nb"> title="&euro;" />',
+    '<A<() => `x${string /* the type\'s name */}y`> title={t("ok")} />',
+    '<A<"a\\"//"> title="&euro;" />',
+    '<A<"a\\"/*"> title="&euro;" />',
+  ];
+  for (const tag of unreadable) {
+    const name = tag.match(/^<(\w+)/)[1];
+    assertFail(gradeCode(text, page(`return ${tag};`)), new RegExp(`^page\\.tsx: <${name}> at line 2, column 10 has type arguments that are not only names`));
+  }
+});
+
 // --- Eval 15 -----------------------------------------------------------------------------------
 
 const E15 = '15-support-tickets-real';
@@ -703,9 +730,15 @@ test('eval 15: the choice options of the input JSON are labels in the plan\'s or
   assertPass(grade(TICKET_CHOICES, withInput(ticketInput())));
   // A label in several languages is a label too.
   assertPass(grade(TICKET_CHOICES, withInput(ticketInput([{ 1033: 'Low', 1036: 'Bas' }, 'Medium', 'High', 'Critical']))));
-  // The shape the entity-builder page used to show: refused by the plugin's own gate, before anything is written.
+  // The explicit form (2.21.0): each option states the number the plan gives its label, so the column is the same.
   const labelValue = ticketInput(['Low', 'Medium', 'High', 'Critical'].map((label, i) => ({ label, value: 100000000 + i })));
-  assertFail(grade(TICKET_CHOICES, withInput(labelValue)), /provision-entities\.js refuses the captured input: .*options\[0\]: 'label' is not an LCID/);
+  assertPass(grade(TICKET_CHOICES, withInput(labelValue)));
+  assertPass(grade(TICKET_CHOICES, withInput(ticketInput([{ value: 100000000, label: { 1033: 'Low', 1036: 'Bas' } }, 'Medium', 'High', 'Critical']))));
+  // ... but a number the plan does not give that label renumbers the column, and a malformed option is refused by the plugin's gate.
+  assertFail(grade(TICKET_CHOICES, withInput(ticketInput(['Low', 'Medium', 'High', 'Critical'].map((label, i) => ({ label, value: i + 1 }))))),
+    /ticket priority options are .*, but the plan numbers Low, Medium, High, Critical from 100000000/);
+  assertFail(grade(TICKET_CHOICES, withInput(ticketInput([{ label: 'Low', value: 100000000, color: 'red' }, 'Medium', 'High', 'Critical']))),
+    /provision-entities\.js refuses the captured input: .*options\[0\] must have exactly 'value' and 'label' \(unknown color\)/);
   assertFail(grade(TICKET_CHOICES, withInput(ticketInput(['Medium', 'Low', 'High', 'Critical']))), /ticket priority options are "Medium", "Low", "High", "Critical", but the plan numbers Low, Medium, High, Critical from 100000000/);
   assertFail(grade(TICKET_CHOICES, withInput(ticketInput(undefined, ['Open', 'Resolved', 'Closed']))), /ticket status options are .*, but the plan numbers Open, In Progress, Resolved, Closed/);
   const noStatus = ticketInput();
@@ -733,7 +766,7 @@ const provisionRun = (id, input, flags, result) => ({ id, command: `node scripts
 
 test('eval 15: a dry run of provision-entities.js provisions nothing, and the input graded is the applying run\'s', () => {
   const good = JSON.stringify(ticketInput());
-  const labelValue = JSON.stringify(ticketInput(['Low', 'Medium', 'High', 'Critical'].map((label, i) => ({ label, value: 100000000 + i }))));
+  const labelValue = JSON.stringify(ticketInput(['Low', 'Medium', 'High', 'Critical'].map((label, i) => ({ label, value: i + 1 }))));
   const applied = { ok: true, entities: [{ schemaName: 'cr_Ticket', logicalName: 'cr_ticket', entitySetName: 'cr_tickets' }] };
   const planned = { ok: true, dryRun: true, plan: [{ step: 'createTable', schemaName: 'cr_Ticket' }] };
   assertPass(grade(TICKET_CHOICES, provisionedBy([provisionRun('apply', 'provision-input.json', ' --apply', applied)], { 'provision-input.json': good })));
@@ -747,7 +780,7 @@ test('eval 15: a dry run of provision-entities.js provisions nothing, and the in
   const previewThenApply = [provisionRun('plan', 'preview-input.json', '', planned), provisionRun('apply', 'provision-input.json', ' --apply', applied)];
   assertPass(grade(TICKET_CHOICES, provisionedBy(previewThenApply, { 'preview-input.json': labelValue, 'provision-input.json': good })));
   assertFail(grade(TICKET_CHOICES, provisionedBy(previewThenApply, { 'preview-input.json': good, 'provision-input.json': labelValue })),
-    /provision-entities\.js refuses the captured input: .*options\[0\]: 'label' is not an LCID/);
+    /ticket priority options are .*, but the plan numbers Low, Medium, High, Critical from 100000000/);
   // The applying run's input was not kept: a current fixture fails, though the preview's was.
   assertFail(grade(TICKET_CHOICES, provisionedBy(previewThenApply, { 'preview-input.json': good })), /provision-input\.json was not captured/);
 });

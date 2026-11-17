@@ -31,6 +31,12 @@ const { odataLit } = require('./odata.js');
 // The app's build lease (lib/app-operation-lease.js), and the one derivation of the app's unique name it is keyed by.
 const { withAppBuildLease, applyWorkspaceOf } = require('./app-operation-lease.js');
 const { appUniqueName } = require('./sdk-build.js');
+const { usesCommandStates } = require('./command-state-contract.js');
+const { assertConfigurationCreatesClear } = require('./configuration-create-guard.js');
+
+// Why a changed-only apply runs whole while protected configuration is in play (the decision's reason, printed and in the result).
+const PROTECTED_CONFIGURATION_FULL = 'protected configuration is in play (configurationIdentity "stable-v1", or configuration state in the binding store) — full build, so its checks run before any write and its changes are applied';
+const COMMAND_STATES_FULL = 'the spec declares commandStates — full build, so every declared command row is read and its change approved before any write';
 
 // ---- PURE decision ------------------------------------------------------------------------------------
 
@@ -219,6 +225,13 @@ async function runChangedOnlyApply({ spec, opts, deps }) {
 async function runChangedOnlyApplyHeld({ spec, opts, deps }) {
   const log = deps.log || (() => {});
   const ws = opts.workspaceDir;
+  // #807: the configuration create receipt guard, first, under the lease: before the snapshot is read, so no no-op, fast apply or
+  // baseline can certify an environment while the workspace holds an open create unit, an unreadable receipt or an unacknowledged
+  // quarantine. It throws the retry-never halt; nothing below runs and no snapshot is blessed. Local only (no request).
+  assertConfigurationCreatesClear(ws, {
+    spec, env: opts.env, languageCode: opts.preResolvedLanguageCode, phases: opts.phases,
+    quarantineAcknowledgment: opts.configurationQuarantineAcknowledgment,
+  });
   const annotate = (s) => annotateContentHashes(s, deps.readContent);
   const annotatedSpec = annotate(spec);
   const snapshot = store.readSnapshot(ws);
@@ -330,6 +343,19 @@ async function runChangedOnlyApplyHeld({ spec, opts, deps }) {
   // force a full build so the sample-data phase runs.
   if (opts.sampleData && snapshot && snapshot.sampleDataApplied !== true && (decision.decision === 'fast' || decision.decision === 'noop')) {
     decision = { ...decision, decision: 'full', reason: '--sample-data requested but the baseline did not seed rows — full build' };
+  }
+  // Protected configuration (configurationIdentity "stable-v1", or a binding store still holding configuration state) is checked only by
+  // the full build: its debt sweep, its opt-in-removed stop and its read-only preflight run there, before the first write, and its edits
+  // are applied there. The snapshot does not describe those rows (a bound row deleted, an unreadable store or an edit the protected path
+  // refuses all leave the spec's slices as they were), so a fast or no-op decision would report success over a pending obligation.
+  // build-model-app.js never runs this flow while its managed-create gate exists; this is the same rule for any other caller.
+  if (deps.managedCreateGate && (decision.decision === 'fast' || decision.decision === 'noop')) {
+    decision = { ...decision, decision: 'full', reason: PROTECTED_CONFIGURATION_FULL };
+  }
+  // commandStates are applied only by a full build (lib/command-state-run.js commandStateMode): it reads every declared row and asks for
+  // approval of what it finds, which the snapshot cannot stand in for — a row edited in the designer since leaves the spec unchanged.
+  if (usesCommandStates(spec) && (decision.decision === 'fast' || decision.decision === 'noop')) {
+    decision = { ...decision, decision: 'full', reason: COMMAND_STATES_FULL };
   }
   log(`▸ changed-only: ${decision.decision.toUpperCase()} — ${decision.reason}`);
 
@@ -534,4 +560,6 @@ module.exports = {
   runChangedOnlyApply,
   fullApplyOpts,
   distrustWorkspace,
+  PROTECTED_CONFIGURATION_FULL,
+  COMMAND_STATES_FULL,
 };

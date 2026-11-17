@@ -53,6 +53,7 @@ function loadInstaller({
   const module = { id: 'installer-test', exports: {} };
   const requireMock = (name) => {
     if (name === 'path') return paths;
+    if (name === 'url') return { URL };
     if (name === 'os') return { homedir: () => paths.join(root, 'home') };
     if (name === 'fs') return {
       constants: fs.constants,
@@ -78,12 +79,17 @@ function loadInstaller({
     };
     if (name === 'https') return {
       get: (url, options, callback) => {
-        requests.push(url);
+        const target = String(url);
+        requests.push(target);
         const res = new EventEmitter();
-        res.statusCode = Object.hasOwn(remote, url) ? 200 : 404;
+        const response = remote[target];
+        const isRedirect = response && typeof response === 'object';
+        res.statusCode = isRedirect ? response.statusCode : Object.hasOwn(remote, target) ? 200 : 404;
+        res.headers = isRedirect ? { location: response.location } : {};
+        res.resume = () => {};
         callback(res);
-        queueMicrotask(() => {
-          res.emit('data', remote[url]);
+        if (!isRedirect) queueMicrotask(() => {
+          res.emit('data', response);
           res.emit('end');
         });
         return new EventEmitter();
@@ -207,6 +213,45 @@ for (const relative of ['marketplace.json', '.plugin/marketplace.json', '.claude
     }
   });
 }
+
+test('downloaded manifests reject redirects outside the configured HTTPS origin', async () => {
+  const remote = Object.fromEntries(
+    ['marketplace.json', '.plugin/marketplace.json', '.claude-plugin/marketplace.json']
+      .map((relative) => [RAW_ROOT + relative, {
+        statusCode: 302,
+        location: 'https://redirect-target.invalid/received-location',
+      }])
+  );
+  const fixture = loadInstaller({ remote });
+  await assert.rejects(fixture.installer.loadMarketplace(), /Refusing redirect to https:\/\/redirect-target\.invalid/);
+  assert.deepEqual(fixture.requests, [
+    RAW_ROOT + 'marketplace.json',
+    RAW_ROOT + '.plugin/marketplace.json',
+    RAW_ROOT + '.claude-plugin/marketplace.json',
+  ]);
+});
+
+test('downloaded manifests follow bounded redirects within the configured HTTPS origin', async () => {
+  const redirected = RAW_ROOT + 'marketplace.json?source=redirect';
+  const fixture = loadInstaller({
+    remote: {
+      [RAW_ROOT + 'marketplace.json']: { statusCode: 302, location: redirected },
+      [redirected]: JSON.stringify(manifest()),
+    },
+  });
+  assert.deepEqual(JSON.parse(JSON.stringify(await fixture.installer.loadMarketplace())), manifest());
+  assert.deepEqual(fixture.requests, [RAW_ROOT + 'marketplace.json', redirected]);
+});
+
+test('downloaded manifests stop redirect loops after the configured limit', async () => {
+  const remote = Object.fromEntries(
+    ['marketplace.json', '.plugin/marketplace.json', '.claude-plugin/marketplace.json']
+      .map((relative) => [RAW_ROOT + relative, { statusCode: 302, location: RAW_ROOT + relative }])
+  );
+  const fixture = loadInstaller({ remote });
+  await assert.rejects(fixture.installer.loadMarketplace(), /Too many redirects/);
+  assert.equal(fixture.requests.length, 12);
+});
 
 test('invalid local manifests are reported and never returned instead of a valid fallback', async () => {
   const fixture = loadInstaller({

@@ -17,6 +17,6 @@ test('readMarketplaceName does not read checkout-root marketplace metadata for p
     assert.match(formatUpdateMessage('pcf', '1.0.0', '1.0.1', readMarketplaceName(root), 'copilot'), /copilot plugin update pcf/);
     assert.doesNotMatch(formatUpdateMessage('pcf', '1.0.0', '1.0.1', readMarketplaceName(root), 'copilot'), /marketplace update/);
   } finally {
-    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });

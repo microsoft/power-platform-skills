@@ -14,8 +14,9 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const {
-  runDownload, parseDownloadedPages, assignPageKeys, readDescriptionInventory, notRoundTrippedSummary, compareText,
+  runDownload, parseDownloadedPages, assignPageKeys, readDescriptionInventory, notRoundTrippedSummary, notRoundTrippedReport, notRoundTrippedWarning, compareText,
 } = require('../download-model-app.js');
+const { subtractRestored } = require('../lib/managed-restore-report.js');
 const { currentReadSdk } = require('./helpers/app-membership-sdk.js');
 const { fakeGenpage } = require('./helpers/fake-genpage.js');
 
@@ -152,14 +153,14 @@ function withDirectoryOrder(listing, fn) {
 }
 
 // Everything a download hands back or writes, as data.
-async function download(order, listing = identity) {
+async function download(order, listing = identity, options = {}) {
   const out = fs.mkdtempSync(path.join(os.tmpdir(), 'dl-order-'));
   const stderr = [];
   const realWrite = process.stderr.write;
   try {
     process.stderr.write = (chunk) => { stderr.push(String(chunk)); return true; };
     const genpage = fakeGenpage({ pages: order(PAGES.map((p) => ({ ...p, source: `export default function Page() { return '${p.pageId}'; }\n` }))) });
-    const res = await withDirectoryOrder(listing, () => runDownload({ sdk: server(order), genpage, outDir: out, appId: APP_ID, appUnique: APP_UNIQUE }));
+    const res = await withDirectoryOrder(listing, () => runDownload({ sdk: server(order), genpage, outDir: out, appId: APP_ID, appUnique: APP_UNIQUE, ...options }));
     assert.ok(res.ok, JSON.stringify(res));
     const tree = {};
     const walk = (dir) => { for (const entry of fs.readdirSync(dir, { withFileTypes: true })) { const full = path.join(dir, entry.name); if (entry.isDirectory()) walk(full); else tree[path.relative(out, full).replace(/\\/g, '/')] = fs.readFileSync(full, 'utf8'); } };
@@ -253,6 +254,27 @@ test('the same members, only ordered: nothing a download wrote is dropped or add
   assert.deepStrictEqual(inv.globalChoices.map((c) => c.name).sort(), CHOICES.slice(0, 3).map((c) => c.Name).sort(), 'the sets the solution owns; the unrelated one stays out');
   assert.deepStrictEqual(res.pages.map((p) => p.pageId).sort(), PAGES.map((p) => p.pageId).sort());
   assert.strictEqual(res.notRoundTripped.total, FORMS.length + VIEWS.length + CHARTS.length + RULES.length + 3);
+});
+
+// The managed download (main, --include-managed) asks runDownload to defer its not-round-tripped report, so the report can be
+// printed once the restore has put some of it back into the spec. Deferred, the download prints nothing else differently, answers the
+// same report, and hands back the parts main recomputes it from; not asked, it is what it always was.
+test('deferReport: the report is not printed but handed back as the parts it is computed from; everything else is the same download', async () => {
+  const plain = await download(identity);
+  const deferred = await download(identity, identity, { deferReport: true });
+  const warning = notRoundTrippedWarning(plain.res.notRoundTripped);
+  assert.ok(warning && plain.stderr.includes(warning), 'the plain download prints the report');
+  assert.strictEqual(deferred.stderr, plain.stderr.replace(warning, ''), 'deferred, only the report is missing from what the download says');
+  assert.deepStrictEqual(deferred.res.notRoundTripped, plain.res.notRoundTripped);
+  assert.deepStrictEqual(deferred.tree, plain.tree);
+  assert.strictEqual(JSON.stringify(deferred.res.spec), JSON.stringify(plain.res.spec));
+  assert.strictEqual('deferredReport' in plain.res, false, 'a caller that does not ask gets no new field');
+  const { inventory, membershipNotes } = deferred.res.deferredReport;
+  assert.deepStrictEqual(notRoundTrippedReport(inventory, deferred.res.spec, membershipNotes), plain.res.notRoundTripped, 'the parts give the report back');
+  // Less a restored view, by id: one view fewer, and nothing else. A view sharing its name on another table stays.
+  const restored = notRoundTrippedReport(subtractRestored(inventory, { views: [`{${g('44444444', 2).toUpperCase()}}`] }), deferred.res.spec, membershipNotes);
+  assert.strictEqual(restored.total, plain.res.notRoundTripped.total - 1);
+  assert.deepStrictEqual(restored.entities.find((e) => e.entity === 'contoso_item').views, ['My Items']);
 });
 
 test('what is not reordered: the navigation keeps the sitemap\'s order, and every page folder holds its own page', async () => {

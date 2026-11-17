@@ -42,11 +42,12 @@ This keeps hook behavior in one place and avoids relying on skill-frontmatter ho
 
 ## Skills
 
-The plugin provides 39 skills: 38 user-invocable skills and one model-only worker.
+The plugin provides 40 skills: 39 user-invocable skills and one model-only worker.
 They cover the full lifecycle of a Power Pages site - scaffolding,
 non-SPA authoring, deployment, data modeling, backend integration, authentication, localization,
 ALM and CI/CD, security review, performance analysis, testing, auditing, and platform migrations. Each user-invocable
 skill is invoked conversationally - just describe what you want to do.
+Governance remains temporarily disabled pending Product approval and is not included in these counts.
 
 ### Site scaffolding and deployment
 
@@ -99,6 +100,25 @@ changes without turning the site into an SPA.
 - New pages update navigation by default unless the user explicitly asks not to
 - Preserves local-only boundaries until the user explicitly runs deployment
 - Invokes the model-only `author-webpage-content` worker for localized page-body composition
+
+#### `/compare-site-configurations`
+
+> "My site works in dev but not in the test environment"
+>
+> "Compare the configuration of my dev and production Power Pages sites"
+>
+> "Compare this local downloaded site with the live site"
+
+Asks for both sites in one form: each can be a downloaded folder, a website URL, or a website record ID with its Dataverse environment URL.
+Downloads remote sites into separate local folders and opens a self-contained HTML report in the default browser.
+The comparison engine and HTML renderer are bundled directly from the Power Platform VS Code extension.
+The report keeps its component tabs, expandable text diffs, and Local/Remote labels: Added Locally means first-site-only; Deleted Locally means second-site-only.
+Only Power Pages configuration is compared: the component folders PAC writes and the `.yml` files at the site root.
+Other files in a site folder, such as `docs/`, are listed as skipped; for SPA sites only `.powerpages-site` is compared, not application source.
+Standard and Enhanced non-SPA sites and SPA sites are supported.
+Alongside the HTML report, the skill writes a JSON file that teammates can open in VS Code through **Power Pages Actions** > **Site Comparison** > **Import Comparison**, the same format as the extension's **Export as JSON**.
+After the report opens, the agent reads the changed files, explains which differences can change how the sites behave (access, settings, forms, templates, scripts) and asks whether you are seeing a behavior difference.
+Neither site is modified or uploaded; reports stay outside the site trees and contain site configuration, so share them only with people allowed to see it.
 
 #### `/deploy-site`
 
@@ -353,6 +373,20 @@ Runs a guided, end-to-end security review of a Power Pages site and consolidates
 - Orchestrates `/scan-code`, `/scan-site`, `/manage-headers`, `/manage-firewall`, `/audit-permissions`, and auth checks
 - Consolidates findings into a single HTML report
 - Suitable for release-readiness or live-site monitoring
+
+#### `manage-governance` (temporarily disabled)
+
+**Not available for invocation pending Product approval.** The workflow and
+scripts are retained for future enablement, but there is no discoverable
+`SKILL.md` entry point. See [enablement instructions](skills/manage-governance/HOW_IT_WORKS.md#temporary-disablement)
+for restoring it.
+
+Applies and inspects 21 Power Pages tenant governance policies: the Maker Copilot toggle for existing sites (`EnableMakerCopilotForExistingSites`), nine authentication feature toggles, and eleven `PowerPages_*` Copilot / site-control policies. The authentication toggles cover the OpenID Connect / SAML 2.0 / WS-Federation / OAuth 2.0 protocols, Facebook / Google / Microsoft sign-in, local (username & password) login, and all external identity providers. The additional policies govern Maker / pro-developer / site Copilots, search and list summaries, intelligent forms, summarization APIs, non-production public sites, and external service calls from server logic. Tenant-admin skill: it does not require a Power Pages project on disk.
+
+- Picks any environment the signed-in user has admin access to (via `pac admin list`)
+- Applies a policy environment-wide or to multiple selected sites through Include / Exclude scopes, with an explicit consent gate
+- Watches the roll-out by polling `governance/status/{policy}` until terminal, then re-reads state to verify
+- Also reads the current state at environment or portal level on demand
 
 ### ALM and CI/CD
 

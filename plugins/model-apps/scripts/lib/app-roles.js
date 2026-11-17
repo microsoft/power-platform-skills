@@ -6,6 +6,8 @@
 //   verify-model-app.js  appIdFor / appRoleIdsFor — the ids of the roles a deployed app has, to prove the app is associated with the roles its personas author.
 //                        They read as they always did: the published layer, and an answer that carries no list is read as no ids (verify then FAILS the persona's
 //                        check, the safe side).
+//   persona-restore.js   appRoleIdsComplete — the same ids for the managed download's persona proof, read strictly (see its comment): there a missing id
+//                        is written into the spec as `appAccess: false`, so a short or malformed answer must be a refusal, not a shorter list.
 //   write-app-spec-doc.js  appRolesOf — the roles (by name) an app has, for the design document: an extension of an app that already has roles
 //                          says nothing about them in its spec, and the document is where a reviewer is told what they are. It states what it read, so it is
 //                          strict where verify is lenient: see below.
@@ -30,6 +32,7 @@ const { collectionRows } = require('./app-components.js');
 
 // A failure as the one line a caller shows: the message, cut at 200 characters (an error text can carry a whole response body).
 const reasonOf = (err) => ((err && err.message) ? String(err.message).slice(0, 200) : 'read failed');
+const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 // The association rows of an app, with the role columns in `select` (the navigation property answers role rows).
 const associationPath = (appId, select) => `/appmodules(${appId})/appmoduleroles_association?$select=${select.join(',')}`;
@@ -57,6 +60,31 @@ async function appRoleIdsFor(sdk, appUnique) {
         .filter(Boolean)
         .map((id) => String(id).toLowerCase()),
     };
+  } catch (err) {
+    return { ok: false, reason: reasonOf(err) };
+  }
+}
+
+/**
+ * The managed download's view (lib/persona-restore.js): the same ids as appRoleIdsFor, read the strict way, because there the answer is not a check
+ * but a value WRITTEN into the spec — a role missing from it becomes `appAccess: false`, and a build from that spec dissociates the role from the app.
+ * So the rows come through collectionRows (every page, a malformed or refused answer an error) and every row must name a role by a GUID; anything
+ * less is { ok: false, reason }, never a shorter list. appRoleIdsFor keeps its lenient contract for verify, where a short list fails safe.
+ *   { ok: true, roleIds } (lower-case, braces stripped) | { ok: false, reason }
+ */
+async function appRoleIdsComplete(sdk, appUnique) {
+  try {
+    const appId = await appIdFor(sdk, appUnique);
+    if (!appId) return { ok: false, reason: `app '${appUnique}' could not be resolved` };
+    if (!sdk.dataverse || typeof sdk.dataverse.get !== 'function') return { ok: false, reason: 'SDK dataverse reader is unavailable' };
+    const rows = await collectionRows(sdk.dataverse, associationPath(appId, ['roleid']), 'the association rows');
+    const roleIds = [];
+    for (const row of rows) {
+      const id = row && typeof row.roleid === 'string' ? row.roleid.trim().toLowerCase().replace(/^\{|\}$/g, '') : '';
+      if (!GUID_RE.test(id)) return { ok: false, reason: 'an association row names no role' };
+      roleIds.push(id);
+    }
+    return { ok: true, roleIds };
   } catch (err) {
     return { ok: false, reason: reasonOf(err) };
   }
@@ -95,4 +123,4 @@ async function appRolesOf(sdk, appUnique) {
   }
 }
 
-module.exports = { appIdFor, appRoleIdsFor, appRolesOf };
+module.exports = { appIdFor, appRoleIdsFor, appRoleIdsComplete, appRolesOf };

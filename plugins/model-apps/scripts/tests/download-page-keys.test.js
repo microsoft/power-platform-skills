@@ -413,6 +413,18 @@ test('--reset-page-keys is a switch of the download: off unless it is given, and
   assert.deepStrictEqual(plain.emitted, [{ ok: false, payload: refusal }]);
 });
 
+test('--include-capabilities is a switch of the download: off unless it is given, given it reaches the download, and the usage line names it', async (t) => {
+  const out = folder(t);
+  const base = ['--env', 'https://contoso.crm.dynamics.com', '--app', APP_ID, '--out', out];
+  const plain = await cli(base, { ok: false, error: 'stop' });
+  assert.strictEqual(plain.asked[0].includeCapabilities, false);
+  const on = await cli([...base, '--include-capabilities'], { ok: false, error: 'stop' });
+  assert.strictEqual(on.asked[0].includeCapabilities, true);
+  assert.strictEqual(on.exited, null, 'a known switch is no usage error');
+  const bare = await cli([], { ok: true });
+  assert.match(bare.said, /\[--include-capabilities\]/);
+});
+
 test('the usage line names --reset-page-keys, and a misspelling of it is a usage error that suggests it', async () => {
   const bare = await cli([], { ok: true });
   assert.match(bare.said, /Usage: node download-model-app\.js --env <url> --app <appId\|uniqueName\|displayName> --out <dir> \[--allow-lossy-download\] \[--reset-page-keys\]/);

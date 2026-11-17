@@ -366,6 +366,95 @@ test('a $batch that names the action is REFUSED while an edit is open — a part
   assert.strictEqual(scope.wrap({ post: async () => ({}) }).postRaw, undefined);
 });
 
+// The bundled SDK's guarded pin (lib/app-component-scope.js, THE SDK'S GUARDED PIN): one change set of guard, action and echo, rendered as the bundle renders it. For an app with an edit open it is
+// not sent — the SDK is answered with a refused guard, and sends its plain action, which is limited — and any change set that differs from it in anything is refused as every batch that names the action is.
+function guardedPin({ app = APP, action = app, echo = app, solution = false, parts } = {}) {
+  const part = (id, line, headers, body) => ['--changeset_7', 'Content-Type: application/http', 'Content-Transfer-Encoding: binary', `Content-ID: ${id}`, '', line, ...headers, '', body].join('\r\n');
+  const json = 'Content-Type: application/json;type=entry';
+  const named = solution ? ['MSCRM.SolutionUniqueName: contoso_solution'] : [];
+  const all = parts || [
+    part(1, `PATCH ${ROOT}/appmodules(${app}) HTTP/1.1`, [json, ...named, 'If-Match: W/"41"'], '{}'),
+    part(2, `POST ${ADD} HTTP/1.1`, [json, ...named], JSON.stringify(derived(action))),
+    part(3, `PATCH ${ROOT}/appmodules(${echo})?$select=appmoduleid HTTP/1.1`, [json, ...named, 'Prefer: return=representation'], '{}'),
+  ];
+  return { part, json, text: ['--batch_9', 'Content-Type: multipart/mixed;boundary=changeset_7', '', ...all, '--changeset_7--', '--batch_9--', ''].join('\r\n') };
+}
+
+test('the SDK\'s guarded pin for an app with an edit open is NOT sent — the SDK is answered with a change set whose guard was refused, so it sends its plain action, which is limited; another app\'s goes on as it was read', async () => {
+  const scope = makeAppComponentScope();
+  const { client, calls } = rawTransport();
+  const wrapped = scope.wrap(client);
+  await scope.limit(APP, { views: [VIEW] }, async () => {
+    for (const body of [guardedPin().text, Buffer.from(guardedPin({ solution: true }).text), guardedPin({ app: APP.toUpperCase() }).text]) {
+      const answer = await wrapped.postRaw(`${ROOT}/$batch`, body, { headers: { 'Content-Type': 'multipart/mixed;boundary=batch_9' } });
+      assert.strictEqual(answer.status, 200);
+      const boundary = /^--(batchresponse_[0-9a-f-]+)\r\n/.exec(answer.body);
+      assert.ok(boundary && answer.body.endsWith(`--${boundary[1]}--\r\n`), 'a whole change-set answer');
+      assert.match(answer.body, /\r\nContent-ID: 1\r\n\r\nHTTP\/1\.1 400 Bad Request\r\n/, 'one part, answering the guard, refused');
+      assert.strictEqual((answer.body.match(/^HTTP\/1\.1 /gm) || []).length, 1);
+      assert.match(answer.body, /"code":"APP_COMPONENTS_GUARD_NOT_SENT"/);
+    }
+    assert.deepStrictEqual(calls, [], 'nothing was sent');
+    const other = guardedPin({ app: OTHER_APP }).text;
+    await wrapped.postRaw(`${ROOT}/$batch`, other, {});
+    assert.deepStrictEqual(calls, [[`${ROOT}/$batch`, other, {}]], 'another app\'s pin is not this edit\'s');
+  });
+  calls.length = 0;
+  await wrapped.postRaw(`${ROOT}/$batch`, guardedPin().text, {});
+  assert.strictEqual(calls.length, 1, 'with no edit open it is nobody\'s to read');
+});
+
+// The bundle's note for a guard refused other than by 412 (cds-maker-sdk `pinNotice`), as it renders it.
+const guardNote = (app) => `APP_PIN_TOKEN_UNCONFIRMED (guardRefused): App '${app}': the change set binding the pin was refused at its guard (HTTP 400) and rolled back; the plain component action was acknowledged, and the app token held was kept without adopting any read. The next header or exact-membership edit may answer VERSION_CONFLICT; …`;
+
+test('the bundle\'s note that a guard was refused is taken out of the push\'s answer only when the limit refused that app\'s guard itself — any other note, and the same note for a guard it did not answer, stays', async () => {
+  const scope = makeAppComponentScope();
+  const { client } = rawTransport();
+  const wrapped = scope.wrap(client);
+  const moved = `APP_PIN_REBASE_REQUIRED (tokenMoved): App '${APP}': before its components were pinned, the app row's token read differed …`;
+  const other = guardNote(OTHER_APP);
+  // The guard this limit answered: its note goes, whatever case the bundle spells the app id in; every other note of the same push stays.
+  const answered = await scope.limit(APP, { views: [VIEW] }, async () => {
+    await wrapped.postRaw(`${ROOT}/$batch`, guardedPin().text, {});
+    return { saved: true, warnings: ['a note of the push', guardNote(APP.toUpperCase()), moved, other] };
+  });
+  assert.deepStrictEqual(answered, { saved: true, warnings: ['a note of the push', moved, other] });
+  // No guard answered in this push (the service refused it, or the gate never sent one): the note is the service's, and stays — the next push is not told of the last one's.
+  const kept = { saved: true, warnings: [guardNote(APP)] };
+  assert.strictEqual(await scope.limit(APP, { views: [VIEW] }, async () => kept), kept);
+});
+
+test('a change set that is not exactly the SDK\'s guarded pin is REFUSED as any batch that names the action is — another part, another app in one part, a header, a body or a method it does not have — and nothing is sent', async () => {
+  const scope = makeAppComponentScope();
+  const { client, calls } = rawTransport();
+  const wrapped = scope.wrap(client);
+  const { part, json, text } = guardedPin();
+  const guard = part(1, `PATCH ${ROOT}/appmodules(${APP}) HTTP/1.1`, [json, 'If-Match: W/"41"'], '{}');
+  const add = part(2, `POST ${ADD} HTTP/1.1`, [json], JSON.stringify(derived()));
+  const echo = part(3, `PATCH ${ROOT}/appmodules(${APP})?$select=appmoduleid HTTP/1.1`, [json, 'Prefer: return=representation'], '{}');
+  const variants = {
+    'a fourth part': guardedPin({ parts: [guard, add, echo, part(4, `POST ${ROOT}/RemoveAppComponents HTTP/1.1`, [json], JSON.stringify(derived()))] }).text,
+    'no echo': guardedPin({ parts: [guard, add] }).text,
+    'the parts in another order': guardedPin({ parts: [add, guard, echo] }).text,
+    'the action for another app': guardedPin({ action: OTHER_APP }).text,
+    'the echo of another app': guardedPin({ echo: OTHER_APP }).text,
+    'a guard with a body': guardedPin({ parts: [part(1, `PATCH ${ROOT}/appmodules(${APP}) HTTP/1.1`, [json, 'If-Match: W/"41"'], '{"name":"x"}'), add, echo] }).text,
+    'a guard that is not conditional': guardedPin({ parts: [part(1, `PATCH ${ROOT}/appmodules(${APP}) HTTP/1.1`, [json], '{}'), add, echo] }).text,
+    'an echo that does not ask for the row': guardedPin({ parts: [guard, add, part(3, `PATCH ${ROOT}/appmodules(${APP})?$select=appmoduleid HTTP/1.1`, [json], '{}')] }).text,
+    'a header the SDK does not send': guardedPin({ parts: [guard, part(2, `POST ${ADD} HTTP/1.1`, [json, 'X-Other: 1'], JSON.stringify(derived())), echo] }).text,
+    'the action in another spelling': guardedPin({ parts: [guard, part(2, `POST ${ROOT}/addappcomponents HTTP/1.1`, [json], JSON.stringify(derived())), echo] }).text,
+    'trailing text after the batch': `${text}x`,
+  };
+  await scope.limit(APP, { views: [VIEW] }, async () => {
+    for (const [label, body] of Object.entries(variants)) {
+      await assert.rejects(wrapped.postRaw(`${ROOT}/$batch`, body, {}), (e) => e instanceof SdkError && e.code === 'APP_COMPONENTS_NOT_LIMITED', label);
+    }
+    await assert.rejects(wrapped.post(`${ROOT}/$batch`, text, {}), (e) => e.code === 'APP_COMPONENTS_NOT_LIMITED', 'through post, which is not how the SDK sends a change set');
+    await assert.rejects(wrapped.postRaw(`${ROOT}/other`, text, {}), (e) => e.code === 'APP_COMPONENTS_NOT_LIMITED', 'to an address that is not the batch endpoint');
+  });
+  assert.deepStrictEqual(calls, []);
+});
+
 // ── A raw POST is told by its address as a post is ───────────────────────────────────────────────────────────────────────────────────────────────────
 // `postRaw` is a real POST, not only the SDK's `$batch`: the plugin's transport sends it as `call('POST', url, body, options, { rawBody: true })`, with a body that is text, or the bytes of it, that it
 // does not touch. The bundle sends the action through `post` today. A request to the action's address through `postRaw` — a drift of the bundle, or another caller — is limited exactly as the object

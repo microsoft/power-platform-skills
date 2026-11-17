@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 2,
+  "minimumPluginVersion": "2.21.0",
+  "solution": { "uniqueName": "ContosoHelpDesk", "publisherPrefix": "cnt" },
+  "app": { "name": "Help Desk", "description": "Tickets searchable by number, with their customers" },
+  "entities": [
+    { "schemaName": "cnt_customer", "displayName": "Customer", "pluralName": "Customers",
+      "primaryAttribute": { "schemaName": "cnt_name", "displayName": "Name" },
+      "columns": [{ "schemaName": "cnt_email", "displayName": "Email", "type": "Text", "format": "Email" }],
+      "quickFind": { "findColumns": ["cnt_name", "cnt_email"] } },
+    { "schemaName": "cnt_ticket", "displayName": "Ticket", "pluralName": "Tickets",
+      "primaryAttribute": { "schemaName": "cnt_name", "displayName": "Title" },
+      "columns": [
+        { "schemaName": "cnt_ticketnumber", "displayName": "Ticket Number", "type": "Text" },
+        { "schemaName": "cnt_priority", "displayName": "Priority", "type": "Choice", "options": ["Low", "Medium", "High"] }
+      ],
+      "quickFind": { "findColumns": ["cnt_name", "cnt_ticketnumber"] } }
+  ],
+  "relationships": [
+    { "type": "OneToMany", "referenced": "cnt_customer", "referencing": "cnt_ticket",
+      "lookup": { "schemaName": "cnt_CustomerId", "displayName": "Customer" } }
+  ],
+  "forms": [{ "entity": "cnt_ticket", "name": "Information", "layout": "auto" }],
+  "views": [
+    { "entity": "cnt_ticket", "name": "Open Tickets", "reconcile": "declared", "activeOnly": true,
+      "columns": ["cnt_ticketnumber", "cnt_name", { "name": "cnt_name", "relatedEntity": "cust", "width": 150 }, "cnt_priority"],
+      "linkEntities": [{ "name": "cnt_customer", "from": "cnt_customerid", "to": "cnt_customerid", "alias": "cust", "linkType": "outer" }],
+      "sort": [{ "attr": "cnt_ticketnumber", "dir": "desc" }] },
+    { "entity": "cnt_customer", "name": "Customer Directory", "reconcile": "declared", "activeOnly": true,
+      "columns": ["cnt_name", "cnt_email"] }
+  ],
+  "charts": [{ "entity": "cnt_ticket", "name": "Tickets by Priority", "reconcile": "declared", "groupBy": "cnt_priority", "measure": "count", "chartType": "Column" }],
+  "appShell": { "areas": [{ "label": "Help Desk", "groups": [{ "label": "Work", "subAreas": [
+    { "entity": "cnt_ticket", "title": "Tickets" }, { "entity": "cnt_customer", "title": "Customers" } ] }] }] }
+}

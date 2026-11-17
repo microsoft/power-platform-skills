@@ -55,15 +55,16 @@ const MISREAD_PAGES = {
       '}',
     ),
   },
-  // `of` is a name here and the table takes it for the keyword before a regex. The false regex ends at the real one's `/`, the `/*` inside
-  // it opens a comment that ends at the `*/` INSIDE a string, and the rest of that string is read as code.
+  // `of` is a name here — in the value a `for … of` head iterates — and the table takes it for the keyword before a regex: after what a head binds
+  // an `of` is the keyword, and a second one may be either (`for (let of of …)` binds a name `of`). The false regex ends at the real one's `/`,
+  // the `/*` inside it opens a comment that ends at the `*/` INSIDE a string, and the rest of that string is read as code.
   keyword: {
     kind: 'keyword',
     frontier: (code) => code.indexOf('of/2') + 2,
     code: page(
       'export default function Page() {',
       '  const of = 12;',
-      '  const count = of/2; const re = /\\/*$/;',
+      '  for (const x of of/2 + "") {} const re = /\\/*$/;',
       `  ${IN_A_STRING}`,
       `  ${CALL}`,
       '  return null;',
@@ -425,7 +426,7 @@ const HIDDEN_CALL_PAGE = {
   code: page(
     'export default function Page() {',
     '  const of = 12;',
-    '  const count = of/2; const re = /\\/*$/;',
+    '  for (const x of of/2 + "") {} const re = /\\/*$/;',
     `  ${CALL}`,
     '  /* regular comment */',
     '  return null;',

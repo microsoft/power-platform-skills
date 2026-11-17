@@ -3,6 +3,7 @@
 
 const path = require('node:path');
 const { parseArgs, validateFlags } = require('./lib/dataverse-auth.js');
+const { booleanFlagError } = require('./lib/pcf-cli-flags.js');
 const { makeWritesBlocking } = require('./lib/output-redaction.js');
 const {
   WHERE_USED_CAVEAT,
@@ -41,8 +42,10 @@ async function main(argv = process.argv.slice(2)) {
 
   const env = String(flags.env);
   const workspace = flags.workspace ? String(flags.workspace) : path.resolve('.maker-workspace', 'pcf-inventory');
-  const includeManaged = readBooleanFlag(flags, 'include-managed');
-  const withWhereUsed = readBooleanFlag(flags, 'where-used');
+  const booleanError = booleanFlagError(flags, ['include-managed', 'where-used']);
+  if (booleanError) usageError(booleanError);
+  const includeManaged = Boolean(flags['include-managed']);
+  const withWhereUsed = Boolean(flags['where-used']);
   const output = { ok: true, controls: [] };
   if (withWhereUsed) output.whereUsedCaveat = WHERE_USED_CAVEAT;
 
@@ -105,14 +108,6 @@ function isDefaultInventoryControl(control) {
   // owns; keep them hidden with the managed-solution rows unless --include-managed asks for the
   // complete platform inventory.
   return control && !control.isManaged && !name.startsWith('MscrmControls.') && !name.startsWith('Microsoft.');
-}
-
-function readBooleanFlag(flags, name) {
-  const value = flags[name];
-  if (value === undefined) return false;
-  if (value === true) return true;
-  usageError(`--${name} does not take a value`);
-  return false;
 }
 
 function missingControlMessage(controlName) {

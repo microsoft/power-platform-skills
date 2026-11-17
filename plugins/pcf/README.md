@@ -129,7 +129,7 @@ export PCF_DISABLE_HOOKS=1
 
 Usage telemetry is **enabled and default-on** for transmission, with **no first-run prompt**. PCF shares model-apps' 1DS tenant and instrumentation keys; its bundled `ikey.json` is a byte-identical copy.
 
-The hooks send **`skill_started` only**, with these approved base fields:
+The hooks send **`skill_started`**, with these approved base fields:
 
 - `pluginName`, `pluginVersion`, `skillName` - plugin and invoked skill identity.
 - `sessionId`, `correlationId` - session and per-invocation correlation.
@@ -137,7 +137,9 @@ The hooks send **`skill_started` only**, with these approved base fields:
 - `pacCliVersion`, `aiAgentName`, `aiAgentVersion` - PAC and host agent metadata when available.
 - `orgId`, `tenantId` - Dataverse organization and Entra tenant GUIDs when PAC is signed in.
 
-There is **no user object ID** and **no `eventInfo` payload**. The Power Apps client `event` envelope uses `clientType: "PcfAIPlugin"` and `pluginName: "pcf"` so PCF usage stays separate from other plugins and native-client traffic.
+When `pcf-push.js` finishes a push, it sends **`skill_completed`** with the same base fields (its own random `sessionId`, no PAC version), plus `outcome`, `durationMs`, a fixed `errorClass` on failure, and an `eventInfo` of enums and booleans only: `operation: "control-push"`, `incremental`, `registration` (`verified`, `not-verified`, `skipped`) and `steps.push`. Its `orgId`/`tenantId` are those of the environment pushed to, read with one `WhoAmI` using the token the registration read already holds; a push that did not read its registration back sends neither. The approved schema is in `shared/telemetry/README.md`.
+
+There is **no user object ID**. The Power Apps client `event` envelope uses `clientType: "PcfAIPlugin"` and `pluginName: "pcf"` so PCF usage stays separate from other plugins and native-client traffic.
 
 **Routing matches model-apps:** a public-cloud organization routes by its geo to the US or EU collector, with no public-default fallback when its geo is unknown. Only signed-out PAC uses the configured US default. Sovereign or internal clouds route from the PAC cloud stamp alone, never to a public collector; unknown clouds and signed-in organizations without a cloud stamp send nothing.
 

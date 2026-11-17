@@ -89,7 +89,7 @@ test('buildControl runs pcf-scripts build through node with shell-free productio
     assert.equal(result.controls.length, 1);
     assert.equal(result.controls[0].bundleBytes, 128);
   } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
 
@@ -110,7 +110,7 @@ test('buildControl fails a clean exit that produced no processed control', () =>
     assert.match(result.error, /no processed control/i);
     assert.match(result.error, /ControlManifest\.xml/);
   } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
 
@@ -139,7 +139,7 @@ test('buildControl cleans old output and classifies unexplained files without re
     assert.ok(bundleFindings(result, { bundle: { webpackDefaultMaxBytes: 5 * 1024 * 1024, warnAtFraction: 0.8 } })
       .some((finding) => finding.code === 'PCF_OUT_UNEXPLAINED_FILE' && /debug\.map/.test(finding.message) && /remove|declare|exclude/i.test(finding.fix)));
   } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
 
@@ -174,9 +174,9 @@ test('buildControl refuses absolute, parent, and project-root outDir values with
       assert.match(result.error, new RegExp(escapeRegExp(String(outDir))));
       assert.equal(fs.readFileSync(sentinel, 'utf8'), item);
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-      fs.rmSync(absoluteOut, { recursive: true, force: true });
-      fs.rmSync(parentSibling, { recursive: true, force: true });
+      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      fs.rmSync(absoluteOut, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      fs.rmSync(parentSibling, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   }
 });
@@ -208,8 +208,8 @@ test('buildControl refuses an outDir symlink or junction that resolves outside t
     assert.match(result.error, /inside the PCF project/i);
     assert.equal(fs.readFileSync(sentinel, 'utf8'), 'outside');
   } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-    fs.rmSync(outside, { recursive: true, force: true });
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    fs.rmSync(outside, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
 
@@ -343,7 +343,7 @@ test('findControlProject walks up from a nested folder to the nearest pcfproj ro
     assert.equal(found.manifests.length, 1);
     assert.equal(found.packageJson, path.join(dir, 'package.json'));
   } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
 

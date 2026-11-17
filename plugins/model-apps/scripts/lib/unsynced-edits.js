@@ -28,13 +28,15 @@
 //
 // FAILS OPEN: an SDK without the method, or a diff that throws (a workspace file that cannot be read), says
 // "changed", so the caller writes exactly as it did before this check existed. A skipped write has to be
-// proven unnecessary; a doubtful one is made.
-async function hasUnsyncedEdits(sdk, type, id) {
+// proven unnecessary; a doubtful one is made. `rethrow(error)` names the errors a caller must see as they are instead
+// (a refusal that says itself what the maker should do, which "changed" would hide).
+async function hasUnsyncedEdits(sdk, type, id, { rethrow } = {}) {
   if (!sdk || typeof sdk.diffArtifact !== 'function') return true;
   try {
     const diff = await sdk.diffArtifact(type, id);
     return !(diff && Array.isArray(diff.changes) && diff.changes.length === 0);
-  } catch {
+  } catch (error) {
+    if (typeof rethrow === 'function' && rethrow(error)) throw error;
     return true;
   }
 }

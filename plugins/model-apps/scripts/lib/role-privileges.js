@@ -121,4 +121,51 @@ function compareRolePrivileges(declared, entityPrivileges, actualByPrivilegeId) 
   return { ok: missing.length === 0, missing };
 }
 
-module.exports = { declaredPrivileges, compareRolePrivileges, depthFromMask, SCOPE_DEPTH, ACCESS_TYPE, DEPTH_RANK };
+// The privilege set a role holds after the SDK writes `requests` into it — EXACTLY, not as a subset: what the explicit managed
+// download proves before it writes a persona read from a role (lib/persona-restore.js), because a build REPLACES a persona
+// role's privileges with this set (ReplacePrivilegesRole), so a persona that compiles to anything else changes the role.
+//   `requests`: [{ entity, access: [...], scope? }] — a PersonaRoleSpec's job privileges and additionalPrivileges, flattened
+//               as the SDK flattens them (createPersonaRole).
+//   `entityPrivileges`: Map<entityLogical, [{ name, privilegeId, privilegeType, scopes }]> — the SDK's own
+//               `getEntityPrivileges` answer, whose `scopes` lists the App Spec scopes the privilege's CanBe* flags allow.
+// Returns Map<privilegeId(lowercased, unbraced), { name, depth }> with `depth` the Dataverse depth name.
+//
+// Mirrors the vendored SDK's resolver (scripts/vendor/cds-maker-sdk.cjs, the function createSecurityRole compiles with)
+// rule for rule, and THROWS where it throws, so a set it would refuse is never called exact:
+//   * a missing scope is `user`; an unknown scope, an empty access list, an unknown access or one the table does not
+//     expose is refused;
+//   * a scope the privilege's CanBe* flag forbids is refused;
+//   * one entry per PrivilegeId. The same scope again joins the entity to it. A different scope is allowed only when
+//     the entry so far came from this one entity, and then the higher scope wins; distinct entities sharing a
+//     privilege at different scopes are refused (a role holds one depth per privilege).
+// Access tokens are matched through ACCESS_TYPE (lower-cased keys), so `appendto` is read as `appendTo` here where the
+// SDK would refuse it; the App Spec validator and the download only ever produce the SDK's own spelling.
+function compileRolePrivileges(requests, entityPrivileges) {
+  const byId = new Map();
+  for (const r of requests || []) {
+    const entity = String((r && r.entity) || '');
+    if (!r || !Array.isArray(r.access) || !r.access.length) throw new Error(`'${entity}' asks for no access`);
+    const scope = r.scope === undefined || r.scope === null ? 'user' : r.scope;
+    if (!Object.prototype.hasOwnProperty.call(SCOPE_DEPTH, scope)) throw new Error(`unknown scope '${scope}' for '${entity}'`);
+    const privs = entityPrivileges.get(entity);
+    if (!Array.isArray(privs) || !privs.length) throw new Error(`the privileges of '${entity}' are not known`);
+    for (const a of r.access) {
+      const type = Object.prototype.hasOwnProperty.call(ACCESS_TYPE, String(a).toLowerCase()) ? ACCESS_TYPE[String(a).toLowerCase()] : undefined;
+      if (!type) throw new Error(`unknown access '${a}' for '${entity}'`);
+      const p = privs.find((x) => x && x.privilegeType === type);
+      if (!p) throw new Error(`'${entity}' does not support '${a}' access`);
+      if (!Array.isArray(p.scopes) || !p.scopes.includes(scope)) throw new Error(`privilege '${p.name}' on '${entity}' does not support the '${scope}' scope`);
+      const id = String(p.privilegeId || '').replace(/[{}]/g, '').trim().toLowerCase();
+      const prev = byId.get(id);
+      if (!prev) { byId.set(id, { name: p.name, scope, entities: new Set([entity]) }); continue; }
+      if (prev.scope === scope) { prev.entities.add(entity); continue; }
+      if (!(prev.entities.size === 1 && prev.entities.has(entity))) {
+        throw new Error(`'${[...prev.entities].sort().join(', ')}' and '${entity}' share the privilege '${p.name}' at different scopes`);
+      }
+      if (rankOf(SCOPE_DEPTH[scope]) > rankOf(SCOPE_DEPTH[prev.scope])) prev.scope = scope;
+    }
+  }
+  return new Map([...byId].map(([id, v]) => [id, { name: v.name, depth: SCOPE_DEPTH[v.scope] }]));
+}
+
+module.exports = { declaredPrivileges, compareRolePrivileges, compileRolePrivileges, depthFromMask, SCOPE_DEPTH, ACCESS_TYPE, DEPTH_RANK };

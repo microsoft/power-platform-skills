@@ -35,6 +35,8 @@ function run(argv, world = {}, { preload = true, env = {} } = {}) {
   const logDir = scratch('log');
   const log = path.join(logDir, 'log.json');
   const result = spawnSync(process.execPath, [...(preload ? ['--require', PRELOAD] : []), SCRIPT, ...argv], {
+    // add-to-app and remove-from-app take the app's pages lease in the current folder's .maker-workspace: a folder of the run's own.
+    cwd: scratch('cwd'),
     env: { ...process.env, POWER_PLATFORM_SKILLS_TELEMETRY_MODEL_APPS_OPTOUT: '1', FAKE_GENPAGE: JSON.stringify(world), FAKE_GENPAGE_LOG: log, ...env },
     encoding: 'utf8',
     timeout: 120000,
@@ -271,6 +273,31 @@ test('PROCESS delete: a page an app names is refused — exit 1, the app is name
   assert.deepStrictEqual(deleted.log.pages.map((p) => p.id).sort(), [P1, APP_EXISTING_PAGE_ID].sort());
   assert.strictEqual(deleted.log.messages, 4, 'the two messages of the page went with it');
   workspacesGone(deleted);
+});
+
+test('PROCESS prepare-compiler-refresh: the page is read, the proposal — its own CRLF kept — goes to --output-file only, nothing is written to the environment; a local source that is not the deployed one is exit 1, one line', () => {
+  const dir = scratch('refresh');
+  const local = path.join(dir, 'page.tsx');
+  fs.writeFileSync(local, CRLF_SOURCE, 'utf8');
+  const out = path.join(dir, 'page.proposed.tsx');
+  const r = run(['prepare-compiler-refresh', '--env', ENV, '--page-id', P1, '--file', local, '--output-file', out], { pages: PAGES });
+  assert.strictEqual(r.status, 0, r.stderr);
+  const payload = result(r);
+  const proposed = `${CRLF_SOURCE}// model-apps compiler refresh: iterator-v1\r\n`;
+  assert.deepStrictEqual([payload.ok, payload.action, payload.writes, payload.proposedSource, payload.outputFile], [true, 'refresh', 0, proposed, fs.realpathSync.native(out)]);
+  assert.strictEqual(fs.readFileSync(out, 'utf8'), proposed);
+  assert.strictEqual(fs.readFileSync(local, 'utf8'), CRLF_SOURCE, 'the reviewed source is left as it was');
+  assert.deepStrictEqual(r.log.writes, [], 'a preparation reads');
+  workspacesGone(r);
+
+  fs.writeFileSync(local, CRLF_SOURCE.replace('Grüße', 'Hallo'), 'utf8');
+  fs.rmSync(out);
+  const moved = run(['prepare-compiler-refresh', '--env', ENV, '--page-id', P1, '--file', local, '--output-file', out], { pages: PAGES });
+  assert.strictEqual(moved.status, 1);
+  const refusal = result(moved);
+  assert.deepStrictEqual([refusal.ok, refusal.code, refusal.outcome, refusal.pageId], [false, 'COMPILER_REFRESH_BASE_MISMATCH', 'nothing', P1]);
+  assert.ok(!fs.existsSync(out), 'no proposal is written');
+  assert.deepStrictEqual(moved.log.writes, []);
 });
 
 const USAGE_ERRORS = [

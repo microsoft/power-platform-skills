@@ -199,6 +199,18 @@ test('#559 a failed artifact query is unknown, not a silent create', async () =>
   assert.match(plan[0].stateWhy, /query refused/);
 });
 
+test('#796 a form on a table that reads present, whose lookup meets the metadata-cache lag, is unknown, not create', async () => {
+  // The answer that also means "no such table":
+  //   HTTP 400 {"error":{"code":"0x80041102","message":"The entity with a name = 'new_t' with namemapping = 'Logical' was not found in the MetadataCache..."}}
+  // The table was just read present, so here it is the table's lag, and the form may well be there.
+  const plan = [{ phase: 'forms', label: 'form for new_t', key: { kind: 'form', entity: 'new_t', name: 'Information', formType: 'Main' } }];
+  const { provision } = reader({ tables: { new_t: { columns: [] } } });
+  provision.queryRecords = async () => { throw Object.assign(new Error("The entity with a name = 'new_t' with namemapping = 'Logical' was not found in the MetadataCache"), { statusCode: 400 }); };
+  await annotateLivePlan(plan, { spec: {}, provision });
+  assert.strictEqual(plan[0].state, 'unknown');
+  assert.match(plan[0].stateWhy, /not found in the MetadataCache/);
+});
+
 test('#559 an item with no key is left unprobed rather than guessed', async () => {
   const plan = [{ phase: 'publish', label: 'publish customizations' }];
   const { provision, reads } = reader({});
@@ -372,7 +384,7 @@ test('#559 a spec with no localized labels resolves inconclusive probes through 
 // every view and form on it — and the apply never reaches them: findExistingTable raises BuildHalt
 // for exactly this state, outside any runner.run, so the build aborts in `data-model`.
 //
-// The form arm is the one that hides best: resolveExistingFormId deliberately swallows the
+// The form arm is the one that hides best: resolveExistingFormId by default swallows the
 // MetadataCache 400 and returns null, and `!!null` is a confident "absent".
 test('#559 a view/chart/form on a table whose probe was INCONCLUSIVE is unknown, not create', async () => {
   const spec = { entities: [{ schemaName: 'new_loc', displayName: { 1033: 'Localized', 3082: 'Localizada' }, columns: [] }] };

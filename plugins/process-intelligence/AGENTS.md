@@ -25,8 +25,9 @@ or competing explanations, and `setup` for connection work. Exact queries stay d
 
 ## Implementation
 
-`server/mcp.mjs` is the self-contained Node.js 22/24 ESM bundle. Source and tests stay
-in `src/` and `tests/`; no root-shared runtime files, symlinks or startup builds are required.
+`server/mcp.mjs` is the self-contained Node.js 22+ ESM bundle, built for the Node 22 minimum.
+Source and tests stay in `src/` and `tests/`; no root-shared runtime files, symlinks or startup
+builds are required.
 The official MCP SDK owns protocol/HTTP transport. Azure CLI owns authentication and its shared
 credential storage; the bridge has no disk token cache. Keep dependencies locked.
 
@@ -103,7 +104,9 @@ do not hand-format the bundle.
 
 Run `npm ci`, `npm run build` and `npm test` from this directory in a repository checkout.
 The plugin's path-filtered CI runs the same build and tests on Windows, Linux and macOS with
-Node.js 22/24. Keep its workflow scoped to this plugin, its own file and required build/test inputs.
+Node.js 22, 24 and 26. Keep the minimum-version policy distinct from this tested matrix;
+odd-numbered and future majors are not blocked by an allowlist or assumed verified.
+Keep its workflow scoped to this plugin, its own file and required build/test inputs.
 CI must reject changes to either generated artifact after building. Keep source checkout bytes
 stable with the plugin's `.gitattributes` and preserve byte-exact artifact comparisons.
 Cover every first-party input listed in the esbuild metafile, including imported JSON.

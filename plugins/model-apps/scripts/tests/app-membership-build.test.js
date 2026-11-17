@@ -56,6 +56,47 @@ test('omitted membership directives cost no component reads or extra publish', a
   assert.equal(fake.pushes[0].components.mainFormsByTable, undefined);
 });
 
+for (const livePlan of [false, true]) {
+  test(`the ${livePlan ? 'live' : 'offline'} dry run lists each exact Main-form removal, with its scope and the app publish it owes`, async () => {
+    const spec = membershipSpec({ hidden: false });
+    spec.app.mainFormsOnUpdate = 'exact';
+    spec.minimumPluginVersion = '2.21.0';
+    const fake = membershipSdk({ existing: true });
+    const result = await runSdkBuild(spec, { sdk: fake.sdk, apply: false, phases: ['app-shell'], livePlan, emit: () => {} });
+    const removals = result.planItems.filter((item) => item.op === 'app-main-forms-removal');
+    assert.equal(removals.length, 1, JSON.stringify(result.planItems));
+    assert.equal(removals[0].phase, 'app-shell');
+    assert.equal(removals[0].destructive, true);
+    assert.match(removals[0].description, /removes other Main forms of contoso_item from the app's membership; no form is deleted/);
+    assert.match(removals[0].label, /--allow-destructive/);
+    assert.deepEqual(removals[0].publication, { kind: 'app', app: 'contoso_membership' });
+    assert.ok(!fake.events.some(([event]) => ['post', 'create', 'push', 'publish'].includes(event)), 'a dry run writes nothing');
+  });
+}
+
+test('the live dry run of a new app lists the exact Main forms without counting a removal', async () => {
+  const spec = membershipSpec({ hidden: false });
+  spec.app.mainFormsOnUpdate = 'exact';
+  spec.minimumPluginVersion = '2.21.0';
+  const fake = membershipSdk({ existing: false });
+  const result = await runSdkBuild(spec, { sdk: fake.sdk, apply: false, phases: ['app-shell'], livePlan: true, emit: () => {} });
+  const removal = result.planItems.find((item) => item.op === 'app-main-forms-removal');
+  assert.ok(removal, JSON.stringify(result.planItems));
+  assert.equal(removal.destructive, false);
+  assert.match(removal.label, /the app is new, so no Main form is taken out/);
+});
+
+test('a dry run without exact Main forms lists no removal and keeps its plan items unchanged', async () => {
+  for (const livePlan of [false, true]) {
+    const fake = membershipSdk({ existing: true });
+    const result = await runSdkBuild(membershipSpec({ hidden: false }), { sdk: fake.sdk, apply: false, phases: ['app-shell'], livePlan, emit: () => {} });
+    assert.ok(result.planItems.length > 0);
+    for (const item of result.planItems) {
+      for (const key of ['op', 'destructive', 'description', 'publication']) assert.ok(!(key in item), `${key} on ${item.label}`);
+    }
+  }
+});
+
 test('a navigation table redundantly listed in app.tables is proven without another pin or publish', async () => {
   const fake = membershipSdk();
   const spec = membershipSpec({ mainForms: false });

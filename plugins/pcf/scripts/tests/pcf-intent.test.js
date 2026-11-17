@@ -87,7 +87,7 @@ function withRecipeCatalog(recipes, callback) {
     }
     return callback({ recipesRoot });
   } finally {
-    fs.rmSync(recipesRoot, { recursive: true, force: true });
+    fs.rmSync(recipesRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 }
 
@@ -563,7 +563,7 @@ test('write-pcf-plan writes markdown, emits JSON, and exits 1 when lint has erro
     assert.ok(payload.findings.some((finding) => finding.code === 'PCF_INTENT_PAGES_NEEDS_WEB'));
     assert.match(fs.readFileSync(outPath, 'utf8'), /PCF_INTENT_PAGES_NEEDS_WEB/);
   } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
 
@@ -580,7 +580,7 @@ test('write-pcf-plan accepts Liquid, writes its instructions, and preserves the 
     assert.deepEqual(JSON.parse(cli.stdoutText()), { ok: true, out: outPath, findings: [] });
     assert.ok(fs.readFileSync(outPath, 'utf8').includes("{% codecomponent name:<registered control name> <property>:'<value>' %}"));
   } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
 
@@ -600,7 +600,7 @@ test('write-pcf-plan rejects a Pages list journey before writing a plan with sch
     assert.match(payload.findings[0].message, /dataset journeys on Power Pages/i);
     assert.equal(fs.existsSync(outPath), false);
   } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
 
@@ -623,7 +623,7 @@ test('write-pcf-plan blocks a Pages dataset while preserving the blocking-plan J
     assertFinding(payload.findings, 'PCF_INTENT_PAGES_DATASET', 'error');
     assert.match(fs.readFileSync(outPath, 'utf8'), /PCF_INTENT_PAGES_DATASET/);
   } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
 
@@ -651,7 +651,7 @@ test('write-pcf-plan emits JSON and exits 1 when the intent JSON is invalid', as
     assert.equal(payload.ok, false);
     assert.match(payload.error, /cannot read PCF intent/);
   } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
 
@@ -676,7 +676,7 @@ test('write-pcf-plan emits schema JSON instead of throwing for schema-invalid in
       assert.ok(payload.findings.some((finding) => finding.code === 'PCF_INTENT_SCHEMA'), name);
       assert.match(payload.error, /intent schema is invalid/i, name);
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   }
 });
@@ -693,7 +693,7 @@ test('write-pcf-plan rejects a positional intent path without --intent', async (
     assert.match(cli.stderrText(), /Usage:/);
     assert.equal(cli.stdoutText(), '');
   } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
 

@@ -36,6 +36,9 @@ function tmp() {
   return d;
 }
 
+// The folder whose .maker-workspace holds the pages lease an upload with --app-id takes: one of this file's own, never the folder the tests run in.
+const LEASE_DIR = tmp();
+
 const ENV = 'https://contoso.crm.dynamics.com';
 const PAGE = '9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d'; // the page the environment already holds, placed in APP
 const APP = 'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa';
@@ -89,6 +92,7 @@ function run(argv, backend, extra = {}) {
     uploadMod.main(argv, {
       makeGenpageSdk: (env, deps) => { made = make(env, deps); return made; },
       emit: (ok, payload) => resolve({ ok, payload, disposedAtEmit: made && made.disposed }),
+      appDir: LEASE_DIR,
       ...extra,
     }).catch(reject);
   });
@@ -1268,6 +1272,10 @@ function appWithPublishedLayer({ publishTakesEffect = true } = {}) {
       appmodulecomponent: () => [{ objectid: 'dddddddd-4444-4444-8444-dddddddddddd', componenttype: 62 }],
       sitemap: () => [{ sitemapxml: published.xml }],
     },
+    // The app's unique name, which names the pages lease the upload takes (lib/standalone-page-lease.js), read from the saved layer.
+    onGet: async (url) => (url.startsWith('/appmodules/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()')
+      ? { status: 200, body: { value: [{ appmoduleid: APP, uniquename: 'contoso_review' }] } }
+      : { status: 404, body: null }),
   }).seedApp({ id: APP, name: 'Review app', siteMap: { areas: [{ id: 'a', title: 'Main', groups: [{ id: 'g', title: 'Pages', subAreas: [] }] }] } });
   let failNext = true;
   const publishArtifact = sdk.publishArtifact.bind(sdk);
@@ -1647,8 +1655,28 @@ test('an UPDATE of a page that already has the keys — sent as it is, or edited
     assert.ok(warning.startsWith(`${file} updates a page that is already deployed, and the deployed page already had these, set the same, so the upload goes on. It writes CSS that Griffel drops at runtime, so the page renders without it as it does today: `), `${what}: ${warning}`);
     for (const needle of ['borderWidth', 'borderColor', 'borderStyle']) assert.ok(warning.includes(`${file}:${placeOf(local, needle)}: \`${needle}\` is not supported by Griffel`), `${what}: ${needle}, at its place in the file that is uploaded`);
     assert.ok(warning.includes(BOTH_WAYS_OUT), `${what}: both ways out`);
-    assert.match(warning, new RegExp(`Edit the file to do either \\(\`node scripts/check-griffel-styles\\.js --file ${escapeRe(commandArg(file))}\` lists every one\\); an upload that adds anything the check reports, or sets one of these to another value, is refused\\.$`), what);
+    assert.match(warning, new RegExp(`Edit the file to do either \\(\`node scripts/check-griffel-styles\\.js --file ${escapeRe(commandArg(file))} --existing\` lists every one\\); an upload that adds anything the check reports, or sets one of these to another value, is refused\\.$`), what);
   }
+});
+
+test('the check an UPDATE suggests is the one for a deployed page: with the Griffel key fixed, it exits 0 and reports a missing scroll context as a note, not a refusal', async () => {
+  // A deployed page with a key Griffel drops and no scroll context (a bare root). The upload warns, and suggests the checker; run as suggested on the file once the key is
+  // fixed, the checker must not turn the maker's Griffel fix into a refusal of the page's layout.
+  const deployed = `${GRIFFEL_IMPORT}const useStyles = makeStyles({ root: { borderWidth: '1px' } });\nexport default function P() {\n  const s = useStyles();\n  return <div className={s.root}>rows</div>;\n}\n`;
+  const { file, r } = await griffelUpdate(deployed, deployed);
+  assert.strictEqual(r.ok, true, JSON.stringify(r.payload));
+  const warning = r.payload.warnings.find((w) => /Griffel/.test(w));
+  const command = /`node scripts\/check-griffel-styles\.js ([^`]+)`/.exec(warning)[1];
+  assert.strictEqual(command, `--file ${commandArg(file)} --existing`);
+  fs.writeFileSync(file, deployed.replace("borderWidth: '1px'", "borderTopWidth: '1px'"));
+  const res = require('node:child_process').spawnSync(process.execPath, [path.join(__dirname, '..', 'check-griffel-styles.js'), '--file', file, '--existing'], { encoding: 'utf8' });
+  assert.strictEqual(res.status, 0, res.stdout + res.stderr);
+  const out = JSON.parse(res.stdout);
+  assert.deepStrictEqual(out.problems, []);
+  assert.deepStrictEqual(out.notes.map((n) => n.code), ['no-scroll-context']);
+  // The same file run without --existing — what a create is told to run — is held to the scroll rule as a new page.
+  const strict = require('node:child_process').spawnSync(process.execPath, [path.join(__dirname, '..', 'check-griffel-styles.js'), '--file', file], { encoding: 'utf8' });
+  assert.strictEqual(strict.status, 3, strict.stdout);
 });
 
 test('an UPDATE that ADDS a key the deployed page did not have is refused, naming only the new key — and --overwrite-deployed is no way past it', async () => {
@@ -1664,7 +1692,8 @@ test('an UPDATE that ADDS a key the deployed page did not have is refused, namin
     assert.ok(error.includes(`${file}:${placeOf(added, "borderStyle: 'dashed'")}: \`borderStyle\` is not supported by Griffel`), 'the new key, where it is');
     for (const old of ['borderWidth', 'borderColor']) assert.ok(!error.includes(`${file}:${placeOf(added, old)}:`), `${old} was already deployed, so it is not what stops the upload`);
     assert.ok(error.includes(BOTH_WAYS_OUT));
-    assert.match(error, /Fix it in the file \(`node scripts\/check-griffel-styles\.js --file [^`]+` lists every one\), then re-run the upload\.$/);
+    // An update suggests the check with --existing: the page is deployed already, so its scroll findings are notes (Styling gotchas 6).
+    assert.match(error, /Fix it in the file \(`node scripts\/check-griffel-styles\.js --file [^`]+ --existing` lists every one\), then re-run the upload\.$/);
   }
 });
 
@@ -2023,6 +2052,8 @@ function realBackend(server, { navigation = {}, made = [], deps = {} } = {}) {
     const genpage = makeGenpageSdk(env, { httpClient: server.http(), mkdtempSync: (prefix) => { const dir = fs.mkdtempSync(prefix); made.push(dir); return dir; }, ...deps, ...fromScript });
     genpage.enumeratePages = async (appId) => { const pages = navigation[appId] || []; return { ok: true, pages, empty: pages.length === 0 }; };
     genpage.placeInApp = async () => ({ added: [], alreadyPlaced: [], pinnedViews: [], warnings: [], appEdited: false });
+    // The name of the app's pages lease an upload with --app-id takes (lib/standalone-page-lease.js): one more app read.
+    genpage.appUniqueName = async () => 'contoso_review';
     return genpage;
   };
 }
@@ -2377,4 +2408,53 @@ test('a file that starts with two byte order marks reaches the backend as the te
   assert.strictEqual(r.ok, true, JSON.stringify(r.payload));
   assert.strictEqual(only(updating, 'update')[1].source, text);
   assert.strictEqual(pageHash(only(updating, 'update')[1].source), readMarker(file).localSha256, 'and the recorded hash is of that same text');
+});
+
+// ── skill_completed telemetry (lib/telemetry/skill-completed.js) ───────────────────────────────────────────────────────────────
+// An upload that was ATTEMPTED reports once, before its result is printed, in the closed vocabulary: what happened to the page, never its
+// name, id, prompt or the environment's URL. A refusal of the command line or its files sends nothing.
+function reporter() {
+  const sent = [];
+  return { sent, reportCompletion: async (input) => { sent.push(input); return true; } };
+}
+
+test('skill_completed: a create reports success with page "created", the target environment and a duration', async () => {
+  const spy = reporter();
+  const r = await run(createArgs(codeFile()), environment(), spy);
+  assert.strictEqual(r.ok, true, JSON.stringify(r.payload));
+  assert.strictEqual(spy.sent.length, 1);
+  const [sent] = spy.sent;
+  assert.deepStrictEqual({ ...sent, durationMs: typeof sent.durationMs }, {
+    skillName: 'genpage', outcome: 'success', errorClass: undefined, envUrl: ENV, durationMs: 'number',
+    eventInfo: { operation: 'page-upload', page: 'created', placedInApp: false },
+  });
+});
+
+test('skill_completed: an update reports page "updated"', async () => {
+  const file = codeFile('export const n = 2;\n'); // an edit of the deployed TEXT: the same bytes would be "unchanged"
+  seedBase(file);
+  const spy = reporter();
+  const r = await run(updateArgs(file), environment(), spy);
+  assert.strictEqual(r.ok, true, JSON.stringify(r.payload));
+  assert.deepStrictEqual(spy.sent.map((s) => [s.outcome, s.eventInfo.page]), [['success', 'updated']]);
+});
+
+test('skill_completed: a command the script refuses before any upload reports nothing', async () => {
+  const spy = reporter();
+  const { factory } = untouchable();
+  const r = await run(['--env', ENV, '--app-id', APP, ...NAMED], factory, spy);
+  assert.strictEqual(r.ok, false);
+  assert.deepStrictEqual(spy.sent, []);
+});
+
+test('skill_completed: uploadCompletion maps each result to its outcome and error class', () => {
+  const { uploadCompletion } = uploadMod;
+  assert.deepStrictEqual(uploadCompletion({ ok: true, payload: { ok: true, updated: true, unchanged: true, addedToSitemap: true, addedToSolution: true } }),
+    { outcome: 'success', eventInfo: { operation: 'page-upload', page: 'unchanged', placedInApp: true, addedToSolution: true } });
+  assert.deepStrictEqual(uploadCompletion({ ok: false, payload: { ok: false, code: 'griffel-shorthand', error: 'x' } }),
+    { outcome: 'failure', errorClass: 'invalid-input', eventInfo: { operation: 'page-upload' } });
+  assert.deepStrictEqual(uploadCompletion({ ok: false, payload: { code: 'solution-add-failed', addedToSolution: false } }),
+    { outcome: 'failure', errorClass: 'deploy-failed', eventInfo: { operation: 'page-upload', addedToSolution: false } });
+  assert.deepStrictEqual(uploadCompletion({ error: new Error('boom') }),
+    { outcome: 'failure', errorClass: 'unexpected', eventInfo: { operation: 'page-upload' } });
 });

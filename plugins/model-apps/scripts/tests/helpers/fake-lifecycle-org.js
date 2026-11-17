@@ -27,6 +27,9 @@
 //   pages      the generative pages (`uxagentprojects`, their files and conversation), held by the stateful page fake the SDK's own
 //              tests drive (helpers/fake-genpage-server.js), which takes their writes, a file's bytes and a `PublishXml`; their reads
 //              are answered here from its state, so every query option a read carries is applied (pageRows, answerPageRead).
+//   configuration  only in an org made with `{ configuration: true }`: environment variable definitions and values, connection
+//              references and Custom APIs with their parameters and properties (CONFIGURATION_TABLES), each created as a deep insert
+//              may send it and read back with the `$expand` of its child collection.
 //
 // The platform rules it keeps, and where each comes from. MEASURED or DOCUMENTED (the plugin's code or another fake records it):
 //   - a read BY ID answers the saved row with its current token (the SDK reads a form it just created that way), except an app module,
@@ -108,6 +111,39 @@ const SYSTEM_TABLES = {
   account: { set: 'accounts', id: 'accountid', name: 'name', otc: 1, stock: true },
   contact: { set: 'contacts', id: 'contactid', name: 'fullname', otc: 2, stock: true },
 };
+// Column security, modelled only for an org made with `{ fieldSecurity: true }` (a test that seeds profiles): a field security profile,
+// its column permissions, and — as N:N links in `associations` — the users and teams it is given to (systemuserprofiles_association,
+// teamprofiles_association). Their READS follow the read contract below; nothing writes them here, so any write to them is answered
+// 501 and recorded in `unexpected`, as every unmodelled request is. Without the option they are not tables of the org at all.
+// See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/fieldsecurityprofile
+// See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/fieldpermission
+const FIELD_SECURITY_TABLES = {
+  fieldsecurityprofile: { set: 'fieldsecurityprofiles', id: 'fieldsecurityprofileid', name: 'name', otc: 9020, componentType: 70 },
+  fieldpermission: { set: 'fieldpermissions', id: 'fieldpermissionid', name: null, otc: 9019 },
+};
+// Protected configuration, modelled only for an org made with `{ configuration: true }` (a test that builds and downloads it): environment
+// variable definitions and their values, connection references, and Custom APIs with their request parameters and response properties
+// (and the definitions, not the rows, of the duplicate rule tables).
+// A definition, a reference and a Custom API created with the solution header join that solution (an environment variable definition
+// as type 380, the other two as their table's ObjectTypeCode, which is what a current environment lists them under); a value never
+// joins one, and a Custom API's parameters and properties created inside it do not either — the build adds each with
+// AddSolutionComponent (helpers/fake-config-org.js keeps the same rules, and says where each comes from). A Custom API's children
+// arrive in its create as a deep insert, and a read may `$expand` a definition's values or a Custom API's children.
+// See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/environmentvariabledefinition
+// See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/connectionreference
+// See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/custom-api-tables
+const CONFIGURATION_TABLES = {
+  environmentvariabledefinition: { set: 'environmentvariabledefinitions', id: 'environmentvariabledefinitionid', name: 'schemaname', otc: 380, componentType: 380 },
+  environmentvariablevalue: { set: 'environmentvariablevalues', id: 'environmentvariablevalueid', name: null, otc: 381 },
+  connectionreference: { set: 'connectionreferences', id: 'connectionreferenceid', name: 'connectionreferencelogicalname', otc: 10132, componentType: 10132 },
+  customapi: { set: 'customapis', id: 'customapiid', name: 'uniquename', otc: 10133, componentType: 10133 },
+  customapirequestparameter: { set: 'customapirequestparameters', id: 'customapirequestparameterid', name: 'uniquename', otc: 10134 },
+  customapiresponseproperty: { set: 'customapiresponseproperties', id: 'customapiresponsepropertyid', name: 'uniquename', otc: 10135 },
+  // Definitions only: the build reads the ObjectTypeCode of every table protected configuration may add to a solution, duplicate rules
+  // included, before its first write. No test of this org declares a duplicate rule, so their rows are not modelled.
+  duplicaterule: { set: 'duplicaterules', id: 'duplicateruleid', name: 'name', otc: 4414 },
+  duplicaterulecondition: { set: 'duplicateruleconditions', id: 'duplicateruleconditionid', name: null, otc: 4416 },
+};
 const PAGE_PATH = /^\/(uxagentprojects|uxagentprojectfiles|agentconversationmessages)\b/;
 
 // THE READ CONTRACT of the record half: the columns a read may name, per system table, EXPLICITLY — `fields` the platform always fills
@@ -143,6 +179,33 @@ const RECORD_SCHEMA = {
   settingdefinition: { fields: ['settingdefinitionid', 'uniquename', 'displayname', 'datatype', 'defaultvalue', 'isoverridable', 'overridablelevel', ...AUDIT], nullable: [] },
   appsetting: { fields: ['appsettingid', '_parentappmoduleid_value', '_settingdefinitionid_value', 'value', 'componentstate', ...AUDIT], nullable: ['uniquename'], lookups: { parentappmoduleid: 'appmodules', settingdefinitionid: 'settingdefinitions' } },
   organizationsetting: { fields: ['organizationsettingid', '_settingdefinitionid_value', 'value', 'uniquename', ...AUDIT], nullable: [], lookups: { settingdefinitionid: 'settingdefinitions' } },
+  // Reachable only in an org made with `{ fieldSecurity: true }` (FIELD_SECURITY_TABLES).
+  fieldsecurityprofile: { fields: ['fieldsecurityprofileid', 'name', 'ismanaged', ...AUDIT], nullable: ['description'] },
+  fieldpermission: { fields: ['fieldpermissionid', '_fieldsecurityprofileid_value', 'entityname', 'attributelogicalname', 'canread', 'cancreate', 'canupdate', ...AUDIT], nullable: ['canreadunmasked'], lookups: { fieldsecurityprofileid: 'fieldsecurityprofiles' } },
+  // Reachable only in an org made with `{ configuration: true }` (CONFIGURATION_TABLES). Every column a definition may leave empty is
+  // nullable: the build sets only what the spec declares. `collections` are the collection-valued navigations `$expand` may embed and a
+  // create may carry as a deep insert: the child set and the lookup on the child that points back.
+  environmentvariabledefinition: {
+    fields: ['environmentvariabledefinitionid', 'schemaname', 'type', 'isrequired', ...AUDIT],
+    nullable: ['displayname', 'description', 'defaultvalue', 'valueschema', 'apiid', 'connectorid', 'parameterkey', '_parentdefinitionid_value', 'secretstore', 'hint', 'learnmoreurl', 'inputcontrolconfig', 'ismanaged', 'statecode', 'statuscode'],
+    lookups: { parentdefinitionid: 'environmentvariabledefinitions' },
+    collections: { environmentvariabledefinition_environmentvariablevalue: { set: 'environmentvariablevalues', fk: '_environmentvariabledefinitionid_value' } },
+  },
+  environmentvariablevalue: { fields: ['environmentvariablevalueid', '_environmentvariabledefinitionid_value', ...AUDIT], nullable: ['value', 'schemaname', 'ismanaged', 'statecode', 'statuscode'], lookups: { environmentvariabledefinitionid: 'environmentvariabledefinitions' } },
+  connectionreference: {
+    fields: ['connectionreferenceid', 'connectionreferencelogicalname', ...AUDIT],
+    nullable: ['connectionreferencedisplayname', 'description', 'connectorid', '_customconnectorid_value', 'connectionid', 'connectionparametersconfig', 'connectionparametersetconfig', 'promptingbehavior', 'ismanaged', 'statecode', 'statuscode'],
+  },
+  customapi: {
+    fields: ['customapiid', 'uniquename', ...AUDIT],
+    nullable: ['name', 'displayname', 'description', 'bindingtype', 'boundentitylogicalname', 'isfunction', 'isprivate', 'allowedcustomprocessingsteptype', 'workflowsdkstepenabled', 'executeprivilegename', '_plugintypeid_value', 'ismanaged', 'statecode', 'statuscode'],
+    collections: {
+      CustomAPIRequestParameters: { set: 'customapirequestparameters', fk: '_customapiid_value' },
+      CustomAPIResponseProperties: { set: 'customapiresponseproperties', fk: '_customapiid_value' },
+    },
+  },
+  customapirequestparameter: { fields: ['customapirequestparameterid', 'uniquename', '_customapiid_value', ...AUDIT], nullable: ['name', 'displayname', 'description', 'type', 'logicalentityname', 'isoptional', 'ismanaged'], lookups: { customapiid: 'customapis' } },
+  customapiresponseproperty: { fields: ['customapiresponsepropertyid', 'uniquename', '_customapiid_value', ...AUDIT], nullable: ['name', 'displayname', 'description', 'type', 'logicalentityname', 'ismanaged'], lookups: { customapiid: 'customapis' } },
   // The page tables are answered by the page fake (helpers/fake-genpage-server.js); their reads are checked here before it sees them.
   uxagentproject: { fields: ['uxagentprojectid', 'name', 'versionnumber', 'componentstate'], nullable: ['description', 'createdon', 'modifiedon'] },
   uxagentprojectfile: { fields: ['uxagentprojectfileid', 'filename', 'filetype', '_uxagentprojectid_value', 'versionnumber'], nullable: ['createdon', 'modifiedon'], lookups: { uxagentprojectid: 'uxagentprojects' } },
@@ -155,7 +218,8 @@ const READ_OPTIONS = {
   navigation: ['$select', '$filter', '$orderby', '$top'],
   unpublished: ['$select'],
   unpublishedMany: ['$select', '$filter', '$orderby', '$top'],
-  write: ['$select'],
+  // A create may `$expand` what it deep-inserted (a Custom API answers its new children's ids); expandsOf checks each navigation.
+  write: ['$select', '$expand'],
 };
 
 // The fixed ids a fresh environment hands out, so a test can name them.
@@ -199,14 +263,16 @@ function createLifecycleOrg(options = {}) {
     onTableDeleted: (table) => tableDeleted(table),
   });
 
+  // The system tables of this org: column security's two only when the test asked for them (FIELD_SECURITY_TABLES).
+  const systemTables = { ...SYSTEM_TABLES, ...(options.fieldSecurity ? FIELD_SECURITY_TABLES : {}), ...(options.configuration ? CONFIGURATION_TABLES : {}) };
   const tableInfo = (logical) => {
-    const system = SYSTEM_TABLES[logical];
+    const system = systemTables[logical];
     if (system) return { logical, ...system };
     const t = metadata.tables.get(logical);
     return t ? { logical, set: t.EntitySetName, id: t.PrimaryIdAttribute, name: t.PrimaryNameAttribute, otc: t.ObjectTypeCode } : null;
   };
   const infoOfSet = (set) => {
-    for (const [logical, t] of Object.entries(SYSTEM_TABLES)) if (t.set === set) return { logical, ...t };
+    for (const [logical, t] of Object.entries(systemTables)) if (t.set === set) return { logical, ...t };
     for (const t of metadata.tables.values()) if (t.EntitySetName === set) return tableInfo(t.LogicalName);
     return null;
   };
@@ -371,7 +437,7 @@ function createLifecycleOrg(options = {}) {
     if (!info) throw new Unmodelled(`no table has the entity set ${set}`);
     const explicit = RECORD_SCHEMA[info.logical];
     if (explicit) {
-      return { info, fields: new Set(explicit.fields), nullable: new Set(explicit.nullable), lookups: explicit.lookups || {}, navigations: explicit.navigations || {}, expands: explicit.expands || {} };
+      return { info, fields: new Set(explicit.fields), nullable: new Set(explicit.nullable), lookups: explicit.lookups || {}, navigations: explicit.navigations || {}, expands: explicit.expands || {}, collections: explicit.collections || {} };
     }
     const table = metadata.tables.get(info.logical);
     if (!table) throw new Unmodelled(`the table of ${set} has no definition`);
@@ -394,7 +460,7 @@ function createLifecycleOrg(options = {}) {
       }
       if (!fields.has(name)) nullable.add(name);
     }
-    return { info, fields, nullable, lookups, navigations: {}, expands: {} };
+    return { info, fields, nullable, lookups, navigations: {}, expands: {}, collections: {} };
   }
   const knows = (schema, name) => schema.fields.has(name) || schema.nullable.has(name);
   // Refuses — before any row is enumerated — a read that names anything the set does not have: an option, a column (in `$select`,
@@ -516,18 +582,30 @@ function createLifecycleOrg(options = {}) {
   //   -> { "solutionid": "…", "uniquename": "…", "publisherid": { "publisherid": "…", "customizationprefix": "contoso" } }
   // The navigations modelled are the lookups the lifecycle expands (RECORD_SCHEMA `expands`); any other is refused by name.
   // See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/query/join-tables#expand-many-to-one-relationships
+  //
+  // A collection-valued navigation (RECORD_SCHEMA `collections`) embeds the child rows that point back at the row, each narrowed by its
+  // own `$select`, in the order they were made:
+  //   /customapis(<id>)?$select=customapiid&$expand=CustomAPIRequestParameters($select=customapirequestparameterid,uniquename)
+  //   -> { "customapiid": "…", "CustomAPIRequestParameters": [ { "customapirequestparameterid": "…", "uniquename": "In" } ] }
+  // See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/query/join-tables#expand-one-to-many-relationships
   function expandsOf(schema, text, where) {
     return metadata.parseExpand(text).map((item) => {
-      const target = schema.expands[item.name];
+      const collection = schema.collections[item.name] || null;
+      const target = collection ? collection.set : schema.expands[item.name];
       if (!target) throw new Unmodelled(`$expand=${item.name} on ${where} is not modelled`);
       for (const option of Object.keys(item.opts)) if (option !== '$select') throw new Unmodelled(`$expand=${item.name}(${option}) on ${where} is not modelled`);
       const related = schemaOf(target);
       if (item.opts.$select !== undefined) for (const name of listOf(item.opts.$select)) if (!knows(related, name)) throw new Unmodelled(`${related.info.logical} has no column ${name} ($expand=${item.name} on ${where})`);
-      return { ...item, target };
+      return { ...item, target, collection, parentKey: schema.info.id };
     });
   }
   function withExpands(out, data, expands) {
     for (const e of expands) {
+      if (e.collection) {
+        const parent = bare(data[e.parentKey]);
+        out[e.name] = [...rowsOf(e.target).values()].filter((row) => bare(row.data[e.collection.fk]) === parent).map((row) => shape(row, row.data, e.opts, infoOfSet(e.target), { saved: true }));
+        continue;
+      }
       const id = data[`_${e.name}_value`];
       const row = id && rowsOf(e.target).get(bare(id));
       out[e.name] = row ? shape(row, row.data, e.opts, infoOfSet(e.target), { saved: true }) : null;
@@ -582,12 +660,30 @@ function createLifecycleOrg(options = {}) {
     roles: () => ({ ismanaged: false, iscustomizable: { Value: true, CanBeChanged: true } }),
     solutions: () => ({ ismanaged: false, isvisible: true }),
     appactions: () => ({ ismanaged: false, statecode: 0, statuscode: 1 }),
+    environmentvariabledefinitions: () => ({ ismanaged: false, statecode: 0, statuscode: 1 }),
+    environmentvariablevalues: () => ({ ismanaged: false, statecode: 0, statuscode: 1 }),
+    connectionreferences: () => ({ ismanaged: false, statecode: 0, statuscode: 1 }),
+    customapis: () => ({ ismanaged: false, statecode: 0, statuscode: 1 }),
+    customapirequestparameters: () => ({ ismanaged: false }),
+    customapiresponseproperties: () => ({ ismanaged: false }),
   };
 
   function createRow(set, body, headers, query = {}) {
     const info = infoOfSet(set);
     if (!info) throw new Unmodelled(`no table has the entity set ${set}`);
-    const data = { ...(CREATE_DEFAULTS[set] ? CREATE_DEFAULTS[set]() : {}), ...coerce(bindLookups(set, body)) };
+    // A deep insert: an array under a collection-valued navigation is the child rows, made in the same request and pointing back at the
+    // new row (`{ "uniquename": "contoso_Ping", "CustomAPIRequestParameters": [ { "uniquename": "In", … } ] }`).
+    // See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/create-entity-web-api#create-related-table-rows-in-one-operation
+    const { collections } = schemaOf(set);
+    const own = { ...(body || {}) };
+    const children = [];
+    for (const [name, collection] of Object.entries(collections)) {
+      if (own[name] === undefined) continue;
+      if (!Array.isArray(own[name])) throw new Unmodelled(`a deep insert of ${name} that is not a list on ${set}`);
+      children.push([collection, own[name]]);
+      delete own[name];
+    }
+    const data = { ...(CREATE_DEFAULTS[set] ? CREATE_DEFAULTS[set]() : {}), ...coerce(bindLookups(set, own)) };
     // A dashboard is a form of no table: the platform stores `objecttypecode` "none" for it.
     if (set === 'systemforms' && Number(data.type) === 0 && !data.objecttypecode) data.objecttypecode = 'none';
     const id = bare(data[info.id] || randomUUID());
@@ -602,11 +698,22 @@ function createLifecycleOrg(options = {}) {
       if (data.statuscode === undefined) data.statuscode = 1;
     }
     const row = insertRow(set, { ...data, [info.id]: id, createdon: '2026-10-01T00:00:00Z', modifiedon: '2026-10-01T00:00:00Z' });
+    for (const [collection, items] of children) {
+      for (const item of items) {
+        const childInfo = infoOfSet(collection.set);
+        const child = { ...(CREATE_DEFAULTS[collection.set] ? CREATE_DEFAULTS[collection.set]() : {}), ...coerce(bindLookups(collection.set, item)), [collection.fk]: id };
+        const childId = bare(child[childInfo.id] || randomUUID());
+        if (rowsOf(collection.set).has(childId)) throw new Unmodelled(`a deep insert of an existing ${childInfo.logical} ${childId}`);
+        insertRow(collection.set, { ...child, [childInfo.id]: childId });
+      }
+    }
     const solution = solutionHeader(headers);
     if (solution && info.componentType) addComponentByName(solution, { objectid: id, componenttype: info.componentType });
     const location = `${API}/${set}(${id})`;
-    // `Prefer: return=representation` answers the row as created — narrowed by the request's `$select`, as a read would be.
-    if (/return=representation/i.test(preferOf(headers))) return json(201, shape(row, row.data, query, info, { saved: true }), { 'odata-entityid': location, etag: etagOf(row.version) });
+    // `Prefer: return=representation` answers the row as created — narrowed by the request's `$select`, and with what its `$expand`
+    // names, as a read would be.
+    const expands = query.$expand !== undefined ? expandsOf(schemaOf(set), query.$expand, `POST /${set}`) : [];
+    if (/return=representation/i.test(preferOf(headers))) return json(201, withExpands(shape(row, row.data, query, info, { saved: true }), row.data, expands), { 'odata-entityid': location, etag: etagOf(row.version) });
     return noContent({ 'odata-entityid': location, etag: etagOf(row.version) });
   }
 
@@ -677,7 +784,7 @@ function createLifecycleOrg(options = {}) {
   function recordPrivileges(table) {
     for (const p of table.Privileges || []) insertRow('privileges', { privilegeid: p.PrivilegeId, name: p.Name, accessright: p.PrivilegeType, canbebasic: p.CanBeBasic, canbelocal: p.CanBeLocal, canbedeep: p.CanBeDeep, canbeglobal: p.CanBeGlobal });
   }
-  for (const [logical, info] of Object.entries(SYSTEM_TABLES)) seedSystemTable(logical, info);
+  for (const [logical, info] of Object.entries(systemTables)) seedSystemTable(logical, info);
   // The two stock tables the platform relates every File and Image column to (fake-lifecycle-metadata.js mediaRelationshipOf), as
   // definitions only: nothing reads or writes their rows. MEASURED: `fileattachment` reads back `IsCustomEntity: false`.
   for (const [logical, otc] of [['fileattachment', 55], ['imagedescriptor', 1007]]) {
@@ -1032,6 +1139,8 @@ function createLifecycleOrg(options = {}) {
     const info = infoOfSet(set);
     if (!info) throw new Unmodelled(`${method} ${p}: no table has the entity set ${set}`);
     if (key !== undefined) idOf(key, `${method} ${p}`);
+    // Column security is modelled for reading only: a write to a profile, a permission or a profile's links is not modelled.
+    if (method !== 'GET' && Object.values(FIELD_SECURITY_TABLES).some((t) => t.set === set)) throw new Unmodelled(`${method} ${p}: a write to column security is not modelled`);
     if (!key && !rest) {
       if (method === 'GET') return json(200, { value: readRows(set, query, { kind: 'collection', where: p }) });
       if (method === 'POST') { checkRead(set, query, 'write', p); return createRow(set, body, headers, query); }
@@ -1346,6 +1455,10 @@ function createLifecycleOrg(options = {}) {
     unpublished: () => [...sets].flatMap(([set, rows]) => (isLayered(set) ? [...rows.values()].filter((row) => row.publishedVersion !== row.version).map((row) => `${set} ${row.data.name || row.id}`) : [])),
     // A row by name, saved layer: what the platform holds whatever is published.
     find: (set, predicate) => [...rowsOf(set).values()].map((row) => row.data).filter(predicate),
+    // What a test sets up that no lifecycle request makes (a column security profile, its permissions, a second user): a row put in
+    // place as the platform holds it, and a component put in a solution, without a request — so neither is counted as a write.
+    seedRow: (set, data) => clone(insertRow(set, data).data),
+    seedComponent: (solutionName, component) => addComponentByName(solutionName, component),
   };
 }
 

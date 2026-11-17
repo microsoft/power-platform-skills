@@ -11,6 +11,8 @@ allowed-tools: Read, Write, Edit, Bash, Glob, Grep, WebFetch, Task, AskUserQuest
 
 > **Plugin check**: Run `node "${PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
 
+> **Model check (lightweight models only)**: If you are a lightweight model optimized for fast, simple tasks, tell the user in your first message that `/genpage` works best on a general-purpose coding model or an advanced reasoning model — planning the page, generating its React/TypeScript, binding it to data, deploying it and verifying it take multistep planning, tool use and validation — and recommend switching; then continue. On any other model, skip this note and say nothing about it.
+
 # Power Apps Generative Pages Builder
 
 **Triggers:** genpage, generative page, create genpage, genux page, build genux, power apps page, model page
@@ -81,7 +83,14 @@ application of planned edits.
 
 ## Instructions
 
-Follow these phases in order for every `/genpage` invocation.
+Follow these phases in order for every `/genpage` invocation, except for two requests that build nothing:
+
+- **Pull existing pages into the project** without editing them (for example "bring these pages into my repo",
+  "put the maker-made pages under source control"): follow [Pulling existing pages into the
+  project](#pulling-existing-pages-into-the-project) instead of the phases.
+- **Promote pages to another environment** (test, production, another development environment): read
+  [promotion.md](../../references/promotion.md) and follow it. Read it only for such a request. When the same
+  run also builds pages, read it after Phase 6.7.
 
 **Every `<…>` you fill into a command goes in single quotes** (`'<working-dir>/prompt.txt'`, `'<App Name>'`).
 PowerShell and bash expand nothing inside them — not `$name`, not `$(…)`, not a backtick — and a space does not split
@@ -225,7 +234,10 @@ page overwrites source nobody reviewed, so on the **edit** path an unattended ru
 requires the page to be named explicitly in `$ARGUMENTS`. Do not infer the target
 from a search result and do not fall back to "the only page that matched". If the
 target is ambiguous, **halt and say so** — an unattended run that guesses which
-page to overwrite is the one failure this table exists to prevent.
+page to overwrite is the one failure this table exists to prevent. The same holds
+for the other apps that show the page: the edit reaches them too, so before the
+upload an unattended run **halts** and reports them (`edit-flow.md`, Edit Phase 6),
+and it never confirms them itself.
 
 Halting is a normal outcome here, not an error to route around: report what was
 missing and stop, so the run can be re-driven with the decision supplied.
@@ -543,7 +555,8 @@ It returns a single JSON object:
 {
   "ok": true | false,
   "blocker": null | "usage" | "az_missing" | "az_not_logged_in" | "az_timeout" | "pac_not_logged_in"
-                 | "pac_timeout" | "no_env_url" | "whoami_403" | "whoami_401" | "whoami_error",
+                 | "pac_timeout" | "no_env_url" | "whoami_403" | "whoami_401" | "whoami_error"
+                 | "no_customization_role",
   "message": "human-readable next step",
   "warnings": ["..."],
   "azUser": "...", "pacUser": "...", "envUrl": "...",
@@ -565,6 +578,10 @@ It returns a single JSON object:
 - **`blocker: "az_timeout"`** means the Azure CLI was too slow to answer, not that it is missing or
   signed out. Retry once; if it recurs on a busy machine, set `POWER_PLATFORM_SKILLS_AZ_TIMEOUT_MS`
   (milliseconds, default 60000) for the Azure CLI budget.
+- **`blocker: "no_customization_role"`** means WhoAmI passed but the identity holds no security role, so
+  every customization read would fail (HTTP 403 `0x80042f09`). Show the `message` and stop: the maker
+  needs an administrator to assign a role such as System Customizer (or to sign in as the PAC user when
+  `message` offers it). Any other failure of that one extra read is only a `warnings` entry.
 - **`blocker: "pac_timeout"`** means `pac org who` did not answer within its fixed 60 s, so the PAC
   login is unknown, not missing. Retry once. The Azure CLI setting above does not change this budget.
 
@@ -879,7 +896,7 @@ subagent. Inline the page-builder workflow directly in the orchestrator:
    Rewrite any unverified names with the closest verified alternative; do not
    load the full icon list into context
 9. Check the generated file for the Griffel shorthands that `makeStyles` drops at
-   runtime:
+   runtime, and for a scroll context:
 
    ```powershell
    node "${PLUGIN_ROOT}/scripts/check-griffel-styles.js" --file '<working-dir>/<filename>.tsx'
@@ -912,21 +929,31 @@ subagent. Inline the page-builder workflow directly in the orchestrator:
    cannot see (a template that starts with `--`, `&`, `:` or `@` is read); Fluent's
    `...shorthands.*(…)` and `...typographyStyles.*` may be spread as they are.
 
-   Then review the page for iteration that compiles to nothing:
+   The same command checks that the page establishes a scroll context
+   (`references/rules.md`, **Page Layout**): the host shows a page in a container of
+   fixed height and never scrolls it, so a page with none is cut off below the fold.
+   `no-scroll-context`, `scroll-context-unproven` and `scroll-context-padding` are
+   problems like any other, each with the edit that fixes it: apply it and run the
+   check again.
 
-   The page compiler targets ES5 without iterator downleveling or full type checking.
-   Spreading, looping over, or array-destructuring a Map, Set or iterator reads length
-   and indices instead of the iterator: values can disappear, defaults can replace them,
-   or rest destructuring can throw. This includes `[...new Set(xs)]`, `[...m.values()]`,
+   Then review the page for iteration that another page compiler can lose:
+
+   Pages this plugin uploads are compiled with iterator support (ES5 with
+   `downlevelIteration`), so a spread, a `for...of` loop or an array destructure of a Map,
+   Set, iterator, generator or string reads it as modern JavaScript does. A tool that
+   compiles the page again without that support — an older maker portal, or `pac` — reads
+   length and indices instead: values disappear, defaults replace them, and rest
+   destructuring or a string spread throws, all with a clean compile. Keep the page
+   correct under every compiler: convert with `Array.from(...)` before spreading, looping
+   or destructuring, for example `[...new Set(xs)]`, `[...m.values()]`,
    `[...seen.values()]`, `for (const [k, v] of m)`, `new Set([...prev, id])`,
-   `[...selected]` and `[...text.matchAll(re)]`. Convert with `Array.from(...)` before
-   spreading, looping or destructuring; copy a Set with `new Set(prev)` then `.add(id)`.
-   Ordinary array spreads and loops remain valid. `Object.keys`, `Object.values` and
-   `Object.entries` return arrays. Spreads of `arguments` and ordinary indexed
-   array-likes work; rest destructuring of an array-like without `slice` does not.
-   String spread throws, and an ES5 string loop visits UTF-16 code units rather than
-   Unicode code points. See **Common Errors > 5. Iteration that compiles to nothing**
-   in `references/rules.md` for the pairs.
+   `[...selected]` and `[...text.matchAll(re)]`; copy a Set with `new Set(prev)` then
+   `.add(id)`. Ordinary array spreads and loops remain valid. `Object.keys`,
+   `Object.values` and `Object.entries` return arrays. Rest destructuring of a non-iterable array-like
+   without `slice` throws under every compiler. A destructuring default must not write to
+   the array being destructured: `const [a = (values[1] = 3), b] = values` leaves `b` at
+   its old value here, unlike modern JavaScript. See **Common Errors > 5. Iteration that
+   another page compiler can lose** in `references/rules.md` for the pairs.
 10. Run the completeness gate on the page you wrote — the same one 5c runs on a
     worker's page, and this is also the page a 5c fallback produces:
 
@@ -1029,10 +1056,11 @@ check themselves; run it on every generated page, exactly as in step 9 of Phase 
 node "${PLUGIN_ROOT}/scripts/check-griffel-styles.js" --file '<working-dir>/<filename>.tsx'
 ```
 
-and fix what it reports in the page yourself before Phase 6. A page that has not
-exited 0 is not deployed. Review every generated page for iteration that compiles to
-nothing as well, and fix it yourself: the workers follow the same rule
-(`references/rules.md`, **Common Errors > 5. Iteration that compiles to nothing**).
+and fix what it reports in the page yourself before Phase 6, its scroll context
+included (step 9). A page that has not
+exited 0 is not deployed. Review every generated page for iteration that another page
+compiler can lose as well, and fix it yourself: the workers follow the same rule
+(`references/rules.md`, **Common Errors > 5. Iteration that another page compiler can lose**).
 
 ### Phase 6: Deploy
 
@@ -1184,7 +1212,8 @@ did not already have (below). The result is `"code":"griffel-shorthand"`, with e
 and what each way out does in `error` (and the same list in `problems`). That is the same check as
 `check-griffel-styles.js`, held at the one place every upload passes, so a page that skipped the earlier gate still cannot
 ship a key it added without its border. Fix the page and run the upload again; no flag skips it, and
-`--overwrite-deployed` does not. The upload reads the code file once and writes exactly the text it checked, so a change saved
+`--overwrite-deployed` does not. The upload does not check a page's scroll context: only `check-griffel-styles.js`
+does (Phase 5b step 9). The upload reads the code file once and writes exactly the text it checked, so a change saved
 to the file after the upload started is not sent — run the upload again to send it. It does not take `--compiled-code-file`: the SDK
 compiles the checked file itself.
 
@@ -1205,6 +1234,11 @@ deployed page itself.
 **For mock data pages:** Same but omit `--data-sources`.
 
 #### For updating existing pages (subsequent upload):
+
+**An update of a page that existed before this run** — an edit, a verification fix-up of an edited
+page, a compiler refresh — changes every app that shows the page. Run the shared-page check from
+Edit Phase 6 (`edit-flow.md`, **Before anything is uploaded: the other apps that show this page**)
+right before the upload and before each retry, and follow its answer; no recipe here skips it.
 
 Use `--page-id`, omit `--add-to-sitemap`, and **scope the prompt to the delta only**:
 
@@ -1248,6 +1282,40 @@ Log the marker, the check result (`code`, `lines`, `deployedCopy`) and that `Cho
 - **An update with `"outcome": "unknown"`** "MAY HAVE LANDED" and is not sent again. Compare the deployed page with your file first: `node "${PLUGIN_ROOT}/scripts/genpage-base.js" check --env '<org-url>' --app-id '<app-id>' --page-id '<page-id>' --file '<working-dir>/<file>.tsx'`. `"contentSame": true` means the update landed: do not upload it again — run `genpage-base.js record` for that page and file so the marker matches what is deployed, and confirm in Maker that the page shows your change and is published. `"deployed": "unchanged"` means it did not land, and re-running the update is safe. `"deployed": "changed"` with `"contentSame": false` means someone else saved the page: treat it as the `deployed-changed` refusal above, with its choice and its `Choice:` line.
 - **A create with `"outcome": "unknown"`** is an *uncertain* create: its message says to look for the page by its `pageId` before creating it again, and it is never run again until that is done — a second run mints a second page. List the environment's pages: `node "${PLUGIN_ROOT}/scripts/genpage.js" list --env '<org-url>'` prints every page of the environment, drafts included, as `{ "pageId", "name" }`, and a failed read (exit 1, `"ok": false`) is never "the page is not there". If it is there, add it to the app's navigation with `node "${PLUGIN_ROOT}/scripts/genpage.js" add-to-app --env '<org-url>' --app-id '<app-id>' --page-id '<page-id>'` (it publishes the app and proves the page shows in the published navigation), run `genpage-base.js record --app-id '<app-id>' --page-id '<page-id>' --file '<working-dir>/<file>.tsx'` (the file is what was uploaded), then run the update with `--page-id`. Or delete the page and re-run the create: `node "${PLUGIN_ROOT}/scripts/genpage.js" delete --env '<org-url>' --page-id '<page-id>'` first says what it would remove — the page, its file rows and its conversation messages — and deletes nothing; ask the user, and only if they agree run it again with `--allow-destructive`, which removes them for good — an unattended run stops at that refusal instead, since suppressing a prompt never authorizes a delete — and it is refused while an app's navigation names the page (the refusal names the apps; `genpage.js remove-from-app` takes the page out of each). If no page of yours appears after a few minutes, the create is re-run. An update of a page that is not in the app's navigation is refused, and a second create makes a duplicate — so neither is the way on while the page is unaccounted for. The first page of a new app has no app yet to be added to: once it is found, run `genpage-base.js record --page-id '<page-id>' --file '<working-dir>/<file>.tsx'` with no `--app-id` (no app holds the page yet, so the marker records the page alone, and the first update that names the new app records the app) and go on with step 2 of "A new app" below (`apps.js create --page-id`).
 - **A create that wrote the page but did not publish or place it** is not an unknown outcome: its result carries the `pageId`, and the way on is "A create that did not finish" above.
+
+#### Drafts, the pages lease, and a compiler refresh
+
+- **`--draft`** on `genpage-upload.js` (a page's content): use it only when the user says "save as draft", "review before
+  publishing" or "don't publish yet" (for example "update the overview page but don't publish it yet"). Add `--draft` to the
+  same create or update command. The page is saved and not published; with `--add-to-sitemap` its navigation entry is saved as
+  a draft too, and nothing publishes the app. Tell the user it is saved, not published: the app that runs is unchanged until a
+  build, the app designer or the same upload without `--draft` publishes it. The answer has `draft: true`, `saved`,
+  `pendingPublish` (null: nothing new was saved) and `publish.kind: "skipped"`. Never describe a draft as live or published.
+  A page an earlier upload created and did not finish refuses `--draft`: finish it without `--draft`.
+- **`--draft`** on `genpage.js add-to-app` / `remove-from-app`: use it only when the user wants the navigation change saved but
+  not live yet (to review it, or to publish several edits at once). Tell them it is saved, not published: the app that runs is
+  unchanged until a build, the app designer or the same command without `--draft` publishes it. On a removal, `liveState`
+  says what the published navigation showed; only `shown` means the page cannot be deleted until the app is published.
+- **`--turn-id '<guid>' --app-dir '<folder>'`** on `genpage-upload.js`: do NOT pass it for an ordinary create or edit. It is
+  only for a host or script that retries one complete edit after losing its answer, and the id must be minted and kept BEFORE
+  the first send — never added after an answer was lost. Retry with the same files, flags, `--app-dir` and receipt; the record
+  is kept in `<folder>/.maker-workspace/turns`. A reuse asking for anything else is refused with nothing written
+  (`GENPAGE_TURN_ID_REUSED`); a changed edit needs a new id once the old one's outcome is known. `GENPAGE_APP_PUBLISH_UNPROVEN`
+  under a turn means the placement is not finished: run the same command again with the same turn id. Never delete the marker
+  or the turn record, or drop the turn id, to get past an error. A retry from another folder or machine is not supported.
+- **`pages-locked`** or **`build-locked`** (exit 1, nothing written) from `add-to-app`, `remove-from-app` or `genpage-upload.js --app-id`: a build or
+  another edit of the same app is running from that folder. Wait for it and run again; pass `--app-dir '<folder>'` when the
+  command is not run from the app's build folder. The lock covers one machine and one folder only.
+  `GENPAGE_APP_LEASE_UNRESOLVED` (exit 1, nothing written) from the same commands: the app's unique name, which names the
+  lock, could not be read — the app id is wrong, or the read failed (the message says which). Check the id and run again.
+- **Compiler refresh** — only when the user names a page whose loops over a Map, a Set or a string misbehave after an older
+  build. Download the page, then run `node "${PLUGIN_ROOT}/scripts/genpage.js" prepare-compiler-refresh --env '<org-url>'
+  --page-id '<page-id>' --file '<working-dir>/<file>.tsx' --output-file '<working-dir>/<file>.refresh.tsx'`. It writes nothing
+  to the environment; it adds one comment line so the SDK compiles the page again. Show the user the one-line `diff`, get
+  approval, then run the shared-page check from Edit Phase 6 (`edit-flow.md`) and upload the proposed file as an
+  ordinary update (above) only as that check allows. Never refresh pages in bulk: nothing proves which
+  compiler built a page. `COMPILER_REFRESH_MARKER_UNPROVEN` means the source already has the line — make a reviewed source change
+  instead; `COMPILER_REFRESH_BASE_MISMATCH` means download the page and review again.
 
 #### A new app: the first page, then the app, then the rest
 
@@ -1396,6 +1464,10 @@ referenced Custom APIs are a separate deployment prerequisite (bound by `name`),
 A built-in operation binding (`WhoAmI`, `RetrieveVersion`) needs nothing at all: it names an
 operation the platform defines, so there is no component to add or deploy.
 
+When the user asks to promote the pages to another environment, read
+[promotion.md](../../references/promotion.md) now: managed or unmanaged, full solution or patch, the version
+number, the dependency check, the import order, rollback, and what travels with a page.
+
 ### Phase 7: Verify in Browser (Optional)
 
 After successful deployment, ask the user via `AskUserQuestion`:
@@ -1468,3 +1540,52 @@ deploy, verify, summarize. Built-in operations (`WhoAmI`, `RetrieveVersion`) are
 Phase 3; Edit Phase 4 handles `dataverse_operation_discovery_required`, forwards this run's
 built-in operation contract through every planner round, and re-probes `dataverse-operations`
 before an add or replace is applied — the create flow's Phase 4.6b is not visited.
+
+---
+
+## Pulling existing pages into the project
+
+Use this when the user asks to bring existing generative pages — maker-authored ones included — into their project or
+source control without changing them. It runs no planner and no agent, uploads nothing and writes nothing to the
+environment: it only reads pages and writes their files locally.
+
+1. **Mode and environment.** Resolve the interaction mode (`resolve-interaction-mode.js`, as in Phase 1) and capture
+   the environment URL with `node "${PLUGIN_ROOT}/scripts/check-auth.js"` (add `--env '<envUrl>'` when the user named
+   the environment). Use that `envUrl` for every command below. Read its result as Phase 2a does: on `ok: false`
+   show the `message` verbatim and stop (`blocker: "usage"` alone means fix the command line and rerun it).
+2. **Choose the pages.** List them, never guess them:
+   - the pages of one app: `node "${PLUGIN_ROOT}/scripts/apps.js" list --env '<envUrl>'`, then
+     `node "${PLUGIN_ROOT}/scripts/genpage.js" list --env '<envUrl>' --app-id '<app-id>'`;
+   - every page in the environment, including pages in no app: `node "${PLUGIN_ROOT}/scripts/genpage.js" list --env '<envUrl>'`.
+
+   **Attended:** ask with `AskUserQuestion` (multi-select; label each page by `name`, the page id in the description).
+   **Unattended:** pull only the pages `$ARGUMENTS` names by id or exact name; when none is named, or a name matches
+   more than one page, halt and report what is needed.
+3. **Choose the folder.** The project root: the genpage project at or above the current directory (a folder holding a
+   `package.json` beside a `genpage.d.ts`), otherwise the current directory, or the folder the user names. Each page
+   lands in `<project-root>/<page-id>/` as `page.tsx`, `config.json` and, when the page has a prompt, `prompt.txt`.
+   When `<project-root>/<page-id>/` already exists, the download replaces the local files. **Attended:** ask
+   "Replace the local copy" or "Skip this page" for each such page. **Unattended:** skip it and report it. A pull
+   never replaces local work nobody agreed to replace.
+4. **Download** all the chosen pages in one command (add `--app-id '<app-id>'` only when every page came from that
+   app's list: with it, a page that is not in the app's saved navigation is refused):
+
+   ```powershell
+   node "${PLUGIN_ROOT}/scripts/genpage.js" download --env '<envUrl>' --page-id '<page-id1>,<page-id2>' --output-directory '<project-root>'
+   ```
+
+   It prints `{ "ok": true, "pages": [ { "pageId", "name", "directory", "files", "replaced", "removed" } ] }`
+   (Edit Phase 2 describes the fields). A failure (exit 1) leaves the folders as they were: report it and stop.
+5. **Record the base** of each page, so a later edit or upload can tell whether the deployed page changed since:
+
+   ```powershell
+   node "${PLUGIN_ROOT}/scripts/genpage-base.js" record --page-id '<page-id>' --file '<project-root>/<page-id>/page.tsx'
+   ```
+
+   Add `--app-id '<app-id>'` when the page came from an app's list. The marker holds hashes and ids only, so it may
+   be committed with the page.
+6. **Log and report.** Append a `## Pull` section to `workflow-log.md` in each pulled page's folder: the commands,
+   their JSON results, and every `AskUserQuestion` or `Unattended default:` line. Then show the user each page's name,
+   id and folder, and the pages skipped and why. Do not edit, build or upload the pulled pages in this request. To
+   change one later, run the edit flow and name the pulled `page.tsx` as the local copy (edit-flow.md, "Starting
+   from a local copy").

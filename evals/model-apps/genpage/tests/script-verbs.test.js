@@ -79,6 +79,7 @@ test('scriptRuns: a switch takes no value, so a switch in front of the verb does
   assert.deepEqual(verbsOf(`node scripts/genpage.js --include-unpublished list --env ${ENV} --app-id ${APP}`, 'genpage.js'), ['list']);
   assert.deepEqual(verbsOf(`node scripts/genpage.js --allow-destructive delete --env ${ENV} --page-id ${PAGE}`, 'genpage.js'), ['delete']);
   assert.deepEqual(verbsOf(`node scripts/genpage.js --env ${ENV} --allow-empty-navigation remove-from-app --app-id ${APP} --page-id ${PAGE}`, 'genpage.js'), ['remove-from-app']);
+  assert.deepEqual(verbsOf(`node scripts/genpage.js --env ${ENV} --draft add-to-app --app-id ${APP} --page-id ${PAGE}`, 'genpage.js'), ['add-to-app']);
   // Every flag but those takes the next word, as the script's argument reader does for any flag it is given.
   assert.deepEqual(verbsOf(`node scripts/genpage.js --not-a-flag delete --env ${ENV} --page-id ${PAGE}`, 'genpage.js'), [null]);
   assert.deepEqual(verbsOf(`node scripts/genpage.js --not-a-flag x delete --env ${ENV} --page-id ${PAGE}`, 'genpage.js'), ['delete']);
@@ -89,7 +90,7 @@ test('scriptRuns: a switch takes no value, so a switch in front of the verb does
   assert.deepEqual([...scriptSwitches('apps.js')].sort(), switchesOf(COMMANDS));
   assert.deepEqual([...scriptSwitches('genpage.js')].sort(), switchesOf(VERBS));
   assert.deepEqual([...scriptSwitches('apps.js')], ['publish']);
-  assert.deepEqual([...scriptSwitches('genpage.js')].sort(), ['allow-destructive', 'allow-empty-navigation', 'include-unpublished']);
+  assert.deepEqual([...scriptSwitches('genpage.js')].sort(), ['allow-destructive', 'allow-empty-navigation', 'draft', 'include-unpublished']);
 });
 
 test('scriptRuns reads a script\'s path as it is written: quoted, relative, absolute, Windows, in a Markdown code span', () => {

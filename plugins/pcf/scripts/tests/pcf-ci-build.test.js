@@ -19,7 +19,7 @@ function tmpRoot() {
   return root;
 }
 test.after(() => {
-  for (const root of createdRoots) fs.rmSync(root, { recursive: true, force: true });
+  for (const root of createdRoots) fs.rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
 function deps(overrides = {}) {

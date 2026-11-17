@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 'use strict';
 // One-command regression gate for model-apps. Runs the full plugin node:test suite and, with
-// `--with-sdk <ppux-path>`, the vendored SDK's Jest suite under Node 20 (the canvas native module
+// `--with-sdk <sdk-repo-path>`, the vendored SDK's Jest suite under Node 20 (the canvas native module
 // is built for the Node-20 ABI; the default Node fails to load it). Prints a combined PASS/FAIL and
 // exits non-zero on any failure — the "did I break anything?" gate to run before every commit.
 // The plugin suite runs in a temporary folder of its own, and the run also fails when a test leaves
@@ -11,8 +11,8 @@
 //
 // Usage:
 //   node scripts/run-tests.js                       # plugin suite only
-//   node scripts/run-tests.js --with-sdk D:/Projects/power-platform-ux-sdk
-//   NODE20_BIN=C:/path/to/node20/dir node scripts/run-tests.js --with-sdk <ppux>
+//   node scripts/run-tests.js --with-sdk <sdk-repo>
+//   NODE20_BIN=C:/path/to/node20/dir node scripts/run-tests.js --with-sdk <sdk-repo>
 
 const { spawnSync } = require('node:child_process');
 const { spawnResultSync, withPathFirst } = require('./lib/process-runner.js');
@@ -159,7 +159,7 @@ function main(argv) {
   if (sdkIdx > -1 && !sdkPath) {
     // `--with-sdk` is a regression gate opt-in; silently skipping on a missing path makes a
     // supposedly SDK-covered run green, so treat the omitted value as a usage error.
-    process.stderr.write('Usage: node scripts/run-tests.js [--with-sdk <ppux-path>]\n');
+    process.stderr.write('Usage: node scripts/run-tests.js [--with-sdk <sdk-repo-path>]\n');
     return 2;
   }
   const pluginRoot = path.join(__dirname, '..');

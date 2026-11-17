@@ -5,7 +5,7 @@
 // it is yes — is tested through the reader itself in verify-model-app.test.js.
 const test = require('node:test');
 const assert = require('node:assert');
-const { sameFormXmlAcrossLayers } = require('../lib/formxml-layers.js');
+const { sameFormXmlAcrossLayers, comparableSavedFormXml } = require('../lib/formxml-layers.js');
 const reads = require('./helpers/dashboard-two-language-reads.js');
 
 // A dashboard's FormXML in the shape the platform answers it: a tab and a section with a caption each, and cells whose captions are
@@ -299,4 +299,45 @@ test('sameFormXmlAcrossLayers: the version never makes a read that is not one we
   }
   // Two equal texts stay the same document at any version, as they always were.
   assert.strictEqual(same('not xml', 'not xml', AFTER_A_SAVE), true);
+});
+
+// --- comparableSavedFormXml: the saved FormXML as the build compares it with the published one ------------------------------------------------
+
+// A form in an organization with Spanish (3082) provisioned: the saved read carries a 3082 caption on SOME of its <labels> (a cell's), never on
+// the tab's or the section's, and the published read carries none.
+const SAVED_TWO = form([cell('Site Name', label(3082, 'Site Name')), cell('Code')]);
+const PUBLISHED_ONE = form([cell('Site Name'), cell('Code')]);
+
+test('comparableSavedFormXml: a caption in a language the published read does not carry, and not on every label, is not compared — published or never published', () => {
+  assert.strictEqual(comparableSavedFormXml(SAVED_TWO, PUBLISHED_ONE), PUBLISHED_ONE);
+  // A row with no published layer yet sets aside the same captions, so the hash recorded at its create is the one its publish shows.
+  assert.strictEqual(comparableSavedFormXml(SAVED_TWO, null), PUBLISHED_ONE);
+  // Captions in two such languages, on different cells.
+  const three = form([cell('Site Name', label(3082)), cell('Code', label(1036, 'Code (fr)'))]);
+  assert.strictEqual(comparableSavedFormXml(three, PUBLISHED_ONE), PUBLISHED_ONE);
+});
+
+test('comparableSavedFormXml: everything else is still compared — a caption of a language both reads carry, any other change, and fail-closed inputs', () => {
+  // The published read carries 3082 too (somewhere), so the saved 3082 caption is compared and differs.
+  const publishedWithSpanish = form([cell('Site Name'), cell('Code', label(3082, 'Código'))]);
+  assert.strictEqual(comparableSavedFormXml(SAVED_TWO, publishedWithSpanish), SAVED_TWO);
+  // A base-language caption that changed is a change.
+  assert.notStrictEqual(comparableSavedFormXml(form([cell('Site', label(3082, 'Site Name')), cell('Code')]), PUBLISHED_ONE), PUBLISHED_ONE);
+  // Anything that is not a caption is a change: a cell, an attribute.
+  assert.notStrictEqual(comparableSavedFormXml(form([cell('Site Name', label(3082)), cell('Code'), cell('More')]), PUBLISHED_ONE), PUBLISHED_ONE);
+  assert.notStrictEqual(comparableSavedFormXml(SAVED_TWO.replace('showlabel="false"', 'showlabel="true"'), PUBLISHED_ONE), PUBLISHED_ONE);
+  // A second language on EVERY label is not set aside: no language but the base one tells a translation apart (fail closed, as before).
+  const everywhere = form([cell('Site Name', label(3082)), cell('Code', label(3082))], label(3082, 'General')).replace(
+    /(<section\b[^>]*><labels><label description="" languagecode="1033" \/>)/, `$1${label(3082, 'Sección')}`);
+  assert.strictEqual(comparableSavedFormXml(everywhere, PUBLISHED_ONE), everywhere);
+  // A text that is not one well-formed document, on either side, sets nothing aside; neither does a read that is not text.
+  for (const [saved, published] of [[`${SAVED_TWO}<form/>`, PUBLISHED_ONE], [SAVED_TWO, 'not xml'], [SAVED_TWO, 42], [42, PUBLISHED_ONE], [null, PUBLISHED_ONE]]) {
+    assert.strictEqual(comparableSavedFormXml(saved, published), saved, JSON.stringify([typeof saved, typeof published]));
+  }
+});
+
+test('comparableSavedFormXml: in an organization of one language the saved text is returned as it is, so every hash is the one it always was', () => {
+  for (const [saved, published] of [[PUBLISHED_ONE, PUBLISHED_ONE], [form([cell('Changed')]), PUBLISHED_ONE], [PUBLISHED_ONE, null], ['<form/>', '<form/>']]) {
+    assert.strictEqual(comparableSavedFormXml(saved, published), saved);
+  }
 });

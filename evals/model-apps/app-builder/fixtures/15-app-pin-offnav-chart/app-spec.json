@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 2,
+  "minimumPluginVersion": "2.21.0",
+  "solution": { "uniqueName": "ContosoProjectCosts", "publisherPrefix": "cnt" },
+  "app": {
+    "name": "Project Costs",
+    "description": "Projects, with a chart of expenses by category",
+    "pinDeclaredArtifacts": true
+  },
+  "entities": [
+    { "schemaName": "cnt_project", "displayName": "Project", "pluralName": "Projects",
+      "primaryAttribute": { "schemaName": "cnt_name", "displayName": "Name" },
+      "columns": [{ "schemaName": "cnt_budget", "displayName": "Budget", "type": "Money" }] },
+    { "schemaName": "cnt_expense", "displayName": "Expense", "pluralName": "Expenses",
+      "primaryAttribute": { "schemaName": "cnt_name", "displayName": "Name" },
+      "columns": [
+        { "schemaName": "cnt_category", "displayName": "Category", "type": "Choice", "options": ["Travel", "Equipment", "Services"] },
+        { "schemaName": "cnt_amount", "displayName": "Amount", "type": "Money" }
+      ] }
+  ],
+  "forms": [{ "entity": "cnt_project", "name": "Information", "layout": "auto" }],
+  "views": [{ "entity": "cnt_project", "name": "Active Projects", "columns": ["cnt_name", "cnt_budget"] }],
+  "charts": [{ "entity": "cnt_expense", "name": "Expenses by Category", "groupBy": "cnt_category", "measure": "count", "chartType": "Column" }],
+  "appShell": { "areas": [{ "label": "Projects", "groups": [{ "label": "Work", "subAreas": [{ "entity": "cnt_project", "title": "Projects" }] }] }] }
+}

@@ -564,7 +564,7 @@ test('reverse resolution reports an id in a call that reaches a frontier, though
 // comment that ends at the `*/` inside the string on the next line: the rest of that DOUBLE-quoted string is then read as code — a call, whose
 // single-quoted id was rewritten as "PAGEREF_detail", quotes and all, inside a string that the new quotes then ended.
 test('a single-quoted id inside a string the lexer read as code is not turned into a token', () => {
-  const code = ['const of = 12;', 'const count = of/2; const re = /\\/*$/;', `const note = "*/ navigateTo({pageType:'generative', pageId:'${GUID}'}) /*";`, ''].join('\n');
+  const code = ['const of = 12;', 'for (const x of of/2 + "") {} const re = /\\/*$/;', `const note = "*/ navigateTo({pageType:'generative', pageId:'${GUID}'}) /*";`, ''].join('\n');
   assert.deepStrictEqual(extractNavTargets(code).map((t) => [t.kind, t.quote, t.afterFrontier]), [['literal', "'", true]], 'the lexer does read the call out of the string');
   const report = reverseResolveNavIdsReport(code, REVERSE_IDS);
   assert.strictEqual(report.code, code, 'the string is intact');
@@ -1882,9 +1882,9 @@ test('only what lies at or after the earliest frontier is distrusted, and the ea
   const twice = `${OBJECT_DIVISION}\n${DETAIL_CALL}\n${OBJECT_DIVISION}\n${DETAIL_CALL.replace('detail', 'other')}\n`;
   assert.deepStrictEqual(strayPageRefs(twice).map((r) => [r.token, r.frontier.kind, r.frontier.line]), [['PAGEREF_detail', 'brace', 1], ['PAGEREF_other', 'brace', 1]]);
   // The earliest by OFFSET, not the first kind found or the commonest one.
-  const keywordFirst = `const of = 12; const count = of/2; const re = /x/;\n${OBJECT_DIVISION}\n${DETAIL_CALL}\n`;
+  const keywordFirst = `const yield = 12; const count = yield/2; const re = /x/;\n${OBJECT_DIVISION}\n${DETAIL_CALL}\n`;
   assert.deepStrictEqual(strayPageRefs(keywordFirst).map((r) => [r.frontier.kind, r.frontier.line]), [['keyword', 1]]);
-  const braceFirst = `${OBJECT_DIVISION}\nconst of = 12; const count = of/2; const re = /x/;\n${DETAIL_CALL}\n`;
+  const braceFirst = `${OBJECT_DIVISION}\nconst yield = 12; const count = yield/2; const re = /x/;\n${DETAIL_CALL}\n`;
   assert.deepStrictEqual(strayPageRefs(braceFirst).map((r) => [r.frontier.kind, r.frontier.line]), [['brace', 1]]);
 });
 
@@ -1893,7 +1893,7 @@ test('only what lies at or after the earliest frontier is distrusted, and the ea
 const FRONTIER_SNIPPETS = {
   brace: OBJECT_DIVISION,
   paren: `if (true /*${'x'.repeat(2100)}*/) /abc/.test(text);`,
-  keyword: 'const of = 12; const count = of/2; const re = /x/;',
+  keyword: 'const yield = 12; const count = yield/2; const re = /x/;',
   angle: 'const half = total as Types . Alias<number> / 2; const re = /x/;',
   identifier: 'var Al\\u0069as = 12;',
   operator: 'const m = [.../a/.exec("a")]; const n = /b/;',

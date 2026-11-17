@@ -58,6 +58,10 @@ projects, update them separately when required.
 
 ## Before upgrading
 
+The template now pins Zod 4.6.6 to fix oversized-collection validation.
+If your app uses Zod 3, review the [Zod 4 migration guide](https://zod.dev/v4/changelog) and update your schemas and error handling before adopting this dependency change.
+The bundled starter has no Zod imports to migrate.
+
 1. Commit or back up your work.
 2. Preview the upgrade:
 

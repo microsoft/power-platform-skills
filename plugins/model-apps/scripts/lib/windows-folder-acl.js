@@ -261,7 +261,13 @@ function judge(folder, deps) {
   const read = readDacl(folder, tool, deps);
   if (read.verdict) return read.verdict;
   const writers = foreignWriters(read.dacl.aces, sid);
-  if (writers.length > 0) return { ok: false, reason: `${writers.join(', ')} can add to it, remove from it or take it over` };
+  if (writers.length > 0) {
+    // A list that is still all the folder took from the one above — not protected, and every entry marked `ID` (inherited) — is also the list a folder has between the `mkdir` of the run that
+    // made it and that run's icacls (makeWindowsFolderPrivate), when the temp folder it is in lets others write (`TEMP` on a data drive: `D:(A;OICIID;0x1301bf;;;AU)...`). The answer says so
+    // (`inherited`), so that a caller can tell that "no" from one about a list somebody set; it is a "no" all the same.
+    const inherited = !read.dacl.protected && read.dacl.aces.every((ace) => (ace.flags.match(/../g) || []).includes('ID'));
+    return { ok: false, reason: `${writers.join(', ')} can add to it, remove from it or take it over`, ...(inherited ? { inherited: true } : {}) };
+  }
   // A list that names only the right principals does not make the folder theirs: its owner can rewrite the list whatever it says now. The owner is the user — or the administrators, whom the list
   // trusts anyway, and who own what a process that runs elevated makes.
   const owner = ownerSidOf(folder, tool);
@@ -309,10 +315,10 @@ function protect(folder, deps) {
 /**
  * Whether only this user, the system and the administrators can change `folder`, and it belongs to this user or the administrators. Never throws: whatever cannot be read, run or understood is
  * `{ ok: false }`. `unreadable: true` marks the one kind of "no" that may not stay one: the list could not be got at all (the folder is being removed, most likely), which says nothing about
- * the folder.
+ * the folder. `inherited: true` marks a "no" about a list that is still only what the folder took from the one above — what a folder has until the run that made it gives it a list of its own.
  * @param {string} folder
  * @param {object} [deps] test seams: run (the process runner's spawnResultSync), env, saveIn (the folder the saved list goes in: the folder's own parent)
- * @returns {{ ok: boolean, reason: string, unreadable?: boolean, owner?: string }} `owner` is the SID of the folder's owner, when it was read
+ * @returns {{ ok: boolean, reason: string, unreadable?: boolean, inherited?: boolean, owner?: string }} `owner` is the SID of the folder's owner, when it was read
  */
 function windowsFolderIsPrivate(folder, deps = {}) {
   try {

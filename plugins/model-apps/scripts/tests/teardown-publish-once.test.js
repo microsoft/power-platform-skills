@@ -359,3 +359,38 @@ test('the real vendored bundle turns three per-table PublishXml requests into on
   assert.equal(afterPublishes.length, 1, JSON.stringify(afterPublishes.map((call) => call.body)));
   assert.match(afterPublishes[0].body.ParameterXml, /<entity>p5_alpha<\/entity>.*<entity>p5_beta<\/entity>.*<entity>p5_gamma<\/entity>/);
 });
+
+// The managed fence (lib/managed-standalone-fence.js): a build of the app left a managed change of one table unproved (pending) or a publish of it sent
+// and not confirmed (uncertain). The resets' batched publish must not put that table's saved state live — whether the caller passed the barrier it
+// filled (the CLI does) or the engine discovers the debt itself — and the other tables still publish. A workspace with no store changes nothing (above).
+const { seedManagedDebt } = require('./helpers/managed-debt.js');
+const { openStandaloneManagedFence } = require('../lib/managed-standalone-fence.js');
+
+const ENV = 'https://contoso.crm.dynamics.com';
+function teardownWithDebt(debt) {
+  const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), 'teardown-fence-'));
+  bundleWorkspaces.push(workspaceDir);
+  const spec = { ...teardownSpec(3), app: { uniqueName: 'cnt_fenced', name: 'Fenced' } };
+  seedManagedDebt({ workspaceDir, environment: ENV, appUniqueName: 'cnt_fenced', solutionUniqueName: 'ContosoTeardown' }, { family: 'view', key: 'cnt_child2/held', table: 'cnt_child2', ...debt });
+  return { workspaceDir, spec };
+}
+
+for (const [debtName, debt] of [['pending', {}], ['uncertain', { uncertain: true }]]) {
+  for (const [how, given] of [['the caller\'s barrier', true], ['its own discovery', false]]) {
+    test(`managed fence (${debtName}, ${how}): the withheld table's reset is not published; the other tables are, once`, async () => {
+      const { workspaceDir, spec } = teardownWithDebt(debt);
+      const warnings = [];
+      const { sdk, calls } = makeTeardownSdk();
+      const opts = { apply: true, workspaceDir };
+      if (given) opts.publicationBarrier = openStandaloneManagedFence({ environment: ENV, workspaceDir, spec }).barrier;
+      const result = await runTeardown(spec, opts, { sdk, emit: () => {}, warn: (message) => warnings.push(message) });
+      const published = calls.filter((call) => call.method === 'publishArtifacts' || call.method === 'publishArtifact')
+        .flatMap((call) => (call.targets ? call.targets.map((t) => t.id) : [call.id]));
+      assert.deepEqual(published, ['view-cnt_child1', 'view-cnt_child3'], callNames(calls).join(' -> '));
+      assert.equal(count(calls, 'publishArtifacts'), 1);
+      assert.equal(warnings.length, 1, warnings.join('\n'));
+      assert.match(warnings[0], /cnt_child2 is saved and was not published/);
+      assert.deepEqual(result.warnings, warnings);
+    });
+  }
+}

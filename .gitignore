@@ -1,6 +1,7 @@
 # Eval artifacts (generated during test runs)
 evals/artifacts/
 evals/temp/
+evals/runtime/node_modules/
 
 # Eval reports (aggregated results)
 evals/reports/
@@ -51,3 +52,8 @@ Thumbs.db
 
 # oh-my-claudecode scratch state
 .omc/
+
+# Showcase site build output
+site/dist/
+# The site's video and poster, fetched from the site-media branch (see site/lib/media.js)
+site/media

@@ -29,7 +29,7 @@ Comprehensive rules for generating generative page code. Read this file during c
 21. **End final type-argument statements with `;`**: If the file's last statement ends in a type argument list (`Page<string>`, `Array<Row>`), terminate it with a semicolon.
 22. **Consistent errors**: Route failed data operations through the page's single top-level `reportPageError`, retain bounded code and message diagnostics, and put its returned view in the operation's error state. Render errors as escaped Fluent MessageBar text with localized application fallbacks. Offer manual retry only for proven-safe reads or the documented pre-dispatch Custom API network result; never retry an indeterminate result automatically. Wrap PageBody in the page's one top-level React PageErrorBoundary. Instrument only explicitly authorized failure sites, only through the helper. Expected null/empty states are not failures. See “Missing Error Handling” for the canonical patterns and the static check's declared limits.
 23. **Lookup identities**: A lookup reference is a validated table-and-bare-id pair, not its label or the first metadata target. Normalize bare GUID and `/<table>(<guid>)` read values using the logical-name annotation and/or qualified prefix, checking both against metadata and rejecting conflicts. Use the bare id for filters, retrieval and navigation; rebuild the qualified value only for writes. Record every lookup used by a join/filter and its complete target set in Per-Page Specifications. Ask about unresolved relationship/filter meaning; never broaden a failed typed query. Unresolved references cannot trigger target-dependent actions. See **DataAPI Rules > Lookup references** for the canonical `normalizeLookupReference` and the five WRONG/CORRECT pairs.
-24. **Convert iterables to arrays**: The page compiler targets ES5 without iterator downleveling or full type checking. Spreading, looping over, or array-destructuring a Map, Set or iterator reads length and indices instead: values can disappear, defaults can replace them, or rest destructuring can throw. Never write `[...new Set(xs)]`, `[...m.values()]`, `for (const [k, v] of m)`, `new Set([...prev, id])`, `[...selected]` or `[...text.matchAll(re)]` directly; convert with `Array.from` or copy a Set natively. See **Common Errors > 5. Iteration that compiles to nothing**.
+24. **Convert iterables to arrays**: Pages this plugin uploads compile with iterator support, but a page compiled again by an older maker portal or `pac` reads a Map, Set or iterator by length and indices: values can disappear, defaults can replace them, or rest destructuring can throw. Write `[...new Set(xs)]`, `[...m.values()]`, `for (const [k, v] of m)`, `new Set([...prev, id])`, `[...selected]` and `[...text.matchAll(re)]` through `Array.from`, or copy a Set natively, so the page is correct under every compiler. See **Common Errors > 5. Iteration that another page compiler can lose**.
 
 ---
 
@@ -128,7 +128,7 @@ export default GeneratedComponent;
 ### Responsive Design
 - Mobile-first; adapt to 320px, 480px, 768px, 1024px, 1440px breakpoints
 - Use relative units (%, rem, em); avoid fixed widths
-- Root container is flex column; use flex properties to fill space
+- Root container is flex column; use flex properties to fill space; it must establish a scroll context (see **Page Layout**)
 - `boxSizing: border-box`; images: `max-width: 100%, height: auto`
 - NEVER use `100vh`/`100vw` — the page is hosted inside the designer, not the full window; viewport units (and `position: fixed` overlays) size to the whole designer and bleed over the agent panel
 - **Media queries go INSIDE the slot they modify** — never as a top-level
@@ -151,23 +151,74 @@ const useStyles = makeStyles({
 
 ### Page Layout
 - Page-level functions (nav, search, filters) in header opposite title
-- Only scrollable bodies scroll, not entire page
-- Fix height of parent, set overflow on content area
+- **The page must establish its own scroll context.** The host shows a page in a container of fixed
+  height and never scrolls it. A page that is taller than that container is cut off below the fold,
+  with no scrollbar and no error. So an element from the page's top element down must have a bounded
+  height and must scroll. Use one of these three layouts:
+  1. **The whole page scrolls.** Give the page's top element `height: "100%"` (bounded by the host's
+     container), `overflowY: "auto"` (it scrolls) and `boxSizing: "border-box"` (its padding stays
+     inside that height; without it, a padded top element is taller than the container by its
+     padding, and its last content stays cut off).
+  2. **A fixed header and a scrolling body.** The top element has `height: "100%"`,
+     `overflow: "hidden"` and is a flex column. The header has `flexShrink: 0`. The body has
+     `flex: 1`, `minHeight: 0` and `overflowY: "auto"` (without `minHeight: 0` the body grows with its
+     content and the top element clips it).
+  3. **The themed two-div wrapper** (see **Special Patterns > Dark Mode Toggle**): the outer div has
+     `height: "100%"` and `overflow: "hidden"`, and the inner `styles.root` is layout 1.
+- In a bounded flex column (layouts 1 and 2), give `flexShrink: 0` to each item that clips its own
+  content (a `Card`, or a box with an overflow key). Otherwise the column squeezes it to fit, and it
+  cuts off its own content.
+- These do not make a scroll context: `minHeight: "100%"` (the element grows with its content, so it
+  never scrolls), `overflowY: "auto"` on an element whose height is not bounded (it grows too), and
+  `100vh` (see **Responsive Design**).
+- A `minHeight` wins over a `height`: a top element with `height: "100%"` and `minHeight: 800` is
+  800px tall in a shorter container, and the rest is cut off. Leave `minHeight` off a bounded
+  element, set it to `0`, or give it the same value as the `height`.
+- `height: "100%"` resolves only against a parent with a definite `height`. Under a parent that has
+  only a `maxHeight`, it is ignored and the element grows with its content.
+- When a condition chooses what the page shows (a list view or a card view), only one alternative is
+  on screen at a time, so each one must scroll. Put the scroll context on an element the
+  alternatives share, such as the page's top element. A loading, error or empty view on its own (a
+  `Spinner`, a `MessageBar`, a line of `Text`) is fine as an alternative; a `Card` or another
+  component that holds content is not.
+- `check-griffel-styles.js` checks every generated page for a scroll context (see **Styling gotchas**,
+  item 6).
 - Consistent padding/spacing; strong text contrast
 - Include hover/focus/active states
 
-### Scrollable Areas
-- Use fixed `maxHeight` for parent + `overflow: auto` for scrollable area
-- Calculate `maxHeight: calc(100% - [fixed element heights])`
-- Only content area scrolls, never entire page
-- Example:
 ```typescript
-<div style={{ maxHeight: 'calc(100% - 100px)', overflow: 'auto' }}>
-  <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-    {/* scrollable content */}
-  </div>
-</div>
+const useStyles = makeStyles({
+  // WRONG: a flex column with no bounded height and nothing that scrolls, so everything below the fold is cut off.
+  // root: { display: "flex", flexDirection: "column", gap: tokens.spacingVerticalL, padding: tokens.spacingHorizontalL },
+
+  // CORRECT (layout 1): the top element is bounded by the host's container and scrolls.
+  root: {
+    height: "100%",
+    overflowY: "auto",
+    boxSizing: "border-box",
+    display: "flex",
+    flexDirection: "column",
+    gap: tokens.spacingVerticalL,
+    padding: tokens.spacingHorizontalL,
+  },
+  // A Card clips its own content, so in the bounded column it must not shrink.
+  card: { flexShrink: 0 },
+
+  // CORRECT (layout 2): a fixed header and a scrolling body.
+  // <div className={styles.shell}><div className={styles.header}>…</div><div className={styles.body}>…</div></div>
+  shell: { height: "100%", overflow: "hidden", display: "flex", flexDirection: "column" },
+  header: { flexShrink: 0, padding: tokens.spacingHorizontalL },
+  body: { flex: 1, minHeight: 0, overflowY: "auto", padding: tokens.spacingHorizontalL },
+});
 ```
+
+### Scrollable Areas
+- A scrolling area inside the page (a list under a toolbar, a side panel) is layout 2 of
+  **Page Layout**: a bounded flex column whose scrolling child has `flex: 1`, `minHeight: 0` and
+  `overflowY: "auto"`. Use it instead of `maxHeight: calc(100% - [fixed element heights])`, which
+  breaks when a header wraps to a second line.
+- `overflowY: "auto"` on an element whose height is not bounded never scrolls: the element grows with
+  its content, and an ancestor cuts it off.
 
 ### Navigation
 - Multiple screens within a page: Use Fluent UI V9 Tabs/Breadcrumbs
@@ -216,6 +267,7 @@ const brandTheme = {
     borderRadiusMedium: "2px",
 };
 // In the component: the outer div sets the variables, the inner div reads them.
+// styles.root scrolls: height: "100%", overflowY: "auto", boxSizing: "border-box" (see Page Layout).
 // <div style={{ ...themeToVars(brandTheme), height: "100%", overflow: "hidden" }}>
 //     <div className={styles.root}>{/* … */}</div>
 // </div>
@@ -576,7 +628,7 @@ import { webDarkTheme, webLightTheme } from "@fluentui/react-components";
 </div>
 ```
 
-**Root div scrolling:** The inner `styles.root` div must have `height: "100%"` and `overflowY: "auto"` so the page content is scrollable. The genpage host provides a fixed-height container — if neither the outer nor inner div establishes a scroll context, content below the fold is unreachable.
+**Root div scrolling:** The inner `styles.root` div must have `height: "100%"`, `overflowY: "auto"` and `boxSizing: "border-box"` so the page content is scrollable (layout 3 of **Page Layout**). The genpage host provides a fixed-height container — if neither the outer nor inner div establishes a scroll context, content below the fold is unreachable. A bare inner div (`<div>` with no class) under the outer div is the same failure.
 
 **Inherited text color does NOT follow the variable override.** `themeToVars` overrides CSS *variables*, but Fluent typography (`Text`, `Title`, `Body`, etc.) mostly **inherits** its `color` from the light-theme FluentProvider root — and inheritance passes the already-resolved value, so flipping `--colorNeutralForeground1` to white does not recolor inherited text (you get near-black text on a dark background, contrast ~1.07, effectively invisible). **Fix:** set `color: tokens.colorNeutralForeground1` on the page root (`styles.root`) so every descendant inherits the variable-resolved foreground. Raw `<button>` elements (e.g. custom "attention" rows) default to black `buttontext` and need an explicit `color` too. Status-color CSS vars (`--colorStatusDangerForeground1`, etc.) *do* resolve in inline styles via the `themeToVars` wrapper, so status tokens work fine.
 
@@ -591,6 +643,7 @@ Recurring CSS bugs that type-check and compile but render wrong. Check for these
 3. **`tokens.fontFamilyNumeric` is Bahnschrift, not Segoe UI.** Using it for tabular numbers (counts, %, ranks, dates) renders those digits in Bahnschrift — visibly mismatched against Segoe UI everywhere else. Fix: use `tokens.fontFamilyBase` and keep `fontVariantNumeric: "tabular-nums"` for aligned digits.
 4. **Gradient hero with white text: `colorPalette*Background2/3` tokens are light tints, not dark.** A gradient built from e.g. `colorPalettePurpleBackground3` / `colorPaletteTealBackground2` with `color: colorNeutralForegroundOnBrand` (white) renders white-on-light → unreadable; those `Background2/3` palette tokens are pale. Fix: build the gradient from the dark, saturated `colorPalette*Foreground2` stops (e.g. `colorPalettePurpleForeground2`, `colorPaletteTealForeground2`), which are dark enough for white text to pass AA.
 5. **Ten CSS shorthands are unsupported by Griffel — `borderWidth` is the usual one.** Griffel does not support ten CSS shorthands, and `makeStyles` drops them at runtime: the page type-checks, transpiles and deploys, then renders without the border, color or reset. They are `all`, `borderColor`, `borderStyle`, `borderWidth`, `borderBlock`, `borderBlockStart`, `borderBlockEnd`, `borderInline`, `borderInlineStart` and `borderInlineEnd`. Write longhands instead: `borderColor`, `borderStyle` and `borderWidth` become one longhand per side, `border` + `Top`, `Right`, `Bottom` or `Left` + `Color`, `Style` or `Width` (`borderWidth` → `borderTopWidth`, `borderRightWidth`, `borderBottomWidth`, `borderLeftWidth`); `borderBlock`, `borderInline` and their `Start` and `End` forms become the `Width`, `Style` and `Color` longhands of the sides they name (`borderBlockStart` → `borderBlockStartWidth`, `borderBlockStartStyle`, `borderBlockStartColor`; `borderBlock` → those and the three `borderBlockEnd…` ones); `all` has no longhands, so set the properties you need one by one. Every other shorthand (`padding`, `margin`, `border`, `borderRadius`, `gap`, `outline`) is supported, and an inline `style={{ … }}` is not Griffel at all. The browser console logs `@griffel/react: You are using unsupported shorthand CSS property "<name>"` for each one that reaches it. Run `node "${PLUGIN_ROOT}/scripts/check-griffel-styles.js" --file '<page.tsx>'` on the finished page. `check-griffel-styles.js` prints each problem it finds — a key Griffel drops in a `makeStyles` call, at any depth, with its line, column and longhands, or a call or a style object it cannot read, with what to change — and exits 3 while any is left: fix what it reports and run it again, and do not transpile or upload the page until it exits 0. It reads the style objects written inline in the call, `makeStyles({ … })`, so write them there: one passed or spread in from elsewhere (`makeStyles(styles)`, `...base`) is reported, because the check cannot see its keys, and so is a key computed from an expression (`[key]: …`), whose name it cannot see (a template that starts with `--`, `&`, `:` or `@` is read); Fluent's `...shorthands.*(…)` and `...typographyStyles.*` may be spread as they are.
+6. **A page with no scroll context is cut off below the fold, with no error.** See **Page Layout**. `check-griffel-styles.js` also checks each page it is given (a file with a default export) for a scroll context, and reports what it finds after the Griffel problems, with the same exit 3: `no-scroll-context` (no element from the page's top element down has a bounded height and scrolls); `scroll-context-unproven` (the check cannot read what decides it, and its `reason` says what: for example a class given as a string or a template, so use `mergeClasses`); and `scroll-context-padding` (the page scrolls, but an element that fills the container has vertical padding without `boxSizing: "border-box"`, so its last content stays cut off). Each message gives the edit that fixes it: apply it and run the check again. With `--existing` (a page this run did not generate, such as a deployed page that an edit changes) the check reports these in `notes` instead, and they do not change the exit code.
 
 ### Data Fetching: the host double-mount, de-dupe, and caching
 
@@ -1331,16 +1384,16 @@ const useStyles = makeStyles({
 });
 ```
 
-### 5. Iteration that compiles to nothing
+### 5. Iteration that another page compiler can lose
 
-The page compiler targets ES5 without iterator downleveling or full type checking. Spreading, looping over, or array-destructuring a Map, Set or iterator reads length and indices instead of the iterator: values can disappear, defaults can replace them, or rest destructuring can throw. This includes `[...new Set(xs)]`, `[...m.values()]`, `[...seen.values()]`, `for (const [k, v] of m)`, `new Set([...prev, id])`, `[...selected]` and `[...text.matchAll(re)]`. Convert with `Array.from(...)` before spreading, looping or destructuring; copy a Set with `new Set(prev)` then `.add(id)`. Ordinary array spreads and loops remain valid. `Object.keys`, `Object.values` and `Object.entries` return arrays. Spreads of `arguments` and ordinary indexed array-likes work; rest destructuring of an array-like without `slice` does not. String spread throws, and an ES5 string loop visits UTF-16 code units rather than Unicode code points. See **Common Errors > 5. Iteration that compiles to nothing** in `references/rules.md` for the pairs.
+Pages this plugin uploads are compiled with iterator support (ES5 with `downlevelIteration`), so a spread, a `for...of` loop or an array destructure of a Map, Set, iterator, generator or string reads it as modern JavaScript does. A tool that compiles the page again without that support — an older maker portal, or `pac` — reads length and indices instead: values disappear, defaults replace them, and rest destructuring or a string spread throws, all with a clean compile. Keep the page correct under every compiler: convert with `Array.from(...)` before spreading, looping or destructuring, for example `[...new Set(xs)]`, `[...m.values()]`, `[...seen.values()]`, `for (const [k, v] of m)`, `new Set([...prev, id])`, `[...selected]` and `[...text.matchAll(re)]`; copy a Set with `new Set(prev)` then `.add(id)`. Ordinary array spreads and loops remain valid. `Object.keys`, `Object.values` and `Object.entries` return arrays. Rest destructuring of a non-iterable array-like without `slice` throws under every compiler. A destructuring default must not write to the array being destructured: `const [a = (values[1] = 3), b] = values` leaves `b` at its old value here, unlike modern JavaScript. See **Common Errors > 5. Iteration that another page compiler can lose** in `references/rules.md` for the pairs.
 
-A Dropdown built from `[...seen.values()]` can open with no options despite a clean compile. The same problem affects native collection iterators, generators, native `matchAll` results, `URLSearchParams`, `FormData` and `Headers`. JSX expressions use the same emit.
+Under such a compiler a Dropdown built from `[...seen.values()]` opens with no options despite a clean compile — what pages uploaded before model-apps 2.20.6 did. The same problem affects native collection iterators, generators, native `matchAll` results, `URLSearchParams`, `FormData` and `Headers`. JSX expressions use the same emit. Each WRONG example below except the last works in a page this plugin uploads and fails as its comment says under a compiler without iterator support; each CORRECT example works under both.
 
 **Map values**
 
 ```typescript
-// WRONG — the spread contributes no values
+// WRONG — without iterator support the spread contributes no values
 const seen = new Map([["a", 1], ["b", 2]]);
 const choices = [...seen.values()];
 ```
@@ -1354,7 +1407,7 @@ const choices = Array.from(seen.values());
 **Unique values**
 
 ```typescript
-// WRONG — unique becomes []
+// WRONG — without iterator support unique becomes []
 const xs = [1, 1, 2];
 const unique = [...new Set(xs)];
 ```
@@ -1368,7 +1421,7 @@ const unique = Array.from(new Set(xs));
 **Map pairs**
 
 ```typescript
-// WRONG — the loop runs zero times
+// WRONG — without iterator support the loop runs zero times
 const m = new Map([["a", 1], ["b", 2]]);
 const rows: Array<[string, number]> = [];
 for (const [k, v] of m) rows.push([k, v]);
@@ -1386,7 +1439,7 @@ A native Map's `m.forEach((v, k) => { rows.push([k, v]); })` is an alternative, 
 **Selection state — component-body examples; state values are not statically inferred**
 
 ```typescript
-// WRONG — the updater loses prior ids; chosen loses every selected value
+// WRONG — without iterator support the updater loses prior ids; chosen loses every selected value
 const [selected, setSelected] = React.useState(new Set<string>());
 function addSelected(id: string) {
   setSelected(prev => new Set([...prev, id]));
@@ -1412,7 +1465,7 @@ The Map and Set constructors consume iterables natively: `new Set(prev)` and `ne
 **Native matchAll result**
 
 ```typescript
-// WRONG — the match iterator has no array length
+// WRONG — without iterator support the match iterator has no array length
 const text = "a1 b2";
 const re = /\d/g;
 const hits = [...text.matchAll(re)].map(match => match[0]);
@@ -1428,7 +1481,7 @@ const hits = Array.from(text.matchAll(re)).map(match => match[0]);
 **Destructuring**
 
 ```typescript
-// WRONG — first is undefined
+// WRONG — without iterator support first is undefined
 const [first] = new Set([1, 2]);
 ```
 
@@ -1438,7 +1491,7 @@ const [first] = Array.from(new Set([1, 2]));
 ```
 
 ```typescript
-// WRONG — fallback replaces the actual value
+// WRONG — without iterator support fallback replaces the actual value
 const [first = "fallback"] = new Set(["actual"]);
 ```
 
@@ -1448,7 +1501,7 @@ const [first = "fallback"] = Array.from(new Set(["actual"]));
 ```
 
 ```typescript
-// WRONG — throws because the emitted rest operation calls slice
+// WRONG — without iterator support this throws: the emitted rest operation calls slice
 const [...rest] = new Set([1, 2]);
 ```
 
@@ -1460,7 +1513,7 @@ const [...rest] = Array.from(new Set([1, 2]));
 **String spread — a separate throw, not an empty iterable result**
 
 ```typescript
-// WRONG
+// WRONG — without iterator support this throws
 const name = "A😀";
 const chars = [...name];
 ```
@@ -1473,6 +1526,24 @@ const chars = Array.from(name);
 
 Call and constructor arguments need the same conversion: write `f(...Array.from(iterator))` and `new C(...Array.from(iterator))`, not direct iterator spreads.
 
-These operations remain ordinary valid patterns: `[...rows]`, `[...Object.keys(row)]`, `for (const row of rows)`, `const [first] = rows`, `{ ...tokens }`, `<div {...props} />`, rest parameters, `selected.has(id)`, `seen.set(key, value)`, `new Set(prev)` and `new Map(entries)`. A first-element binding of a string reads its indexed UTF-16 element, not a whole Unicode code point.
+These operations remain ordinary valid patterns: `[...rows]`, `[...Object.keys(row)]`, `for (const row of rows)`, `const [first] = rows`, `{ ...tokens }`, `<div {...props} />`, rest parameters, `selected.has(id)`, `seen.set(key, value)`, `new Set(prev)` and `new Map(entries)`. Without iterator support a first-element binding of a string reads its indexed UTF-16 element, not a whole Unicode code point.
+
+**A default that writes the array it destructures — the one difference from modern JavaScript under iterator support**
+
+The elements are copied before a default runs, so a default that writes a later element of the same array is not seen by that element.
+
+```typescript
+// WRONG — b is 2 here; modern JavaScript and a compiler without iterator support give 3
+const values: Array<number | undefined> = [undefined, 2];
+const [a = (values[1] = 3), b] = values;
+```
+
+```typescript
+// CORRECT — compute the values first, then read them
+const values: Array<number | undefined> = [undefined, 2];
+if (values[0] === undefined) values[1] = 3;
+const a = values[0] === undefined ? values[1] : values[0];
+const b = values[1];
+```
 
 The authoring rule also applies when an iterable comes from props, parameters, React state, a ref, a cache or another function. Static checks cannot prove all of those origins. Do not mistake a lack of findings for proof that arbitrary iteration is safe.

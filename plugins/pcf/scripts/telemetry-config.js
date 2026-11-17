@@ -55,7 +55,8 @@ function main(argv = process.argv.slice(2)) {
     const latest = latestSessionLog(configDir, 'pcf');
     if (latest) console.log(`Most recent session: ${latest}`);
   }
-  console.log('An enabled, provisioned release records only skill_started base fields: skill, plugin, PAC, agent, OS and Node versions, session and correlation IDs, plus orgId and tenantId when PAC is signed in; no user object ID or eventInfo fields.');
+  console.log('An enabled, provisioned release records skill_started base fields: skill, plugin, PAC, agent, OS and Node versions, session and correlation IDs, plus orgId and tenantId when PAC is signed in; no user object ID.');
+  console.log('When a control push finishes, skill_completed also records its outcome, duration, a fixed error class and whether the registration was verified, with the orgId and tenantId of the environment it targeted; never control, solution or environment names.');
   console.log('Never sent: file paths, cwd, environment variables, prompts, arguments, tool inputs, site names, Dataverse URLs, stack traces, error messages, credentials, usernames or hostnames.');
   console.log('Opt out: /pcf:telemetry off or POWER_PLATFORM_SKILLS_TELEMETRY_PCF_OPTOUT=1 (highest precedence).');
 }

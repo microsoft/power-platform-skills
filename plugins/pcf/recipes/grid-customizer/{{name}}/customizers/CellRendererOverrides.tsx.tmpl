@@ -16,4 +16,21 @@ export const cellRendererOverrides: CellRendererOverrides = {
             text,
         );
     },
+    // Choice (option set) cells: `value` is the stored option number and `formattedValue` is the
+    // label the grid already resolved in the user's language, so show the label, never the number.
+    // Without a label, return null so the grid's internal renderer shows the choice instead.
+    OptionSet: (props) => {
+        if (props.value == null || !props.formattedValue) return null;
+        const label = props.formattedValue;
+
+        return React.createElement(
+            "span",
+            {
+                className: "{{nameLower}}-choice-renderer",
+                dir: props.isRTLMode ? "rtl" : undefined,
+                title: label,
+            },
+            label,
+        );
+    },
 };

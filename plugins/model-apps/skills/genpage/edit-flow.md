@@ -519,7 +519,7 @@ Before Edit Phase 6, check the edited page for the Griffel shorthands that
 `makeStyles` drops at runtime:
 
 ```powershell
-node "${PLUGIN_ROOT}/scripts/check-griffel-styles.js" --file '<working-dir>/<page-id>/page.tsx'
+node "${PLUGIN_ROOT}/scripts/check-griffel-styles.js" --file '<working-dir>/<page-id>/page.tsx' --existing
 ```
 
 Griffel does not support ten CSS shorthands, and `makeStyles` drops them at
@@ -549,6 +549,19 @@ keys, and so is a key computed from an expression (`[key]: …`), whose name it 
 see (a template that starts with `--`, `&`, `:` or `@` is read); Fluent's
 `...shorthands.*(…)` and `...typographyStyles.*` may be spread as they are.
 
+`--existing` is there because this page was not generated in this run: the check
+also reads its scroll context (`references/rules.md`, **Page Layout**), and reports
+what it finds in `notes` without changing the exit code, so a maker's layout never
+blocks their edit.
+
+When the maker's requested edit itself rewrites the page's top-level layout, that
+layout is new code written in this run and must follow the scroll rule: apply the
+remedy as part of that edit, and tell the maker in one sentence that you did. Any
+other scroll note on a downloaded page is offer-only: tell the maker that content
+below the fold may be cut off, offer the edit its message gives, and apply it only
+if they agree. A note is never a reason to change a layout the maker did not ask
+to change.
+
 A page that was deployed before this check existed can already hold such a key, so the
 checker may report one that your edit did not add. The deployed page renders without it
 today, which is why there are two ways out: **delete the key** — nothing changes on
@@ -560,25 +573,33 @@ the same, go ahead with a
 `warnings` entry, but the page then goes on rendering without it — do not rely on that to
 skip this step.)
 
-Review the edited page for iteration that compiles to nothing as well:
+Review the edited page for iteration that another page compiler can lose as well:
 
-The page compiler targets ES5 without iterator downleveling or full type checking.
-Spreading, looping over, or array-destructuring a Map, Set or iterator reads length
-and indices instead of the iterator: values can disappear, defaults can replace them,
-or rest destructuring can throw. This includes `[...new Set(xs)]`, `[...m.values()]`,
-`[...seen.values()]`, `for (const [k, v] of m)`, `new Set([...prev, id])`,
-`[...selected]` and `[...text.matchAll(re)]`. Convert with `Array.from(...)` before
-spreading, looping or destructuring; copy a Set with `new Set(prev)` then `.add(id)`.
-Ordinary array spreads and loops remain valid. `Object.keys`, `Object.values` and
-`Object.entries` return arrays. Spreads of `arguments` and ordinary indexed array-likes
-work; rest destructuring of an array-like without `slice` does not. String spread
-throws, and an ES5 string loop visits UTF-16 code units rather than Unicode code
-points. See **Common Errors > 5. Iteration that compiles to nothing** in
-`references/rules.md` for the pairs.
+Pages this plugin uploads are compiled with iterator support (ES5 with
+`downlevelIteration`), so a spread, a `for...of` loop or an array destructure of a Map,
+Set, iterator, generator or string reads it as modern JavaScript does. A tool that
+compiles the page again without that support — an older maker portal, or `pac` — reads
+length and indices instead: values disappear, defaults replace them, and rest
+destructuring or a string spread throws, all with a clean compile. Keep the page correct
+under every compiler: convert with `Array.from(...)` before spreading, looping or
+destructuring, for example `[...new Set(xs)]`, `[...m.values()]`, `[...seen.values()]`,
+`for (const [k, v] of m)`, `new Set([...prev, id])`, `[...selected]` and
+`[...text.matchAll(re)]`; copy a Set with `new Set(prev)` then `.add(id)`. Ordinary
+array spreads and loops remain valid. `Object.keys`, `Object.values` and
+`Object.entries` return arrays. Rest destructuring of a non-iterable array-like without `slice`
+throws under every compiler. A destructuring default must not write to the array being
+destructured: `const [a = (values[1] = 3), b] = values` leaves `b` at its old value
+here, unlike modern JavaScript. See **Common Errors > 5. Iteration that another page
+compiler can lose** in `references/rules.md` for the pairs.
 
-Write every form your edit adds with that conversion. A form the page already had
-before your edit loses its values today, and converting it with `Array.from` can make
-previously absent values appear or stop a throw — a change users see. Do not silently
+Write every form your edit adds with that conversion. The upload compiles the whole page
+again with iterator support, so a form the page already had now reads its values or stops
+throwing where an earlier release's upload lost them — a change users see, converted or
+not: say so in the summary when the page has such a form. Converting it keeps the page
+correct under an older compiler, but `Array.from` reads the whole iterable at once: where a
+loop stops early or a destructure reads only the first values of a generator or another
+iterator, the conversion reads the rest too — check that doing so changes nothing the page
+shows or does before converting such a form. Do not silently
 expand an unrelated edit: convert an existing form only when the requested change needs
 it or the user asks for it, and state any resulting behavior change in the summary.
 
@@ -588,6 +609,47 @@ This is an **update** (existing page-id), so the prompt must describe the
 **delta of changes only** — not a re-statement of the original page description.
 It is written to a file and passed as `--prompt-file`; see SKILL.md Phase 6
 "Prompt semantics".
+
+**Before anything is uploaded: the other apps that show this page.** A page belongs to the
+environment, not to the app picked in Phase 1: any app's navigation can name it, and the upload
+replaces the page itself, so the edit reaches every app that shows it — apps never opened here,
+possibly another team's. Right before the upload command below (and again before a retry of it), run:
+
+```powershell
+node "${PLUGIN_ROOT}/scripts/genpage-shared-check.js" `
+  --env '<org-url>' `
+  --app-id '<app-id>' `
+  --page-id '<page-id>'
+```
+
+It reads the environment and writes nothing. Branch on its exit status:
+
+- **Exit 0, `"shared": false`** — no other app's navigation, published or saved, names the page.
+  Say nothing to the user and go on to the upload.
+- **Exit 2, `"code": "GENPAGE_SHARED_PAGE_UNCONFIRMED"`** — `apps` lists the other apps (`name`,
+  `uniqueName`, `savedOnly`). **Attended:** tell the user "This change also affects <App B> and
+  <App C>" using each app's `name` (its `uniqueName` when no name is given), and ask exactly: "Apply the
+  edit to every app that shows this page" or "Stop". Record the answer as its own line in
+  `workflow-log.md`, before the upload command, exactly
+  `Choice: Apply the edit to every app that shows this page` or `Choice: Stop`. Only the first
+  answer may be followed by running the check again with
+  `--confirmed-apps '<uniqueName>,<uniqueName>'` — the `uniqueName` of every app in `apps`, no
+  more and no fewer; exit 0 with `"shared": true, "confirmed": true` then permits the upload.
+  **Unattended:** STOP and report the apps. Never pass `--confirmed-apps` without the user's
+  answer — suppressing a prompt never authorizes changing other apps' content.
+- **Exit 1** — the check could not tell (an app's navigation could not be read, or the scan could not
+  run; `code` is usually `GENPAGE_APPS_UNREADABLE`). STOP and report the `error`, whichever mode the run
+  is in. Do not take the page to be unshared, and do not pass `--confirmed-apps` to get past it.
+
+A confirmation covers only the apps it names. If the check stops again and names an app that was not
+confirmed (an app began to show the page since), ask again for the apps now named. Log the result of
+every run in `workflow-log.md` — `Shared page check: <page-id> not shared`, or the unique names it
+found and whether they were confirmed — whichever way it came out. When the user confirmed, also log
+`Confirmed apps: <page-id>: <uniqueName>,<uniqueName>`: Edit Phase 7's fix-up reads that line.
+
+The check is a point-in-time scan, not a lock: an app that starts to show the page between the check
+and the upload is not covered. That is why the check runs again right before every later upload of
+this page, the verification fix-up included (Edit Phase 7).
 
 Connector binding rules for edit deploy:
 - **Add / replace / discover / remove one connector:** the `genpage-connector-builder`
@@ -668,6 +730,8 @@ the sitemap; the wrapper refuses the combination anyway).
 Omit `--data-sources` when `config.json.dataSources` was empty.
 Omit `--connectors` when connector bindings are unchanged.
 Omit `--actions` when the page's `actionBindings` are unchanged (Custom API and built-in rows alike).
+Do not pass `--turn-id` for an edit: it is only for a host that retries one complete edit after losing its answer, with an id
+kept before the first send (SKILL.md, "Drafts, the pages lease, and a compiler refresh").
 
 An update without `--name`/`--name-file` keeps the page's current name: the SDK writes only what differs from the
 page it has just read, so an edit that does not rename the page omits it. To rename a page, pass `--name-file` on this
@@ -688,6 +752,10 @@ Log the marker, the check result (`code`, `lines`, `deployedCopy`) and that `Cho
 ## Edit Phase 7: Verify (Optional)
 
 Offer browser verification via `AskUserQuestion` (same flow as Phase 7 in the create flow — see SKILL.md).
+The page is still an existing one: if 7.5 in `verify-flow.md` fixes it, check the fix with the
+`--existing` command that 7.5 gives for the edit flow, not the command for a generated page. The fix-up
+upload is an edit of a shared page like Phase 6's: 7.5 runs the shared-page check from Edit Phase 6
+right before it (and before each retry), with only the apps the user confirmed for this page.
 
 ## Edit Phase 8: Summary
 

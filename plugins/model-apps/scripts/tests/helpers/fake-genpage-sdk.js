@@ -209,7 +209,8 @@ class FakeSdk {
   async queryRecords(entity, options) {
     this.calls.push({ name: 'queryRecords', args: [entity, options] });
     const source = this.records[entity];
-    if (typeof source === 'function') return source(options);
+    // A source is also handed the fake itself, for an answer that follows what was pushed (the components an app holds after its push).
+    if (typeof source === 'function') return source(options, this);
     return source || [];
   }
 

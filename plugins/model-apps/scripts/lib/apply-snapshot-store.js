@@ -29,6 +29,8 @@ const { processAlive } = require('./process-owner.js');
 // (lib/output-redaction.js: a text cleaned as a text, bytes masked as the bytes the file gets). The leases, claims and markers this module writes hold process ids, times and random ids, and a reason built from a file
 // system's own words.
 const { redactFileData } = require('./output-redaction.js');
+// The one rename that outlasts a brief Windows file lock (lib/rename-retry.js).
+const { renameWithRetry } = require('./rename-retry.js');
 
 const SNAPSHOT_FILE = 'apply-snapshot.json';
 const LEASE_FILE = 'apply-snapshot.lock';
@@ -65,7 +67,8 @@ function snapshotAbsent(workspaceDir) {
 // writeSync may write only part of it (see createExclusive), and a short write fsynced and renamed into
 // place is exactly the partial file this exists to prevent. A write that fails at any step removes its
 // temp and leaves the target as it was. The sitemap baseline (deployed-baseline.js) is written through it too.
-function writeFileAtomic(target, text) {
+// `opts.retryLock === false` makes the rename a single attempt, exactly as before lib/rename-retry.js (see below).
+function writeFileAtomic(target, text, opts) {
   const tmp = `${target}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`;
   try {
     const fd = fs.openSync(tmp, 'w');
@@ -75,7 +78,18 @@ function writeFileAtomic(target, text) {
     } finally {
       fs.closeSync(fd);
     }
-    fs.renameSync(tmp, target);
+    // A rename that Windows refuses for a moment (a scanner or an indexer holding the file) is repeated by default, and why
+    // that is safe: it is the same rename of this call's own file (`tmp` has the pid, the time and a random part in its
+    // name), and a refused rename moves nothing, so atomicity is unchanged. It is safe for the targets whose writers are
+    // serialised by a lease and by the re-read and compare-and-set around the write: the apply snapshot, the managed
+    // bindings, and the page, dashboard and web-resource records. Only a program that edits such a file by hand while the
+    // rename is refused could be overwritten, and that edit is outside what the plugin supports (the same overwrite
+    // happens if it lands just before the first attempt). It is NOT safe for a target that an unleased writer can also
+    // write, because an older write that was refused could then land after a newer one: such a target passes
+    // `{ retryLock: false }` and renames once (the deployed baseline, which the download writes without the build lease).
+    // The wait is bounded per call and per process: see lib/rename-retry.js.
+    if (opts && opts.retryLock === false) fs.renameSync(tmp, target);
+    else renameWithRetry(fs, tmp, target);
   } catch (e) {
     try { fs.unlinkSync(tmp); } catch { /* best-effort cleanup of the orphaned temp */ }
     throw e;
@@ -547,7 +561,10 @@ function markDistrusted(workspaceDir, { reason } = {}) {
   try {
     fs.mkdirSync(workspaceDir, { recursive: true });
     fs.writeFileSync(tmp, JSON.stringify({ id, reason: reason || null, pid: process.pid, at: new Date().toISOString() }));
-    fs.renameSync(tmp, target);
+    // Why repeating the rename is safe here: `tmp` is this call's own file (its name holds this marker's unique id), a
+    // refused rename moves nothing, and a marker is only ever created under a name nobody else uses, so a repeat cannot
+    // replace another writer's file. The wait is bounded per call and per process: see lib/rename-retry.js.
+    renameWithRetry(fs, tmp, target);
     return { ok: true };
   } catch (e) {
     try { fs.rmSync(tmp, { force: true }); } catch { /* best-effort cleanup of the temp */ }
@@ -679,6 +696,10 @@ function clearWorkspace(target, deps = {}) {
     reserved = true;
     if (typeof deps.beforeRename === 'function') deps.beforeRename();
     const candidate = `${target}.cleared-${process.pid}-${Math.random().toString(36).slice(2, 10)}`;
+    // One attempt, on purpose (lib/rename-retry.js is not used here): the preflight and the lease were taken for the
+    // folder as it is NOW, and waiting would let a program that is not part of the lease (an editor, a sync client)
+    // swap another folder in under the same path, which would then be moved and deleted on this approval. A refusal
+    // is reported as it is, and the caller keeps the folder.
     fs.renameSync(target, candidate);
     aside = candidate;
   } catch (e) {

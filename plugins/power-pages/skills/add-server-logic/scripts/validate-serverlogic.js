@@ -203,19 +203,33 @@ runValidation((cwd) => {
       errors.push(`${dirName}.js: uses 'function delete()' — 'delete' is a reserved word, use 'del' instead`);
     }
 
+    // Runtime pattern matching scans raw source, including comments and strings.
+    // /Function\s*\(/i rejects `.map(function (r) {...})` as well as `Function("...")`.
+    // Keep this case-insensitive and unanchored to match the observed runtime rule.
+    // Tracking: https://github.com/microsoft/power-platform-skills/issues/870
+    const functionMatches = [...content.matchAll(/function\s*\(/gi)];
+    if (functionMatches.length > 0) {
+      const lineNumbers = functionMatches.map(m => content.slice(0, m.index).split('\n').length);
+      errors.push(
+        `${dirName}.js: contains prohibited pattern /Function\\s*\\(/i on line(s) ${lineNumbers.join(', ')} - ` +
+        `the Power Pages runtime blocks this even inside comments, string literals, and other identifiers. ` +
+        `Use arrow functions for callbacks (e.g., rows.map(r => r.id)) or named nested helpers.`
+      );
+    }
+
     // Check: no 'with(' substring anywhere in the raw source.
-    // The Power Pages server validator rejects scripts matching /with\s*\(/ to block
+    // The Power Pages server validator rejects scripts matching /with\s*\(/i to block
     // the JavaScript `with` statement, but the regex also matches the substring inside
     // identifiers like `startswith(`, `endswith(`, and `groupwith(` — even inside string
     // literals — which causes runtime error: "Script validation failed: prohibited
     // pattern found - Pattern: with\s*\(". Run this on the raw content (not stripped)
     // because the server validator does the same.
-    const withMatches = [...content.matchAll(/with\s*\(/g)];
+    const withMatches = [...content.matchAll(/with\s*\(/gi)];
     if (withMatches.length > 0) {
       const lineNumbers = withMatches.map(m => content.slice(0, m.index).split('\n').length);
       errors.push(
         `${dirName}.js: contains the substring 'with(' on line(s) ${lineNumbers.join(', ')} — ` +
-        `the Power Pages server validator's regex /with\\s*\\(/ blocks this even inside string literals ` +
+        `the Power Pages server validator's regex /with\\s*\\(/i blocks this even inside string literals ` +
         `(e.g., OData functions like startswith(, endswith(). Split the literal so 'with(' is not contiguous, ` +
         `e.g., \`"startswith" + "(crd50_name,..."\` instead of \`"startswith(crd50_name,..."\`.`
       );

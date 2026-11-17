@@ -358,6 +358,9 @@ the model-driven shell today. Scope honestly:
   token conformance (§13). We do **not** claim to write the app theme.
 - **Future (optional):** a supported `appDef` theme read/write mapping — deferred until the SDK
   exposes it; called out as an extension point, not v1 scope.
+- **Since 2.21.0 (Preview):** the app theme and header logo are written separately from `appDef`,
+  by the optional `app.theme` key (an explicit branding request only), through the SDK's theme
+  methods. `spec.design` still drives pages only; see `app-builder-capabilities.md` for the theme.
 
 ---
 
@@ -621,6 +624,11 @@ full build / HALT.
 4. **app-shell sitemap** — structural sitemap change only (app.description/icon excluded).
 Additions of NEW top-level artifacts, removals, and charts/commands/dashboards/web-resource-content/AI ⇒
 full build, and they incur sticky **debt**.
+A spec that declares `commandStates[]` (2.24.0) is never fast-applied and never a no-op: a full build reads
+every declared command row and asks for approval of what it finds, which an unchanged snapshot cannot stand
+in for (`COMMAND_STATES_FULL`, `lib/changed-only-flow.js`). A change to them (added, changed or no longer
+declared, matched by row id) is a full-build reason with **no** debt: the full build applies it, and an entry
+no longer declared leaves its row as it is, which no later build could close either.
 
 ## Snapshot envelope (`<workspace>/apply-snapshot.json`, schema 3, atomic)
 `{ schema, orgId (live WhoAmI), envUrl, appUniqueName, appId, solutionUniqueName, generation (uuid),

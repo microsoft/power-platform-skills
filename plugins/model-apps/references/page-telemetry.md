@@ -8,7 +8,8 @@ Application Insights resource.
 > plugin's `skill_started` usage telemetry (`/model-apps:telemetry`), which
 > measures the authoring tool rather than the page.
 
-**Gated by the default-OFF `custom-telemetry` feature flag.** `genpage-page-builder`
+**Gated by the default-ON `custom-telemetry` feature flag.** Set
+`GENPAGE_ENABLE_CUSTOM_TELEMETRY=0` to disable it for a run. `genpage-page-builder`
 reads this file only when its dispatch says `Telemetry: enabled`. With the flag OFF
 a generated page contains no telemetry calls at all, exactly as before the feature
 existed.

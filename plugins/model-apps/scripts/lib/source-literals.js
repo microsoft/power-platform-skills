@@ -121,8 +121,8 @@ function prevSignificant(src, i) {
 //                         const n = {valueOf(){return 12;}}/2; const re = /x/;
 //   paren               `)` ends an if/for/while head (a regex follows) or an operand (a division), and its `(` is out of reach
 //                         if (true /* …2,100 characters… */) /navigateTo({…})/.test(text);
-//   keyword             a word that is a keyword in some places and a name in others
-//                         const of = 12; const n = of/2; const re = /\/*$/;
+//   keyword             a word that is a keyword in some places and a name in others (`of` only in a `for` head: ofTakesOperand)
+//                         const of = 12; for (const x of of/2 + "") {} const re = /\/*$/;
 //   angle               a `>` may close type arguments, a JSX tag or a comparison; the `>` of `=>`, the closer of a cast the lexer proves is one (castKeywordIsCertain) and the end of an element
 //                       or a regex it read are certain
 //                         const half = total as Types . Alias<number> / 2; const re = /x/;
@@ -331,6 +331,11 @@ function positionAfter(src, prev, ends = null, depth = 0) {
     // short by an escape, `#` or a non-ASCII letter, which is not the word it spells (`identifier`), and `throw` before a line break — an
     // error in JavaScript, `throw;` to TypeScript's `parseThrowStatement` — where what follows is unknowable (`newline`).
     if (cutsWord(src, s)) return { expression, ambiguity: 'identifier' };
+    // `of` takes an operand only as the keyword of a `for (… of …)` head; anywhere else it is a name (ofTakesOperand).
+    if (keyword && word === 'of') {
+      const of = ofTakesOperand(src, index);
+      return { expression: of.operand, ambiguity: of.ambiguity };
+    }
     if (keyword && word === 'throw' && prev.newline) return { expression, ambiguity: 'newline' };
     return { expression, ambiguity: !property && CONTEXTUAL_WORDS.has(word) ? 'keyword' : null };
   }
@@ -676,6 +681,46 @@ function wordBefore(src, j) {
   let word = '';
   for (let k = s + 1; k <= e; k += 1) word += src[k];
   return { word, start: s };
+}
+
+// Whether the word `of` whose last character is at `index` takes an operand — a `/` after it starts a regex and a `<` an element — and whether
+// that answer is certain: { operand, ambiguity }. TypeScript's parser takes `of` as the keyword in one place only, right after what the head of a
+// `for (… of …)` or `for await (… of …)` statement binds (parseForOrForInOrForOfStatement,
+// https://github.com/microsoft/TypeScript/blob/v5.8.3/src/compiler/parser.ts); everywhere else `of` is an identifier, so a `/` after it divides
+// and a `<` compares or opens type arguments:
+//   type of<T> = T;  const x = fn<of<List<Row>>>();     a type's name, twice: no element
+//   const half = of / 2;                                  a division
+//   for (const x of <A />.props.items) {}                 the keyword: an element
+// The word is a name for CERTAIN only where the scan PROVES that no for head can enclose it. The scan counts back over the lexer's output (where the
+// brackets of strings, comments, regexes and JSX text are blank) to the nearest bracket left open before the word, as statementHead does, and
+// a name is proven in three cases only, each the return of NAME below:
+//   (a) that bracket is a `[` or a `{` — an array, a pattern, a block, an object, an attribute's or a child's braces: the keyword stands in the
+//       parentheses of its head and nowhere deeper, so `for (const [a = of / 2] of xs)` holds a name;
+//   (b) it is a `(` whose preceding token, read across white space and blanked comments, is read whole and is neither the word `for` nor the word
+//       `await` — a punctuator, a quote, a regex's flag, any other ASCII word (`f(of / 2)`, `if (of / 2)`);
+//   (c) the scan reaches the start of the source with no bracket left open.
+// Nothing else proves it, and no exception to a head may: a `(` after the word `for` or `await` is always a possible head, whatever stands before
+// that word — `a.for(…)` looks like a property, but the dot may be a decimal's that ends the statement before (`const n = 1.⏎for (…)`). Inside a
+// for head nothing is proven either, whatever stands before the `of`: a binding can end in a name the scan does not read (`π`), a non-null `!`, or
+// any type (`x as enum`). There, before a word cut by an escape, a `#` or a character beyond ASCII (which may be a `for` or an `await` spelled
+// otherwise), and where the bracket lies beyond LOOKAHEAD, the reading is the table's, as it always was: the keyword, and a GUESS (`keyword`).
+function ofTakesOperand(src, index) {
+  const keyword = { operand: true, ambiguity: 'keyword' };
+  const NAME = { operand: false, ambiguity: null };
+  let depth = 0;
+  for (let j = index - 2; j >= 0; j -= 1) {
+    if (index - 1 - j > LOOKAHEAD) return keyword;
+    const c = src[j];
+    if (c === ')' || c === ']' || c === '}') depth += 1;
+    else if (c === '(' || c === '[' || c === '{') {
+      if (depth > 0) { depth -= 1; continue; }
+      if (c !== '(') return NAME;
+      const head = wordBefore(src, j);
+      if (head.word === 'for' || head.word === 'await' || cutsWord(src, head.start)) return keyword;
+      return NAME;
+    }
+  }
+  return NAME;
 }
 
 // The window for the scans that look back or ahead over a bounded stretch of source: the `(` of a statement head (statementHead), the `<` of
@@ -5091,4 +5136,4 @@ function ellipsisFollowedByStatement(mask, k) {
   return STATEMENT_WORDS.has(word) || word === 'import' || word === 'export';
 }
 
-module.exports = { blankLiterals, blankNonCodePreservingTemplateExpressions, commentRanges, endsMidStatement, findElisionMarker, hasDefaultExport, hasUnbalancedBrackets, expressionPosition, opensTypeParameters, elementFailsAt, elementChildren, scanTemplateExpressionEnd, isLineTerminator, isTrivia, isSingleLineTrivia, trimTrivia, TRIVIA_CLASS, WS, AMBIGUITY_KINDS, ANGLE_AFTER, ANGLE_AFTER_LINE_BREAK, NO_MEMBER_BEFORE, RESERVED_WORDS, TYPE_PARAMETER_MODIFIERS, MEMBER_NAME_OPERATORS, MEMBER_PREFIX_WORDS, OPERATOR_WORD_ENDS_MEMBER_AFTER, OPERATOR_WORDS_THAT_ARE_NAMES, HEAD_NESTING };
+module.exports = { blankLiterals, ofTakesOperand, blankNonCodePreservingTemplateExpressions, commentRanges, endsMidStatement, findElisionMarker, hasDefaultExport, hasUnbalancedBrackets, expressionPosition, opensTypeParameters, elementFailsAt, elementChildren, scanTemplateExpressionEnd, isLineTerminator, isTrivia, isSingleLineTrivia, trimTrivia, TRIVIA_CLASS, WS, AMBIGUITY_KINDS, ANGLE_AFTER, ANGLE_AFTER_LINE_BREAK, NO_MEMBER_BEFORE, RESERVED_WORDS, TYPE_PARAMETER_MODIFIERS, MEMBER_NAME_OPERATORS, MEMBER_PREFIX_WORDS, OPERATOR_WORD_ENDS_MEMBER_AFTER, OPERATOR_WORDS_THAT_ARE_NAMES, HEAD_NESTING };

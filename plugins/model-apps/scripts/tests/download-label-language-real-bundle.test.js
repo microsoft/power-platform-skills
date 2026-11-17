@@ -119,9 +119,9 @@ test('label language: rebuilt into a fresh environment without Spanish, the buil
   assert.deepEqual(step.unexpected, []);
   const said = step.error ? step.error.message : JSON.stringify(step.value && step.value.result);
   assert.match(said, /not provisioned in this organization: 3082/, 'the language it lacks is named');
-  // The build's language guard stands at the start of the data-model phase, after the solution phase has made the solution and its
-  // publisher: no table, column or app is written — no Spanish text is stored as an English label.
-  assert.deepEqual(Object.keys(step.writes).sort(), ['POST publishers', 'POST solutions']);
+  // The build's language guard stands before its first write, ahead of the solution phase: no publisher, solution, table, column or app is
+  // written — no Spanish text is stored as an English label, and nothing is left behind to clean up.
+  assert.deepEqual(Object.keys(step.writes).sort(), []);
   assert.equal(fresh.metadata.tables.get('contoso_pedido'), undefined);
 });
 

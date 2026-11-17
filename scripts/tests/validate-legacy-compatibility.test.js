@@ -59,7 +59,20 @@ function fixture(openRemote, legacyRemote) {
 }
 
 test('a remote subdirectory plugin passes with github in marketplace.json and git-subdir in the legacy file', () => {
-  assert.deepEqual(validate(fixture(OPEN_REMOTE, LEGACY_REMOTE)), []);
+  const root = fixture(OPEN_REMOTE, LEGACY_REMOTE);
+  assert.deepEqual(validate(root), []);
+  const manifestPath = path.join(root, 'plugins', 'local-plugin', 'plugin.json');
+  const portable = {
+    $schema: 'https://agent-plugins.org/schemas/1.0.0/plugin.schema.json',
+    ...LOCAL_MANIFEST,
+  };
+  writeJson(manifestPath, portable);
+  assert.deepEqual(validate(root), []);
+  for (const change of [{ version: '2.0.0' }, { $schema: 'https://example.com/invalid' }, { skills: './skills' }]) {
+    writeJson(manifestPath, { ...portable, ...change });
+    const errors = validate(root);
+    assert.ok(errors.some((error) => /portable plugin manifest/.test(error)), errors.join('\n'));
+  }
 });
 
 test('git-subdir in marketplace.json is rejected because Copilot CLI refuses the whole marketplace', () => {

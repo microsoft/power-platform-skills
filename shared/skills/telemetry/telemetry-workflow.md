@@ -47,6 +47,11 @@ telemetry for this plugin. Default to `status` when no argument is given.
   revision/common context and outcome markers even when transmission is off.
   Old receipts are pruned best-effort after 14 days on a later selection; hard-off
   writes none. No additional question, catalog fetch, or per-poll event is needed.
+- Model Apps app builds (`--apply`) and page uploads record `skill_completed`
+  when they finish: the outcome, duration, a fixed error class and per-phase
+  step counts (or whether a page was created, updated or unchanged), with the
+  organization and tenant GUIDs of the environment they targeted. App, table,
+  page and environment names are never included.
 - Events do not include file paths, prompts, tool inputs, site names, Dataverse
   URLs, credentials, usernames, or hostnames.
 - **Automation/CI** can disable telemetry by setting the opt-out env var

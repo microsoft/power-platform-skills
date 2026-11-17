@@ -57,6 +57,41 @@ test('judgeFailure: an explicit never wins over everything the failure carries, 
   assert.strictEqual(judgeFailure({ message: 'x', cause: { transient: false, statusCode: 429 } }).never, true, 'the old reading of the error and its cause still holds');
 });
 
+// REAL BUNDLE: the bundled SDK's errors for a write whose answer was lost. The SDK keeps the ConnectionError the write failed with — a 503, a
+// 429, a reset — as the cause, and says the write MAY have committed and is never sent again. A whole build run again would send it again, so
+// these are never run again, whatever the cause says; any other typed error beside a 503 still is (the control).
+test('judgeFailure: an SDK write whose outcome is unknown is never run again, even when the answer it lost was a 503 or a reset', () => {
+  const bundle = require('../vendor/cds-maker-sdk.cjs');
+  const lost = (status) => new ConnectionError('https://contoso.crm.dynamics.com/api/data/v9.2/contoso_tasks(contoso_key=\'A-1\')', status, status ? 'Service Unavailable' : 'Request failed: read ECONNRESET');
+  for (const status of [503, 429, 0]) {
+    const upsert = new bundle.UpsertOutcomeUnknownError('contoso_task', { contoso_key: 'A-1' }, status, undefined, 'The upsert of contoso_task may have been written; it was not sent again.', lost(status));
+    assert.strictEqual(upsert.code, 'UPSERT_OUTCOME_UNKNOWN');
+    assert.strictEqual(judgeFailure(upsert).never, true, `UPSERT_OUTCOME_UNKNOWN over ${status}`);
+    assert.strictEqual(retryPolicyFor(upsert), RETRY.NEVER);
+    assert.strictEqual(isTransientHalt(new BuildHalt('sample-data failed', { phase: 'sample-data', cause: upsert, retry: retryPolicyFor(upsert) })), false);
+    const app = Object.assign(new SdkError('APP_UPDATE_OUTCOME_UNKNOWN', 'The app update may have committed.'), { statusCode: status });
+    Object.defineProperty(app, 'cause', { value: lost(status), enumerable: false });
+    assert.strictEqual(judgeFailure(app).never, true, `APP_UPDATE_OUTCOME_UNKNOWN over ${status}`);
+    // The control: another typed error over the same lost answer is still the service's to explain.
+    const other = Object.assign(new SdkError('SOME_OTHER_CODE', 'x'), { statusCode: status });
+    Object.defineProperty(other, 'cause', { value: lost(status), enumerable: false });
+    assert.strictEqual(judgeFailure(other).never, false, `another typed error over ${status}`);
+  }
+});
+
+// The bundled SDK's business-process-flow steps whose effect it could not confirm (a rollback of a half-made flow, a
+// deactivate, a reactivate). Each keeps the failure it met as its cause; a whole build run again would replay the step.
+test('a process step whose outcome is unknown is never re-run, over a 503 or a reset', () => {
+  const lost = (status) => new ConnectionError('https://contoso.crm.dynamics.com/api/data/v9.2/workflows', status, status ? 'Service Unavailable' : 'Request failed: read ECONNRESET');
+  for (const code of ['BPF_CREATE_ROLLBACK_OUTCOME_UNKNOWN', 'BPF_DEACTIVATE_OUTCOME_UNKNOWN', 'BPF_REACTIVATE_OUTCOME_UNKNOWN']) {
+    for (const status of [503, 0]) {
+      const e = new SdkError(code, 'could not be confirmed'); e.cause = lost(status);
+      assert.strictEqual(judgeFailure(e).never, true, `${code} over ${status}`);
+      assert.strictEqual(retryPolicyFor(e), RETRY.NEVER);
+    }
+  }
+});
+
 test('judgeFailure: the HTTP status decides first — 429, 502, 503 and 504 are transient wherever in the chain the service\'s answer sits', () => {
   for (const status of [429, 502, 503, 504]) {
     assert.strictEqual(isTransientHalt(connectionError(status, 'nothing to read here')), true, `${status} on the error`);
@@ -519,4 +554,53 @@ test('throttleAskOf: what a throttled failure asks of the next send — the long
   for (const junk of [undefined, null, 'x', 7, {}, { retryNotBefore: 'soon' }, { retryNotBefore: Infinity }, { retryNotBefore: Number.NaN }, { retryAfterMs: -5 }, { retryAfterMs: '7000' }]) {
     assert.deepStrictEqual(throttleAskOf(junk), { throttled: false, askedMs: 0, notBefore: 0 }, String(junk));
   }
+});
+
+// #848: what the build reads of a publish the customization lock refused. The HTTP client records the Retry-After of an answer that is not a success on its body —
+// the body the SDK keeps as its ConnectionError's `cause` — and not as anything that prints or compares; publishLockRefusalOf finds the refusal along the chain only
+// when the answer is a 429, its code is one the platform gives the lock, the request was a publish, and that publish is one whose target the next run proves by id first
+// (a web resource written and not confirmed) — not a generative page saved and not published, whose next run does not compare the compiled runtime it publishes.
+test('a publish the lock refused: the client records the Retry-After the answer gave, invisibly, and the rule finds the refusal only for a 429 with a lock code to a publish the next run proves by id', async () => {
+  const { createAzHttpClient, HTTP_RETRY_AFTER } = require('../lib/sdk-http-client.js');
+  const { publishLockRefusalOf } = require('../lib/retry-policy.js');
+  const LOCKED = { error: { code: '0x80071151', message: 'Cannot start the requested operation [Publish] because there is another [Import] running at this moment.' } };
+  const answers = [];
+  const at = 1800000000000;
+  const http = createAzHttpClient('https://contoso.crm.dynamics.com', {
+    getToken: () => 'TOK', sleep: async () => {}, now: () => at,
+    request: async () => answers.shift(),
+  });
+  const PUBLISH = 'https://contoso.crm.dynamics.com/api/data/v9.2/PublishXml';
+  answers.push({ statusCode: 429, headers: { 'retry-after': '400' }, body: JSON.stringify(LOCKED) });
+  const refused = await http.post(PUBLISH, { ParameterXml: '<importexportxml/>' });
+  assert.strictEqual(answers.length, 0, 'sent once');
+  assert.deepStrictEqual(refused.body, LOCKED, 'the body compares as it did');
+  assert.deepStrictEqual(Object.keys(refused.body), ['error']);
+  assert.deepStrictEqual(refused.body[HTTP_RETRY_AFTER], { askedMs: 400000, notBefore: at + 400000 }, 'the whole ask, past the client\'s own cap');
+  answers.push({ statusCode: 429, headers: {}, body: JSON.stringify(LOCKED) });
+  assert.strictEqual((await http.post(PUBLISH, {})).body[HTTP_RETRY_AFTER], undefined, 'no header, no ask');
+  answers.push({ statusCode: 200, headers: { 'Retry-After': '5' }, body: '{"value":[]}' });
+  assert.strictEqual((await http.get('https://contoso.crm.dynamics.com/api/data/v9.2/accounts')).body[HTTP_RETRY_AFTER], undefined, 'a success is the caller\'s data, untouched');
+
+  const sdkError = (statusCode, url, body) => Object.assign(new Error(`HTTP ${statusCode} from ${url}: x`), { code: 'CONNECTION_ERROR', statusCode, url, cause: body });
+  // The publish whose target the next run proves by id first, as the build raises it (lib/sdk-build.js): a web resource written and not confirmed.
+  const WR_ID = '2b857bb3-fc46-4be3-987a-0d002c6ea843';
+  const unconfirmed = (cause, id = WR_ID) => Object.assign(new Error('unconfirmed'), { code: 'WEB_RESOURCE_UNVERIFIED', ...(id ? { id } : {}), cause });
+  const halt = (cause) => new BuildHalt('web-resources failed', { phase: 'web-resources', code: 'WEB_RESOURCE_UNVERIFIED', recoverable: true, cause: unconfirmed(cause) });
+  const pageHalt = (cause, code = 'pages-publish-failed') => new BuildHalt('page "Overview" was updated and saved, but publishing it failed', { phase: 'pages', code, recoverable: true, cause });
+  assert.deepStrictEqual(publishLockRefusalOf(halt(sdkError(429, PUBLISH, refused.body))), { code: '0x80071151', askedMs: 400000, notBefore: at + 400000 });
+  assert.deepStrictEqual(publishLockRefusalOf(halt(sdkError(429, 'https://contoso.crm.dynamics.com/api/data/v9.2/Microsoft.Dynamics.CRM.PublishAllXml', { error: { code: '0x8004F064' } }))), { code: '0x8004f064', askedMs: 0, notBefore: 0 });
+  for (const [what, error] of [
+    ['a 500', halt(sdkError(500, PUBLISH, LOCKED))],
+    ['a read', halt(sdkError(429, 'https://contoso.crm.dynamics.com/api/data/v9.2/savedqueries', LOCKED))],
+    ['a custom action', halt(sdkError(429, 'https://contoso.crm.dynamics.com/api/data/v9.2/contoso_PublishXml', LOCKED))],
+    ['a service-protection limit', halt(sdkError(429, PUBLISH, { error: { code: '0x80072322' } }))],
+    ['a code only in words', halt(sdkError(429, PUBLISH, { error: { message: 'CustomizationLockException 0x80071151' } }))],
+    ['a bare 429', halt(Object.assign(new Error('HTTP 429 from PublishXml'), { statusCode: 429 }))],
+    // A lock-refused publish whose next run is not proven to write or read its target first: a table's, an app's, the bulk publish, a generative page's — under no such error, or under another.
+    ['a publish of no proven kind', sdkError(429, PUBLISH, LOCKED)],
+    ['a generative page saved and not published', pageHalt(sdkError(429, PUBLISH, refused.body))],
+    ['a publish under another halt', pageHalt(sdkError(429, PUBLISH, LOCKED), 'pages-sitemap-read-failed')],
+    ['an unconfirmed write that names no id', new BuildHalt('x', { phase: 'web-resources', code: 'X', recoverable: true, cause: unconfirmed(sdkError(429, PUBLISH, LOCKED), null) })],
+    ['nothing', undefined],  ]) assert.strictEqual(publishLockRefusalOf(error), null, what);
 });

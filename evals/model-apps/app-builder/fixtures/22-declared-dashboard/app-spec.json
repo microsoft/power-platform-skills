@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 2,
+  "minimumPluginVersion": "2.21.0",
+  "solution": { "uniqueName": "ContosoFieldOps", "displayName": "Contoso Field Ops", "publisherPrefix": "cnt" },
+  "app": { "name": "Field Ops", "description": "Work orders with an operations dashboard whose tiles follow the spec on every rebuild" },
+  "entities": [
+    { "schemaName": "cnt_workorder", "displayName": "Work Order", "pluralName": "Work Orders",
+      "primaryAttribute": { "schemaName": "cnt_name", "displayName": "Work Order" },
+      "columns": [
+        { "schemaName": "cnt_status", "displayName": "Status", "type": "Choice", "options": ["Open", "Scheduled", "Done"] },
+        { "schemaName": "cnt_dueon", "displayName": "Due On", "type": "DateTime", "dateTimeBehavior": "DateOnly" }
+      ] }
+  ],
+  "forms": [{ "entity": "cnt_workorder", "name": "Information", "layout": "auto" }],
+  "views": [
+    { "entity": "cnt_workorder", "name": "Open Work Orders", "columns": ["cnt_name", "cnt_status", "cnt_dueon"], "activeOnly": true }
+  ],
+  "charts": [
+    { "entity": "cnt_workorder", "name": "Work Orders by Status", "groupBy": "cnt_status", "measure": "count", "chartType": "Column" }
+  ],
+  "dashboards": [
+    { "name": "Field Operations", "key": "field-ops", "reconcile": "declared",
+      "description": "Today's open work and where it stands.",
+      "tiles": [
+        { "key": "open", "type": "list", "view": "Open Work Orders", "name": "Open work orders", "colspan": 2 },
+        { "key": "by-status", "type": "chart", "chart": "Work Orders by Status", "view": "Open Work Orders" },
+        { "key": "map", "type": "iframe", "url": "https://contoso.example/field-map", "name": "Crew map", "rowspan": 16 }
+      ] }
+  ],
+  "appShell": { "areas": [{ "label": "Field", "groups": [{ "label": "Operations", "subAreas": [
+    { "entity": "cnt_workorder", "title": "Work Orders" },
+    { "dashboard": "Field Operations", "title": "Field Operations" }
+  ] }] }] }
+}

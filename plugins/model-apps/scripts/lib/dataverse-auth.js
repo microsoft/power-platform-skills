@@ -122,6 +122,14 @@ function getAuthToken(envUrl, opts = {}) {
   return readAzToken(resource, opts);
 }
 
+// The token this process has ALREADY read for the environment (the memo getAuthToken fills), or null. It never starts the Azure CLI:
+// for work that must not cost the user a CLI start of seconds — usage telemetry after a script's real work is done
+// (lib/telemetry/skill-completed.js) — and for which "no token yet" simply means "do without".
+function peekAuthToken(envUrl) {
+  const resource = dataverseOrigin(envUrl);
+  return resource && authTokenMemo.has(resource) ? authTokenMemo.get(resource) : null;
+}
+
 // The Azure CLI read behind every token this plugin uses — a Dataverse environment's (getAuthToken, above) and the Power Apps
 // service's (getPowerAppsToken, below) — so both share one memo, one failure record and one budget. `resource` is the `--resource` of
 // `az account get-access-token`; the callers decide which resources are allowed (a Dataverse origin is checked by dataverseOrigin, the
@@ -910,6 +918,7 @@ function asciiJson(value) {
  *                       details like `errors: [...]`), short note to stderr, exit 1
  *   ok=false + string → string to stderr, exit 1
  * `options.ascii` writes the stdout JSON through `asciiJson`, for a script whose output an agent reads off a console.
+ * `options.failureExitCode` (an integer above 1) is the exit status of a failure instead of 1, for a script whose caller must tell one kind of refusal from the rest.
  * (stderr is for people and is never escaped.)
  * Every text it writes has the access tokens the process obtained taken out (lib/output-redaction.js). The streams are guarded the moment the first token is obtained, so this is the same guard once more; the result is
  * the one thing every script prints, and it is clean where a caller has replaced `process.stdout.write` (a host that runs a script in its own process, a test that captures it) and so replaced the guard too.
@@ -947,7 +956,7 @@ function emitResult(ok, payload, options = {}) {
   } else {
     process.stderr.write(redact(String(payload)) + '\n');
   }
-  process.exit(1);
+  process.exit(options && Number.isInteger(options.failureExitCode) && options.failureExitCode > 1 ? options.failureExitCode : 1);
 }
 
 module.exports = {
@@ -957,6 +966,7 @@ module.exports = {
   preflightAuth,
   azIdentity,
   getAuthToken,
+  peekAuthToken,
   getAuthTokenAsync,
   getPowerAppsToken,
   getPowerAppsTokenAsync,

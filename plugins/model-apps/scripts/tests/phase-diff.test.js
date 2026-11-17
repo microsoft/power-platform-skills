@@ -39,6 +39,22 @@ test('diffPhases: a data-model change is reported under data-model (drives the f
   assert.ok(!changed.includes('pages'), 'unrelated phases are not falsely flagged');
 });
 
+test('diffPhases: a configuration declaration change (or its opt-in) is reported under data-model; absent on both sides is no change', () => {
+  const edits = {
+    configurationIdentity: 'stable-v1',
+    environmentVariables: [{ schemaName: 'new_Endpoint', displayName: 'Endpoint', type: 'String' }],
+    connectionReferences: [{ logicalName: 'new_sharedoffice', connectorId: '/providers/Microsoft.PowerApps/apis/shared_office365' }],
+    customApis: [{ uniqueName: 'new_Calc', displayName: 'Calc' }],
+    duplicateDetectionRules: [{ name: 'Same name', baseEntity: 'new_x', matchingEntity: 'new_x' }],
+  };
+  for (const [field, value] of Object.entries(edits)) {
+    const cur = { ...spec(), [field]: value };
+    assert.deepStrictEqual(diffPhases(cur, spec()), ['data-model'], `${field} added`);
+    assert.deepStrictEqual(diffPhases(spec(), cur), ['data-model'], `${field} removed`);
+    assert.deepStrictEqual(diffPhases(cur, { ...spec(), [field]: value }), [], `${field} unchanged`);
+  }
+});
+
 test('diffPhases: app OR appShell change reports app-shell', () => {
   const cur = spec();
   cur.appShell.areas[0].label = 'Renamed';

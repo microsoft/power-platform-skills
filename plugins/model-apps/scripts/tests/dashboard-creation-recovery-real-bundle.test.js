@@ -28,6 +28,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { makeTempDir } = require('./helpers/temp-dirs.js');
+const { shortRenameWait } = require('./helpers/short-rename-wait.js');
 const { createLifecycleOrg } = require('./helpers/fake-lifecycle-org.js');
 const { createLifecycleHarness } = require('./helpers/lifecycle-harness.js');
 const { createMakerSdk, createNodeWorkspaceStorage } = require('../lib/maker-sdk.js');
@@ -712,7 +713,10 @@ const FIRST_BUILD_WRITES = {
 };
 const FIRST_BUILD_READS = 41;
 const UNCHANGED_REBUILD_WRITES = { 'PATCH sitemaps': 1, 'POST AddAppComponents': 1, 'POST PublishXml': 2 };
-const UNCHANGED_REBUILD_READS = 92;
+// The bundled SDK reads three more before an unchanged rebuild's app update re-adds the app's components (an unpublished update that
+// adds components): the app row's token and, as it matches, the app's current layer and its components — then sends the action as
+// before when every component is there. Writes are unchanged.
+const UNCHANGED_REBUILD_READS = 95;
 
 const BAD_RECORDS = [
   ['damaged', (file) => fs.writeFileSync(file, '{ "schemaVersion": 1, "dashboards": '), /could not be read/],
@@ -724,6 +728,7 @@ const BAD_RECORDS = [
     fs.linkSync(elsewhere, file);
   }, /could not be read/],
   ['unwritable', (file, env, t) => {
+    shortRenameWait(t);
     const rename = fs.renameSync;
     t.mock.method(fs, 'renameSync', function renameSync(from, to, ...rest) {
       if (path.resolve(String(to)) === path.resolve(file)) throw Object.assign(new Error(`EACCES: permission denied, rename '${from}' -> '${to}'`), { code: 'EACCES' });

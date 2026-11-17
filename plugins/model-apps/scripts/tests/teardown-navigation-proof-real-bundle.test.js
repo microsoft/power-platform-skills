@@ -398,8 +398,8 @@ const requestLog = (org) => org.requests.map((r) => (r.operations ? `${r.method}
 const REFUSED_SAVED_LAYER = (req) => (req.method === 'GET' && req.path.startsWith('/sitemaps/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple')
   ? json(503, { error: { message: 'Offline refusal' } }) : null);
 const PUBLISHED_SCENARIOS = [
-  ['its published navigation names both pages', { published: true }, { requests: 37, ok: true }],
-  ['its published navigation names one page and its saved navigation, which is read for the other, names both', { published: true, xml: navigation(entry(PAGE_A)), answer: savedLayer(navigation(entry(PAGE_A), entry(PAGE_B))) }, { requests: 41, ok: true }],
+  ['its published navigation names both pages', { published: true }, { requests: 39, ok: true }],
+  ['its published navigation names one page and its saved navigation, which is read for the other, names both', { published: true, xml: navigation(entry(PAGE_A)), answer: savedLayer(navigation(entry(PAGE_A), entry(PAGE_B))) }, { requests: 43, ok: true }],
   ['its published navigation names one page and its saved navigation cannot be read', { published: true, xml: navigation(entry(PAGE_A)), answer: REFUSED_SAVED_LAYER }, { requests: 18, ok: false }],
 ];
 

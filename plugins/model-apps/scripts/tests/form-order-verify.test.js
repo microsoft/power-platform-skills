@@ -152,6 +152,22 @@ test('an undeclared form served first fails with the Maker remedy', async () => 
   assert.match(served.detail, /Move it down in Maker \(Form settings > Form order\), or declare it/);
 });
 
+test('a declared form served ahead of two plain Main forms fails with the Maker remedy only, never the spec order remedy', async () => {
+  const spec = specFor({ forms: [
+    { entity: ENTITY, name: LEGACY, formType: 'Main', reconcile: 'declared' },
+    { entity: ENTITY, name: WORK, formType: 'Main' },
+    { entity: ENTITY, name: MY_WORK, formType: 'Main' },
+  ] });
+  const result = await verifySpec(spec, readFor({ orders: { [WORK]: 0, [MY_WORK]: 1 }, served: [LEGACY, WORK, MY_WORK] }));
+
+  assert.deepStrictEqual(checksOf(result, 'form-order').map((c) => [c.present, c.name]), [[true, `${ENTITY}: ${WORK} > ${MY_WORK}`]]);
+  const served = checkOf(result, 'form-order-served');
+  assert.strictEqual(served.present, false);
+  assert.match(served.detail, /users without a remembered form open 'Legacy' first: a declared form \(forms\[\]\.reconcile "declared"\), which is outside the form order the build sets/);
+  assert.match(served.detail, /Move it down in Maker \(Form settings > Form order\)$/);
+  assert.doesNotMatch(served.detail, /does not declare|mainFormOrder/);
+});
+
 test('declared forms served in the wrong relative order fail and name the inversion', async () => {
   const result = await verifySpec(specFor(), readFor({ served: [WORK, SUMMARY, MY_WORK] }));
 

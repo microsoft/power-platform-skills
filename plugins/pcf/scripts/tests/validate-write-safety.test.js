@@ -55,7 +55,7 @@ test.beforeEach(() => {
   fs.writeFileSync(path.join(cwd, 'pcf-plan.md'), '# plan\n', 'utf8');
 });
 test.afterEach(() => {
-  try { fs.rmSync(cwd, { recursive: true, force: true }); } catch { /* ignore */ }
+  try { fs.rmSync(cwd, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); } catch { /* ignore */ }
 });
 
 test('write inside the working directory is allowed (exit 0)', () => {

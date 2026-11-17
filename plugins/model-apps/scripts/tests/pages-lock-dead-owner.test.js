@@ -9,9 +9,10 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { acquireAppPagesLease } = require('../lib/sdk-build.js');
-const { ownerStamp } = require('../lib/process-owner.js');
+const { ownerStamp, probeProcess } = require('../lib/process-owner.js');
 const { sha256 } = require('../lib/hash.js');
 const { startTarget, tempEnv, privateTempRoot, deadPid, removeWhenTestEnds } = require('./helpers/kill-target-client.js');
+const { deletedWhileOpen, deletedNamesLinger } = require('./helpers/delete-pending.js');
 
 const APP = 'contoso_app';
 const workspace = (t) => {
@@ -219,8 +220,217 @@ test('a workspace that cannot be written is that error, as it always was — not
   assert.throws(() => acquireAppPagesLease(blocked, APP), (e) => !(e && e.code === 'pages-locked') && e.code === 'UNSAFE_OUTPUT' && e.reason === 'not-directory', 'the file system\'s own problem');
 });
 
+// A name another build is deleting while a third process still has it open — a build reading the lock to judge its owner — lingers on Windows under
+// Node 20 until that handle closes, and every look at it and every create of it fails with EPERM meanwhile (helpers/delete-pending.js). That is the
+// moment a release or a take-over ends: another build holds the lock, or has just held it, and a build that finds the name so is refused as by a
+// held lock — not stopped with a file-safety error or a raw EPERM. Under Node 22, and on Linux and macOS, the delete removes the name at once: the same
+// steps leave no name, and each test says what a build then finds. A refusal for a name Windows could not inspect names THAT name — the claim, when it
+// is the claim — and adds why it may outlast every build: the same EPERM is what a file this user may not read answers.
+const UNINSPECTABLE = (name) => ` Windows could not inspect ${name} (EPERM): another build may be removing it, or this user may not have access to it. If this refusal persists while no build is running, check that file's access, or remove it.`;
+const refusedUninspectable = (name) => (e) => {
+  assert.strictEqual(e && e.code, 'pages-locked', String(e && e.stack));
+  assert.strictEqual(e.message, REFUSAL(name) + UNINSPECTABLE(name));
+  return true;
+};
+const refusedNotError = (lock) => (e) => {
+  assert.strictEqual(e && e.code, 'pages-locked', String(e && e.stack));
+  return refused(lock)(e);
+};
+
+test('a claim another build is deleting as its take-over ends, while a third still has it open, is a lock in use: refused, naming the claim where it lingers — the lock untouched', (t) => {
+  const dir = workspace(t);
+  const lingers = deletedNamesLinger(dir);
+  const mine = acquireAppPagesLease(dir, APP);
+  const held = fs.readFileSync(canonicalFile(dir), 'utf8');
+  const claimName = `${canonicalFile(dir)}.reclaim`;
+  const claim = deletedWhileOpen(claimName, JSON.stringify({ pid: process.pid, at: Date.now(), rnd: 'taking-over' }));
+  try {
+    // Where it lingers the claim is what could not be inspected; where it does not, the live lock refuses as it always has.
+    assert.throws(() => acquireAppPagesLease(dir, APP), lingers ? refusedUninspectable(claimName) : refusedNotError(canonicalFile(dir)), `names deleted while open linger here: ${lingers}`);
+  } finally {
+    claim.close();
+  }
+  assert.strictEqual(fs.readFileSync(canonicalFile(dir), 'utf8'), held, 'the lock is as it was');
+  mine.release();
+  assert.deepStrictEqual(fs.readdirSync(dir), [], 'released, and the claim is gone with its last handle');
+});
+
+test('a lock another build is deleting as it lets go, while a third still has it open, is refused where its name lingers, and free where it does not — never a file-safety error', (t) => {
+  const dir = workspace(t);
+  const lingers = deletedNamesLinger(dir);
+  const lock = deletedWhileOpen(canonicalFile(dir), JSON.stringify({ ...ownerStamp(), rnd: 'letting-go' }));
+  try {
+    if (lingers) assert.throws(() => acquireAppPagesLease(dir, APP), refusedUninspectable(canonicalFile(dir)));
+    else acquireAppPagesLease(dir, APP).release();
+  } finally {
+    lock.close();
+  }
+  assert.deepStrictEqual(fs.readdirSync(dir), [], 'nothing is left once the last handle is closed');
+  acquireAppPagesLease(dir, APP).release();
+});
+
+test('a lock that starts being deleted between a build\'s look and its create is refused where its name lingers, and taken where it does not — never the create\'s raw EPERM', (t) => {
+  const dir = workspace(t);
+  const lingers = deletedNamesLinger(dir);
+  const real = fs.writeFileSync;
+  let letGo = null;
+  // Another build lets go of the lock just after this one found the name free, while a third still reads it: the create meets the lingering name.
+  t.mock.method(fs, 'writeFileSync', function writeFileSync(file, data, opts) {
+    if (!letGo && file === canonicalFile(dir) && opts && opts.flag === 'wx') {
+      letGo = 'starting';
+      letGo = deletedWhileOpen(file, JSON.stringify({ ...ownerStamp(), rnd: 'letting-go' }));
+    }
+    return real.call(this, file, data, opts);
+  });
+  try {
+    if (lingers) assert.throws(() => acquireAppPagesLease(dir, APP), refusedUninspectable(canonicalFile(dir)));
+    else acquireAppPagesLease(dir, APP).release();
+  } finally {
+    if (letGo && letGo.close) letGo.close();
+  }
+  assert.ok(letGo, 'control: the create met the name being deleted');
+  t.mock.restoreAll();
+  assert.deepStrictEqual(fs.readdirSync(dir), []);
+});
+
+test('a create that fails with EPERM while nothing is at the lock\'s name is that error, as it always was — a folder this user cannot write in is not another build', (t) => {
+  const dir = workspace(t);
+  const real = fs.writeFileSync;
+  t.mock.method(fs, 'writeFileSync', function writeFileSync(file, data, opts) {
+    if (file === canonicalFile(dir) && opts && opts.flag === 'wx') throw Object.assign(new Error(`EPERM: operation not permitted, open '${file}'`), { code: 'EPERM' });
+    return real.call(this, file, data, opts);
+  });
+  assert.throws(() => acquireAppPagesLease(dir, APP), (e) => e && e.code === 'EPERM', 'the create\'s own error');
+  t.mock.restoreAll();
+  assert.deepStrictEqual(fs.readdirSync(dir), []);
+});
+
+test('on Windows a create that failed with EPERM while the name was being deleted, and finds it gone, is tried once more and takes the free lock; elsewhere it is that error', (t) => {
+  const dir = workspace(t);
+  const real = fs.writeFileSync;
+  let failed = 0;
+  // The deletion finished between the failed create and the look at the name: nothing lingers by the time the build looks.
+  t.mock.method(fs, 'writeFileSync', function writeFileSync(file, data, opts) {
+    if (file === canonicalFile(dir) && opts && opts.flag === 'wx' && failed === 0) {
+      failed += 1;
+      throw Object.assign(new Error(`EPERM: operation not permitted, open '${file}'`), { code: 'EPERM' });
+    }
+    return real.call(this, file, data, opts);
+  });
+  if (process.platform === 'win32') {
+    const lease = acquireAppPagesLease(dir, APP);
+    assert.strictEqual(JSON.parse(fs.readFileSync(canonicalFile(dir), 'utf8')).pid, process.pid, 'taken on the second try');
+    lease.release();
+  } else {
+    assert.throws(() => acquireAppPagesLease(dir, APP), (e) => e && e.code === 'EPERM', 'as it always was');
+  }
+  assert.strictEqual(failed, 1);
+  t.mock.restoreAll();
+  assert.deepStrictEqual(fs.readdirSync(dir), []);
+});
+
+test('a link or a junction at the lock\'s name or at its claim\'s is still refused as the file system problem it is, and nothing is written through it', (t) => {
+  for (const at of ['lock', 'claim']) {
+    const dir = workspace(t);
+    const elsewhere = path.join(dir, 'elsewhere');
+    fs.mkdirSync(elsewhere);
+    const name = at === 'lock' ? canonicalFile(dir) : `${canonicalFile(dir)}.reclaim`;
+    // A junction on Windows, which needs no privilege; the type is ignored elsewhere, where it is a symbolic link to the folder.
+    fs.symlinkSync(elsewhere, name, 'junction');
+    assert.throws(() => acquireAppPagesLease(dir, APP), (e) => {
+      assert.strictEqual(e && e.code, 'UNSAFE_OUTPUT', `${at}: ${String(e && e.stack)}`);
+      assert.strictEqual(e.reason, 'link', at);
+      return true;
+    });
+    assert.deepStrictEqual(fs.readdirSync(elsewhere), [], `${at}: nothing was written through it`);
+    assert.deepStrictEqual(fs.readdirSync(dir).sort(), ['elsewhere', path.basename(name)].sort(), `${at}: nothing was taken or left`);
+  }
+});
+
+// The access-denied side of the same EPERM: a claim this user may not read, while no build runs at all. Under Node 20 Windows cannot inspect it, and
+// the refusal must name the claim and say to check its access — waiting cannot cure it, and the lock it would otherwise name is not even there. Under
+// Node 22 lstat is allowed for this ACL (only reading is denied), so the claim is inspected, is a plain file, and the free lock is taken. The deny is a
+// real ACL on a file this test made, and is lifted again before the folder is removed.
+test('on Windows, a claim this user may not read is refused as pages-locked and build-locked naming that claim and its access, where it cannot be inspected', { skip: process.platform !== 'win32' && 'needs Windows ACLs' }, async (t) => {
+  const { execFileSync } = require('node:child_process');
+  const { withAppBuildLease } = require('../lib/app-operation-lease.js');
+  // Both tools by absolute path (helpers/windows-system-tools.js): by name alone, a machine with Git's tools on PATH — the GitHub-hosted
+  // Windows runners are one — runs Git's GNU `whoami`, which rejects `/user`.
+  const { systemTool } = require('./helpers/windows-system-tools.js');
+  // "<domain>\<user>","S-1-5-21-…": the SID is the last quoted field.
+  const sid = /"(S-[\d-]+)"\s*$/.exec(execFileSync(systemTool('whoami'), ['/user', '/fo', 'csv', '/nh'], { encoding: 'utf8' }).trim())[1];
+  const icacls = (...args) => execFileSync(systemTool('icacls'), args, { stdio: 'ignore' });
+  const buildFile = (dir) => path.join(dir, `app-build.${sha256(APP.toLowerCase())}.lock`);
+  const BUILD_REFUSAL = (name) => `another build may be applying '${APP}' in this workspace — refusing a second concurrent apply (would risk duplicate creation). Re-run the same command after it finishes. If no build using this workspace is running, inspect ${name} and remove it only if it is abandoned; keep the workspace and its recovery records.`;
+  for (const kind of ['pages', 'build']) {
+    const dir = workspace(t);
+    const lock = kind === 'pages' ? canonicalFile(dir) : buildFile(dir);
+    const claim = `${lock}.reclaim`;
+    fs.writeFileSync(claim, '{}');
+    icacls(claim, '/deny', `*${sid}:(R)`);
+    try {
+      let look = 'inspected';
+      try { fs.lstatSync(claim); } catch (e) { look = e.code; }
+      const take = kind === 'pages'
+        ? async () => acquireAppPagesLease(dir, APP).release()
+        : () => withAppBuildLease({ workspaceDir: dir, appUniqueName: APP }, async () => {});
+      if (look === 'EPERM') {
+        await assert.rejects(take(), (e) => {
+          assert.strictEqual(e && e.code, `${kind}-locked`, `${kind}: ${String(e && e.stack)}`);
+          assert.strictEqual(e.message, (kind === 'pages' ? REFUSAL(claim) : BUILD_REFUSAL(claim)) + UNINSPECTABLE(claim), kind);
+          return true;
+        });
+        assert.ok(!fs.existsSync(lock), `${kind}: no lock was taken`);
+      } else {
+        assert.strictEqual(look, 'inspected', `${kind}: an lstat that fails otherwise is not this case`);
+        await take();
+        assert.ok(!fs.existsSync(lock), `${kind}: taken and released`);
+      }
+    } finally {
+      icacls(claim, '/remove:d', `*${sid}`);
+    }
+    assert.strictEqual(fs.readFileSync(claim, 'utf8'), '{}', `${kind}: the claim is untouched`);
+  }
+});
+
+test('a lock or claim name that cannot be inspected for another reason than EPERM is the file-safety error it always was; EPERM is a refusal on Windows only', (t) => {
+  const real = fs.lstatSync;
+  for (const code of ['EACCES', 'EIO', 'EPERM']) {
+    for (const at of ['lock', 'claim']) {
+      const dir = workspace(t);
+      const name = at === 'lock' ? canonicalFile(dir) : `${canonicalFile(dir)}.reclaim`;
+      t.mock.method(fs, 'lstatSync', function lstatSync(p, ...rest) {
+        if (path.resolve(String(p)) === name) throw Object.assign(new Error(`${code}: lstat '${p}'`), { code });
+        return real.call(this, p, ...rest);
+      });
+      try {
+        if (code === 'EPERM' && process.platform === 'win32') {
+          assert.throws(() => acquireAppPagesLease(dir, APP), refusedUninspectable(name), `${code} at the ${at}`);
+        } else {
+          assert.throws(() => acquireAppPagesLease(dir, APP), (e) => {
+            assert.strictEqual(e && e.code, 'UNSAFE_OUTPUT', `${code} at the ${at}: ${String(e && e.stack)}`);
+            assert.strictEqual(e.reason, 'uninspectable');
+            assert.strictEqual(e.message, `refusing to write ${name}: it could not be inspected (${code})`);
+            return true;
+          });
+        }
+      } finally {
+        t.mock.restoreAll();
+      }
+      assert.deepStrictEqual(fs.readdirSync(dir), [], `${code} at the ${at}: nothing was taken or left`);
+    }
+  }
+});
+
 // Several builds that start at once, and each finds the lock: not there at all, or left by a build that was killed. Exactly one of them takes it.
-for (const [what, killedFirst] of [['no lock at all', false], ['the lock of a killed build', true]]) {
+//
+// The build is killed only once every racer has started and loaded the module, and the gate opens at once after it. Windows hands a pid that is
+// free again to a new process after a while when the machine starts many processes (measured on a loaded machine: from about 8 s after the kill
+// at ~90 process starts a second), and then the killed build's lock names a pid that RUNS: process-owner.js cannot tell it from the build, so
+// every racer keeps the lock and is refused — the safe answer, pinned by the next test. Killed before the racers started, the build's
+// pid stayed free for as long as four processes took to start, which on a loaded machine is seconds: one whole-suite run saw all four refused.
+// Killed last, the pid is free only for the milliseconds the race takes, and no racer can be the process that gets it: each was running before.
+for (const [what, holderFate] of [['no lock at all', 'none'], ['the lock of a killed build', 'killed']]) {
   test(`REAL PROCESSES racing for the lock — ${what}: exactly one takes it, the others are refused, and nothing is left but the lock`, async (t) => {
     const RACERS = 4;
     const ROUNDS = 3;
@@ -228,19 +438,24 @@ for (const [what, killedFirst] of [['no lock at all', false], ['the lock of a ki
     for (let round = 1; round <= ROUNDS; round += 1) {
       const dir = fs.mkdtempSync(path.join(root, 'ws-'));
       const app = `race_${round}`;
-      if (killedFirst) {
-        const holder = startTarget(t, ['lock', dir, app], { env: tempEnv(root) });
+      let holder = null;
+      if (holderFate === 'killed') {
+        holder = startTarget(t, ['lock', dir, app], { env: tempEnv(root) });
         await holder.waitFor(/^held$/);
-        await holder.kill();
-        assert.ok(fs.existsSync(lockFile(dir, app)));
       }
       const gate = path.join(root, `gate-${round}`);
       const racers = Array.from({ length: RACERS }, () => startTarget(t, ['lock', dir, app, gate], { env: tempEnv(root) }));
       await Promise.all(racers.map((racer) => racer.waitFor(/^ready$/)));
+      if (holder) {
+        await holder.kill();
+        assert.ok(fs.existsSync(lockFile(dir, app)));
+      }
       fs.writeFileSync(gate, '');
       const answers = await Promise.all(racers.map((racer) => racer.waitFor(/^(held|refused .*)$/)));
       const winners = racers.filter((racer, i) => answers[i] === 'held');
-      assert.strictEqual(winners.length, 1, `round ${round}: one winner, got ${JSON.stringify(answers)}`);
+      // Should the killed build's pid run again all the same, the failure says so: that refusal is the rule for a running pid, not a lost race.
+      const pidAgain = holder && probeProcess(holder.pid) !== 'gone' ? ` — the killed build's pid ${holder.pid} is a running process's again` : '';
+      assert.strictEqual(winners.length, 1, `round ${round}: one winner, got ${JSON.stringify(answers)}${pidAgain}`);
       assert.ok(answers.filter((a) => a !== 'held').every((a) => a === 'refused pages-locked'), `round ${round}: the others are refused: ${JSON.stringify(answers)}`);
       assert.strictEqual(JSON.parse(fs.readFileSync(lockFile(dir, app), 'utf8')).pid, winners[0].pid, `round ${round}: the lock names the winner`);
       assert.strictEqual(JSON.parse(fs.readFileSync(canonicalFile(dir, app), 'utf8')).pid, winners[0].pid, `round ${round}: both of its files`);
@@ -249,3 +464,23 @@ for (const [what, killedFirst] of [['no lock at all', false], ['the lock of a ki
     }
   });
 }
+
+// What every racer sees when a killed build's pid has been handed to another process: a lock whose pid runs. The build here is simply not killed.
+// None of them takes it — not one, however many race — and the lock is as it was: a pid that runs is never proven gone (process-owner.js).
+test('REAL PROCESSES racing for the lock of a build whose pid runs — what a killed build\'s lock is once its pid is another process\'s: every one is refused, and the lock is untouched', async (t) => {
+  const root = privateTempRoot(t);
+  const dir = fs.mkdtempSync(path.join(root, 'ws-'));
+  const app = 'race_running';
+  const holder = startTarget(t, ['lock', dir, app], { env: tempEnv(root) });
+  await holder.waitFor(/^held$/);
+  const held = [fs.readFileSync(lockFile(dir, app), 'utf8'), fs.readFileSync(canonicalFile(dir, app), 'utf8')];
+  const gate = path.join(root, 'gate');
+  const racers = Array.from({ length: 4 }, () => startTarget(t, ['lock', dir, app, gate], { env: tempEnv(root) }));
+  await Promise.all(racers.map((racer) => racer.waitFor(/^ready$/)));
+  fs.writeFileSync(gate, '');
+  const answers = await Promise.all(racers.map((racer) => racer.waitFor(/^(held|refused .*)$/)));
+  assert.deepStrictEqual(answers, Array(4).fill('refused pages-locked'), 'no winner: a pid that runs keeps its lock');
+  assert.deepStrictEqual([fs.readFileSync(lockFile(dir, app), 'utf8'), fs.readFileSync(canonicalFile(dir, app), 'utf8')], held, 'both files are as the build left them');
+  assert.deepStrictEqual(fs.readdirSync(dir).sort(), [path.basename(canonicalFile(dir, app)), `pages-${app}.lock`].sort(), 'no claim or other file is left');
+  await Promise.all([holder, ...racers].map((target) => target.kill()));
+});

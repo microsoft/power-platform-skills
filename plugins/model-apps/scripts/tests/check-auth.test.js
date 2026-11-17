@@ -19,6 +19,7 @@ test('check-auth.js enumerates all blocker codes', () => {
     'whoami_403',
     'whoami_401',
     'whoami_error',
+    'no_customization_role',
   ]) {
     assert.match(scriptSrc, new RegExp(`['"]${code}['"]`), `missing blocker code: ${code}`);
   }
@@ -119,6 +120,8 @@ test('check-auth.js: 403 hint mentions az login --username when identities diffe
 const { loadCli } = require('./helpers/cli-harness.js');
 
 const ENVURL = 'https://contoso.crm.dynamics.com';
+// The one GET sent after a passing WhoAmI: the first read the build makes (its solution), as the capability probe.
+const PROBE_REQUEST = 'GET solutions?$select=solutionid&$top=1';
 
 // runQuiet() shells out via execFileSync and treats a throw as "absent". These stubs therefore
 // model each CLI as either returning stdout or throwing, exactly as a missing binary would — and a
@@ -241,7 +244,7 @@ function makeCancelableExecFile({ pacOrg = null, azUser = 'maker@contoso.com', a
   };
 }
 
-async function run({ argv = [], exec = {}, whoAmI, whoAmIThrows, tokenFailure = null }) {
+async function run({ argv = [], exec = {}, whoAmI, whoAmIThrows, tokenFailure = null, probe, probeThrows }) {
   const calls = [];
   // The token read is an `az` call too: with the Azure CLI missing or logged out it fails, as it would live.
   const azUnusable = exec.azVersion === null || exec.azUser === null || (exec.notOnPath || []).includes('az');
@@ -264,7 +267,13 @@ async function run({ argv = [], exec = {}, whoAmI, whoAmIThrows, tokenFailure = 
         },
         tokenFailureKind: () => tokenFailure,
         tokenFailureMessage: (url, fallback) => (tokenFailure === 'timeout' ? `token for ${url} timed out` : fallback),
-        dataverseRequest: async () => {
+        dataverseRequest: async (url, method, requestPath) => {
+          // WhoAmI is the identity test; any other request is the capability probe that follows a passing WhoAmI.
+          if (requestPath !== 'WhoAmI') {
+            calls.push(`${method} ${requestPath}`);
+            if (probeThrows) throw new Error(probeThrows);
+            return probe || { status: 200, data: { value: [] } };
+          }
           calls.push('whoami');
           if (whoAmIThrows) throw new Error(whoAmIThrows);
           return whoAmI || { status: 200, data: { UserId: 'u-1', OrganizationId: 'o-1' } };
@@ -304,7 +313,11 @@ async function runWithAsyncChildren({ argv = [], exec = {}, token, whoAmI } = {}
         },
         tokenFailureKind: () => null,
         tokenFailureMessage: (url, fallback) => fallback,
-        dataverseRequest: async () => {
+        dataverseRequest: async (url, method, requestPath) => {
+          if (requestPath !== 'WhoAmI') {
+            calls.push(`${method} ${requestPath}`);
+            return { status: 200, data: { value: [] } };
+          }
           calls.push('whoami');
           return whoAmI || { status: 200, data: { UserId: 'u-1', OrganizationId: 'o-1' } };
         },
@@ -428,6 +441,7 @@ test('pac org who starts before the az probes, and the WhoAmI token is warmed wh
     `token ${ENVURL}`,
     'whoami',
     'done pac',
+    PROBE_REQUEST,
   ]);
 });
 
@@ -629,6 +643,85 @@ test('a clean run reports ok with the WhoAmI identity ids', async () => {
   assert.match(r.message, /Ready \(az \+ pac both signed in/);
 });
 
+// --- an identity that passes WhoAmI but holds no security role ---------------------------------------
+//
+// WhoAmI answers for any user the environment knows, role or not, so it said "ready" for an identity whose every customization
+// read then fails:
+//   GET solutions?$select=solutionid&$top=1  ->  HTTP 403
+//   {"error":{"code":"0x80042f09","message":"The user with id <id> has not been assigned any roles. They need a role with the prvReadCustomization privilege."}}
+// (measured on an environment where the signed-in user had no role: `solutions`, `sitemaps`, `roles` and `publishers` all answered it).
+// The probe is one customization read the build itself starts with. A role COUNT would be wrong: privileges also come through teams.
+const NO_ROLE = { status: 403, data: { error: { code: '0x80042f09', message: 'The user with id 00000000-0000-0000-0000-000000000000 has not been assigned any roles. They need a role with the prvReadCustomization privilege.' } } };
+
+test('an identity that passes WhoAmI but holds no security role is NOT ok, and the message says what to do', async () => {
+  const r = await run({ argv: ['--env', ENVURL], exec: { pacOrg: 'Connected as maker@contoso.com\n' }, probe: NO_ROLE });
+  assert.equal(r.ok, false);
+  assert.equal(r.blocker, 'no_customization_role');
+  assert.match(r.message, /maker@contoso\.com/, 'names the identity');
+  assert.match(r.message, /no security role/);
+  assert.match(r.message, /System Customizer/, 'names a role that fixes it');
+  assert.doesNotMatch(r.message, /az login/, 'the same identity in pac is no other identity to sign in as');
+  assert.equal(r.azUser, 'maker@contoso.com');
+  assert.equal(r.envUrl, ENVURL);
+  assert.equal(r.whoAmI.ok, true, 'WhoAmI itself passed, and the result still says so');
+});
+
+test('with another identity in pac the role-less message offers it', async () => {
+  const r = await run({ argv: ['--env', ENVURL], exec: { azUser: 'dev@contoso.com', pacOrg: 'Connected as maker@contoso.com\n' }, probe: NO_ROLE });
+  assert.equal(r.blocker, 'no_customization_role');
+  assert.match(r.message, /dev@contoso\.com/);
+  assert.match(r.message, /az login --username maker@contoso\.com/);
+});
+
+test('the role-less verdict reads the code in any case, and still says to ask for a role when pac is not signed in', async () => {
+  const r = await run({
+    argv: ['--env', ENVURL],
+    probe: { status: 403, data: { error: { code: '0X80042F09', message: 'Der Benutzer hat keine Rolle.' } } },
+  });
+  assert.equal(r.ok, false, 'the code decides, not the words: the platform answers in the caller\'s language');
+  assert.equal(r.blocker, 'no_customization_role');
+  assert.match(r.message, /System Customizer/);
+});
+
+test('a role-holder is unchanged: one extra GET, the same ok result and no new warning', async () => {
+  const r = await run({ argv: ['--env', ENVURL], exec: { pacOrg: 'Connected as maker@contoso.com\n' } });
+  assert.equal(r.ok, true);
+  assert.equal(r.blocker, null);
+  assert.deepEqual(r.warnings, []);
+  assert.deepEqual(r.calls.filter((c) => c.startsWith('GET ')), [PROBE_REQUEST], 'exactly one GET is added, and it is the probe');
+  assert.deepEqual(r.calls.filter((c) => c === 'whoami').length, 1);
+  assert.match(r.message, /^Ready \(az \+ pac both signed in as maker@contoso\.com/);
+});
+
+test('any OTHER failure of the probe is a warning, never a false "no role"', async () => {
+  const others = [
+    ['another 403 code', { probe: { status: 403, data: { error: { code: '0x80040220', message: 'privilege missing' } } } }],
+    ['a 403 with no body', { probe: { status: 403, data: {} } }],
+    ['an HTTP 500', { probe: { status: 500, data: { error: { code: '0x80040216', message: 'An unexpected error occurred.' } } } }],
+    ['an HTTP 429', { probe: { status: 429, data: {} } }],
+    ['a transport failure', { probeThrows: 'getaddrinfo ENOTFOUND' }],
+  ];
+  for (const [what, extra] of others) {
+    const r = await run({ argv: ['--env', ENVURL], exec: { pacOrg: 'Connected as maker@contoso.com\n' }, ...extra });
+    assert.equal(r.ok, true, `${what} must not block`);
+    assert.equal(r.blocker, null, what);
+    assert.equal(r.warnings.length, 1, `${what} is reported once as a warning; got ${JSON.stringify(r.warnings)}`);
+    assert.match(r.warnings[0], /could not confirm/i, what);
+  }
+});
+
+test('the probe is sent only after WhoAmI passed', async () => {
+  for (const whoAmI of [{ status: 401, data: {} }, { status: 403, data: {} }, { status: 500, data: {} }]) {
+    const r = await run({ argv: ['--env', ENVURL], whoAmI, probe: NO_ROLE });
+    assert.equal(r.ok, false);
+    assert.notEqual(r.blocker, 'no_customization_role', `WhoAmI ${whoAmI.status} keeps its own verdict`);
+    assert.equal(r.calls.some((c) => c === PROBE_REQUEST), false, `no probe after a WhoAmI ${whoAmI.status}`);
+  }
+  const thrown = await run({ argv: ['--env', ENVURL], whoAmIThrows: 'getaddrinfo ENOTFOUND', probe: NO_ROLE });
+  assert.equal(thrown.blocker, 'whoami_error');
+  assert.equal(thrown.calls.some((c) => c === PROBE_REQUEST), false);
+});
+
 test('a mismatched-but-working identity is reported as ready WITH the caveat', async () => {
   // WhoAmI passed, so this is not a blocker — but entity creation can still 403 later, and the
   // message has to carry that forward or the user has no way to connect the two events.
@@ -693,15 +786,19 @@ function runGated({ argv = ['--env', ENVURL], requirePac = false, tokenKind = nu
         tokenFailureKind: () => tokenKind,
         tokenFailureMessage: (url, fallback) => (tokenKind === 'timeout' ? `token for ${url} timed out` : fallback),
         // `whoAmIRequest(events)` swaps in a different WhoAmI (the real dataverseRequest over a stub transport, say);
-        // by default WhoAmI is a gate the test opens by hand.
-        dataverseRequest: whoAmIRequest ? whoAmIRequest(events) : () => {
-          events.push('start whoami');
-          return gates.who.promise.then((value) => {
-            events.push('whoami answered');
-            if (value instanceof Error) throw value;
-            return value;
-          });
-        },
+        // by default WhoAmI is a gate the test opens by hand. The capability probe that follows a passing WhoAmI is a role-holder's
+        // 200 here, and leaves no event: these tests are about when WhoAmI starts and what it may refresh.
+        dataverseRequest: (() => {
+          const whoAmI = whoAmIRequest ? whoAmIRequest(events) : () => {
+            events.push('start whoami');
+            return gates.who.promise.then((value) => {
+              events.push('whoami answered');
+              if (value instanceof Error) throw value;
+              return value;
+            });
+          };
+          return (url, method, apiPath, ...rest) => (apiPath === 'WhoAmI' ? whoAmI(url, method, apiPath, ...rest) : Promise.resolve({ status: 200, data: { value: [] } }));
+        })(),
       },
     },
   });

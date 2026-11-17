@@ -29,7 +29,8 @@
 // blank line before a delimiter, an address relative to the host (`PATCH /api/data/v9.0/accounts(<id>) HTTP/1.1`) or to the service root (`PATCH accounts(<id>) HTTP/1.1`), requests outside any change
 // set beside it, several change sets, and bare line feeds (the documentation says CRLF is required and that other endings "might cause deserialization errors", which is not the same as being refused).
 //
-// WHAT IS REFUSED. `readBatchRequest` answers `{ problem }` for everything it cannot read with confidence — a boundary the Content-Type does not declare or the body does not use, a batch that is not
+// WHAT IS REFUSED. `readBatchRequest` answers `{ problem }` for everything it cannot read with confidence — a boundary the Content-Type does not declare or the body does not use, a Content-Type (of the
+// batch or of a change set) whose parameters cannot be taken apart or that declares its boundary more than once, a batch that is not
 // closed, a part with no content type or with one the service does not run, a part that is not encoded as binary, a line among the headers that is not a header, a request line that is not one — because
 // a reader that guessed would see a different batch from the service's, and the only reason to read it is to know what it writes. A caller that cannot read a batch must decide what that means; the
 // header guard of lib/app-header-text.js refuses one that names the app module table. The reasons contain no parentheses: they are put inside some in a message.
@@ -46,13 +47,81 @@ const CONTINUATION = /^[ \t]+\S/;
 // part's row), no spaces in it, and the HTTP version.
 //   PATCH https://contoso.crm.dynamics.com/api/data/v9.0/appmodules(<id>) HTTP/1.1
 const REQUEST_LINE = /^([A-Za-z]+) (\S+) HTTP\/\d(?:\.\d)?$/;
-// The boundary parameter of a multipart Content-Type: `multipart/mixed;boundary=batch_1`, `multipart/mixed; boundary="batch_1"`.
-const BOUNDARY_PARAMETER = /;\s*boundary\s*=\s*(?:"([^"]*)"|([^\s;"]+))/i;
+// A token (RFC 9110 5.6.2) as one character: what a parameter name and an unquoted parameter value are made of.
+const TOKEN_CHAR = /^[!#$%&'*+.^_`|~0-9A-Za-z-]$/;
+const isSpace = (c) => c === ' ' || c === '\t';
 
+// The parameters of a Content-Type, read the way the media type grammar has them (RFC 9110 5.6.6 and 8.3.1,
+// https://www.rfc-editor.org/rfc/rfc9110#section-5.6.6): after the type, `;`-separated `name=value` pairs, a name being a
+// token (its case does not matter) and a value a token or a quoted string, in which a backslash quotes the next character.
+//   multipart/mixed; note="; boundary=decoy"; boundary=actual
+// has two parameters, `note` (`; boundary=decoy`) and `boundary` (`actual`): text inside a quoted value is never a
+// parameter. A search for `boundary=` anywhere would take the quoted `decoy`, and the parts it delimits — a preamble to the
+// service, which runs the parts of `actual` — would be read in place of the real ones. Spaces around `;` and `=` are let
+// through (`Multipart/Mixed ; Boundary = "b"`), as lenient readers take them. Answers `{ parameters: [{ name, value }] }`,
+// names lower-cased, or `{ problem }` when the text cannot be taken apart this way: a reader that guessed where a parameter
+// starts could pick a boundary the service does not.
+function parametersOf(contentType) {
+  const text = String(contentType);
+  let at = text.indexOf(';');
+  if (at === -1) return { parameters: [] };
+  if (text.slice(0, at).includes('"')) return { problem: 'its media type holds a quote' };
+  const parameters = [];
+  const skipSpace = () => { while (at < text.length && isSpace(text[at])) at += 1; };
+  while (at < text.length) {
+    // `at` is on a `;`. An empty parameter (`;;`, or a `;` at the end) is allowed by the grammar and carries nothing.
+    at += 1;
+    skipSpace();
+    if (at >= text.length) break;
+    if (text[at] === ';') continue;
+    const nameStart = at;
+    while (at < text.length && TOKEN_CHAR.test(text[at])) at += 1;
+    const name = text.slice(nameStart, at).toLowerCase();
+    if (!name) return { problem: 'a parameter of its Content-Type has no name' };
+    skipSpace();
+    if (text[at] !== '=') return { problem: `the parameter ${name} of its Content-Type has no value` };
+    at += 1;
+    skipSpace();
+    let value = '';
+    if (text[at] === '"') {
+      at += 1;
+      let closed = false;
+      while (at < text.length) {
+        const c = text[at];
+        if (c === '"') { closed = true; at += 1; break; }
+        if (c === '\\') {
+          if (at + 1 >= text.length) break;
+          value += text[at + 1];
+          at += 2;
+          continue;
+        }
+        value += c;
+        at += 1;
+      }
+      if (!closed) return { problem: `the quoted value of the parameter ${name} of its Content-Type is not closed` };
+    } else {
+      const valueStart = at;
+      while (at < text.length && TOKEN_CHAR.test(text[at])) at += 1;
+      value = text.slice(valueStart, at);
+    }
+    skipSpace();
+    if (at < text.length && text[at] !== ';') return { problem: `the parameter ${name} of its Content-Type is followed by text that is not another parameter` };
+    parameters.push({ name, value });
+  }
+  return { parameters };
+}
+
+// The boundary a multipart Content-Type declares — `multipart/mixed;boundary=batch_1`, `multipart/mixed; boundary="batch_1"` —
+// as `{ boundary }`, or `{ problem }`. Exactly one `boundary` parameter, read by parametersOf; two of them (whichever the
+// service took, the other could be read), or a `boundary*` extended form (RFC 2231, which a reader may or may not apply), make
+// the boundary ambiguous and are refused rather than resolved.
 function boundaryOf(contentType) {
-  const found = BOUNDARY_PARAMETER.exec(String(contentType));
-  const boundary = found && (found[1] !== undefined ? found[1] : found[2]);
-  return boundary || undefined;
+  const read = parametersOf(contentType);
+  if (read.problem) return read;
+  if (read.parameters.some((p) => p.name.startsWith('boundary*'))) return { problem: 'its Content-Type gives the boundary in an extended form' };
+  const found = read.parameters.filter((p) => p.name === 'boundary');
+  if (found.length > 1) return { problem: 'its Content-Type declares more than one boundary' };
+  return found.length && found[0].value ? { boundary: found[0].value } : {};
 }
 
 const mediaTypeOf = (headers) => String(headers['content-type'] || '').split(';')[0].trim().toLowerCase();
@@ -156,7 +225,9 @@ function readBatchRequest(text, contentType) {
     if (!delimiter) return { problem: 'it declares no boundary and does not open with a delimiter line' };
     boundary = delimiter[1];
   } else {
-    boundary = boundaryOf(contentType);
+    const declared = boundaryOf(contentType);
+    if (declared.problem) return declared;
+    boundary = declared.boundary;
     if (boundary === undefined) return { problem: 'its Content-Type declares no boundary' };
   }
   const outer = splitParts(lines, boundary);
@@ -181,7 +252,9 @@ function readBatchRequest(text, contentType) {
       continue;
     }
     // A change set: requests, one level down — the service does not run a change set inside one.
-    const changeSetBoundary = boundaryOf(part.headers['content-type']);
+    const declared = boundaryOf(part.headers['content-type']);
+    if (declared.problem) return { problem: `a change set cannot be read: ${declared.problem.replace(/^its /, 'its own ')}` };
+    const changeSetBoundary = declared.boundary;
     if (changeSetBoundary === undefined) return { problem: 'a change set declares no boundary' };
     const changeSet = splitParts(part.content, changeSetBoundary);
     if (changeSet.problem) return changeSet;

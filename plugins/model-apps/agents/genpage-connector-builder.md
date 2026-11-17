@@ -212,6 +212,11 @@ invent a logical name — create one:
 node "${PLUGIN_ROOT}/scripts/create-connection-reference.js" "<ENV_URL>" "<logicalName>" "<connectorId>" --connection-id "<connectionId>"
 ```
 
+When the App Spec declares the reference in `connectionReferences[]`, the build makes it (with the
+connection from `--deployment-settings`) before it writes the pages, and does not write a page that calls
+it until it is bound (`references/app-spec-schema.md` → *Configuration items*). Creating it here is still
+right for a page you are building now; the build then finds it and compares it.
+
 ## Step 3 — Resolve dataset/table (tabular) or operation (REST/action)
 
 **Tabular connectors** (SharePoint, SQL, …): resolve the dataset and table.

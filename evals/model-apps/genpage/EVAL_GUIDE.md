@@ -111,13 +111,14 @@ Layers 1 and 2 are automated. Layer 3 is human judgment by design — visual qua
 - `<DataGrid>` usage imports `createTableColumn` + configures `columnSizingOptions` or `resizableColumns`
 - Every effective navigation target is checked with the production resolver; current before/after snapshots must differ by exact substitutions only, and only affected pages reupload
 - The production `pageStructureProblems` gate rejects truncated modules, including unfinished statements after valid exports
+- A scroll context, with the plugin's own rule (`scripts/lib/page-scroll.js`, the one `check-griffel-styles.js` runs at the /genpage gate): the page's top element is bounded by the host's fixed-height container and scrolls, or holds a bounded scrolling body, with no padded content-box box overhanging the host. The pages captured before the rule (`lib/scroll-context.js`) report a skip that names the verdict the rule gives them, so the report still shows which captures clip (AB#6793599)
 - The Custom API lifecycle grades actual saved TSX, method/parameter/bound-record parity, sanitized result handling and preservation versus explicit clear. For a clear of a page that binds `WhoAmI` or `RetrieveVersion`, the grader reads the maker's `Clear choice:` line recorded right before each upload the clear covers; it does not check that the choice was made before the edit plan was approved, which the skill requires (`edit-flow.md`, Edit Phase 3).
 
 Whether a page applies a style the maker asked for (a plan whose `Styling:` line starts with `Maker-requested:`) is not graded yet.
 
 Plus per-eval `expectations` for **Phase 5, 5a, 5b and 5c**. `Edit Phase 5` entries remain Layer-1 expectations. The column-name expectations (eval 1's Phase 5b, in both layers, and eval 7's) are graded by `lib/column-contract.js` against the RuntimeTypes.ts a fixture kept: every column a page names in its dataApi calls — a `select` list, an `orderBy` or `filter` expression, the keys of a `createRow`/`updateRow` payload, an options object or select list written as a name it declares, and each `<column>@OData.Community.Display.V1.FormattedValue` key it reads — must be one the schema declares on that table (or a system column every user-owned table has and the type generator does not write, such as `createdon`). A fixture that kept no RuntimeTypes.ts reports `column-name verification requires RuntimeTypes.ts fixture`. Lookup-identity use in page code is not graded yet: no check proves that a page reads, filters, retrieves, opens or writes a lookup only through its normalized table-and-id pair (`references/rules.md` Critical Rule 23) — eval 26 grades the question, the lookup metadata and the plan records behind its page, not the page's lookup code. Other unregistered expectations are reported as skips, not claimed as coverage. The API request scorer supports literal request objects in named helpers and scalar annotations; it is not a TypeScript compiler or a runtime execution oracle.
 
-**Structural page checks:** several per-eval expectations are graded from how a page is BUILT rather than whether a word appears in it — eval 4's review step showing every entered field before the submit, and a label on every form field (its own `aria-label`/`aria-labelledby`, or a Fluent `<Field label>` around it); eval 5's components and utilities kept top level (a nested PascalCase component, or a nested function that reads nothing from the one around it, fails; a handler that closes over state does not); eval 12's search box beside a filter toolbar; eval 13's shown text through the `translate` (or `t`) helper; and eval 15's choice values named after the RuntimeTypes.ts member they are. `lib/tsx-structure.js` reads elements, attributes, JSX text and function scopes from the plugin's lexer view, where strings, comments and JSX text are blanked at their offsets, and `lib/page-checks.js` holds the checks; each states what it does not judge, which stays with the Layer 3 rubric. JSX text and a JSX attribute's string are read as the page renders them: `lib/jsx-references.js` decodes their character references with the page compiler the plugin vendors, so to eval 13's checks `<Text>&#72;&#105;</Text>` is the hardcoded text "Hi" and `<Text>&euro;{total}</Text>` a hardcoded currency symbol, exactly as when written plainly, while a JavaScript string (`{'&euro;'}`) shows its references as written. Eval 4's step navigation ("step state management … and Next/Back navigation") is deliberately not graded: whether Next and Back move the step is the value the step's setter receives — an updater can compute the next step and return the old one — which a scan of the page's text cannot prove; it needs data-flow analysis, and the coverage baseline records it as unscored with that reason.
+**Structural page checks:** several per-eval expectations are graded from how a page is BUILT rather than whether a word appears in it — eval 4's review step showing every entered field before the submit, and a label on every form field (its own `aria-label`/`aria-labelledby`, or a Fluent `<Field label>` around it); eval 5's components and utilities kept top level (a nested PascalCase component, or a nested function that reads nothing from the one around it, fails; a handler that closes over state does not); eval 12's search box beside a filter toolbar; eval 13's shown text through the `translate` (or `t`) helper; and eval 15's choice values named after the RuntimeTypes.ts member they are. `lib/tsx-structure.js` reads elements, attributes, JSX text and function scopes from the plugin's lexer view, where strings, comments and JSX text are blanked at their offsets, and `lib/page-checks.js` holds the checks; each states what it does not judge, which stays with the Layer 3 rubric. JSX text and a JSX attribute's string are read as the page renders them: `lib/jsx-references.js` decodes their character references with the page compiler the plugin vendors, so to eval 13's checks `<Text>&#72;&#105;</Text>` is the hardcoded text "Hi" and `<Text>&euro;{total}</Text>` a hardcoded currency symbol, exactly as when written plainly, while a JavaScript string (`{'&euro;'}`) shows its references as written. A component's type arguments are read when they are names only, so `<DataGridRow<Row> title="&euro;" />` is graded like any tag; a tag whose type arguments are anything else (a function, string, template, object or other type) cannot be read for certain, and every check that reads elements or JSX text fails its page with the tag's line and column rather than pass what it could not see. Eval 4's step navigation ("step state management … and Next/Back navigation") is deliberately not graded: whether Next and Back move the step is the value the step's setter receives — an updater can compute the next step and return the old one — which a scan of the page's text cannot prove; it needs data-flow analysis, and the coverage baseline records it as unscored with that reason.
 
 **Bounded Custom API declaration tracking (Layers 1 and 2):** Potential-write checks
 distinguish a definite plain arrow parameter declaration, including a default, from an
@@ -154,7 +155,7 @@ still refuse lookup provenance.
 All eval definitions live in `evals.json` alongside this file. The file contains:
 
 - `common_workflow_assertions`: **18** registered workflow checks, each passed or explicitly skipped when inapplicable.
-- `common_code_assertions`: **21** registered code checks.
+- `common_code_assertions`: **22** registered code checks.
 - `evals`: **27** prompt definitions, each with `id`, `tier`, `prompt`, `data`, and per-eval `expectations`.
 
 The `data` field specifies scenario assumptions for a manual capture or constructed fixture. The offline harness does not provide responses to `AskUserQuestion` or verify every recorded answer. The corpus contains **35 fixture directories / 39 top-level TSX files**, representing 27 prompt IDs. IDs **none** have no fixture — every registered prompt is executed.
@@ -357,6 +358,24 @@ For a side-by-side comparison or trial run:
 ```bash
 node run-layer-1.js --fixtures /path/to/alternate/fixtures
 ```
+
+### Selected by name: a host's retry under `--turn-id`
+
+`genpage-upload.js --turn-id` is for a host or script that retries one complete edit after losing its
+answer, not for the skill's ordinary flow, so its evidence is outside the default runs and their counts:
+
+```bash
+node evals/model-apps/genpage/run-stable-turn-retry.js                       # fixtures/stable-turn-retry
+node evals/model-apps/genpage/run-stable-turn-retry.js --fixtures <folder>   # another evidence folder
+```
+
+It grades one folder (`lib/turn-retry-contract.js`): the turn id is kept before the first send and never
+added after a lost answer; the retry is the same command with the same bytes from another process,
+under the same turn; the turn leaves one page and one history turn; a reuse of the turn for another
+request (another binding list) is refused `GENPAGE_TURN_ID_REUSED` with nothing written and the
+page's connection kept; and an ordinary edit passes no `--turn-id` — in the folder and in every upload
+the default corpus records. `--eval` and `--tier` are refused (exit 2). The evidence is constructed,
+not captured, and nothing is sent to a service.
 
 ### CI-style summary
 

@@ -149,3 +149,27 @@ test('Main-form verify emits no restriction check for an omitted or empty map', 
     assert.ok(!result.checks.some((check) => check.kind === 'app-main-forms'));
   }
 });
+
+test('with "exact", Main-form verify reads the component list strictly and names the build remedy; without it, nothing changes', async () => {
+  // A row the read cannot place (here a view's row in the list of type 60): the plain read leaves it out, the strict
+  // read of an "exact" list refuses it, since an "only these forms" proof cannot rest on a list read in part.
+  for (const exact of [false, true]) {
+    const { sdk, read, spec } = fixture();
+    if (exact) spec.app.mainFormsOnUpdate = 'exact';
+    const get = sdk.dataverse.get;
+    sdk.dataverse.get = async (url) => {
+      const answer = await get(url);
+      if (url.startsWith('/appmodulecomponents')) answer.body.value.push({ objectid: FORM_B, componenttype: 26 });
+      return answer;
+    };
+    const check = (await verifySpec(spec, read)).checks.find((entry) => entry.kind === 'app-main-forms');
+    assert.ok(check);
+    assert.equal(check.present, !exact, check.detail);
+    if (exact) assert.match(check.detail, /unverified/);
+  }
+  const { read, spec } = fixture({ members: [FORM_A, FORM_B] });
+  spec.app.mainFormsOnUpdate = 'exact';
+  const check = (await verifySpec(spec, read)).missing.find((entry) => entry.kind === 'app-main-forms');
+  assert.ok(check);
+  assert.match(check.detail, /Alternate.*outside the list, which app\.mainFormsOnUpdate "exact" takes out of the app — re-run the build with --allow-destructive/);
+});
