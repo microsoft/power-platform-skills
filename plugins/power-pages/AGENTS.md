@@ -31,7 +31,8 @@ Keep `migrate-datamodel`'s four phases, track selection, and approval gates unch
 when maintaining its scripts. Snapshot comparisons must not pass incomplete parses
 or ambiguous duplicate identities. Reuse the strict aggregate parser and site-root
 resolver; retain inactive navigation links, target/order/state, and both site-setting
-layouts. Capture canonical `web-link-sets` (plus legacy layout compatibility),
+layouts, and both aggregate and per-record web-role layouts. Capture canonical
+`web-link-sets` (plus legacy layout compatibility),
 prefixed/unprefixed states, nested advanced-form steps and per-record page-access
 rules. Wire new inventories through diff identities, meaningful values and report
 grouping. The live comparison must use record-level diff semantics, not just counts.

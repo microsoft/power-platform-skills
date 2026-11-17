@@ -228,7 +228,7 @@ The customization report (step 2.1) categorizes findings into five types. step 2
 | Type | Sub-pattern | step 2.2 action |
 | --- | --- | --- |
 | **FetchXml contains adx references** | `<entity name='adx_*'>` | **Auto-rewritten** — rename to `powerpagecomponent`, inject `powerpagecomponenttype` filter |
-| **FetchXml contains adx references** | `<link-entity name='adx_*'>` | **Auto-rewritten** — same logic, two-pass to avoid nested-filter collision |
+| **FetchXml contains adx references** | `<link-entity name='adx_*'>` | **Auto-rewritten** — validate the containing entity before accepting nested changes; preserve the complete block if any part is skipped |
 | **FetchXml contains adx references** | `<filter type='or'>` containing adx_* | Flagged for manual review (semantic-change risk) |
 | **FetchXml contains adx references** | Unknown adx_* entity (custom table) | Flagged manually (no `powerpagecomponenttype` mapping) |
 | **Liquid contains adx references** | `entities['adx_*']` collection access | **Semi-auto** — Liquid-comment suggestion inserted above the original; user reviews diff |
@@ -239,7 +239,7 @@ The customization report (step 2.1) categorizes findings into five types. step 2
 | **Data Model Extensions** | Custom columns on `adx_*` tables | **Per-table checklist** — grouped by source table; checklist suggests new custom table name, lookup-to-`powerpagecomponent` column, and data-migration steps. **No Dataverse API calls** — schema decisions stay with the user |
 | **Plugins registered on adx entities** | `Microsoft.*` system plugins | Categorized as **no action needed** (Power Pages Core handles on EDM) |
 | **Plugins registered on adx entities** | `Adxstudio.*` framework plugins | Recommendation: verify V2 EDM-compatible solution installed (step 1.6 check) |
-| **Plugins registered on adx entities** | Custom plugins | Per-finding refactor recommendation with original entity + step name |
+| **Plugins registered on adx entities** | Custom plugins | Refactor guidance only for supported mapped metadata targets; transactional, unmapped and unknown targets remain unchanged for manual review |
 | **Custom workflow** | Any | Generic doc guidance (no per-finding info available without Dataverse queries) |
 | **Relationships between custom and adx tables** | (not in sample reports) | Manual guidance in SKILL.md if encountered |
 
@@ -272,7 +272,7 @@ The auto-rewriter is non-destructive by construction: it never writes to `<SITE_
 The skill executes local-only analysis (no Dataverse API) for every customization finding:
 
 - **`categorizeLiquidFinding(snippet)`** — pattern-matches the snippet against `entities[...]`, `{% fetchxml %}`, `{% editable %}`, property access, and lookup-key patterns; emits one of `needs-rewrite` / `auto-fetchxml` / `false-positive` / `unknown` with a tailored action message.
-- **`categorizePlugin(snippet)`** — name-prefix match on `Microsoft.*` / `Adxstudio.*` / custom; emits per-finding action including original entity and step name.
+- **`categorizePlugin(snippet)`** — name-prefix match on `Microsoft.*` / `Adxstudio.*` / custom; emits per-finding action including original entity and step name. Customer-owned targets need a supported metadata mapping before receiving `powerpagecomponent` refactor guidance. The generated prompt uses the same canonical mapping, not a separately maintained table.
 - **`buildDataModelExtensionChecklists(items)`** — groups column findings by source `adx_*` table; produces one checklist per source table with suggested new-table name and step-by-step guidance from the migration doc.
 
 The categorization drives the augmented remediation prompts written to `<OUTPUT_DIR>/plugin-remediation-prompt.txt` and `<OUTPUT_DIR>/dme-remediation-prompt.txt`, plus the per-finding guidance catalogued in `customization-report.html`.

@@ -25,7 +25,7 @@ function fixture(t) {
     assert.equal(result.status, 0, result.stderr);
     return JSON.parse(fs.readFileSync(path.join(output, 'sdm-snapshot.json'), 'utf8'));
   }
-  return { write, run };
+  return { write, run, site };
 }
 
 test('missing optional snapshot directories remain empty', (t) => {
@@ -65,6 +65,43 @@ test('malformed aggregate fields are reported instead of silently dropped', (t) 
     assert.equal(snapshot.counts.siteSettings, 0);
     assert.match(snapshot.parseErrors.siteSettings[0].message, /Invalid YAML line/);
   });
+
+test('review regression: web roles merge aggregate and per-record layouts with prefixed and unprefixed states', (t) => {
+  const { write, run } = fixture(t);
+  write('webrole.yml', '- adx_name: Aggregate\n  adx_statecode: 1');
+  write('web-roles\\Individual.webrole.yml', 'name: Individual\nstatecode: 0');
+  const snapshot = run();
+  assert.equal(snapshot.counts.webRoles, 2);
+  assert.deepEqual(snapshot.inventory.webRoles, [
+    { name: 'Aggregate', stateCode: 1 },
+    { name: 'Individual', stateCode: 0 },
+  ]);
+  assert.equal(Object.hasOwn(snapshot.parseErrors, 'webRoles'), false);
+});
+
+test('review regression: per-record web-role loss is detected instead of comparing empty inventories', (t) => {
+  const { write, run, site } = fixture(t);
+  write('web-roles\\Administrators.webrole.yml', 'adx_name: Administrators');
+  write('web-roles\\Members.webrole.yml', 'adx_name: Members');
+  const before = run();
+  assert.equal(before.counts.webRoles, 2);
+  fs.unlinkSync(path.join(site, 'web-roles', 'Members.webrole.yml'));
+  const after = run();
+  assert.equal(after.counts.webRoles, 1);
+  const diff = diffCategory('webRoles', before.inventory.webRoles, after.inventory.webRoles);
+  assert.equal(diff.status, 'fail');
+  assert.equal(diff.missingInEdm[0].name, 'Members');
+});
+
+test('review regression: malformed per-record web roles retain explicit parse errors', (t) => {
+  const { write, run } = fixture(t);
+  write('web-roles\\Broken.webrole.yml', 'adx_name: Broken\nmalformed field without a colon');
+  const snapshot = run();
+  assert.equal(snapshot.counts.webRoles, 0);
+  assert.equal(snapshot.parseErrors.webRoles.length, 1);
+  assert.match(snapshot.parseErrors.webRoles[0].filePath, /Broken\.webrole\.yml$/);
+  assert.match(snapshot.parseErrors.webRoles[0].message, /Invalid YAML line/);
+});
 
 test('navigation retains inactive links, target, order and state while counting active links', (t) => {
     const { write, run } = fixture(t);

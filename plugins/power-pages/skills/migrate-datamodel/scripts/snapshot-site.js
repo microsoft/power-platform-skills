@@ -429,8 +429,9 @@ function main() {
     columnPermissionProfiles: scanPerSlugFolder(siteRoot, 'column-permission-profiles', '.columnpermissionprofile.yml',
       { name: 'adx_name' }),
     siteSettings,
-    webRoles: scanTopLevelCollection(siteRoot, 'webrole.yml',
-      { name: 'adx_name' }),
+    webRoles: mergeScans(
+      scanTopLevelCollection(siteRoot, 'webrole.yml', { name: 'adx_name' }),
+      scanFlatFolder(siteRoot, 'web-roles', '.webrole.yml', { name: 'adx_name' })),
     siteMarkers: scanTopLevelCollection(siteRoot, 'sitemarker.yml',
       { name: 'adx_name' }),
     websiteAccesses: scanTopLevelCollection(siteRoot, 'websiteaccess.yml',

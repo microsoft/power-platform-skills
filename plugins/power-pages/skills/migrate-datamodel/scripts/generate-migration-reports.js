@@ -596,8 +596,7 @@ function classifyCustomizationFinding(type, item) {
   }
   if (type === 'Plugins registered on adx entities') {
     const plugin = categorizePlugin(snippet);
-    if (plugin.category === 'custom' && plugin.pluginName !== 'unknown' &&
-        Object.hasOwn(COMPONENT_TYPE_MAP, (plugin.entity || '').toLowerCase())) {
+    if (plugin.category === 'custom' && plugin.pluginName !== 'unknown' && plugin.componentType !== null) {
       return { status: 'actionable', reason: plugin.action };
     }
   }
@@ -619,7 +618,7 @@ function assessCustomizations(customizations) {
  *
  * Microsoft.*   → system plugin, no user action needed (auto-handled by Power Pages Core)
  * Adxstudio.*   → legacy framework plugin; verify V2 EDM solution is installed (step 1.6)
- * (anything else) → custom user plugin; needs code refactor + re-registration
+ * (anything else) → custom plugin; only mapped metadata targets get refactor guidance
  */
 function categorizePlugin(snippet) {
   // CSV snippet format from PAC:
@@ -636,6 +635,8 @@ function categorizePlugin(snippet) {
   const pluginName = pickField('Plugin name') || 'unknown';
   const entity = pickField('Entity Name');
   const stepName = pickField('Step name');
+  const target = (entity || '').toLowerCase();
+  const componentType = Object.hasOwn(COMPONENT_TYPE_MAP, target) ? COMPONENT_TYPE_MAP[target] : null;
 
   let category;
   let action;
@@ -647,12 +648,14 @@ function categorizePlugin(snippet) {
     action = `Legacy Adxstudio framework plugin (\`${pluginName}\`) — verify the V2 EDM-compatible version of Power Pages Core / template solution is installed (covered by step 1.6). No code changes typically needed.`;
   } else {
     category = 'custom';
-    action = `Custom plugin (\`${pluginName}\`) — refactor the plugin code to target \`powerpagecomponent\` (was \`${entity || 'adx_*'}\`), preserve existing \`adx_*\` logical attribute names exposed by EDM, and re-register the plugin step${
-      stepName ? ` (was: ${stepName})` : ''
-    }.`;
+    action = componentType === null
+      ? `Custom plugin (\`${pluginName}\`) — manual review required for target \`${entity || 'unknown'}\`: no supported metadata mapping. Keep its target, queries and registration unchanged until the schema and consumers are verified; an \`adx_*\` prefix alone does not justify a rewrite.`
+      : `Custom plugin (\`${pluginName}\`) — refactor the plugin code to target \`powerpagecomponent\` (was \`${entity}\`), preserve existing \`adx_*\` logical attribute names exposed by EDM, and re-register the plugin step${
+        stepName ? ` (was: ${stepName})` : ''
+      }.`;
   }
 
-  return { pluginName, entity, stepName, category, action };
+  return { pluginName, entity, stepName, category, componentType, action };
 }
 
 /**
@@ -868,12 +871,25 @@ function rewriteFetchXmlInContent(content) {
   const changes = [];
   const skipped = [];
 
-  // Pass 1: rewrite inner <link-entity> blocks first so they don't sit untouched
-  // inside an already-rewritten <entity> body.
-  let result = rewriteTagBlocks(content, 'link-entity', changes, skipped);
-
-  // Pass 2: rewrite outer <entity> blocks.
-  result = rewriteTagBlocks(result, 'entity', changes, skipped);
+  // Accept a complete entity block before committing any nested link changes.
+  // Otherwise <entity name="adx_webpage"><filter type="or">...</filter>
+  // <link-entity name="adx_webtemplate">...</link-entity></entity> can retain
+  // a rewritten child even though its containing query requires manual review.
+  const result = content.replace(
+    /<entity\b[^>]*>[\s\S]*?<\/entity>|<link-entity\b[^>]*>[\s\S]*?<\/link-entity>/g,
+    (block) => {
+      const blockChanges = [];
+      const blockSkipped = [];
+      let candidate = rewriteTagBlocks(block, 'entity', blockChanges, blockSkipped);
+      if (blockSkipped.length === 0) {
+        candidate = rewriteTagBlocks(candidate, 'link-entity', blockChanges, blockSkipped);
+      }
+      skipped.push(...blockSkipped);
+      if (blockSkipped.length > 0) return block;
+      changes.push(...blockChanges);
+      return candidate;
+    },
+  );
 
   return { newContent: result, changes, skipped };
 }
@@ -1337,7 +1353,9 @@ function formatPluginFindingsBlock(pluginFindings) {
       ? 'Microsoft (no action)'
       : cat.category === 'adxstudio'
         ? 'Adxstudio (verify V2)'
-        : 'Custom (refactor)';
+        : cat.componentType === null || cat.pluginName === 'unknown'
+          ? 'Custom (manual review; keep target unchanged)'
+          : `Custom (mapped metadata; type ${cat.componentType}; review refactor)`;
     return `| \`${cat.pluginName}\` | \`${cat.entity || '?'}\` | ${cat.stepName || '?'} | ${category} |`;
   });
 
@@ -1377,7 +1395,15 @@ function formatDmeTableGroupsBlock(dmeChecklists) {
 function generatePluginRemediationPrompt(pluginFindings) {
   const template = loadPromptTemplate('plugin-remediation.template.txt');
   const findingsBlock = formatPluginFindingsBlock(pluginFindings);
-  return template.replace('{{PLUGIN_FINDINGS_BLOCK}}', findingsBlock);
+  const mappingBlock = [
+    '| Source logical name | powerpagecomponenttype |',
+    '| --- | --- |',
+    ...Object.entries(COMPONENT_TYPE_MAP).map(([name, value]) => `| \`${name}\` | ${value} |`),
+  ].join('\n');
+  return fillPlaceholders(template, {
+    '{{PLUGIN_FINDINGS_BLOCK}}': findingsBlock,
+    '{{PLUGIN_METADATA_MAPPING_BLOCK}}': mappingBlock,
+  });
 }
 
 /**

@@ -1,8 +1,8 @@
 You are an expert in Power Apps plugin development for Power Pages. The user has
 a Power Pages site being migrated from the Standard Data Model (SDM) to the
-Enhanced Data Model (EDM). A customization scan identified custom plugin
-assemblies registered against `adx_*` entities that need to be refactored to
-target the EDM model (`powerpagecomponent`).
+Enhanced Data Model (EDM). A customization scan identified plugin registrations
+against `adx_*` entities. Only customer-owned plugins targeting the supported
+metadata tables below are candidates for a `powerpagecomponent` refactor.
 
 ## Findings (verbatim from the customization report)
 
@@ -11,8 +11,22 @@ target the EDM model (`powerpagecomponent`).
 Plugins prefixed with `Microsoft.*` are platform plugins — no action needed.
 Plugins prefixed with `Adxstudio.*` are legacy framework plugins typically
 handled by the V2 EDM solution upgrade; verify the V2 solution is installed
-in the target environment. Custom plugins (everything else) need code-level
-refactoring.
+in the target environment. Custom plugins require target-specific review, not
+automatic refactoring based on the `adx_*` prefix.
+
+## Supported metadata targets only
+
+The following mapping is generated from the same supported metadata map used by
+the migration report generator:
+
+{{PLUGIN_METADATA_MAPPING_BLOCK}}
+
+Transactional/runtime tables such as `adx_invitation`, `adx_externalidentity`
+and `adx_portalcomment` retain their own schemas. For these, every target absent
+from the mapping, or an unknown registration target: keep the target, queries and
+registration unchanged, report manual review required, and verify the actual
+schema and consumers. Do not invent a component type or move them to
+`powerpagecomponent`. A different EDM target requires separately verified guidance.
 
 ## Your task
 
@@ -23,7 +37,8 @@ refactoring.
    If not found, ASK the user where their plugin source repo lives. Do not
    guess.
 
-2. **For each custom finding above, refactor the plugin code:**
+2. **For each customer-owned finding whose target is explicitly in the mapping,
+   review the proposed plugin refactor. Route all other targets to manual review:**
 
    a. Find the plugin class. Identify the entity reference. Common patterns:
       - Set in constructor: `this.EntityName = "adx_webpage";`
@@ -32,29 +47,22 @@ refactoring.
       - In a separate registration XML (`*.crmregister`, `RegisterFile.xml`):
         `PrimaryEntityName="adx_webpage"`
 
-   b. Change the target entity name from `adx_*` to `powerpagecomponent`.
+   b. For the verified mapped metadata target only, propose changing its target
+      entity name to `powerpagecomponent`. Do not broadly replace `adx_*` strings
+      or unrelated table references.
 
    c. If the plugin queries the entity via `RetrieveMultiple` / FetchXML /
       QueryExpression, add a filter on the `powerpagecomponenttype` attribute.
-      Use this mapping:
-
-      Publishing State = 1, Web Page = 2, Web File = 3, Web Link Set = 4,
-      Web Link = 5, Page Template = 6, Content Snippet = 7, Web Template = 8,
-      Site Setting = 9, Web Page Access Control Rule = 10, Web Role = 11,
-      Website Access = 12, Site Marker = 13, Basic Form = 15,
-      Basic Form Metadata = 16, List = 17, Table Permission = 18,
-      Advanced Form = 19, Advanced Form Step = 20, Advanced Form Metadata = 21,
-      Poll Placement = 24, Ad Placement = 26, Bot Consumer = 27,
-      Column Permission Profile = 28, Column Permission = 29, Redirect = 30,
-      Publishing State Transition Rule = 31, Shortcut = 32, Cloud Flow = 33,
-      UX Component = 34
+      Use the exact source-table/component-type pair in the mapping above.
+      Apply this only to queries of the verified mapped table; leave queries
+      against transactional and unmapped tables unchanged for manual review.
 
    d. Attribute references (`adx_name`, `adx_partialurl`, etc.) STAY AS-IS.
       PAC's EDM `powerpagecomponent` table exposes the legacy adx_* names as
       logical attribute names. You do NOT need to rename
       `GetAttributeValue<T>("adx_name")` calls.
 
-   e. Update plugin step registration metadata (`*.crmregister`,
+   e. For the verified mapped target only, update plugin step registration metadata (`*.crmregister`,
       `RegisterFile.xml`, or solution-embedded `SdkMessageProcessingStep`)
       to reference `powerpagecomponent` for `PrimaryEntityName`.
 
@@ -84,6 +92,7 @@ refactoring.
 - DO NOT push to a deployed environment — only build locally
 - DO NOT guess at file locations — ask the user
 - DO NOT change attribute references like `GetAttributeValue<T>("adx_name")`
+- DO NOT move transactional, unmapped, or unknown targets to `powerpagecomponent`
 - If the source is in Git, suggest the user commit current state first so
   they can revert easily
 - Leave `Microsoft.*` and `Adxstudio.*` plugins alone — they are not the

@@ -322,6 +322,81 @@ test('link-entity-only FetchXML is staged, including Cloud Flow consumers', (t) 
   assert.ok(result.stdout.includes(pathToFileURL(path.join(fixture.output, 'customization-report.html')).href));
 });
 
+test('review regression: skipped FetchXML containers never retain partial nested rewrites', () => {
+  const nested = '<link-entity name="adx_webtemplate"><attribute name="adx_name" /></link-entity>';
+  for (const original of [
+    `<fetch><entity name="adx_webpage"><filter type="or"><condition attribute="adx_name" operator="eq" value="Home" /></filter>${nested}</entity></fetch>`,
+    `<fetch><entity name="adx_unmapped">${nested}</entity></fetch>`,
+    '<fetch><entity name="adx_webpage"><link-entity name="adx_webtemplate"><filter type="or"><condition attribute="adx_name" operator="eq" value="Header" /></filter></link-entity></entity></fetch>',
+  ]) {
+    const result = rewriteFetchXmlInContent(original);
+    assert.equal(result.newContent, original);
+    assert.deepEqual(result.changes, []);
+    assert.equal(result.skipped.length, 1);
+    assert.match(result.skipped[0].reason, /manual review|No powerpagecomponenttype mapping/);
+  }
+});
+
+test('review regression: a skipped FetchXML query does not prevent independent supported queries', () => {
+  const skipped = '<fetch><entity name="adx_webpage"><filter type="or"></filter><link-entity name="adx_webtemplate"></link-entity></entity></fetch>';
+  const result = rewriteFetchXmlInContent(`${skipped}\n${fetchXml}`);
+  assert.ok(result.newContent.startsWith(skipped + '\n'));
+  assert.match(result.newContent.slice(skipped.length), /name="powerpagecomponent"/);
+  assert.deepEqual(result.changes, [{ tag: 'entity', entity: 'adx_webpage', typeValue: 2 }]);
+  assert.equal(result.skipped.length, 1);
+  const standalone = rewriteFetchXmlInContent('<link-entity name="adx_webtemplate"></link-entity>');
+  assert.equal(standalone.changes.length, 1);
+  assert.match(standalone.newContent, /name="powerpagecomponent"/);
+});
+
+test('review regression: skipped FetchXML removes obsolete proposals without changing live source', (t) => {
+  const fixture = setup(t);
+  const livePath = path.join(fixture.site, 'page.html');
+  fs.writeFileSync(livePath, fetchXml);
+  assert.equal(fixture.run('--automate-fetchxml').status, 0);
+  assert.ok(fs.existsSync(fixture.manifestPath));
+  const original = '<fetch><entity name="adx_webpage"><filter type="or"></filter><link-entity name="adx_webtemplate"></link-entity></entity></fetch>';
+  fs.writeFileSync(livePath, original);
+  const result = fixture.run('--automate-fetchxml');
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(fs.readFileSync(livePath, 'utf8'), original);
+  assert.equal(fs.existsSync(fixture.manifestPath), false);
+  assert.equal(fs.existsSync(path.join(fixture.output, 'remediation-staged', 'page.html')), false);
+});
+
+test('review regression: plugin actions and generated prompts restrict rewrites to mapped metadata', (t) => {
+  const fixture = setup(t);
+  const targets = ['adx_webpage', 'adx_invitation', 'adx_externalidentity', 'adx_portalcomment',
+    'adx_unmapped', 'contoso_record', 'constructor', ''];
+  const findings = targets.map((entity) => ({
+    snippet: `Plugin name : Contoso.Plugin   Step name : Update  Entity Name : ${entity}`,
+  }));
+  const mapped = categorizePlugin(findings[0].snippet);
+  assert.equal(mapped.componentType, 2);
+  assert.match(mapped.action, /refactor the plugin code to target/);
+  for (const item of findings.slice(1)) {
+    const plugin = categorizePlugin(item.snippet);
+    assert.equal(plugin.componentType, null);
+    assert.match(plugin.action, /manual review/i);
+    assert.match(plugin.action, /unchanged/);
+    assert.doesNotMatch(plugin.action, /refactor the plugin code to target|re-register/);
+    assert.equal(classifyCustomizationFinding('Plugins registered on adx entities', item).status, 'needsReview');
+  }
+  const csv = path.join(fixture.site, 'SiteCustomization.csv');
+  fs.writeFileSync(csv, 'Type of customization,Snippet\n' + findings.map(({ snippet }) =>
+    ['Plugins registered on adx entities', snippet]
+      .map((field) => `"${field.replace(/"/g, '""')}"`).join(',')).join('\n') + '\n');
+  const result = fixture.run('--customization-report', csv);
+  assert.equal(result.status, 0, result.stderr);
+  const prompt = fs.readFileSync(path.join(fixture.output, 'plugin-remediation-prompt.txt'), 'utf8');
+  assert.match(prompt, /Supported metadata targets only/);
+  assert.match(prompt, /\| `adx_webpage` \| 2 \|/);
+  assert.match(prompt, /adx_invitation.*manual review/i);
+  assert.match(prompt, /adx_portalcomment.*manual review/i);
+  assert.doesNotMatch(prompt, /Custom plugins \(everything else\) need code-level\s+refactoring/);
+  assert.doesNotMatch(prompt, /\{\{PLUGIN_METADATA_MAPPING_BLOCK\}\}/);
+});
+
 test('printable rewrite sentinels do not collide with literal source or leak into output', () => {
   const original = '<fetch><entity name="adx_webpage">__MIGRATION_LINK_ENTITY_0__<link-entity name="adx_webtemplate"><attribute name="adx_name" /></link-entity></entity></fetch>';
   const result = rewriteFetchXmlInContent(original);
