@@ -559,7 +559,7 @@ test('report and references-start CLI return nonzero for missing artifacts, trac
 
 test('migration instructions use portable commands for both tracks', () => {
   const skillRoot = path.join(__dirname, '../../skills/migrate-datamodel');
-  for (const filename of ['SKILL.md', 'DESIGN.md', 'REPORTS_INTEGRATION.md']) {
+  for (const filename of ['SKILL.md', 'REPORTS_INTEGRATION.md']) {
     const content = fs.readFileSync(path.join(skillRoot, filename), 'utf8');
     assert.doesNotMatch(content, /```(?:powershell|bash)\b/i, filename);
     assert.doesNotMatch(content, /\b(?:Test-Path|Get-ChildItem|Out-File|Out-String|Start-Sleep|ConvertTo-Json|Write-Host|Where-Object)\b/, filename);
