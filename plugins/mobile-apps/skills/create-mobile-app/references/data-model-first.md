@@ -401,7 +401,7 @@ node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' step --i
 
 ### Step 2d — Template-only mode
 
-No background scaffold pipeline is used. The template is already present in `<working_dir>` and dependencies are expected to be installed before this skill starts (`npm install`). Continue directly to Step 3.
+No background scaffold pipeline is used. The fresh-template gate must already have provided the reviewed published npm template at `<working_dir>` and its separately approved shipped-lock `npm ci` installation. Reuse that verified project; planning approval does not authorize another acquisition or install. Continue directly to Step 3.
 
 ### Step 3 — Plan (planner agent + up to 4 applicable approval gates)
 
@@ -873,6 +873,7 @@ node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' step --i
 ```
 
 This step is template-only and foreground-only. Do not clone/copy templates, do not run background scaffold jobs, and do not use any legacy fallback path.
+Acquisition and release resolution must already have passed Step 0.
 
 **Print before starting:**
 > "→ [Step 5/13] Preparing existing Expo standalone template in <working_dir> …"
@@ -886,13 +887,13 @@ test -d node_modules/expo
 ```
 
 If any required template file is missing, STOP:
-> "This folder is not a fresh `expo-app-standalone` template. Materialize a fresh template with `degit` into a new folder, run `npm install`, then rerun `/create-mobile-app --working-dir <fresh-template-dir>`."
+> "This folder is not a supported fresh template. Return to Step 0 to acquire a reviewed immutable release in a new empty directory."
 
 If `node_modules/expo` is missing, STOP:
-> "Dependencies are not installed. Run `npm install` in the template folder, then rerun `/create-mobile-app --working-dir <fresh-template-dir>`."
+> "Dependencies are not installed. Return to Step 0 for an approved lockfile installation and release validation."
 
 If already-created markers appear (`memory-bank.md`, `.datamodel-manifest.json`, or `src/generated/services/*.ts`) and Step 0 did not enter the resume path, STOP. `native-app-plan.md` is expected here because Step 3 writes the approved plan before template preparation:
-> "This folder already looks like a created app. For a new app, materialize a fresh `expo-app-standalone` template with `degit` into a new folder and rerun this skill there."
+> "This folder already looks like a created app. Use the approved resume path or `/edit-app`; acquire a separate empty directory for a new app."
 
 Run the deterministic preparation script once:
 
@@ -924,7 +925,10 @@ only recognized legacy example hooks/query-client files, copies shared helpers
 only when missing, verifies that TypeScript inherits the host configuration,
 and structurally verifies the root provider/theme/safe-area contract. It
 preserves custom navigation, existing helper bytes, `offlineProfile`, provider
-props, and the template's `@ts-ignore` generation boundaries.
+props, and the template's `@ts-ignore` generation boundaries. It must preserve
+`app.json` byte-for-byte, including protected `powerappsNative` fields and
+app-owned extras, plus `AGENTS.md`, `CLAUDE.md`, and `.github/copilot-instructions.md`.
+Do not replace runtime IDs with installed package versions.
 
 Preparation also copies missing app-local guidance from `template/AGENTS.md`,
 `template/CLAUDE.md`, and `template/.github/copilot-instructions.md`. Existing
@@ -1053,13 +1057,15 @@ Key points:
 
 The current template extends
 `@microsoft/power-apps-native-host/config/tsconfig`. That host configuration
-owns the runtime package paths and the six shared-code aliases:
+owns the runtime package paths. Preserve the selected template's explicit
+project-rooted aliases when present (including newer templates); do not replace
+its entire `compilerOptions`. Older templates inherit the six shared-code aliases:
 `@/components`, `@/hooks`, `@/utils`, `@/tokens`, `@/generated`, and
-`@/native`. The preparation script verifies this inheritance and does not
-create a second template-local alias map. Expo Metro consumes the resulting
+`@/native`. The preparation script verifies inheritance without deleting
+template-local aliases. Expo Metro consumes the resulting
 effective TypeScript paths, so no Babel alias plug-in is required.
 
-`<Gradient>` (used by `components/index.tsx`) requires `expo-linear-gradient`. **Assume the upstream template ships it** — do NOT edit `package.json` to add it. If `npm install` (Step 6.5) later reveals the dep is missing, STOP and ask the user to wait for the next template release; do not work around by adding the dep here (same lockdown rule as `/add-native`).
+`<Gradient>` (used by `components/index.tsx`) requires `expo-linear-gradient`. Verify it in the resolved release; do NOT install a missing native module to repair an older binary. Missing support blocks this capability and requires another verified release.
 
 Do not run `npm install` inside Step 5 — in template-only mode dependencies must already be installed before the skill starts.
 

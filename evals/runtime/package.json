@@ -14,7 +14,7 @@
   },
   "dependencies": {
     "@github/copilot": "1.0.106",
-    "@github/copilot-sdk": "1.0.28",
+    "@github/copilot-sdk": "1.0.34",
     "@microsoft/vally": "0.21.0",
     "@microsoft/vally-cli": "0.21.0",
     "@types/react": "19.3.0",

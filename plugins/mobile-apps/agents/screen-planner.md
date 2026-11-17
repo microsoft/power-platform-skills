@@ -40,6 +40,15 @@ In this file, "the orchestrator" is the flow that invoked you: `native-app-plann
 ## Inputs You Can Rely On
 
 The orchestrator gives you:
+- Sanitized app-matched resolved release context, or explicit unresolved status
+  for existing pure source/UI work. Read
+  [release lifecycle](../shared/references/mobile-release-lifecycle.md); use the
+  same context throughout planning and builder handoffs. Do not use the newest
+  bundled template as a runtime allowlist. Unknown/missing release records
+  block new/changed native use, not pure source/UI planning. Mark native
+  compatibility unverified; approval and previews are not native validation.
+  Treat sample APIs as illustrative: verify them against installed release
+  docs/types before planning their use, rather than assuming newest-host APIs.
 - App requirements (`$ARGUMENTS`)
 - Target users + device class (phone/tablet, internal/external)
 - Target platforms (iOS / Android)
@@ -83,18 +92,18 @@ The orchestrator approves the screen graph before any per-screen specs are gener
 
 **Hard rule — single-write in `phase: specs`.** Assemble the complete replacement, including the Step 6 markdown summary when requested, before one update to `plan_path`. A retry replaces the previous specs-owned output; it never adds a second copy. Do not write `_screens_section.md` or delete old sections in a separate operation before inserting their replacements.
 
-**The scaffolded project IS available at `<working_dir>/`.** By the time you start, `<working_dir>/` is populated with the complete template tree with dependencies installed:
+**The scaffolded project at `<working_dir>/` comes from the reviewed published npm template.** The orchestrator owns acquisition through the package's creation CLI and the separately approved shipped-lock `npm ci` installation under the fresh-template gate. Do not create another scaffold or install dependencies during planning. When you start:
 
-- Data model first: the template is in place before planning starts (data-model-first Step 2d). The orchestrator's foreground setup (template preparation, `pa app init -t MobileApp --display-name <name> --environment-id <environment-id> --non-interactive`, dependency checks, tsc smoke) runs after you return, at data-model-first Steps 5-6.6.
-- Screens first: `/create-mobile-app` scaffolds the template and runs `pa app init` before screen planning starts (screens-first Step 3).
+- Data model first: the template is in place before planning starts (data-model-first Step 2d), with no background scaffold pipeline. Template preparation and app initialization (`pa app init -t MobileApp --display-name <name> --environment-id <environment-id> --non-interactive`, dependency checks, tsc smoke) are later foreground-only steps, at data-model-first Steps 5-6.6; do not assume shared helpers, generated schemas or environment binding are already prepared.
+- Screens first: `/create-mobile-app` prepares the template and runs `pa app init` before screen planning starts (screens-first Step 3).
 - `/edit-app`: the existing app.
 
-Safe to `Glob` and `Read`:
+Safe to `Glob` and `Read` existing files:
 
 - `<working_dir>/app/index.tsx`, `app/login.tsx`, `app/oauth-callback.tsx`, `app/(app)/_layout.tsx`, `app/(app)/home.tsx` — existing routes
 - `<working_dir>/tamagui.config.ts` — design tokens
 - `<working_dir>/package.json` — installed dependencies. Native modules must already be present; a verified pure-JavaScript library may instead be proposed with an exact version under `## Screens → ### JavaScript Dependencies` for the orchestrator to install before screen generation.
-- `<working_dir>/src/components/`, `src/hooks/`, `src/utils/`, `src/tokens/` — shared code copied by the orchestrator
+- `<working_dir>/src/components/`, `src/hooks/`, `src/utils/`, `src/tokens/` — shared code, if present; missing helpers are added by the orchestrator's foreground preparation, not by the planner
 - `<working_dir>/src/hooks/data/` — the data layer, in data-layer apps only (never in the data-model-first order): `core.ts` in a new screens-first app; entity modules and `device.ts` in an existing one (their exported hook names are what `/edit-app` specs use)
 
 **Hard rule — read-only on the scaffolded files.** You may NEVER write to anything outside this allow-list:
@@ -104,11 +113,9 @@ Safe to `Glob` and `Read`:
 - `<working_dir>/_plan_preview.html` (only when `skip_preview` is unset/false)
 - `<working_dir>/.tmp/*` (scratch)
 
-If you discover a real issue in `app/`, `src/`, `package.json`, `tamagui.config.ts`, `tsconfig.json`, `power.config.json`, `node_modules/`, or `memory-bank.md`, return `DONE_WITH_CONCERNS: <issue>` — DO NOT silently edit. The orchestrator owns those paths: it writes layouts, screen skeletons, and (in data-layer apps) the data layer from your plan after you return. In the data-model-first order they also belong to its foreground setup steps (template preparation, `pa app init`, dependency checks), which expect them untouched.
+If you discover a real issue in `app/`, `src/`, `package.json`, `tamagui.config.ts`, `tsconfig.json`, `power.config.json`, `node_modules/`, or `memory-bank.md`, return `DONE_WITH_CONCERNS: <issue>` — DO NOT silently edit. The orchestrator owns those paths: its approved foreground preparation and initialization, and the layouts, screen skeletons, and (in data-layer apps) data layer it writes from your plan after you return. Writing to them here bypasses that ownership and can overwrite app-owned changes.
 
-`memory-bank.md` is off-limits in every phase. Report anything worth persisting in your `DONE_WITH_CONCERNS:` line; the orchestrator appends returned concerns to `memory-bank.md`.
-
-In the data-model-first order, `memory-bank.md` stays OFF-LIMITS during `phase: graph` and `phase: specs`. If a sub-agent (data-model architect, etc.) returns a concern that needs persisting, also stash the line in `<working_dir>/.tmp/pending-memory-bank-appends.txt` (the orchestrator's data-model-first Step 6.7 flushes this after JOIN). Do not append to `memory-bank.md` directly.
+`memory-bank.md` is off-limits in every phase, including `phase: graph` and `phase: specs`. Return anything worth persisting in your `DONE_WITH_CONCERNS:` line; the orchestrator queues returned concerns and appends them to `memory-bank.md` (in the data-model-first order, from `DEFERRED_CONCERNS[]` once Step 6.7 creates the bank). Do not append to `memory-bank.md` directly.
 
 ## Specs for built screens
 
@@ -386,12 +393,27 @@ Pick a layout strategy per screen based on target platform:
 | Tokens: `$4`, `$color12`, `$background`, `$sm` | Screen options: `presentation`, `headerSearchBarOptions`, `headerLargeTitle` |
 | Theme switching, breakpoints (`useMedia()`) | Scroll insets: `<ScrollView contentInsetAdjustmentBehavior="automatic">` |
 |  | Platform branching: `process.env.EXPO_OS`, `useWindowDimensions` |
-|  | Capabilities: `expo-camera`, `expo-document-picker`, `expo-print`, `expo-secure-store`, `expo-file-system`, `expo-sharing`, `@microsoft/power-apps-native-pdf-viewer`, `@microsoft/power-apps-native-pen-input`, `@microsoft/power-apps-native-bglocation` when allowlisted by the plan (see AGENTS.md §2). In data-layer apps screens reach them only through `@/hooks/data` device actions. |
+|  | Capabilities: only packages/versions in the app's resolved native inventory; use release-conditional controls wrappers. In data-layer apps screens reach them only through `@/hooks/data` device actions. |
 |  | Calendar management views: `react-native-calendars` (`Calendar`, `CalendarList`, `Agenda`, `ExpandableCalendar`, `AgendaList`) when the approved `JavaScript Dependencies` table includes it |
 
 Reference `${PLUGIN_ROOT}/shared/samples/_layout.tsx` for existing navigation layout patterns (tab structure, safe-area, stack options).
 
 ### Pure-JavaScript dependency planning
+
+For native controls, read
+[the conditional import and permission contract](../skills/add-native/references/native-controls.md).
+Plan `/pdf`, `/pen`, or `/geolocation` only for a release containing those
+subpaths; the root is metadata and there is no barcode subpath. Legacy leaves
+require matching resolved inventory. Keep the installed APIs, not a newer
+release's signatures. Do not install controls to repair an older binary.
+
+One-shot location requires no `app_id`, data source, target table, or tracking.
+Continuous tracking needs one coordinated owner; background-location 0.2.3
+requests background permissions even with `trackInBackground: false`, and
+`stopTracking()` / `isTracking()` have no `app_id`. Treat OS declarations,
+runtime grants, package inclusion, and actual use as separate. Disabling a
+control does not remove default Android permissions; another declaration set
+requires another verified base. Optional permission wrapping is deferred.
 
 Read and follow `${PLUGIN_ROOT}/shared/references/javascript-dependency-planning.md`. Apply it both when the user explicitly names a JavaScript library and when a screen use case has an established library that materially reduces implementation or accessibility risk. Inspect existing dependencies first; otherwise research at most three candidates with the reference's read-only npm commands, select one compatible JS-only package, and emit the exact-version evidence table in `phase: specs` or legacy mode. Do not install during planning.
 
@@ -534,7 +556,12 @@ For each screen the user adds, provide this compact shape. Data-related fields g
 - **Pagination** — `cursor` if the records have no natural ceiling (visits, inspections, work orders, tickets, any user-created records over time); `none` if they are a bounded lookup (status types, categories, job types).
   - Data-layer form: match the contract's `list` operation (`cursor` → `cursor`, `bounded` → `none`). Page size, ordering keys, selected columns, and continuation belong to the adapter at wiring time, so the spec stops at the value.
   - Legacy form: when `cursor`, include SDK `maxPageSize: 50`, deterministic `orderBy` with a unique key, `select`, `skipToken` continuation support, and server-side `filter` for search in the data spec. Do not imply that `top: 50` alone is pagination.
-- **Native capabilities** — data-layer form: the Data Contract device action(s) the screen calls and the capability each needs, for example `capturePhoto()` → camera. Legacy form: which native modules/wrappers it uses. Both forms name which iOS/Android platforms or permission states need fallback handling. The barcode scanner is a native view, not a function: in the data-layer form the screen shows a clearly labelled scanner placeholder with a **Use sample code** button that calls a `scanBarcode()` device action (see [Device actions](../shared/references/preview-data-layer.md#device-actions)), and wiring later embeds the real scanner. For PDF/pen screens, be precise: `document-picker` (`expo-document-picker`) for user-picked files; `pdf-report` (`expo-print`, plus `expo-sharing` only when present and sharing is required) for generated local PDFs; `native-pdf-viewer` (`@microsoft/power-apps-native-pdf-viewer` 0.2.9+) for HTTPS PDF URLs and local `file://` URIs; `pen-input` (`@microsoft/power-apps-native-pen-input`) for signature/ink capture. For location screens, distinguish `geolocation` (`@microsoft/power-apps-native-bglocation`) — continuous/background tracking with native Dataverse sync, needs start/stop/tracking-status UI plus a permission-denied state — from one-shot `location` (`expo-location`) for a single foreground coordinate read. For haptics, name the exact interaction plus the call that fires it (a device action in the data-layer form, the wrapper call in the legacy form): impact and strength for deliberate presses, selection for changed choices, or notification and outcome for completed operations; also name the visible feedback that accompanies it.
+- **Native capabilities** — data-layer form: the Data Contract device action(s) the screen calls and the capability each needs, for example `capturePhoto()` → camera. Legacy form: the resolved package/version and wrapper it uses. Both forms name the iOS/Android permission-denied and unsupported states.
+  Preserve document picking vs PDF generation vs PDF viewing vs pen capture boundaries.
+  Controls use the approved aggregate subpath or matching legacy leaf, never a newer contract.
+  The barcode scanner is a native view, not a function: in the data-layer form the screen shows a clearly labelled scanner placeholder with a **Use sample code** button that calls a `scanBarcode()` device action (see [Device actions](../shared/references/preview-data-layer.md#device-actions)), and wiring later embeds the real scanner.
+  Distinguish continuous `geolocation` (coordinated start/stop/status UI and verified Dataverse target) from one-shot `location` (no data source or tracking startup).
+  Haptics specify the interaction, feedback kind/strength, the call that fires it (a device action in the data-layer form, the wrapper call in the legacy form), and the accompanying visible feedback.
 - **Calendar library** — REQUIRED for screens with `Calendar pattern` unless the pattern is `timeline-day-list`. Write `react-native-calendars` and name the exact components expected, for example `CalendarProvider`, `ExpandableCalendar`, `AgendaList`, `Calendar`, `CalendarList`, or `Agenda`. The package must also appear in `### JavaScript Dependencies`; the screen-builder imports it directly after the orchestrator installs it. No `/add-native` wrapper or native rebuild is involved.
 - **Navigation** — what links to it / what it links to
 - **Navigation intent** — for each outgoing action, explicitly name `navigate`, `push`, or `replace` (must match Navigation Contracts `Intent`)

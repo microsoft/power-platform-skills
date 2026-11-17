@@ -8,7 +8,10 @@ only recognized legacy example hooks/query-client files, copies shared helpers
 only when missing, verifies that TypeScript inherits the host configuration, and
 structurally verifies the root provider/theme/safe-area contract. It preserves
 custom navigation, existing helper bytes, `offlineProfile`, provider props, and
-the template's `@ts-ignore` generation boundaries.
+the template's `@ts-ignore` generation boundaries. It must preserve
+`app.json` byte-for-byte, including protected `powerappsNative` fields and
+app-owned extras, plus `AGENTS.md`, `CLAUDE.md`, and `.github/copilot-instructions.md`.
+Do not replace runtime IDs with installed package versions.
 
 `--screens-first` adds the two things only this build order needs: the
 `POWER_APPS_WEB_PREVIEW` web-output override in the template's `customizeExpoConfig`
@@ -130,13 +133,15 @@ Key points:
 
 The current template extends
 `@microsoft/power-apps-native-host/config/tsconfig`. That host configuration
-owns the runtime package paths and the six shared-code aliases:
+owns the runtime package paths. Preserve the selected template's explicit
+project-rooted aliases when present (including newer templates); do not replace
+its entire `compilerOptions`. Older templates inherit the six shared-code aliases:
 `@/components`, `@/hooks`, `@/utils`, `@/tokens`, `@/generated`, and
-`@/native`. The preparation script verifies this inheritance and does not
-create a second template-local alias map. Expo Metro consumes the resulting
+`@/native`. The preparation script verifies inheritance without deleting
+template-local aliases. Expo Metro consumes the resulting
 effective TypeScript paths, so no Babel alias plug-in is required.
 
-`<Gradient>` (used by `components/index.tsx`) requires `expo-linear-gradient`. **Assume the upstream template ships it** — do NOT edit `package.json` to add it. If a later `npm install` reveals the dep is missing, STOP and ask the user to wait for the next template release; do not work around by adding the dep here (same lockdown rule as `/add-native`).
+`<Gradient>` (used by `components/index.tsx`) requires `expo-linear-gradient`. Verify it in the resolved release; do NOT install a missing native module to repair an older binary. Missing support blocks this capability and requires another verified release.
 
 Do not run `npm install` inside Step 3.2 — in template-only mode dependencies must already be installed before the skill starts.
 

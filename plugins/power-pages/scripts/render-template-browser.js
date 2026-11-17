@@ -5,6 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const { renderTemplate, escapeHtml, escapeHtmlAttribute } = require('./lib/render-template');
 const { openInDefaultBrowser } = require('./lib/default-browser');
+const { effectivePreviewFields } = require('./lib/template-catalog');
 
 // Accepted argv shape:
 //   --templatesJsonPath /tmp/templates.json --outputPath /tmp/browser.html [--open]
@@ -32,11 +33,12 @@ function renderKeywordChips(keywords) {
 }
 
 function renderPreviewImages(template) {
-  const images = Array.isArray(template.previews)
-    ? template.previews.flatMap((preview) => [
+  const previews = template.responsivePreviews ?? template.previews;
+  const images = Array.isArray(previews)
+    ? previews.flatMap((preview) => [
         { url: preview.desktop, label: `${preview.displayName} - desktop` },
         { url: preview.mobile, label: `${preview.displayName} - mobile` },
-      ])
+      ]).filter((image) => image.url)
     : (Array.isArray(template.previewImages)
         ? template.previewImages.map((url, index) => ({ url, label: `Preview ${index + 1}` }))
         : []);
@@ -94,6 +96,22 @@ function renderFrameworkVariants(template) {
   `;
 }
 
+function renderTemplatePreviews(template) {
+  const variants = template.kind === 'non-spa' ? [] : normalizeVariants(template);
+  if (variants.length === 0) return renderPreviewImages(template);
+  return variants.map((variant) => `
+    <div class="variant-previews">
+      <div class="field-label">${escapeHtml(frameworkLabel(variant.framework))}</div>
+      <div class="preview-stack">
+        ${renderPreviewImages({
+          displayName: template.displayName,
+          ...effectivePreviewFields(variant, template),
+        })}
+      </div>
+    </div>
+  `).join('');
+}
+
 function templateTabId(index) {
   return `template-${index + 1}`;
 }
@@ -131,7 +149,7 @@ function renderTemplateSectionsHtml(templates) {
       <p class="template-desc">${escapeHtml(template.description)}</p>
       <div class="field-label previews-label">Previews</div>
       <div class="preview-stack">
-        ${renderPreviewImages(template)}
+        ${renderTemplatePreviews(template)}
       </div>
     </section>
   `).join('');

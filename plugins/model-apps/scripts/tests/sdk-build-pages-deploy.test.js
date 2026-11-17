@@ -4407,12 +4407,13 @@ test('deploy: a local page record that cannot be read stops the build once, in a
     assert.deepStrictEqual([receipt.attempts, receipt.retried], [1, 0], 'the receipt read');
     fs.rmSync(path.join(workspaceDir, `page-ownership.created.${'0'.repeat(64)}.json`));
 
-    // The second read of the folder — the pending records — fails while the first did not: a permission that changed mid-run.
+    // The pending records' read of the folder fails while the reads before it did not: a permission that changed mid-run. The first
+    // read is the configuration create receipt guard's local listing at the engine's entry, the second the creation receipts.
     const engine = async (s, o) => {
       const readdir = fs.readdirSync;
       let reads = 0;
       fs.readdirSync = function patched(p, ...args) {
-        if (path.resolve(String(p)) === workspaceDir && (reads += 1) === 2) throw Object.assign(new Error(`EACCES: permission denied, scandir '${p}'`), { code: 'EACCES' });
+        if (path.resolve(String(p)) === workspaceDir && (reads += 1) === 3) throw Object.assign(new Error(`EACCES: permission denied, scandir '${p}'`), { code: 'EACCES' });
         return readdir.call(this, p, ...args);
       };
       try { return await runBuild(s, o); } finally { fs.readdirSync = readdir; }

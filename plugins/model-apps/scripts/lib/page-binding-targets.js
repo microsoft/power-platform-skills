@@ -504,4 +504,4 @@ function unconfirmedDeployedText(pages, why) {
   return `could not tell whether ${pagesWords(pages)}, recorded as deployed, ${plural(pages, 'is', 'are')} still in this environment (${shown(why)}), so ${plural(pages, 'its', 'their')} bindings are checked as if the build will make ${plural(pages, 'it', 'them')}`;
 }
 
-module.exports = { connectorKey, pagesStatingBindings, pagesMadeUnchecked, pagesLeftOutAsDeployed, bindingReads, readBindingTargets, judgeBindingTargets, unconfirmedDeployedText, definedOperations };
+module.exports = { connectorKey, isBuiltInOperation, pagesStatingBindings, pagesMadeUnchecked, pagesLeftOutAsDeployed, bindingReads, readBindingTargets, judgeBindingTargets, unconfirmedDeployedText, definedOperations };

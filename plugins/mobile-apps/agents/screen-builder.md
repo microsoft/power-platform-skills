@@ -32,6 +32,18 @@ You will be invoked by `/create-mobile-app` Step 11 (data model first build orde
 
 ## Hard Rules
 
+- **App-matched release context.** Read
+  [release lifecycle](../shared/references/mobile-release-lifecycle.md) and use
+  the orchestrator's sanitized resolved context, not the newest bundled
+  template. A missing context is `NEEDS_CONTEXT`; unknown/missing release
+  records block new/changed native use. Existing pure source/UI work may
+  continue against installed APIs with native compatibility explicitly
+  unverified. Never install/upgrade a host, Expo package, controls aggregate,
+  or leaf to make a screen compile, and never claim native validation from tsc.
+  Preserve and forward the same context on any handoff.
+  Release-matched installed APIs take precedence over illustrative samples in
+  this file; do not adopt a newer host/Tamagui/Expo API merely because an example
+  uses it. For an unavailable required API, return `NEEDS_CONTEXT`, not a shim.
 - **MANDATORY progress reporting.** Every step in the workflow has a `**Print before starting:**` block. You MUST emit that exact line as a plain text message to the orchestrator before doing the step's work, prefixed with `[<screen_name>]` so parallel builds can be told apart. Do not skip, do not paraphrase. Without these prints, the user sees nothing for 30–60 seconds while N screens build in parallel.
 - **HARD RULE - every record, mutation, domain type, and device action comes from `@/hooks/data` when `src/hooks/data/` exists.** Check `<working_dir>/src/hooks/data/` before anything else.
   - **Data-layer mode** (the folder exists: every app `/create-mobile-app` builds in its screens first order): import data hooks, domain types, and device actions only from `@/hooks/data`, as [`preview-data-layer.md`](${PLUGIN_ROOT}/shared/references/preview-data-layer.md) defines, and follow [Data access](#data-access-data-layer-mode) and [Device actions](#device-actions). Never import `@/generated/...`, `@/native/...`, or `@/hooks/data/fixtures/...`, never call `fetch` or `axios`, and never edit `src/hooks/data/`; `scripts/check-data-layer.js` fails any screen that crosses this boundary. The single exception is the real barcode scanner view once it exists (`data_mode: wired`; see Device actions). Write the screen so it compiles and behaves the same on sample data and on real data, because wiring later replaces only the data layer.
@@ -103,7 +115,7 @@ You will be invoked by `/create-mobile-app` Step 11 (data model first build orde
   | Tokens: `$4`, `$color12`, `$background`, `$sm` | Screen options: `<Stack.Screen options={{ presentation: 'modal' \| 'formSheet', headerSearchBarOptions, headerLargeTitle }}>` |
   | Theme switching, breakpoints (`useMedia()`) | Scroll insets: `<ScrollView contentInsetAdjustmentBehavior="automatic">` |
   |  | Platform branching: `process.env.EXPO_OS`, `useWindowDimensions` |
-  |  | Capabilities: `expo-camera`, `expo-document-picker`, `expo-print`, `expo-secure-store`, `expo-file-system`, `expo-sharing`, `@microsoft/power-apps-native-pdf-viewer`, `@microsoft/power-apps-native-pen-input`, `@microsoft/power-apps-native-bglocation` when allowlisted by the plan (see AGENTS.md §2). In data-layer mode screens reach these only through device actions from `@/hooks/data`, never by importing them; legacy mode follows the `src/native/` wrapper rule in [Legacy Mode Rules](#legacy-mode-rules). |
+  |  | Capabilities: only packages/versions in the app's resolved native inventory; controls use approved wrappers and release-conditional subpaths. In data-layer mode screens reach these only through device actions from `@/hooks/data`, never by importing them; legacy mode follows the `src/native/` wrapper rule in [Legacy Mode Rules](#legacy-mode-rules). |
   |  | Animations: Reanimated |
 
   **Translation rule:** when the Expo `building-native-ui` skill shows `<View style={{ padding: 16, gap: 8 }}>`, write `<YStack p="$4" gap="$2">`. When it shows `<Stack.Screen options={{...}}>`, copy that **verbatim** — Tamagui never replaces navigation primitives.
@@ -595,7 +607,7 @@ If the spec needs a hook, field, operation, query, or device action the data lay
 
 - Build the screen with the closest data that does exist, and return `DONE_WITH_CONCERNS: contract gap <what is missing and where it is used>`. The orchestrator routes the gap through the preview gate, which extends the Data Contract and the data layer, then rebuilds the screen.
 - If the screen cannot do its job at all without the missing piece, return `NEEDS_CONTEXT: contract gap <what>` instead.
-- Leave `src/hooks/data/` to the orchestrator: no edits there, no invented hooks or services, no imports that reach past `@/hooks/data`, and no `TODO(connector-not-yet-added)` or `TODO(native-not-yet-added)` stubs.
+- Leave `src/hooks/data/` to the orchestrator: no edits there, no invented hooks or services, no imports that reach past `@/hooks/data`, and no `TODO(connector-not-yet-added)` or native-placeholder stubs.
 
 **Legacy mode.** Use the generated-service inspection below.
 
@@ -1241,7 +1253,140 @@ Apply this section only when `<working_dir>/src/hooks/data/` does not exist: an 
 
 - **Dataverse image rendering rule (detail/list screens).** If a screen displays a Dataverse Image column, include the real image/base64 field in `select` and render a `data:image/<mime>;base64,...` URI when base64 is present. Do not rely on guessed URL/display pseudo-fields alone.
 
-- **Native capabilities use `src/native/` wrappers.** `/add-native` creates typed wrappers under `src/native/` (e.g., `camera.ts`, `cameraUpload.ts`, `secureStore.ts`, `documentPicker.ts`, `pdfReport.ts`, `pdfViewer.ts`, `penInput.ts`, `geolocation.ts`, `haptics.ts`). For non-Dataverse native workflows, screen files import these wrappers; the wrapper implementation owns imports from `expo-camera`, `expo-image-picker`, `expo-document-picker`, `expo-print`, `expo-secure-store`, `expo-file-system`, `expo-sharing`, `expo-haptics`, `@microsoft/power-apps-native-pdf-viewer`, `@microsoft/power-apps-native-pen-input`, or `@microsoft/power-apps-native-bglocation`. The wrappers handle permissions, iOS/Android platform differences, URL validation, and return discriminated-union results (`{ ok: true, ... } | { ok: false, reason }`). If a wrapper doesn't exist yet, write the screen with the expected import path and a `// TODO(native-not-yet-added): run /add-native <capability> to create src/native/<wrapper>.ts` comment. For `camera.ts`, use `/add-native camera`; for `barcodeScanner.tsx`, use `/add-native barcode-scanner`; for `pdfReport.ts`, use `/add-native pdf-report`; for `pdfViewer.ts`, use `/add-native pdf-viewer` or `/add-native @microsoft/power-apps-native-pdf-viewer`; for `penInput.ts`, use `/add-native pen-input` or `/add-native @microsoft/power-apps-native-pen-input`; for `geolocation.ts`, use `/add-native geolocation` or `/add-native @microsoft/power-apps-native-bglocation`; for `haptics.ts`, use `/add-native haptics`. `expo-notifications` remains unavailable. If the plan tells you to use an unavailable capability, return `NEEDS_CONTEXT`.
+- **Dataverse display labels — use the `lookupName` / `formattedValue` helpers from `@/utils`, never inline annotation reads or guessed `*name` fields.** This is a hard rule for list rows, detail fields, search/filter fields, and empty-state summaries. Do NOT select, read, search, or destructure invented lookup/choice display fields such as separate `*idname`, `*statusname`, `*owneridname`, `*createdbyname`, or other `*name` shadow properties — those virtual columns are NOT queryable on custom entities and putting them in `$select` returns HTTP 400 on every list read. Do NOT inline the raw annotation key (`record['_<lookup>_value@OData.Community.Display.V1.FormattedValue']`) either — it is brittle and easy to typo. Always:
+
+  ```tsx
+  import { lookupName, formattedValue } from '@/utils';
+
+  const flight = lookupName(record, 'cr3e9_flightid') ?? '—';
+  const status = formattedValue(record, 'cr3e9_status') ?? '—';
+  ```
+
+  For lookup labels, select the real `_<lookup>_value` field in your `$select` and read with `lookupName(record, '<lookupLogicalName>')`. For choice / status / boolean / datetime / money labels, read with `formattedValue(record, '<columnLogicalName>')` or fall back to the generated option const. On bounded lists that use `useSearchFilter(...)`, fields MUST be real string properties from generated types; never add an inferred display-name field just to make search prettier. Cursor lists do not use `useSearchFilter`; they push search into the service `filter` option.
+- **HARD RULE — Cross-entity Field Resolution.** Before writing the screen's `select: [...]` or load step, walk every UI field your spec displays. For each field that sources data from an entity OTHER than the screen's primary fetch target, follow this algorithm exactly. The full supported-path reference is at [`shared/references/data-performance.md` § Cross-entity Reads](${PLUGIN_ROOT}/shared/references/data-performance.md#cross-entity-reads). The screen-builder MUST apply the rule mechanically — do NOT invent your own resolution.
+
+  1. **Follow the planned recommendation** from `related_entity_fields`.
+
+     | Recommendation | Action |
+     |---|---|---|
+     | `formatted-lookup` | Select the real `_<lookup>_value` field and render `lookupName(record, '<lookupLogicalName>')`. |
+     | `chained-fetch` | Perform one bounded related `get` / `getAll` in the screen load step, never inside `map()` or `renderItem`. |
+     | `external-projection-required` | Render no fake fallback data. Return `BLOCKED` and name the field/source. The user must supply a supported server-owned projection outside this workflow. |
+
+  2. **Verify before exit.** Every UI field in your spec must have either a
+     primary select, formatted lookup annotation, or bounded chained fetch.
+     Otherwise return `BLOCKED [<screen_name>]: field <field> requires an external projection`.
+
+  3. **TODO comment shape** for an external projection:
+
+     ```ts
+     // TODO(cross-entity-read): screen displays <field> from related <entity>.
+     // Supply a maker-created formula column or another server-owned projection,
+     // then rerun Dataverse reconciliation. Never chain reads in renderItem.
+     ```
+
+- **HARD RULE — server-managed columns are NEVER in a create or update payload.** The Dataverse server owns these fields; including them in a `*Service.create({...})` or `*Service.update({...})` returns HTTP 400 on every save. Generated `create()` types may include server-managed fields (`ownerid`, `statecode`, primary IDs, etc.) because they mirror the full model; do **not** satisfy those types by emitting junk values. For any screen with create/update behavior, use a narrow write helper/type whose input contains only editable fields. If the skeleton imports an app-level helper, call it; otherwise define the helper inside your assigned screen file. Do **not** create or modify shared `src/utils/`, `src/hooks/`, or service files from a screen-builder. Forbidden keys in any create/update payload:
+  - `ownerid`, `owneridtype` (set automatically from the calling user; assignment uses `Assign` action, not create)
+  - `statecode`, `statuscode` (set via `SetState`/`SetStatus` actions, never inline)
+  - `importsequencenumber`, `overriddencreatedon` (data-import-only fields)
+  - `timezoneruleversionnumber`, `utcconversiontimezonecode` (server-derived)
+  - `versionnumber`, `createdon`, `modifiedon`, `createdby`, `modifiedby` (server-derived)
+- **Dataverse write helpers are mandatory for generated create/update services.** A create/update screen should use functions such as `createInspection(input: CreateInspectionInput)` or `saveEvidence(input: SaveEvidenceInput)` that build the payload, call the generated service, check `result.success`, and throw/return a typed error on failure. This keeps casts centralized within the imported helper or, when no helper is provided, within one local function in your assigned screen file. Ordinary save helpers return `void` or an app-owned value they already know; they do **not** return `result.data` as the source of truth for newly-created IDs. Required ordinary-save shape:
+  ```ts
+  type CreateTaskInput = {
+    title: string;
+    projectId?: string;
+    status: number;
+  };
+
+  export async function createTask(input: CreateTaskInput): Promise<void> {
+    type CreateFields = Pick<
+      Parameters<typeof Cr3e9_tasksService.create>[0],
+      'cr3e9_name' | 'cr3e9_status' | 'cr3e9_projectid@odata.bind'
+    >;
+    const payload: Omit<CreateFields, 'cr3e9_projectid@odata.bind'>
+      & Partial<Pick<CreateFields, 'cr3e9_projectid@odata.bind'>> = {
+      cr3e9_name: input.title,
+      cr3e9_status: input.status,
+    };
+    if (input.projectId) {
+      payload['cr3e9_projectid@odata.bind'] = `/cr3e9_projects(${input.projectId})`;
+    }
+
+    const result = await Cr3e9_tasksService.create(payload as Parameters<typeof Cr3e9_tasksService.create>[0]);
+    if (!result.success) throw new Error(result.error?.message ?? 'Create Task failed.');
+  }
+  ```
+- **If a create flow needs the new record immediately, pre-generate its Dataverse ID.** Do not navigate, upload, create child rows, or build lookup binds from `result.data?.<primaryid>`. Use the create-then-navigate rule below: call `newId()` from `@/utils`, include the primary ID field in the create payload, check `result.success`, then navigate/bind/upload using the ID you generated before the POST. This is the only safe pattern for flows like scan → detail, create parent → child form, or create evidence row → upload image.
+- **Dynamic route IDs are untrusted.** Detail/edit/upload screens that read `useLocalSearchParams()` MUST normalize and validate the route ID before any Dataverse service call. Treat missing values and literal strings like `'undefined'` / `'null'` as invalid. Never pass `String(params.id ?? '')` directly into `Service.get(id)`, `Service.update(id, ...)`, or `Service.upload(id, ...)`; `enabled: !!id` is not enough because `'undefined'` is truthy. Required pattern:
+  ```ts
+  const params = useLocalSearchParams<{ id?: string | string[] }>();
+  const rawId = Array.isArray(params.id) ? params.id[0] : params.id;
+  const id = normalizeDataverseGuid(rawId);
+  const query = useQuery({
+    enabled: !!id,
+    queryFn: () => Service.get(id!),
+  });
+  if (!id) return <MissingRecordIdState />;
+  ```
+  Import `normalizeDataverseGuid` from `@/utils`. Do not invent alternate ID helpers or an inline UUID regex.
+- **Lookup writes use `@odata.bind`, NEVER raw GUIDs.** When a form creates or updates a record with a parent reference (Task → Project, Comment → Task, Inspection → Site, etc.), the foreign key field is set with the entity-bind syntax. Setting it any other way either silently saves `null` (data loss — form looks like it succeeded) or 400s with a cryptic Dataverse error.
+  - **Required pattern** — open the generated target model and copy the exact quoted property ending in `@odata.bind`; value is `/<entitySetName>(<guid>)`:
+    ```ts
+    await Cr3e9_tasksService.create({
+      cr3e9_name: title,
+      'cr3e9_projectid@odata.bind': `/cr3e9_projects(${projectId})`,
+      cr3e9_status: TaskStatus.Open, // choice = number
+    });
+    ```
+  - **Forbidden patterns:**
+    ```ts
+    { _cr3e9_project_value: projectId }  // _value props are READ-ONLY; silently dropped on create
+    { cr3e9_project: projectId }          // raw GUID on nav property; 400
+    { 'cr3e9_projectid@odata.bind': projectId }  // missing /entitySet(guid) wrapper; 400
+    ```
+  - **Finding the right names:**
+    - **Write property** (left of `@odata.bind`): use the exact key declared in `src/generated/models/<Entity>Model.ts`. It is case-sensitive and may be lowercase even when raw Web API metadata exposes a PascalCase navigation property. Never guess or transform the read `_value` property.
+    - **Entity set name** (inside `/(...)`): always the **plural** logical collection name — `cr3e9_projects`, not `cr3e9_project`. Use `pluralName` from the model file or check the generated service filename (`Cr3e9_projectsService.ts` ⇒ entity set is `cr3e9_projects`).
+    - Grep `@odata.bind` in the generated **model**, not the generated service. If the key is absent, return `BLOCKED` rather than inventing it.
+  - **Typed payload rule:** do not start write payloads as `Record<string, unknown>`. Define a `Pick<Parameters<typeof Service.create|update>[N], ...>` containing the exact writable keys, then use a single boundary cast only when generated base types incorrectly require server-managed fields. This makes misspelled or wrongly-cased lookup keys fail TypeScript.
+  - **Lookup filter rule:** generated mobile services do not reliably support raw Web API relationship traversal such as `lookupNav/relatedColumn eq ...`. Query the related table service first, then filter the source table using its read lookup GUID property (`_lookuplogicalname_value eq <guid>`).
+- **Authenticated profile rule:** when the plan links a profile table to `systemuser`, import the generated `SystemusersService`. Resolve token `oid → systemuserid` by filtering `azureactivedirectoryobjectid`, and reject disabled, missing, or duplicate users.
+  - Before writing the profile filter, open the generated profile model and locate the exact declared read lookup property for the planned `systemuser` lookup column. For a planned lookup logical name such as `new_systemuserid`, the expected shape is `_new_systemuserid_value`, but the generated model declaration is authoritative.
+  - Copy that exact model property into the filter: `<exact_generated_lookup_read_key> eq <systemuserid>`. Never emit guessed placeholders such as `_lookup_value`, `_systemuserlookup_value`, or `_<table>_value`.
+  - If the planned lookup column is absent, multiple candidate `systemuser` lookups exist, or the exact read key is not declared in the generated model, return `BLOCKED [<screen_name>]: exact systemuser lookup read key not verified`. Do not fall back to email matching or relationship traversal.
+  - If `SystemusersService` is absent from the Generated Services snapshot, return `BLOCKED`; do not invent a raw Web API client.
+
+  - **Form picker UI** — when the form's spec calls for a parent picker (e.g., "select Project"), the picker stores the selected record's `id` (GUID string), and the submit handler converts it to the bind string at write time. Never store the bind string in component state — only in the API payload.
+- **Pagination rule:** If your spec says `pagination: cursor`, do NOT use `useListData` or `useSearchFilter`. Use the skeleton's `useCursorListData` call, React Query's `useInfiniteQuery`, or an app-specific `use<Entity>CursorList` hook with FlatList `onEndReached` per the pattern in [`data-performance.md`](${PLUGIN_ROOT}/shared/references/data-performance.md). Never fetch all records at once, and never treat `top: 50` as pagination. Real generated Dataverse services use SDK `maxPageSize` for page size and return `IOperationResult.skipToken` for the next page; pass that value back as `skipToken`. Always include deterministic `orderBy` with a unique key and `select` in the service call. Push search/filter into Dataverse with `filter`. If the generated service in the app does not expose `maxPageSize`/`skipToken` for an unbounded table, return `BLOCKED [<screen_name>]: generated service does not expose cursor paging for <Service>; do not downgrade to useListData`.
+- **Dataverse file/image column controls — use `@microsoft/power-apps-native-host` components, NOT raw Expo modules.** When a form field binds to a Dataverse **File** column (`FileAttributeMetadata`), render `<FilePicker>` from `@microsoft/power-apps-native-host`; persist via generated `Service.upload(...)` after the normal create/update, and use `Service.downloadFile(...)` for read/view actions. When it binds to a Dataverse **Image** column (`ImageAttributeMetadata`), render `<ImagePicker>` from `@microsoft/power-apps-native-host`; capture `PickedImageInfo` via `onImageChange`, persist via generated `Service.upload(...)`, and use `Service.downloadImage(...)` for read/view actions. Do not persist picker-selected image/file content with `Service.update(...)`. Both controls adopt brand colors from the nearest `ThemeProvider` (provided by `PowerAppsProvider`). Do not hand-roll Dataverse file/image UI with `expo-document-picker`, `expo-image-picker`, `expo-file-system`, or `expo-sharing`. The full usage pattern and native-wrapper boundary live in [`skills/add-native/SKILL.md`](../skills/add-native/SKILL.md#fileimage-picker-ownership).
+
+- **Custom camera URI uploads to Dataverse Image columns use base64 update, not File/Blob upload.** For `takePhoto()` / `pickImage()` URI flows in native screens, read the local URI as base64 (Expo file APIs) and call `Service.update(recordId, { [imageColumnName]: base64 })`. Do not coerce RN camera URIs into browser-style `File`/`Blob` upload payloads for this path.
+
+- **Dataverse image rendering rule (detail/list screens).** If a screen displays a Dataverse Image column, include the real image/base64 field in `select` and render a `data:image/<mime>;base64,...` URI when base64 is present. Do not rely on guessed URL/display pseudo-fields alone.
+
+- **Native capabilities use existing `src/native/` wrappers.** `/add-native`
+  owns `camera.ts`, `barcodeScanner.tsx`, `pdfReport.ts`, `pdfViewer.ts`,
+  `penInput.ts`, `location.ts`, `geolocation.ts`, and `haptics.ts`. For
+  non-Dataverse native workflows, import these wrappers only after they exist
+  and their APIs match the approved spec. A missing wrapper is `BLOCKED`, never
+  a TODO import or fake implementation. Wrappers guard the native platform
+  before lazy imports and return discriminated results. Read the
+  [conditional controls contract](../skills/add-native/references/native-controls.md):
+  the aggregate root is metadata; runtime subpaths are `/pdf`, `/pen`, and
+  `/geolocation`, with no barcode subpath. Legacy leaf imports require matching
+  resolved inventory. Do not install the aggregate to fix older binaries.
+- **Location mode is explicit.** One-shot `BgLocationClient.getCurrentLocation()`
+  requires no `app_id`, data source, table, or `startTracking`. Continuous
+  tracking has one coordinated owner; do not stop shared tracking when a
+  screen unmounts. Background-location 0.2.3 uses background permissions even
+  with `trackInBackground: false`; `stopTracking()` and `isTracking()` have no
+  `app_id`. Do not introduce `configureSync` / `HttpSyncContract`.
+- **Usage is not permission selection.** Keep package inclusion, OS declarations,
+  runtime grants, and app use distinct. Disabling controls does not remove
+  default Android permissions. A different declaration set requires another
+  verified base; optional per-customer permission wrapping is deferred.
+
 
 - **PDF and pen capability behavior.** Native PDF viewer actions MUST call `openHttpsPdf(url)`, which supports `https://` URLs and local `file://` URIs with viewer 0.2.9+. Reject or disable actions for `content://`, `blob:`, `http://`, or empty inputs. Pen capture cancellation (`USER_CANCELLED`) is not an error; leave the screen state unchanged. Handle `NATIVE_MODULE_MISSING`, `VIEWER_FAILED`, `CAPTURE_FAILED`, `uploadFailed`, and `invalidUrl` with visible inline states rather than silent returns.
 

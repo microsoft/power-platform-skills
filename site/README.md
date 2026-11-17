@@ -1,7 +1,7 @@
 # Showcase site
 
 The source for the plugin showcase at <https://microsoft.github.io/power-platform-skills/>.
-It is a static site with no dependencies beyond Node.js.
+It is a static site with no dependencies beyond Node.js 22.15 or later.
 
 ## Build and preview
 
@@ -62,7 +62,7 @@ Each suite identifies a skill, SKILL.md and suite directory hashes, repeat count
 Every record carries the status, optional score, named boolean grader checks, optional token/duration counts, and a fixed error code rather than an error message.
 Version 2 records add agent input, output and cache counters plus judge call counts and reported input/output counters.
 Version 3 retains those counters and requires agent and judge reasoning efforts plus distinct agent/judge models.
-Earlier summaries display unreported effort and remain separate from explicitly measured effort settings.
+Earlier summaries display unreported effort; selection follows the plugin-specific rules below.
 Unknown agent counters stay null, and judge totals are lower bounds because Vally can substitute zero for missing provider fields.
 Version 1 zero-token totals are treated as unknown because they could indicate missing usage events.
 Unrecognized fields are rejected so raw transcripts cannot accidentally enter the page.
@@ -76,7 +76,10 @@ Changing plugin files, SKILL.md, suite inputs or runtime files invalidates curre
 
 The page separates capability from routing/dormancy, shows observed passes over expected trials, counts distinct tasks and all-repeats-pass tasks, and compares capability against its matched baseline.
 Repeats do not count as additional independent tasks.
-Only the newest supplied run for each plugin / skill / execution model / judge model / agent effort / judge effort combination is shown.
+For Power Pages, the page shows only the agent models in `DEFAULT_MODELS` in [`evals/runtime/models.mjs`](../evals/runtime/models.mjs), which also configures the default Actions matrix.
+Each skill shows the newest supplied result for each configured model, regardless of judge or effort.
+A subset run updates only those models; the latest available results for the other configured models remain visible.
+For other plugins, the page shows the newest supplied run for each plugin / skill / execution model / judge model / agent effort / judge effort combination.
 Separate summaries from a per-skill Actions matrix can share a timestamp and still contribute coverage.
 Every skill retains its selected run's date, commit and hashes; results from different runs, models or versions are never pooled, and missing trials are never filled from older runs.
 The descriptive "Consistent offline evidence" category requires current, complete results, all skilled trials passing, at least two capability tasks, one dormancy task, and two repeats.
@@ -85,7 +88,7 @@ The page explains every category and keeps stale runs inspectable.
 The token view aggregates all supplied summaries rather than only the newest evidence.
 It shows reported agent and judge usage by each skill evaluation's UTC start date and by plugin, along with missing counts and incomplete trial records.
 The usage totals include all models and are not changed by the skill filters.
-On the public site, history is limited to retained artifacts from the latest 20 default-branch manual workflow runs, for up to 90 days.
+On the public site, results and usage history are limited to retained artifacts from the latest 20 default-branch manual workflow runs, for up to 90 days.
 
 Power Pages evaluations assess generated documentation, HTML, and semantic/quality properties of ER diagrams offline.
 They do not provision resources, contact a tenant, or verify deployed behavior.

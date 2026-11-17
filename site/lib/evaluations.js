@@ -3,12 +3,14 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { hashFile, hashTree } = require('../../scripts/lib/eval-evidence.js');
+const { DEFAULT_MODELS } = require('../../evals/runtime/models.mjs');
 
 const HASH = /^[a-f0-9]{64}$/;
 const NAME = /^[a-z0-9][a-z0-9._-]{0,127}$/;
 const CODE = /^[a-zA-Z][a-zA-Z0-9_-]{0,79}$/;
 const DAY = 86400000;
 const MAX_AGE_DAYS = 30;
+const POWER_PAGES_MODELS = new Set(DEFAULT_MODELS);
 
 function requireValue(condition, message) {
   if (!condition) throw new Error(`Invalid evaluation summary: ${message}`);
@@ -261,12 +263,16 @@ function loadEvaluations({ repoRoot, catalog, evalResults = null, allowEmptyEval
     requireValue(summary.suites.every((suite) => plugin.skills.some((skill) => skill.name === suite.skill)), 'unknown skill');
     requireValue(Date.parse(summary.generatedAt) <= Number(now) + 5 * 60000, 'future date');
     for (const suite of summary.suites) {
-      const key = JSON.stringify([summary.plugin, suite.skill, summary.model, summary.judgeModel,
+      const combination = JSON.stringify([summary.plugin, suite.skill, summary.model, summary.judgeModel,
         summary.reasoningEffort ?? null, summary.judgeReasoningEffort ?? null]);
       const timestamp = Date.parse(summary.generatedAt);
+      const configuredPowerPages = summary.plugin === 'power-pages' && POWER_PAGES_MODELS.has(summary.model);
+      const key = configuredPowerPages
+        ? JSON.stringify([summary.plugin, suite.skill, summary.model]) : combination;
       const identity = JSON.stringify([key, timestamp]);
       requireValue(!seen.has(identity), 'ambiguous same-date skill/model summaries');
       seen.add(identity);
+      if (summary.plugin === 'power-pages' && !POWER_PAGES_MODELS.has(summary.model)) continue;
       const previous = latest.get(key);
       // Actions can upload one summary per skill. Select a whole suite with its
       // own provenance; filling missing trials from another run could turn an

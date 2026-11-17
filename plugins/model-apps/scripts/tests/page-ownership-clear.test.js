@@ -10,6 +10,8 @@ const { loadCli } = require('./helpers/cli-harness.js');
 const { fakeGenpage } = require('./helpers/fake-genpage.js');
 const { withPageType } = require('./helpers/page-component-type.js');
 const { isFormScan, noFormRows } = require('./helpers/form-scan.js');
+const { withAppBuildLease, buildLockName } = require('../lib/app-operation-lease.js');
+const { appUniqueName } = require('../lib/app-unique-name.js');
 
 const ENV = 'https://contoso.crm.dynamics.com';
 const OTHER_ENV = 'https://fabrikam.crm.dynamics.com';
@@ -24,7 +26,7 @@ function workspace(t) {
   return dir;
 }
 
-async function runClear(dir, { sdk, spec, realEngine = false } = {}) {
+async function runClear(dir, { sdk, spec, realEngine = false, store } = {}) {
   const emissions = [];
   const cli = loadCli(path.resolve(__dirname, '..', 'teardown-model-app.js'), {
     argv: ['--env', ENV, '--spec', '@contoso-app-spec.json', '--workspace', dir, '--apply', '--allow-destructive', '--clear-workspace'],
@@ -34,6 +36,7 @@ async function runClear(dir, { sdk, spec, realEngine = false } = {}) {
         './lib/app-spec.js': { migrateAppSpec: (s) => s, validateAppSpec: () => ({ ok: true }) },
         './lib/sdk-teardown.js': { runTeardown: async () => ({ ok: true, dryRun: false, deleted: {} }) },
       } : {}),
+      ...(store ? { './lib/apply-snapshot-store.js': store } : {}),
       './lib/dataverse-auth.js': {
         ...require('../lib/dataverse-auth.js'),
         readJsonArg: () => spec || ({ app: { name: 'Contoso Pages', uniqueName: APP }, solution: { uniqueName: 'ContosoPages', publisherPrefix: 'contoso' } }),
@@ -81,6 +84,43 @@ test('clear-workspace still clears a genuine disposable workspace without owners
   const log = await runClear(dir);
   assert.equal(fs.existsSync(dir), false);
   assert.match(log, /cleared workspace/);
+});
+
+// #807: the clear runs while the teardown still holds the app's build lease (the real lease and the real store here), so a build of the app
+// that starts between the deletes and the clear is refused instead of having its workspace, lock and all, moved and deleted under it.
+test('clear-workspace runs under the app build lease: a build of the app started at the clear is refused', async (t) => {
+  const dir = workspace(t);
+  const spec = { app: { name: 'Contoso Pages', uniqueName: APP }, solution: { uniqueName: 'ContosoPages', publisherPrefix: 'contoso' } };
+  const lockPath = path.join(dir, buildLockName(appUniqueName(spec)));
+  let atClear = null;
+  const store = {
+    ...snapshots,
+    clearWorkspace: (target, deps) => {
+      // The lock is looked for first: the concurrent build's lease, tried synchronously next, would make one of its own if it were free.
+      const lockHeld = fs.existsSync(lockPath);
+      const build = withAppBuildLease({ workspaceDir: dir, appUniqueName: appUniqueName(spec), warn: () => {} }, async () => 'a build ran');
+      build.catch(() => {});
+      atClear = { lockHeld, build };
+      return snapshots.clearWorkspace(target, deps);
+    },
+  };
+  const log = await runClear(dir, { spec, store });
+  assert.match(log, /cleared workspace/);
+  assert.equal(fs.existsSync(dir), false);
+  assert.ok(atClear, 'the clear ran');
+  assert.equal(atClear.lockHeld, true, 'the teardown still holds the build lock when the clear starts');
+  await assert.rejects(atClear.build, (e) => e.code === 'build-locked');
+});
+
+// A teardown from a folder that never had a workspace makes one for its lease and removes it again once the lease is let go; the clear
+// then finds nothing to clear, as before the clear moved under the lease.
+test('clear-workspace from a folder that never had a workspace leaves none behind', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'contoso-receipt-clear-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const dir = path.join(root, 'app', '.maker-workspace');
+  const log = await runClear(dir);
+  assert.deepEqual(fs.readdirSync(root), [], 'the folders the teardown made are gone');
+  assert.match(log, /skipped --clear-workspace: nothing to clear/);
 });
 
 for (const outcome of ['deleted', 'confirmed absent']) {

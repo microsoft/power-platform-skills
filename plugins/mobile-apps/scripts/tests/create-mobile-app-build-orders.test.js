@@ -12,10 +12,12 @@ const path = require('node:path');
 const test = require('node:test');
 
 const { shellBlocks } = require('./helpers/markdown-shell-blocks');
+const { createSkillEntry } = require('./helpers/create-skill');
 
 const skillDir = path.resolve(__dirname, '..', '..', 'skills', 'create-mobile-app');
 const read = (file) => fs.readFileSync(path.join(skillDir, file), 'utf8').replace(/\r\n?/g, '\n');
-const entry = read('SKILL.md');
+// With the branches SKILL.md includes (continuing a creation, acquiring a template), as a run reads them.
+const entry = createSkillEntry();
 const screensFirst = read('references/screens-first.md');
 const makeItReal = read('references/make-it-real.md');
 const dataModelFirst = read('references/data-model-first.md');

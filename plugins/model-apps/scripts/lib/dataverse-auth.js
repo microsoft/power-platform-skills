@@ -918,6 +918,7 @@ function asciiJson(value) {
  *                       details like `errors: [...]`), short note to stderr, exit 1
  *   ok=false + string → string to stderr, exit 1
  * `options.ascii` writes the stdout JSON through `asciiJson`, for a script whose output an agent reads off a console.
+ * `options.failureExitCode` (an integer above 1) is the exit status of a failure instead of 1, for a script whose caller must tell one kind of refusal from the rest.
  * (stderr is for people and is never escaped.)
  * Every text it writes has the access tokens the process obtained taken out (lib/output-redaction.js). The streams are guarded the moment the first token is obtained, so this is the same guard once more; the result is
  * the one thing every script prints, and it is clean where a caller has replaced `process.stdout.write` (a host that runs a script in its own process, a test that captures it) and so replaced the guard too.
@@ -955,7 +956,7 @@ function emitResult(ok, payload, options = {}) {
   } else {
     process.stderr.write(redact(String(payload)) + '\n');
   }
-  process.exit(1);
+  process.exit(options && Number.isInteger(options.failureExitCode) && options.failureExitCode > 1 ? options.failureExitCode : 1);
 }
 
 module.exports = {

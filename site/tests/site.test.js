@@ -66,11 +66,11 @@ function writeJson(file, value) {
 
 // These tiny, synthetic summaries exist only in tests. Production builds ship no
 // example scores or model responses.
-function evidenceFixture() {
+function evidenceFixture(pluginName = 'sample') {
   const root = tempDir('pps-evidence-');
-  const pluginDir = path.join(root, 'plugins', 'sample');
+  const pluginDir = path.join(root, 'plugins', pluginName);
   const skillFile = path.join(pluginDir, 'skills', 'write-docs', 'SKILL.md');
-  const suiteFile = path.join(root, 'evals', 'sample', 'write-docs', 'eval.yaml');
+  const suiteFile = path.join(root, 'evals', pluginName, 'write-docs', 'eval.yaml');
   const runtimeDir = path.join(root, 'evals', 'runtime');
   fs.mkdirSync(path.dirname(skillFile), { recursive: true });
   fs.mkdirSync(path.dirname(suiteFile), { recursive: true });
@@ -78,10 +78,10 @@ function evidenceFixture() {
   fs.writeFileSync(suiteFile, 'name: test-suite\n');
   fs.mkdirSync(runtimeDir, { recursive: true });
   fs.writeFileSync(path.join(runtimeDir, 'grader.js'), '// Test-only runtime\n');
-  writeJson(path.join(root, 'marketplace.json'), { plugins: [{ name: 'sample', source: './plugins/sample' }] });
+  writeJson(path.join(root, 'marketplace.json'), { plugins: [{ name: pluginName, source: `./plugins/${pluginName}` }] });
   const cases = [{ name: 'documentation', kind: 'capability' }, { name: 'diagram', kind: 'capability' }, { name: 'unrelated request', kind: 'dormancy' }];
   const summary = {
-    schemaVersion: 1, plugin: 'sample', commit: 'a'.repeat(40), generatedAt: '2026-01-15T12:00:00Z',
+    schemaVersion: 1, plugin: pluginName, commit: 'a'.repeat(40), generatedAt: '2026-01-15T12:00:00Z',
     model: 'test-model', judgeModel: 'test-judge', runUrl: 'https://github.com/example/project/actions/runs/123',
     pluginHash: hashTree(pluginDir), runtimeHash: hashTree(runtimeDir),
     suites: [{
@@ -95,7 +95,7 @@ function evidenceFixture() {
       })))),
     }],
   };
-  const catalog = { plugins: [{ name: 'sample', title: 'Sample plugin', docsUrl: 'https://github.com/example/project' }] };
+  const catalog = { plugins: [{ name: pluginName, title: 'Sample plugin', docsUrl: 'https://github.com/example/project' }] };
   const summaryFile = path.join(root, 'summary.json');
   function load(value = summary, options = {}) {
     writeJson(summaryFile, value);
@@ -103,6 +103,75 @@ function evidenceFixture() {
   }
   return { root, pluginDir, skillFile, suiteFile, runtimeDir, summary, summaryFile, catalog, load };
 }
+
+test('dashboard shows the latest result for each configured model after a subset run', () => {
+  const { DEFAULT_MODELS } = require('../../evals/runtime/models.mjs');
+  const fixture = evidenceFixture('power-pages');
+  const oldA = structuredClone(fixture.summary);
+  oldA.model = DEFAULT_MODELS[0];
+  oldA.judgeModel = 'previous-judge';
+  const oldB = structuredClone(fixture.summary);
+  oldB.model = DEFAULT_MODELS[1];
+  oldB.judgeModel = 'retained-judge';
+  const retired = structuredClone(fixture.summary);
+  retired.model = 'retired-model';
+  const updatedA = structuredClone(oldA);
+  updatedA.generatedAt = '2026-01-16T00:00:00Z';
+  updatedA.judgeModel = 'current-judge';
+  updatedA.commit = 'b'.repeat(40);
+  updatedA.runUrl = 'https://github.com/example/project/actions/runs/124';
+  Object.assign(updatedA, { schemaVersion: 3, reasoningEffort: 'high', judgeReasoningEffort: 'low' });
+  for (const result of updatedA.suites[0].results) {
+    result.agentUsage = { inputTokens: 70, outputTokens: 30, cacheReadTokens: null, cacheWriteTokens: null };
+    result.judgeUsage = { calls: 1, reportedCalls: 1, inputTokens: 10, outputTokens: 5 };
+  }
+  updatedA.suites[0].results.pop();
+  Object.assign(updatedA.suites[0].results.find((result) => result.variant === 'skilled'), {
+    status: 'error', score: null, checks: [], error: 'MODEL_ERROR',
+  });
+  const inputs = [updatedA, oldB, retired, oldA].map((summary, index) => {
+    const file = path.join(fixture.root, `run-${index}.summary.json`);
+    writeJson(file, summary);
+    return file;
+  });
+  const html = renderEvaluations(fixture.load(fixture.summary, { evalResults: inputs }));
+  const cards = [...html.matchAll(/<article class="model-result"[\s\S]*?<\/article>/g)].map((match) => match[0]);
+  assert.equal(cards.length, 2);
+  const current = cards.find((card) => card.includes(`data-evidence-model="${DEFAULT_MODELS[0]}"`));
+  const retained = cards.find((card) => card.includes(`data-evidence-model="${DEFAULT_MODELS[1]}"`));
+  assert.ok(current && retained, 'both configured models retain a result');
+  assert.ok(current.includes(`${DEFAULT_MODELS[0]} (high effort)`));
+  assert.match(current, /Judge: current-judge \(low effort\)/);
+  assert.match(current, /bbbbbbbbbbbb/);
+  assert.match(current, /actions\/runs\/124/);
+  assert.match(current, /Incomplete evidence/);
+  assert.match(current, /MODEL_ERROR/);
+  assert.match(retained, /Judge: retained-judge/);
+  assert.match(retained, /aaaaaaaaaaaa/);
+  const modelFilter = html.match(/<select id="model">([\s\S]*?)<\/select>/)[1];
+  assert.ok(modelFilter.includes(DEFAULT_MODELS[0]) && modelFilter.includes(DEFAULT_MODELS[1]));
+  assert.doesNotMatch(html, /retired-model|Judge: previous-judge/);
+  assert.match(html, /4 summaries/);
+});
+
+test('conflicting same-date Power Pages results for a model stop publication', () => {
+  const { DEFAULT_MODELS } = require('../../evals/runtime/models.mjs');
+  const fixture = evidenceFixture('power-pages');
+  const first = { ...fixture.summary, model: DEFAULT_MODELS[0] };
+  const second = { ...first, judgeModel: 'different-judge' };
+  const newer = { ...first, generatedAt: '2026-01-16T00:00:00Z' };
+  const secondFile = path.join(fixture.root, 'second.summary.json');
+  const newerFile = path.join(fixture.root, 'newer.summary.json');
+  writeJson(secondFile, second);
+  writeJson(newerFile, newer);
+  for (const files of [
+    [fixture.summaryFile, secondFile, newerFile],
+    [newerFile, fixture.summaryFile, secondFile],
+  ]) {
+    assert.throws(() => fixture.load(first, { evalResults: files }),
+      /ambiguous same-date skill\/model summaries/);
+  }
+});
 
 test('evaluation inventory discovers every real skill, not only featured catalog entries', () => {
   const catalog = loadCatalog(REPO_ROOT);
@@ -537,7 +606,7 @@ test('site build includes a linked evaluations page without depending on media o
   const result = build({ repoRoot: REPO_ROOT, outDir, basePath: '/' });
   assert.ok(result.files.includes('evaluations/index.html'));
   assert.match(fs.readFileSync(path.join(outDir, 'index.html'), 'utf8'), /href="evaluations\/"/);
-  assert.match(fs.readFileSync(path.join(outDir, 'evaluations/index.html'), 'utf8'), /Offline only/);
+  assert.doesNotMatch(fs.readFileSync(path.join(outDir, 'evaluations/index.html'), 'utf8'), /Offline only/);
   assert.ok(fs.existsSync(path.join(outDir, 'assets', 'evaluations.css')));
   const args = parseArgs(['--eval-results', 'a.json', '--eval-results', 'results']);
   assert.deepEqual(args.evalResults, [path.resolve('a.json'), path.resolve('results')]);
@@ -548,17 +617,18 @@ test('site build includes a linked evaluations page without depending on media o
     .find((entry) => entry.isDirectory() && fs.existsSync(path.join(pluginDir, 'skills', entry.name, 'SKILL.md')));
   const summary = fixture.summary;
   summary.plugin = 'power-pages';
+  summary.model = require('../../evals/runtime/models.mjs').DEFAULT_MODELS[0];
   summary.generatedAt = new Date().toISOString();
   summary.pluginHash = hashTree(pluginDir);
   summary.suites[0].skill = skill.name;
   summary.suites[0].skillHash = hashFile(path.join(pluginDir, 'skills', skill.name, 'SKILL.md'));
   writeJson(fixture.summaryFile, summary);
   build({ repoRoot: REPO_ROOT, outDir, basePath: '/', evalResults: fixture.summaryFile });
-  assert.match(fs.readFileSync(path.join(outDir, 'evaluations/index.html'), 'utf8'), /test-model/);
+  assert.ok(fs.readFileSync(path.join(outDir, 'evaluations/index.html'), 'utf8').includes(`data-evidence-model="${summary.model}"`));
   assert.ok(!fs.existsSync(path.join(outDir, 'summary.json')), 'input evidence must not be copied wholesale');
   writeJson(fixture.summaryFile, { ...summary, transcript: 'private' });
   assert.throws(() => build({ repoRoot: REPO_ROOT, outDir, basePath: '/', evalResults: fixture.summaryFile }), /Invalid evaluation summary/);
-  assert.match(fs.readFileSync(path.join(outDir, 'evaluations/index.html'), 'utf8'), /test-model/, 'invalid input cannot clear a previous build');
+  assert.ok(fs.readFileSync(path.join(outDir, 'evaluations/index.html'), 'utf8').includes(`data-evidence-model="${summary.model}"`), 'invalid input cannot clear a previous build');
 });
 
 test('published site builds an untested dashboard when no retained summaries exist', () => {

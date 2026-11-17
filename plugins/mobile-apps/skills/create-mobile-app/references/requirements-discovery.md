@@ -14,8 +14,8 @@ Scan the user's description for these signals, then offer the inferred items as 
 | "generate PDF", "export report", "print report", "evidence packet", "certificate PDF" | PDF-report capability; retention target is resolved at the architecture gate |
 | "view PDF", "open PDF", "preview PDF" | Native PDF viewer capability for HTTPS URLs or local `file://` URIs with viewer 0.2.9+ |
 | "signature", "sign", "sign off", "approval", "pen", "ink", "draw" | Pen-input capability; storage target is resolved at the architecture gate |
-| "track location", "background location", "GPS tracking", "follow route", "breadcrumb", "field worker location" | Geolocation capability (`@microsoft/power-apps-native-bglocation`) + Dataverse location table (default `msdyn_locationrecords`) |
-| "current location", "where am I", "tag with coordinates", "one-shot location" | One-shot location capability (`expo-location`) |
+| "track location", "background location", "GPS tracking", "follow route", "breadcrumb", "field worker location" | Geolocation capability from the verified release; confirm background declarations and storage at the architecture gate |
+| "current location", "where am I", "tag with coordinates", "one-shot location" | One-shot location via the verified controls or Expo location API; no tracking/data-source requirement |
 | "share", "send to", "export" | Sharing capability |
 | "secure", "credentials", "token", "PIN" | Secure-store capability |
 | "assign", "technician", "manager" | Multiple user types |
@@ -24,7 +24,7 @@ Scan the user's description for these signals, then offer the inferred items as 
 | "Teams", "chat", "message" | Teams connector |
 | "report", "dashboard", "history", "view all" | Read/list screens |
 
-Do not infer capabilities the template does not ship. Resolve every native signal against the live `template/package.json`; if a package is absent or runtime-banned, surface that as a transparency note instead of pretending the capability exists. Use `agents/native-app-planner.md` Step 3.0 as the canonical native allowlist.
+Resolve every native signal against the app-version-matched context from `resolve-mobile-release.js`, following [mobile-release-lifecycle.md](../../../shared/references/mobile-release-lifecycle.md). Do not use the newest plugin template as an old app's inventory. If support or fixed-base declarations cannot be verified, block that capability instead of pretending it exists. Follow `agents/native-app-planner.md` Step 3.0 and `/add-native` for version-conditional controls/legacy-leaf routing.
 
 Apply the shared
 [`connectivity-intent-ownership.md`](${PLUGIN_ROOT}/shared/references/connectivity-intent-ownership.md)
@@ -37,7 +37,7 @@ PDF/pen rules:
 - Retained generated PDFs use a Dataverse File column or child
   Evidence/Attachment table only when Dataverse is approved; otherwise use an
   approved connector-owned or on-device/share-only target.
-- Signature/ink capture must record the Gate 1-approved target in
+- Signature/ink capture must record the target approved at the architecture gate in
   `native-app-plan.md`: Dataverse Image/File/child row, connector-owned storage,
   or on-device/share-only.
 - Background/continuous location tracking uses the `geolocation` capability (`@microsoft/power-apps-native-bglocation`, MSAL-only) and requires an existing Dataverse target table (default entity set `msdyn_locationrecords`, or a custom `tableName` whose `fieldMap` columns exist). `/add-native geolocation` must verify that table; if it is missing, do not allow the control to be used. The missing control table is not created through `/add-dataverse`; use the geolocation-control table provisioning/setup mechanism, then re-run `/add-native geolocation`. Use one-shot `location` (`expo-location`) for a single foreground coordinate read; do not conflate the two.

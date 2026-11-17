@@ -9,10 +9,13 @@ const raw = (file) => fs.readFileSync(path.join(skillDir, file), 'utf8').replace
 // Steps both build orders run live once, in their own references/<step>.md file, and each flow
 // pulls one in under its own numbered heading with a line such as:
 //   **Shared step:** read [`auth-config.md`](auth-config.md) and follow it in full.
+// SKILL.md uses the same line for a branch only some runs take (continuing a creation, acquiring
+// a template), so its link carries the `references/` folder the flows already sit in:
+//   **Shared step:** read [`creation-continuation.md`](references/creation-continuation.md) and follow it in full.
 // The model reads the file at that point, so contract tests see its body there too. A shared file
 // opens with a note about itself (title, step-number table) that ends at SHARED_BODY_MARK; only
 // the body after it is the step.
-const SHARED_STEP = /^\*\*Shared step:\*\* read \[`([\w.-]+\.md)`\]\(\1\) and follow it in full\.$/gm;
+const SHARED_STEP = /^\*\*Shared step:\*\* read \[`([\w.-]+\.md)`\]\((?:references\/)?\1\) and follow it in full\.$/gm;
 const SHARED_BODY_MARK = '<!-- The step starts here; everything above is about the file. -->';
 
 function sharedStepBody(file) {

@@ -3,9 +3,10 @@
 // The configuration kinds (environment variables, connection references, Custom APIs, duplicate-detection rules) and
 // solution.version, end to end: buildModelApp -> runSdkBuild -> the configuration runtime (lib/configuration-build.js)
 // -> the REAL maker-SDK bundle -> the strict in-memory org (tests/helpers/fake-config-org.js), which answers only the
-// requests it models and lists every other one in `unexpected`. The build's own create port is the plain pass-through
-// (lib/creates-passthrough.js); every build of a spec without `configurationIdentity` runs with the stable-id create
-// modules made unloadable, so a request for one fails the test (tests/helpers/no-stable-create-modules.js).
+// requests it models and lists every other one in `unexpected`. A spec without `configurationIdentity` creates its new
+// configuration rows through the build's create bridge (lib/configuration-create-writer.js): flat single-row POSTs at
+// stable ids, with a receipt in the build's workspace. A build of a spec without configuration items still runs with the
+// stable-id create modules made unloadable, so a request for one fails the test (tests/helpers/no-stable-create-modules.js).
 //
 // The `protected configuration through the build command` tests opt in (`configurationIdentity: "stable-v1"`) and run
 // the production command (main) with the real bundle: the command makes the managed create gate itself, and one app
@@ -22,8 +23,9 @@ const { createAzHttpClient } = require('../lib/sdk-http-client.js');
 const { createMakerSdk, createNodeWorkspaceStorage } = require('../lib/maker-sdk.js');
 const { createConfigOrg } = require('./helpers/fake-config-org.js');
 const { withoutStableCreateModules } = require('./helpers/no-stable-create-modules.js');
+const { attachConfigurationCreateBridge } = require('../lib/configuration-create-writer.js');
 const { configurationSendOnce } = require('../lib/configuration-transport.js');
-const { readDeploymentBindings } = require('../lib/configuration-artifacts.js');
+const { readDeploymentBindings, configurationContext, runConfigurationStep } = require('../lib/configuration-artifacts.js');
 const { openManagedBindings } = require('../lib/managed-bindings.js');
 const { buildModelApp, isTransientHalt, authorizationKeys } = require('../build-model-app.js');
 const { runSdkBuild } = require('../lib/sdk-build.js');
@@ -89,27 +91,28 @@ async function harness({ lose, ...orgOptions } = {}) {
   const httpClient = createAzHttpClient(org.origin, { getToken: () => 'test-token-0123456789abcdef', request, sleep: async () => {}, sendOnce: (m, u) => configurationSendOnce(m, u) });
   const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(makeTempDir('config-build-sdk-')), instanceUrl: org.origin, httpClient, solutionUniqueName: 'ContosoSol' });
   await sdk.initWorkspace();
-  return { org, sdk };
+  // The create bridge build-model-app.js makeSdk attaches for an apply; the build's own workspace (one per harness, as the app
+  // folder's is between builds) holds the configuration create receipts. The waits between the reads that prove a new rule
+  // published are this test's clock (no real wait).
+  attachConfigurationCreateBridge(sdk, { httpClient, apiUrl: (p) => sdk.dataverse.apiUrl(p), sleep: async () => {} });
+  return { org, sdk, httpClient, workspaceDir: makeTempDir('config-build-ws-') };
 }
 
 const proven = async () => [{ connectionId: 'conn-1', connectorId: SP }];
 
-// One CLI-shaped build of the data stage through buildModelApp; the build's create port is its default (the plain pass-through).
+// One CLI-shaped build of the data stage through buildModelApp; new configuration rows go through the build's create bridge.
 async function build(h, spec, { opts = {}, deps = {} } = {}) {
   const logs = [];
   const warns = [];
   const mark = h.org.requests.length;
   let r;
   let thrown;
-  const { requested } = await withoutStableCreateModules(async () => {
-    try {
-      r = await buildModelApp(spec, { apply: true, env: h.org.origin, phases: STAGES.data, workspaceDir: makeTempDir('config-build-ws-'), retryDelayMs: 0, ...opts },
-        { sdk: h.sdk, log: (l) => logs.push(String(l)), warn: (w) => warns.push(String(w)), connections: proven, ...deps });
-    } catch (err) {
-      thrown = err;
-    }
-  });
-  assert.deepEqual(requested, [], 'no stable-id create module is loaded');
+  try {
+    r = await buildModelApp(spec, { apply: true, env: h.org.origin, phases: STAGES.data, workspaceDir: h.workspaceDir, retryDelayMs: 0, ...opts },
+      { sdk: h.sdk, log: (l) => logs.push(String(l)), warn: (w) => warns.push(String(w)), connections: proven, ...deps });
+  } catch (err) {
+    thrown = err;
+  }
   return { r, thrown, logs, warns, writes: h.org.writes(mark), requests: h.org.requests.slice(mark) };
 }
 
@@ -136,7 +139,7 @@ test('a build sets the solution version and creates every configuration kind; th
   assert.deepEqual(h.org.unexpected, []);
 });
 
-test('a lost create answer stops the configuration step as unknown: the items before it are kept, it is sent once and the build is not retried', async () => {
+test('a lost create answer stops the build as a pending create: the items before it are kept, it is sent once and the build is not retried', async () => {
   let posts = 0;
   const lose = ({ method, path: p }) => method === 'POST' && /^\/customapis\b/.test(p) && ++posts >= 1;
   const h = await harness({ lose });
@@ -145,7 +148,9 @@ test('a lost create answer stops the configuration step as unknown: the items be
   const counting = async (...a) => { runs += 1; return runSdkBuild(...a); };
   const out = await build(h, spec, { opts: { configurationBindings: bindingsFor(spec), maxRetries: 3 }, deps: { runBuild: counting } });
   assert.ok(out.thrown, 'the build halted');
-  assert.equal(out.thrown.code, 'configuration-incomplete');
+  // The create's receipt stays open in the build's workspace (lib/configuration-create-writer.js); the step's own
+  // "incomplete" summary does not replace that code.
+  assert.equal(out.thrown.code, 'configuration-create-pending');
   assert.equal(runs, 1, 'the whole-build retry did not run the phases again');
   assert.equal(posts, 1, 'the create whose answer was lost was sent once');
   assert.equal(h.org.rows('environmentvariabledefinitions').length, 2, 'the items before the unknown one were made');
@@ -156,14 +161,11 @@ test('a lost create answer stops the configuration step as unknown: the items be
   posts = 0;
   const h2 = await harness({ lose });
   let caught;
-  const { requested } = await withoutStableCreateModules(async () => {
-    try {
-      await runSdkBuild(spec, { sdk: h2.sdk, apply: true, phases: STAGES.data, workspaceDir: makeTempDir('config-build-ws-'), configurationBindings: bindingsFor(spec), connections: proven, emit: () => {} });
-    } catch (e) { caught = e; }
-  });
-  assert.deepEqual(requested, []);
+  try {
+    await runSdkBuild(spec, { sdk: h2.sdk, apply: true, phases: STAGES.data, workspaceDir: h2.workspaceDir, configurationBindings: bindingsFor(spec), connections: proven, emit: () => {} });
+  } catch (e) { caught = e; }
   assert.ok(caught, 'runSdkBuild throws the halt');
-  assert.equal(caught.code, 'configuration-incomplete');
+  assert.equal(caught.code, 'configuration-create-pending');
   assert.equal(caught.phase, 'data-model');
   assert.equal(caught.retry, RETRY.NEVER);
   assert.equal(isTransientHalt(caught, { spec }), false);
@@ -226,8 +228,10 @@ test('a configuration row the build cannot record as managed, and a child the so
     ? { statusCode: 200, body: { id: '00000000-0000-0000-0000-000000000045' } } : undefined) });
   const unproven = await build(silent, spec, { opts: { configurationBindings: bindingsFor(spec) } });
   assert.ok(unproven.thrown, 'the build halted');
-  assert.equal(unproven.thrown.code, 'configuration-incomplete');
-  assert.match(unproven.thrown.message, /duplicateRuleCondition email\|e \(SOLUTION_MEMBERSHIP_UNKNOWN\)/);
+  // A new rule's condition is part of its create unit, so the unit's own membership proof stops the build, and its receipt stays.
+  assert.equal(unproven.thrown.code, 'configuration-create-membership-incomplete', unproven.thrown.message);
+  assert.match(unproven.thrown.message, /duplicate-rule, root [0-9a-f-]{36}\): a row of the unit is not proven a member of the solution/);
+  assert.match(unproven.thrown.message, /duplicateRule email \(configuration-create-membership-incomplete\)/);
 });
 
 // A current environment refuses the documented duplicate-rule types: AddSolutionComponent with 45 answers
@@ -318,11 +322,19 @@ for (const status of ['unpublished', 'published']) for (const unjoined of [false
     const edited = { ...spec, duplicateDetectionRules: spec.duplicateDetectionRules.map((r) => ({ ...r, conditions: [...r.conditions, { key: 'l', column: 'lastname', match: 'exact' }] })) };
     const out = await build(h, edited);
     assert.ok(out.thrown, 'the build halted');
-    assert.equal(out.thrown.code, 'configuration-incomplete');
     assert.deepEqual(out.writes, [], 'nothing is written before the new condition\u2019s type is known');
     assert.equal(h.org.rows('solutioncomponents').length, members, 'the solution is not changed');
     assert.equal(h.org.rows('duplicateruleconditions').length, 1, 'the rule keeps its one condition');
-    assert.match(out.thrown.message, /duplicateRuleCondition email\|l \(SOLUTION_COMPONENT_TYPE_UNREADABLE\)/);
+    if (status === 'published') {
+      // A published rule cannot take a new condition in place: the default build stops that mixed edit before any read of the
+      // condition's type, and says how to split it.
+      assert.equal(out.thrown.code, 'configuration-create-mixed-edit', out.thrown.message);
+      assert.match(out.thrown.message, /conditions are added to a rule that is not unpublished\. This invocation did not dispatch the create/);
+      assert.match(out.thrown.message, /duplicateRule email \(configuration-create-mixed-edit\)/);
+    } else {
+      assert.equal(out.thrown.code, 'configuration-incomplete');
+      assert.match(out.thrown.message, /duplicateRuleCondition email\|l \(SOLUTION_COMPONENT_TYPE_UNREADABLE\)/);
+    }
     assert.ok(!/SOLUTION_MEMBERSHIP_UNKNOWN/.test(out.thrown.message), out.thrown.message);
     assert.equal(h.org.rows('duplicaterules')[0].statecode, status === 'published' ? 1 : 0);
     assert.deepEqual(h.org.unexpected, []);
@@ -342,41 +354,49 @@ const failingPublish = async (enabled = () => true) => {
 const PUBLISH_HINT = '(saved, but its publication did not complete: publish the rule in the environment\'s duplicate detection rules settings, '
   + 'or set "status": "published" on it in the App Spec and build again; a build without "status" keeps it unpublished)';
 
-test('a duplicate rule saved but not published says how to finish it; a rebuild without status keeps it unpublished, one with status publishes it', async () => {
-  let failPublish = true;
-  const h = await failingPublish(() => failPublish);
+test('a new duplicate rule whose one publication is not proved stops publication-pending; the next build sends nothing and never publishes again', async () => {
+  const h = await failingPublish();
   const first = await build(h, RULE_ONLY());
   assert.ok(first.thrown, 'the build halted');
-  assert.equal(first.thrown.code, 'configuration-incomplete');
-  assert.equal(first.thrown.message, `data-model failed: 1 configuration item not completed: duplicateRule email (DUPLICATE_RULE_PUBLISH_FAILED) ${PUBLISH_HINT}`);
+  assert.equal(first.thrown.code, 'configuration-create-publication-pending', first.thrown.message);
+  assert.match(first.thrown.message, /the publication of a newly created duplicate detection rule was not proved \(unit [0-9a-f-]{36}, duplicate-rule, root [0-9a-f-]{36}\): the rule does not read published yet\./);
+  assert.match(first.thrown.message, /Nothing is published again automatically\./);
+  const publications = (requests) => requests.filter((r) => r.method === 'POST' && /\/Microsoft\.Dynamics\.CRM\.PublishDuplicateRule$/.test(String(r.path)));
+  // The one action, with no solution header: publication is not a component write.
+  assert.equal(publications(first.requests).length, 1);
+  assert.equal(Object.keys(publications(first.requests)[0].headers || {}).find((k) => k.toLowerCase() === 'mscrm.solutionuniquename'), undefined);
   assert.equal(h.org.rows('duplicaterules')[0].statecode, 0, 'the rule is saved and unpublished');
+  assert.equal(h.org.rows('duplicateruleconditions').length, 1);
 
-  // The documented rule holds: a rule whose spec omits status keeps the status it has, so a rebuild reports it unchanged.
+  // The receipt in the build's workspace stops the next build before any request: the action is never sent again by itself.
   const again = await build(h, RULE_ONLY());
-  if (again.thrown) throw again.thrown;
+  assert.ok(again.thrown, 'the next build halted');
+  assert.equal(again.thrown.code, 'configuration-create-publication-pending', again.thrown.message);
   assert.deepEqual(again.writes, []);
-  assert.equal(h.org.rows('duplicaterules')[0].statecode, 0);
-
-  // The hint's second way: status "published" on the rule publishes it on the next build.
-  failPublish = false;
-  const published = { ...RULE_ONLY(), duplicateDetectionRules: CONFIGURATION_FIELDS.duplicateDetectionRules.map((r) => ({ ...r, status: 'published' })) };
-  const fixed = await build(h, published);
-  if (fixed.thrown) throw fixed.thrown;
-  assert.equal(fixed.r.ok, true, JSON.stringify(fixed.r.errors));
-  assert.equal(h.org.rows('duplicaterules')[0].statecode, 1);
+  assert.equal(publications(again.requests).length, 0);
+  assert.equal(h.org.rows('duplicaterules').length, 1);
   assert.deepEqual(h.org.unexpected, []);
 });
 
 // The hint is carried by a marker on the halt item that is not one of its fields: a caller that reads or serializes the items
 // still sees {kind, key, code}. The configuration runtime rebuilds the message from the same items when recording what the step
 // made fails (configuration-build.js), and the hint stays in that message too. One run covers both: the step's own halt items
-// are the ones the rebuilt halt carries. (Each failed publish costs the SDK's full publish wait, so this is one build, not two.)
+// are the ones the rebuilt halt carries. An EXISTING rule's publication is the step's (a lifecycle change, not a create), so the
+// rule is made unpublished first and the failing publication is the edit that sets "status": "published" on it.
 test('the publication hint leaves the halt item {kind, key, code} and survives the message a failed record rebuilds', async () => {
   const { createConfigurationRuntime } = require('../lib/configuration-build.js');
-  const h = await failingPublish();
+  let failPublish = false;
+  const h = await failingPublish(() => failPublish);
+  const withStatus = (status) => ({ ...RULE_ONLY(), duplicateDetectionRules: CONFIGURATION_FIELDS.duplicateDetectionRules.map((r) => ({ ...r, status })) });
+  const made = await build(h, withStatus('unpublished'));
+  if (made.thrown) throw made.thrown;
+  assert.equal(h.org.rows('duplicaterules')[0].statecode, 0);
+  failPublish = true;
   const records = [];
   const managed = { recordApplied: async (rec) => { records.push(rec.kind); throw new Error('store unavailable'); } };
-  const runtime = createConfigurationRuntime({ spec: RULE_ONLY(), sdk: h.sdk, opts: { managed }, appUniqueName: 'contoso_hintpin' });
+  // A new variable beside it is what the step makes and the runtime then fails to record.
+  const spec = { ...withStatus('published'), environmentVariables: [{ schemaName: 'contoso_Mode', type: 'string' }] };
+  const runtime = createConfigurationRuntime({ spec, sdk: h.sdk, opts: { managed, workspaceDir: h.workspaceDir }, appUniqueName: 'contoso_configprobe' });
   const step = await runtime.apply('data-model');
   assert.equal(step.halt.code, 'configuration-incomplete');
   const pending = step.halt.items.find((p) => p.code === 'DUPLICATE_RULE_PUBLISH_FAILED');
@@ -444,8 +464,7 @@ test('the build command creates a declared environment variable through the SDK 
   // A connection reference's binding is proven through the Power Apps service, which this command reaches outside the process.
   delete spec.connectionReferences;
   delete spec.duplicateDetectionRules;
-  const { result: out, requested } = await withoutStableCreateModules(() => runCommand(spec));
-  assert.deepEqual(requested, [], 'no stable-id create module is loaded');
+  const out = await runCommand(spec);
   assert.equal(out.thrown && out.thrown.message, undefined, 'the build did not halt');
   assert.ok(!/WORKSPACE_NOT_INITIALIZED/.test(`${out.stderr} ${JSON.stringify(out.payload)}`), `no workspace halt: ${out.stderr.slice(-600)}`);
   assert.equal(out.exitCode, 0, out.stderr.slice(-600));
@@ -459,7 +478,7 @@ test('the build command creates a declared environment variable through the SDK 
 
   // The same command again, in the same app folder: the throwaway workspace is new, and each item is read back from the server.
   const mark = out.org.requests.length;
-  const again = (await withoutStableCreateModules(() => runCommand(spec, { org: out.org, appDir: out.appDir }))).result;
+  const again = await runCommand(spec, { org: out.org, appDir: out.appDir });
   assert.equal(again.thrown && again.thrown.message, undefined, 'the rerun did not halt');
   assert.equal(again.exitCode, 0, again.stderr.slice(-600));
   assert.deepEqual(out.org.writes(mark), [], 'an unchanged rerun writes nothing');
@@ -470,7 +489,7 @@ test('the build command\u2019s dry run of a spec with configuration items plans 
   const spec = makeSpec();
   delete spec.connectionReferences;
   delete spec.duplicateDetectionRules;
-  const { result: out } = await withoutStableCreateModules(() => runCommand(spec, { apply: false, argv: ['--stage', 'data'] }));
+  const out = await runCommand(spec, { apply: false, argv: ['--stage', 'data'] });
   assert.equal(out.thrown && out.thrown.message, undefined, 'the dry run did not halt');
   assert.ok(!/WORKSPACE_NOT_INITIALIZED/.test(`${out.stderr} ${JSON.stringify(out.payload)}`), out.stderr.slice(-600));
   assert.equal(out.exitCode, 0, out.stderr.slice(-600));
@@ -704,6 +723,49 @@ test('protected configuration through the build command: a dropped item whose cr
   assert.equal(store.readGroup('customApi', 'contoso_calc').pending, null);
   assert.deepEqual(org.unexpected, []);
 });
+
+// #847: through the build command, a secret variable whose definition the service took and whose value request alone it
+// refused stops with create-value-refused and its exact retire approval; each rebuild sends only the value, and the
+// corrected one completes the variable at the original definition id. No Key Vault reference reaches anything printed.
+test('protected configuration through the build command: a refused variable value is sent alone on each rebuild, and the corrected rebuild completes it', async () => {
+  let refuse = true;
+  const org = commandOrg({ intercept: (req) => (refuse && req.method === 'POST' && req.path.split('?')[0] === '/environmentvariablevalues'
+    ? { statusCode: 400, body: { error: { code: '0x80072040', message: `refused ${KV}` } } } : undefined) });
+  const spec = protectedSpec({ environmentVariables: [{ schemaName: 'contoso_ApiKey', type: 'secret' }], customApis: [], duplicateDetectionRules: [] });
+  const settingsFile = path.join(makeTempDir('config-value-settings-'), 'settings.json');
+  fs.writeFileSync(settingsFile, JSON.stringify({ EnvironmentVariables: [{ SchemaName: 'contoso_ApiKey', Value: KV }] }));
+  const argv = [...DATA, '--deployment-settings', settingsFile];
+  const first = await runCommand(spec, { org, argv });
+  const store = () => openManagedBindings({ workspaceDir: path.join(first.appDir, '.maker-workspace'), environment: org.origin, appUniqueName: 'contoso_configprobe', solutionUniqueName: 'ContosoSol' });
+  const { token } = store().readGroup('environmentVariable', 'contoso_apikey').pending;
+  const said = (out) => `${out.stderr} ${JSON.stringify(out.payload)} ${out.thrown ? out.thrown.message : ''}`;
+  assert.ok(said(first).includes('environmentVariable contoso_ApiKey (create-value-refused) (the service refused the value request (0x80072040) before it started;'), said(first).slice(-1500));
+  assert.ok(said(first).includes(`--apply --authorize 'retire:environmentVariable:contoso_apikey@${token}'`), said(first).slice(-1500));
+  assert.ok(!said(first).includes('contoso-kv') && !fs.readFileSync(store().file, 'utf8').includes('contoso-kv'), 'no Key Vault reference is printed or stored');
+  assert.deepEqual(rootCreates(org), ['POST /environmentvariabledefinitions', 'POST /environmentvariablevalues']);
+
+  let mark = org.requests.length;
+  const again = await runAgain(spec, first, argv);
+  assert.ok(said(again).includes('(create-value-refused)'), said(again).slice(-1500));
+  assert.deepEqual(rootCreates(org, mark), ['POST /environmentvariablevalues'], 'only the value, once');
+
+  refuse = false;
+  mark = org.requests.length;
+  const done = await runAgain(spec, first, argv);
+  assert.equal(done.thrown && done.thrown.message, undefined, 'the corrected run did not halt');
+  assert.equal(done.exitCode, 0, done.stderr.slice(-600));
+  assert.deepEqual(rootCreates(org, mark), ['POST /environmentvariablevalues']);
+  assert.equal(org.rows('environmentvariabledefinitions').length, 1);
+  assert.equal(org.rows('environmentvariablevalues').length, 1);
+  const group = store().readGroup('environmentVariable', 'contoso_apikey');
+  assert.equal(group.pending, null);
+  assert.equal(group.committed.records[0].id, org.rows('environmentvariabledefinitions')[0].environmentvariabledefinitionid);
+  mark = org.requests.length;
+  const rerun = await runAgain(spec, first, argv);
+  assert.equal(rerun.exitCode, 0, rerun.stderr.slice(-600));
+  assert.deepEqual(rootCreates(org, mark), []);
+  assert.deepEqual(org.unexpected, []);
+});
 test('protected configuration through the build command: a later phase\u2019s transient failure runs the whole build again and the configuration rows stay where they are', async () => {
   let refused = 0;
   // The sample data's first create meets a customization lock, which the build retries whole; the second succeeds.
@@ -925,21 +987,27 @@ test('protected configuration through the build command: no phase selection, cha
   assert.deepEqual(out.org.unexpected, []);
 });
 
-test('a build without the opt-in and without stored configuration rows loads no protected module and sends what it always sent', async () => {
+test('a build without the opt-in and without stored configuration rows never engages the protected hookup, and creates its rows flat at derived ids', async () => {
   const spec = makeSpec();
   delete spec.connectionReferences;
+  // The default create path shares the strict row reader of lib/configuration-create-bindings.js (and, through it, the managed
+  // create helpers it is written with), so only the protected hookup itself is judged here.
+  const hookup = (requested) => requested.filter((id) => /(^|[\\/])configuration-protected(\.js)?$/.test(id));
   const { result: out, requested } = await protectedModulesLoadedBy(() => runCommand(spec));
-  assert.deepEqual(requested, [], 'no protected configuration module is loaded');
+  assert.deepEqual(hookup(requested), [], 'the protected configuration hookup is not loaded');
   assert.equal(out.exitCode, 0, out.stderr.slice(-600));
-  // The plain path: the server mints each id (no id in the create's body).
+  // Each root is one flat POST that carries its own id: the Custom API's request parameter and response property are POSTs of
+  // their own, never part of the API's body.
   const [api] = out.org.requests.filter((r) => r.method === 'POST' && String(r.path).split('?')[0] === '/customapis').map((r) => r.body);
-  // The plain path: the ids are minted at random (version 4), not derived from the item (the protected path's name-based version 5).
+  assert.ok(!('CustomAPIRequestParameters' in api) && !('CustomAPIResponseProperties' in api), JSON.stringify(api));
+  // The ids are derived from the item (name-based, version 5), as the protected path derives them, not minted at random.
   const saved = out.payload.created.configuration.saved;
   assert.equal(saved.length, 4);
-  for (const s of saved) assert.match(s.id, /^[0-9a-f]{8}-[0-9a-f]{4}-4/, `${s.kind} ${s.key}`);
+  for (const s of saved) assert.match(s.id, /^[0-9a-f]{8}-[0-9a-f]{4}-5/, `${s.kind} ${s.key}`);
+  assert.equal(api.customapiid, saved.find((s) => s.kind === 'customApi').id);
   assert.ok(!/configurationIdentity|managed-create|adopt:/.test(out.stderr));
   const again = await protectedModulesLoadedBy(() => runAgain(spec, out));
-  assert.deepEqual(again.requested, []);
+  assert.deepEqual(hookup(again.requested), []);
   assert.equal(again.result.exitCode, 0);
   assert.deepEqual(out.org.unexpected, []);
 
@@ -949,14 +1017,14 @@ test('a build without the opt-in and without stored configuration rows loads no 
   const mark = out.org.requests.length;
   const calls = { n: 0 };
   const noop = await protectedModulesLoadedBy(() => changedOnlyAgain(spec, out, { calls }));
-  assert.deepEqual(noop.requested, []);
+  assert.deepEqual(hookup(noop.requested), []);
   assert.equal(noop.result.exitCode, 0, noop.result.thrown && noop.result.thrown.message);
   assert.equal(noop.result.payload.noop, true);
   assert.equal(calls.n, 1, 'the flow decided');
   assert.equal(out.org.requests.length, mark, 'nothing was sent');
   const edited = { ...spec, customApis: [{ ...spec.customApis[0], displayName: 'Calculate again' }] };
   const full = await protectedModulesLoadedBy(() => changedOnlyAgain(edited, out));
-  assert.deepEqual(full.requested, []);
+  assert.deepEqual(hookup(full.requested), []);
   assert.notEqual(full.result.payload && full.result.payload.noop, true, 'a configuration edit is never the no-op');
   assert.match(full.result.stderr, /changed-only: FULL — full build — data-model: changed/);
   assert.deepEqual(out.org.unexpected, []);
@@ -1092,6 +1160,45 @@ test('protected configuration in fresh processes: a create whose answer was lost
   assert.deepEqual(org.unexpected, []);
 });
 
+// #847 across OS processes: the first stops with create-value-refused, the second (corrected settings) sends only the value and
+// completes the variable at the definition id the first process stored on disk, and the third sends nothing.
+test('protected configuration in fresh processes: a refused variable value is completed alone by the next process, and the third sends nothing', async () => {
+  const p = processCommands();
+  let refuse = true;
+  const org = commandOrg({ intercept: (req) => (refuse && req.method === 'POST' && req.path.split('?')[0] === '/environmentvariablevalues'
+    ? { statusCode: 400, body: { error: { code: '0x80072040', message: 'the Key Vault reference was refused' } } } : undefined) });
+  const spec = protectedSpec({ environmentVariables: [{ schemaName: 'contoso_ApiKey', type: 'secret' }], customApis: [], duplicateDetectionRules: [] });
+  const settingsFile = path.join(p.root, 'settings.json');
+  fs.writeFileSync(settingsFile, JSON.stringify({ EnvironmentVariables: [{ SchemaName: 'contoso_ApiKey', Value: KV }] }));
+  const argv = [...DATA, '--deployment-settings', settingsFile];
+  const said = (out) => `${out.stderr} ${JSON.stringify(out.payload)} ${out.thrown ? out.thrown.message : ''}`;
+  const group = () => openManagedBindings({ workspaceDir: path.join(p.appDir, '.maker-workspace'), environment: org.origin, appUniqueName: 'contoso_configprobe', solutionUniqueName: 'ContosoSol' })
+    .readGroup('environmentVariable', 'contoso_apikey');
+
+  const first = await p.command(org, spec, { argv });
+  assert.ok(said(first).includes('environmentVariable contoso_ApiKey (create-value-refused)'), said(first).slice(-1500));
+  assert.deepEqual(rootCreates(org), ['POST /environmentvariabledefinitions', 'POST /environmentvariablevalues']);
+  const { root } = group().pending;
+
+  refuse = false;
+  let mark = org.requests.length;
+  const done = await p.command(org, spec, { argv });
+  assert.equal(done.thrown, null, done.thrown && done.thrown.message);
+  assert.equal(done.exitCode, 0, done.stderr.slice(-900));
+  assert.deepEqual(rootCreates(org, mark), ['POST /environmentvariablevalues'], 'only the value, once');
+  assert.equal(group().pending, null);
+  assert.equal(group().committed.records[0].id, root.id, 'at the definition id the first process stored');
+
+  mark = org.requests.length;
+  const again = await p.command(org, spec, { argv });
+  assert.equal(again.exitCode, 0, again.stderr.slice(-900));
+  assert.deepEqual(org.writes(mark), []);
+  assert.deepEqual([org.rows('environmentvariabledefinitions').length, org.rows('environmentvariablevalues').length], [1, 1]);
+  assert.equal(new Set(p.pids).size, 3, 'three OS processes');
+  assert.ok(!p.pids.includes(process.pid));
+  assert.deepEqual(org.unexpected, []);
+});
+
 // A protected Custom API whose implementation (a plug-in type) was registered outside the plugin, as an App Spec cannot declare
 // one (configuration-artifacts.js refuses `pluginTypeId`). The build never writes the implementation; a bound row keeps the exact
 // plug-in type its fresh read found, and the edit is proved only while the row still holds that one.
@@ -1111,6 +1218,16 @@ function apiGroup(base) {
 function succeeded(out, what) {
   assert.equal(out.thrown && out.thrown.message, undefined, what);
   assert.equal(out.exitCode, 0, `${what}: ${out.stderr.slice(-900)}`);
+}
+// The configuration rows of `spec`, made as an earlier plugin version's build made them: the configuration step with no create
+// capability (lib/configuration-artifacts.js runConfigurationStep over a plain configurationContext), which creates each row by
+// name at an id the service picks.
+async function madeByEarlierVersion(org, spec) {
+  const httpClient = createAzHttpClient(org.origin, { getToken: () => 'test-token-0123456789abcdef', request: (req) => org.request(req), sleep: async () => {}, sendOnce: (m, u) => configurationSendOnce(m, u) });
+  const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(makeTempDir('config-build-sdk-')), instanceUrl: org.origin, httpClient, solutionUniqueName: 'ContosoSol' });
+  await sdk.initWorkspace();
+  const step = await runConfigurationStep(spec, configurationContext({ sdk, solutionUniqueName: 'ContosoSol' }), 'data-model');
+  assert.equal(step.halt, null, step.halt && `${step.halt.code}: ${step.halt.message}`);
 }
 // No write since `mark` names the implementation, in any shape (a lookup column or a bind).
 const writesImplementation = (org, mark) => org.requests.slice(mark).some((r) => r.method !== 'GET' && /plugintype/i.test(JSON.stringify(r.body || {})));
@@ -1231,7 +1348,8 @@ test('protected configuration through the build command: a first create whose na
   const versioned = (spec) => ({ ...spec, solution: { ...spec.solution, version: '1.3.0.0' } });
   const solutionVersion = (org) => org.rows('solutions').find((s) => s.uniquename === 'ContosoSol').version;
 
-  // Opting in over an API the build made without the opt-in: a namesake at another id.
+  // Opting in over an API a default build made: default creates take the same derived ids, so the row sits at the derived id
+  // and no binding of this folder holds it. It is not adopted (an id is never adopted on its own), and nothing is written.
   const plain = apiSpec();
   delete plain.configurationIdentity;
   const made = await runCommand(plain);
@@ -1243,6 +1361,8 @@ test('protected configuration through the build command: a first create whose na
     assert.equal(stopped.thrown && stopped.thrown.code, 'create-identity-conflict', `${label}: ${stopped.thrown && stopped.thrown.message}`);
     assert.equal(stopped.thrown.phase, 'preflight', label);
     assert.match(stopped.thrown.message, /customApi contoso_calc/, label);
+    assert.match(stopped.thrown.message, new RegExp(`derived id ${made.org.rows('customapis')[0].customapiid} is taken by a row no binding holds; it is not adopted`), label);
+    assert.ok(!/adopt:customApi/.test(stopped.thrown.message), `${label}: no adoption is offered`);
     assert.notEqual(stopped.exitCode, 0, label);
     assert.deepEqual(made.org.writes(mark), [], `${label}: nothing is written`);
   }
@@ -1262,8 +1382,10 @@ test('protected configuration through the build command: a first create whose na
   assert.deepEqual(first.org.unexpected, []);
 });
 
-// Opting in over two APIs made without it: one stop names both namesakes, each with its own id, the fields the build would then
-// change and its exact approvals, and those approvals given back on the command line adopt both and send only the printed edit.
+// Opting in over two APIs an EARLIER plugin version made without it, at ids the service picked (the configuration step with no
+// create capability, as a standalone caller still runs it): one stop names both namesakes, each with its own id, the fields the
+// build would then change and its exact approvals, and those approvals given back on the command line adopt both and send only
+// the printed edit. (A default build of this version makes them at the derived ids instead; the test above pins that stop.)
 test('protected configuration through the build command: a stop over several namesakes shows each one\u2019s id and fields beside its approvals, and those approvals adopt them', async () => {
   const twoApis = (description) => {
     const spec = apiSpec();
@@ -1272,8 +1394,10 @@ test('protected configuration through the build command: a stop over several nam
   };
   const plain = twoApis('Maker text');
   delete plain.configurationIdentity;
-  const made = await runCommand(plain);
-  succeeded(made, 'the ordinary create');
+  const made = await runCommand({ ...plain, customApis: [] });
+  succeeded(made, 'the app and its solution');
+  await madeByEarlierVersion(made.org, plain);
+  assert.equal(made.org.rows('customapis').length, 2);
   const idOf = (name) => made.org.rows('customapis').find((r) => r.uniquename === name).customapiid;
   const mark = made.org.requests.length;
   const stopped = await runCommand(twoApis('Replacement'), { org: made.org, appDir: made.appDir, argv: DATA });
