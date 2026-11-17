@@ -267,7 +267,12 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
 
 8. For the template path only:
 
-   1. Mark **Resolve target environment** as `in_progress`.
+   1. Mark **Resolve target environment** as `in_progress`. Before invoking any template authentication or provisioning helper, verify PAC command availability:
+      - On Windows, run `Get-Command pac -All -CommandType Application` in PowerShell to discover the installed launcher, then check `Get-Command pac.exe -CommandType Application`. A working `pac.cmd` launcher means PAC is installed; failure to find `pac.exe` on PATH alone is not evidence that PAC is missing or that authentication is wrong. The bundled Node.js helpers invoke `pac.exe`, so a shim-only PATH needs resolution before continuing.
+      - If only `pac.cmd` is available, inspect that installed launcher's target and resolve its actual `pac.exe` (including paths relative to the launcher directory). Do not execute the shim's contents as discovery code, guess a versioned installation directory, search the project for an executable, or install another PAC copy. If the target cannot be resolved and verified, explain that the launcher was found but its native executable could not be located, and stop with the specific discovery error.
+      - Prepend the verified native executable's parent directory to the process-local PATH only. In PowerShell, use `$env:PATH = "<verified PAC directory>;" + $env:PATH`, then run `pac.exe help` to verify it. Do not change the user/machine PATH or modify the installed launcher. Preserve this PATH for **every** subsequent template helper and PAC command, including background tasks. When tool calls use fresh shells, apply the same process-local PATH prefix in each call before launching the command; an earlier shell's environment does not persist.
+      - On macOS/Linux, verify `pac help` using the existing PATH; do not require a `.exe`.
+      - If the executable is genuinely unavailable, report the discovery failure and point to the [PAC CLI installation instructions](https://learn.microsoft.com/power-platform/developer/howto/install-cli). Keep command discovery failures separate from authentication failures; do not ask the user to reinstall a working CLI or switch tenants to fix PATH.
    2. Resolve the target environment via the shared auth helpers:
       ```bash
       node "${PLUGIN_ROOT}/scripts/resolve-template-import-context.js"
@@ -297,7 +302,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
       node "${PLUGIN_ROOT}/scripts/validate-cli-tenant-alignment.js" --envUrl "<environmentUrl>"
       ```
       - **`ok: true`**: mark **Validate CLI tenant alignment** as `completed`.
-      - **`ok: false`**: surface the error and the `pacTenantId`, `azTenantId`, and `tokenTenantId` fields when present. Stop before import and tell the user to switch either PAC auth or Azure CLI to the same tenant, then rerun the skill. Do not emit `template_import_failure` because no import was attempted.
+      - **`ok: false`**: surface the error and the `pacTenantId`, `azTenantId`, and `tokenTenantId` fields when present. Stop before import. If PAC could not be launched, recheck command discovery and the inherited process-local PATH above, then rerun this read-only check after correction. If authentication details could not be determined, report which CLI needs authentication; missing values do not prove a tenant mismatch. Only when the returned `mismatches` identifies a tenant or environment mismatch, tell the user to select the intended PAC environment/auth profile or Azure CLI tenant, then rerun validation. Do not skip tenant validation, change authentication automatically, or emit `template_import_failure` because no import was attempted.
    5. Mark both **Validate JavaScript unblock requirement** and **Validate Dataverse language requirements** as `in_progress`. Run the `.js` blocked-attachment dry run and the Dataverse language check in parallel because both are read-only preflights against the confirmed target environment:
       ```bash
       node "${PLUGIN_ROOT}/scripts/lib/fix-blocked-attachments.js" --envUrl "<environmentUrl>" --extensions js --dry-run --quiet
