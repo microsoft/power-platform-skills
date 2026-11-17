@@ -62,7 +62,8 @@ function watchPlan(options) {
   var unchangedChecks = 0;
   // Set once the reader is seen outside this window: another app (the terminal), another tab, or a
   // hidden page. A reload cannot interrupt a reader who was elsewhere, so the quiet window and the
-  // page's busy signal do not hold it back; the next interaction with the page clears it.
+  // page's busy signal do not hold it back. It clears when the reader comes back (returned()), or
+  // on the next interaction with the page.
   var away = false;
   // Captured now: currentScript is only set while this script first runs, not in later callbacks.
   var nonce = (document.currentScript && document.currentScript.nonce) || '';
@@ -106,14 +107,20 @@ function watchPlan(options) {
     else message.textContent = 'Auto-refresh on while progress changes.';
   }
 
-  function checkVersion() {
+  // `done` runs once the probe has loaded or failed. A classic script runs before its `load`
+  // event, so by then any change it reported has already been handled.
+  function checkVersion(done) {
     var probe = document.createElement('script');
     // The nonce lets the probe past this page's CSP, which admits only nonced scripts.
     if (nonce) probe.setAttribute('nonce', nonce);
-    probe.addEventListener('load', function () { probe.remove(); });
+    probe.addEventListener('load', function () {
+      probe.remove();
+      if (done) done();
+    });
     probe.addEventListener('error', function () {
       probe.remove();
       if (versioned) fallBack();
+      if (done) done();
     });
     // A fresh URL each time, so a cached copy of the version is never read.
     probe.src = options.versionFile + '?t=' + Date.now();
@@ -150,11 +157,19 @@ function watchPlan(options) {
     window.addEventListener(event, touch, { passive: true });
   });
   // Coming back to the page is when the reader wants it current: check at once instead of on the
-  // next tick, and reload straight away if the plan moved on while they were elsewhere.
+  // next tick, and reload straight away if the plan moved on while they were elsewhere. Only after
+  // that pending update does `away` clear. A reader can come back straight into the live preview
+  // frame, whose clicks and keys go to that cross-origin frame's document and never reach these
+  // listeners; if `away` stayed set, the next change would skip the busy checks and reload the
+  // preview while they use it, losing what they had typed.
   function returned() {
-    if (document.hidden) return;
-    if (stale) tryReload();
-    else if (versioned) checkVersion();
+    if (document.hidden || readerElsewhere()) return;
+    var settle = function () { away = false; };
+    if (versioned && !stale) checkVersion(settle);
+    else {
+      tryReload();
+      settle();
+    }
   }
   document.addEventListener('visibilitychange', returned);
   window.addEventListener('focus', returned);
@@ -162,6 +177,11 @@ function watchPlan(options) {
   setInterval(function () {
     if (stopped) return;
     if (readerElsewhere()) away = true;
+    else if (away) {
+      // Back without a focus or visibility event, as when focus returns straight into the frame.
+      returned();
+      return;
+    }
     if (versioned && !stale) {
       checkVersion();
       return;

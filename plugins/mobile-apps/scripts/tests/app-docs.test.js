@@ -38,7 +38,9 @@ function seeded(root) {
 // `docs` is the folder the page was opened from. The create plan loads its version file from
 // there; given the folder, a probe runs the real file app-docs.js wrote, and without it every
 // probe fails, as in a browser that blocks file scripts, so the page uses the timed refresh.
-// `focused: false` models a reader in another app, such as the terminal, with the page visible.
+// `focused: false` models a reader in another app, such as the terminal, with the page visible;
+// `setFocused` moves them later without firing any event, as when focus returns straight into the
+// cross-origin preview frame. `window.planRefreshBusy` is the page's own busy signal.
 function refreshPage(html, href, {
   hidden = false, focused = true, storageUnavailable = false, navigationType = 'navigate', docs,
 } = {}) {
@@ -87,8 +89,9 @@ function refreshPage(html, href, {
   };
   vm.runInNewContext(script[1], context);
   return {
-    intervals, navigations, handlers, message, probes,
+    intervals, navigations, handlers, message, probes, window: context.window,
     tick() { now += 10000; intervals.forEach((callback) => callback()); },
+    setFocused(value) { focused = value; },
   };
 }
 
@@ -277,6 +280,32 @@ test('both plans reload only when they change, keep checking, and update for a r
       write('Step six');
       back.handlers.visibilitychange();
       assert.equal(back.navigations.length, 1, `${name}: returning to the page shows the change`);
+
+      // A reader can come back straight into the live preview frame: no event reaches this page,
+      // and the pointer resting on the frame is the only sign they are using it. A change made
+      // while they were away still shows on their return, but once back, the next change waits
+      // until they stop rather than reloading the preview under them.
+      write('Step seven');
+      const preview = open();
+      preview.window.planRefreshBusy = () => true;
+      preview.setFocused(false);
+      preview.tick();
+      write('Step eight');
+      preview.setFocused(true);
+      preview.tick();
+      assert.equal(preview.navigations.length, 1, `${name}: a change made while away shows on return`);
+      const using = open();
+      using.window.planRefreshBusy = () => true;
+      using.setFocused(false);
+      using.tick();
+      using.setFocused(true);
+      using.tick();
+      write('Step nine');
+      using.tick();
+      assert.deepEqual(using.navigations, [], `${name}: a reader back in the preview is not interrupted`);
+      using.window.planRefreshBusy = () => false;
+      using.tick();
+      assert.equal(using.navigations.length, 1, `${name}: the change shows once they stop`);
 
       // A browser that cannot load the version file gets the timed refresh, which pauses at gates.
       write('Approve again', true);
@@ -1876,7 +1905,7 @@ test('the plan never reloads over a reader, and never resets their place', () =>
   // Reading, typing, scrolling or clicking defers the reload; a hidden tab never reloads.
   const controller = fs.readFileSync(path.resolve(__dirname, '..', 'lib', 'plan-refresh.js'), 'utf8');
   assert.match(controller, /Date\.now\(\) - lastInteraction < QUIET_MS/);
-  assert.match(controller, /if \(document\.hidden\) return;/);
+  assert.match(controller, /if \(stopped \|\| !stale \|\| document\.hidden\) return;/);
   // So does using the live preview, whose events never reach this page: it is a cross-origin
   // frame, so pointer entry is the only signal. The page reports it through planRefreshBusy, and
   // run-plan-page.test.js drives the whole exchange. Focus in the frame is deliberately not a

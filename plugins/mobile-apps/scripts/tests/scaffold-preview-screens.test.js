@@ -104,6 +104,41 @@ test('a Stack app keeps the template layout and still gets placeholders', () => 
   assert.deepEqual(result.placeholders, ['app/(app)/home.tsx', 'app/(app)/notes.tsx']);
 });
 
+test('a rerun that changes Tabs to Stack puts the template stack and its auth guard back', () => {
+  const root = freshApp();
+  // The script writes LF, whatever line endings the template was checked out with.
+  const template = read(root, 'app/(app)/_layout.tsx').replace(/\r\n/g, '\n');
+  scaffoldPreviewScreens({ workingDir: root, graph: INSPECTIONS });
+  assert.match(read(root, 'app/(app)/_layout.tsx'), /<Tabs/);
+
+  const stack = structuredClone(INSPECTIONS);
+  stack.navigation = 'Stack';
+  const result = scaffoldPreviewScreens({ workingDir: root, graph: stack });
+
+  assert.equal(result.navigation, 'Stack');
+  assert.equal(read(root, 'app/(app)/_layout.tsx'), template);
+  assert.match(template, /<Redirect href="\/login" \/>/, 'the restored layout keeps the auth guard');
+  assert.ok(result.writtenFiles.includes('app/(app)/_layout.tsx'));
+  assert.ok(result.layouts.includes('app/(app)/_layout.tsx'));
+
+  // The restored file is the template again, so going back to Tabs works as a first run does.
+  scaffoldPreviewScreens({ workingDir: root, graph: INSPECTIONS });
+  assert.match(read(root, 'app/(app)/_layout.tsx'), /<Tabs/);
+});
+
+test('a hand-written outer layout is kept on a Stack rerun, with a warning when it is not a stack', () => {
+  const root = freshApp();
+  const custom = "import { Tabs } from 'expo-router';\nexport default function AppLayout() { return <Tabs />; }\n";
+  fs.writeFileSync(path.join(root, 'app/(app)/_layout.tsx'), custom);
+  const result = scaffoldPreviewScreens({
+    workingDir: root,
+    graph: { navigation: 'Stack', list: [{ name: 'Home', file: 'app/(app)/home.tsx' }] },
+  });
+  assert.equal(read(root, 'app/(app)/_layout.tsx'), custom);
+  assert.ok(result.kept.includes('app/(app)/_layout.tsx'));
+  assert.match(result.warnings.join('\n'), /not a Stack/);
+});
+
 test('graphs Expo Router cannot serve are refused before anything is written', () => {
   const cases = [
     [{ navigation: 'Tabs', list: [{ name: 'Notes', file: 'app/(app)/notes.tsx' }] }, /must assign app\/\(app\)\/home\.tsx/],

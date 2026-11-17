@@ -345,7 +345,24 @@ function scaffoldPreviewScreens({ workingDir, graph }) {
     layouts.push(relative);
   }
 
-  if (navigation !== 'Stack') {
+  if (navigation === 'Stack') {
+    const current = readText(path.join(root, OUTER_LAYOUT));
+    if (current && current.startsWith(LAYOUT_MARKER)) {
+      // An earlier run wrote Tabs or Drawer here, and the graph is now a Stack. Put the template's
+      // protected stack back as it ships, auth guard and all, rather than generate one: without
+      // the marker, a later Tabs or Drawer rerun treats it as the untouched template again.
+      const template = readText(path.join(TEMPLATE_ROOT, OUTER_LAYOUT));
+      if (template && TEMPLATE_RETURN.test(template)) {
+        writeIfChanged(root, OUTER_LAYOUT, template, written);
+        layouts.push(OUTER_LAYOUT);
+      } else {
+        warnings.push(`${OUTER_LAYOUT} still renders an earlier navigator; the template's protected stack to restore it from is missing. Switch it to a Stack by hand.`);
+      }
+    } else if (current !== null && !/<Stack[\s/>]/.test(current)) {
+      kept.push(OUTER_LAYOUT);
+      warnings.push(`${OUTER_LAYOUT} is not a Stack and is not this script's, so it was kept. Switch it to a Stack by hand.`);
+    }
+  } else {
     const current = readText(path.join(root, OUTER_LAYOUT));
     // A rerun starts again from the template, so a changed screen graph replaces the old tabs.
     const base = current && current.startsWith(LAYOUT_MARKER) ? readText(path.join(TEMPLATE_ROOT, OUTER_LAYOUT)) : current;
