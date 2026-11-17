@@ -32,19 +32,54 @@ function setup(t) {
   return { site, output, staged, manifestPath, writeManifest, run, injectFailure };
 }
 
-test('valid staged remediation still supports dry-run, apply and discard', (t) => {
+test('successful apply removes both staged files and their diff manifest, but dry-run preserves both', (t) => {
   const fixture = setup(t);
   fs.writeFileSync(path.join(fixture.site, 'page.html'), 'original');
   fs.writeFileSync(path.join(fixture.staged, 'page.html'), 'approved proposal');
   fixture.writeManifest({ files: [{ relativePath: 'page.html' }] });
   assert.equal(fixture.run('--dry-run').status, 0);
   assert.equal(fs.readFileSync(path.join(fixture.site, 'page.html'), 'utf8'), 'original');
+  assert.equal(fs.existsSync(fixture.manifestPath), true);
+  assert.equal(fs.readFileSync(path.join(fixture.staged, 'page.html'), 'utf8'), 'approved proposal');
   assert.equal(fixture.run().status, 0);
   assert.equal(fs.readFileSync(path.join(fixture.site, 'page.html'), 'utf8'), 'approved proposal');
   assert.equal(fs.existsSync(fixture.staged), false);
+  assert.equal(fs.existsSync(fixture.manifestPath), false);
   assert.deepEqual(fs.readdirSync(fixture.output).filter((name) => name.startsWith('remediation-backup-')), []);
+  const repeat = fixture.run();
+  assert.equal(repeat.status, 3);
+  assert.match(repeat.stdout, /nothing to apply/);
+  assert.doesNotMatch(repeat.stderr, /Staged file missing/);
+});
+
+test('keep-staged retains a usable manifest and staged files after successful apply', (t) => {
+  const fixture = setup(t);
+  fs.writeFileSync(path.join(fixture.site, 'page.html'), 'original');
+  fs.writeFileSync(path.join(fixture.staged, 'page.html'), 'approved proposal');
+  fixture.writeManifest({ files: [{ relativePath: 'page.html' }] });
+  const before = fs.readFileSync(fixture.manifestPath, 'utf8');
+  const preview = fixture.run('--dry-run', '--keep-staged');
+  assert.equal(preview.status, 0);
+  assert.match(preview.stdout, /staged tree and diff manifest retained/);
+  assert.equal(fixture.run('--keep-staged').status, 0);
+  assert.equal(fs.readFileSync(path.join(fixture.site, 'page.html'), 'utf8'), 'approved proposal');
+  assert.equal(fs.readFileSync(path.join(fixture.staged, 'page.html'), 'utf8'), 'approved proposal');
+  assert.equal(fs.readFileSync(fixture.manifestPath, 'utf8'), before);
+  assert.equal(fixture.run('--keep-staged').status, 0);
+});
+
+test('discard removes both proposals and manifest without applying, while dry-run preserves both', (t) => {
+  const fixture = setup(t);
+  fs.writeFileSync(path.join(fixture.site, 'page.html'), 'original');
+  fs.writeFileSync(path.join(fixture.staged, 'page.html'), 'proposal');
+  fixture.writeManifest({ files: [{ relativePath: 'page.html' }] });
+  assert.equal(fixture.run('--discard', '--dry-run').status, 0);
+  assert.equal(fs.existsSync(fixture.manifestPath), true);
+  assert.equal(fs.existsSync(fixture.staged), true);
   assert.equal(fixture.run('--discard').status, 0);
   assert.equal(fs.existsSync(fixture.manifestPath), false);
+  assert.equal(fs.existsSync(fixture.staged), false);
+  assert.equal(fs.readFileSync(path.join(fixture.site, 'page.html'), 'utf8'), 'original');
 });
 
 test('hard-linked files cannot bypass apply containment', (t) => {

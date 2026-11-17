@@ -1015,7 +1015,7 @@ pac pages upload --path "<SITE_ROOT>" --modelVersion 1
 node update-state.js --output-dir "<OUTPUT_DIR>" --clear-operation
 ```
 
-`apply-remediation.js` reads `remediation-diff.json`, copies each staged file over its live counterpart, and deletes the `remediation-staged/` directory on success. Pass `--dry-run` first if you want to print the planned copies without executing.
+`apply-remediation.js` reads `remediation-diff.json`, copies each staged file over its live counterpart, and deletes both the `remediation-staged/` directory and the diff manifest on success so the live report does not retain broken staged-file links. `--keep-staged` retains both artifacts. Pass `--dry-run` first if you want to print the planned copies without executing.
 
 **No — discard staged changes:** delete the staged tree and the diff manifest; live source remains untouched.
 

@@ -176,7 +176,9 @@ restores original bytes/modes and removes newly created files and directories;
 rollback errors explicitly require manual recovery. Any copy/rollback failure
 preserves staged proposals and an indexed `remediation-backup-*` directory of
 original bytes/modes under the output directory; its location is printed in the
-error. Successful apply removes the backup. A backup preparation failure aborts
+error. Successful apply removes the backup and, unless `--keep-staged` is requested,
+both the staged tree and its diff manifest so the live report cannot retain broken
+staged-file links. Dry-run preserves both artifacts. A backup preparation failure aborts
 before live writes.
 Keep both trees unchanged during apply. This rollback does not cover process crashes.
 Follow the track-specific upload and approval sequence in [SKILL.md](./SKILL.md);

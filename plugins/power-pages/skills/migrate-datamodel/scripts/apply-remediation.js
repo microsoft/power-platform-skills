@@ -19,7 +19,7 @@
  *     over `<site-root>/<relativePath>`. mkdir -p any missing parents.
  *   - Rejects linked descendants; restores originals on caught copy failures.
  *     Do not edit either tree concurrently. This is not crash-safe recovery.
- *   - On success, deletes `<output-dir>/remediation-staged/` (unless --keep-staged).
+ *   - On success, deletes the staged tree and diff manifest (unless --keep-staged).
  *   - --discard: skip the copy, just delete the staged dir (used on cancel).
  *   - --dry-run: print what would happen, touch nothing.
  *
@@ -164,7 +164,8 @@ function main() {
     for (const { from, to } of plan) {
       console.log(`[dry-run] ${from} → ${to}`);
     }
-    console.log(`\n[dry-run] Would apply ${plan.length}/${files.length} file(s) and delete ${stagedDir}.`);
+    console.log(`\n[dry-run] Would apply ${plan.length}/${files.length} file(s)` +
+      (keepStaged ? '; staged tree and diff manifest retained.' : ` and delete ${stagedDir} and ${diffPath}.`));
     return;
   }
 
@@ -236,6 +237,7 @@ function main() {
   rmRecursive(backupDir);
   if (!keepStaged) {
     rmRecursive(stagedDir);
+    fs.unlinkSync(diffPath);
   }
   console.log(`\n✓ Applied ${plan.length}/${files.length} remediation file(s) to ${siteRoot}.`);
 }
