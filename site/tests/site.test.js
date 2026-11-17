@@ -159,10 +159,18 @@ test('conflicting same-date Power Pages results for a model stop publication', (
   const fixture = evidenceFixture('power-pages');
   const first = { ...fixture.summary, model: DEFAULT_MODELS[0] };
   const second = { ...first, judgeModel: 'different-judge' };
+  const newer = { ...first, generatedAt: '2026-01-16T00:00:00Z' };
   const secondFile = path.join(fixture.root, 'second.summary.json');
+  const newerFile = path.join(fixture.root, 'newer.summary.json');
   writeJson(secondFile, second);
-  assert.throws(() => fixture.load(first, { evalResults: [fixture.summaryFile, secondFile] }),
-    /ambiguous same-date skill\/model summaries/);
+  writeJson(newerFile, newer);
+  for (const files of [
+    [fixture.summaryFile, secondFile, newerFile],
+    [newerFile, fixture.summaryFile, secondFile],
+  ]) {
+    assert.throws(() => fixture.load(first, { evalResults: files }),
+      /ambiguous same-date skill\/model summaries/);
+  }
 });
 
 test('evaluation inventory discovers every real skill, not only featured catalog entries', () => {

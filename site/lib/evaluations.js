@@ -266,14 +266,14 @@ function loadEvaluations({ repoRoot, catalog, evalResults = null, allowEmptyEval
       const combination = JSON.stringify([summary.plugin, suite.skill, summary.model, summary.judgeModel,
         summary.reasoningEffort ?? null, summary.judgeReasoningEffort ?? null]);
       const timestamp = Date.parse(summary.generatedAt);
-      const identity = JSON.stringify([combination, timestamp]);
+      const configuredPowerPages = summary.plugin === 'power-pages' && POWER_PAGES_MODELS.has(summary.model);
+      const key = configuredPowerPages
+        ? JSON.stringify([summary.plugin, suite.skill, summary.model]) : combination;
+      const identity = JSON.stringify([key, timestamp]);
       requireValue(!seen.has(identity), 'ambiguous same-date skill/model summaries');
       seen.add(identity);
       if (summary.plugin === 'power-pages' && !POWER_PAGES_MODELS.has(summary.model)) continue;
-      const key = summary.plugin === 'power-pages'
-        ? JSON.stringify([summary.plugin, suite.skill, summary.model]) : combination;
       const previous = latest.get(key);
-      requireValue(!previous || timestamp !== Date.parse(previous.summary.generatedAt), 'ambiguous same-date skill/model summaries');
       // Actions can upload one summary per skill. Select a whole suite with its
       // own provenance; filling missing trials from another run could turn an
       // incomplete run into an apparent pass or mix source versions.
