@@ -11,6 +11,18 @@ The generator never writes the execution/progress report. Do not replace the liv
 report with a static template, example command results, or a fabricated success.
 The authoritative workflow and approval gates are in [SKILL.md](./SKILL.md).
 
+## Source-root validation
+
+Snapshots and source-remediation passes require a downloaded metadata root with
+an actual `website.yml` file, either directly or inside `.powerpages-site`.
+Both commands use the shared strict root check; the general project resolver
+alone is deliberately permissive and is not sufficient for migration scans.
+Remediation resolves the metadata root before scanning, binding the manifest or
+removing obsolete proposals. Invalid roots fail explicitly without replacing
+existing snapshots or proposals instead of producing successful empty scans.
+Report-only CSV generation still needs no source path. This file-presence check
+does not replace the skill's website/environment identity verification.
+
 ## Count status versus record-level validation
 
 The Overview totals and Pages & Components badges are count comparisons, not

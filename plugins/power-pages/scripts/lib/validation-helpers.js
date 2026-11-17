@@ -173,6 +173,28 @@ function resolvePowerPagesSiteRoot(projectRoot) {
   return null;
 }
 
+function requirePowerPagesSiteRoot(projectRoot) {
+  if (typeof projectRoot !== 'string' || !projectRoot.trim()) {
+    throw new Error('A downloaded Power Pages site path containing website.yml is required.');
+  }
+  const root = path.resolve(projectRoot);
+  // The permissive resolver also supports projects whose metadata is not
+  // downloaded yet. Migration scans require the actual website.yml file.
+  const candidates = new Set([resolvePowerPagesSiteRoot(root), root]);
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    const marker = path.join(candidate, 'website.yml');
+    try {
+      if (fs.statSync(marker).isFile()) return candidate;
+    } catch (error) {
+      if (error.code !== 'ENOENT' && error.code !== 'ENOTDIR') {
+        throw new Error(`Could not inspect Power Pages site marker ${marker}: ${error.message}`);
+      }
+    }
+  }
+  throw new Error(`Expected a downloaded Power Pages site containing website.yml at ${root} or its .powerpages-site folder. Select the site root explicitly.`);
+}
+
 /**
  * Finds a subdirectory inside .powerpages-site/.
  * @param {string} dir - Starting directory
@@ -596,6 +618,7 @@ module.exports = {
   findProjectRoot,
   isNonSpaSiteRoot,
   resolvePowerPagesSiteRoot,
+  requirePowerPagesSiteRoot,
   findPowerPagesSiteDir,
   UUID_REGEX,
   validateDataverseEnvironmentUrl,

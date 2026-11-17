@@ -22,6 +22,7 @@ function setup(t) {
   const site = path.join(root, 'site');
   const output = path.join(root, 'reports');
   fs.mkdirSync(site);
+  fs.writeFileSync(path.join(site, 'website.yml'), 'adx_websiteid: 00000000-0000-0000-0000-000000000001\n');
   const run = (...flags) => spawnSync(process.execPath, [
     script, '--site-name', 'Contoso', '--website-id', '00000000-0000-0000-0000-000000000001',
     '--site-path', site, '--output-dir', output, ...flags,
@@ -104,6 +105,7 @@ test('a different site cannot reuse an existing remediation manifest', (t) => {
   const original = fs.readFileSync(fixture.manifestPath, 'utf8');
   const otherSite = path.join(fixture.site, 'other');
   fs.mkdirSync(otherSite);
+  fs.writeFileSync(path.join(otherSite, 'website.yml'), 'adx_websiteid: 00000000-0000-0000-0000-000000000002\n');
   const result = fixture.run('--automate-liquid', '--site-path', otherSite);
   assert.equal(result.status, 1);
   assert.match(result.stderr, /does not match the selected site root/);
@@ -124,6 +126,44 @@ test('null saved remediation inputs produce clear errors before proposals are re
     assert.doesNotMatch(result.stderr, /TypeError|Cannot read properties/);
     assert.equal(fs.readFileSync(stagedPath, 'utf8'), staged);
   }
+});
+
+test('remediation rejects arbitrary roots before creating reports or altering existing proposals', (t) => {
+  const fixture = setup(t);
+  const empty = path.join(fixture.site, 'not-a-site');
+  fs.mkdirSync(empty);
+  for (const flag of ['--automate-fetchxml', '--automate-liquid']) {
+    const result = fixture.run(flag, '--site-path', empty);
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /downloaded Power Pages site containing website\.yml/);
+    assert.equal(fs.existsSync(fixture.output), false);
+  }
+  fs.writeFileSync(path.join(fixture.site, 'page.html'), fetchXml);
+  assert.equal(fixture.run('--automate-fetchxml').status, 0);
+  const manifest = fs.readFileSync(fixture.manifestPath, 'utf8');
+  const stagedPath = path.join(fixture.output, 'remediation-staged', 'page.html');
+  const staged = fs.readFileSync(stagedPath, 'utf8');
+  const result = fixture.run('--automate-liquid', '--site-path', empty);
+  assert.equal(result.status, 1);
+  assert.equal(fs.readFileSync(fixture.manifestPath, 'utf8'), manifest);
+  assert.equal(fs.readFileSync(stagedPath, 'utf8'), staged);
+});
+
+test('remediation resolves managed metadata roots before scanning and binding the manifest', (t) => {
+  const fixture = setup(t);
+  const metadata = path.join(fixture.site, '.powerpages-site');
+  fs.mkdirSync(metadata);
+  fs.writeFileSync(path.join(metadata, 'website.yml'), 'adx_websiteid: 00000000-0000-0000-0000-000000000001\n');
+  fs.writeFileSync(path.join(metadata, 'page.html'), `${fetchXml}\n${liquid}`);
+  fs.writeFileSync(path.join(fixture.site, 'outside.html'), fetchXml);
+  const result = fixture.run('--automate-fetchxml', '--automate-liquid');
+  assert.equal(result.status, 0, result.stderr);
+  const manifest = fixture.manifest();
+  assert.equal(manifest.siteRoot, metadata);
+  assert.deepEqual(manifest.files.map((file) => file.relativePath), ['page.html']);
+  const staged = fs.readFileSync(path.join(fixture.output, 'remediation-staged', 'page.html'), 'utf8');
+  assert.match(staged, /name="powerpagecomponent"/);
+  assert.match(staged, /SDM\u2192EDM SUGGESTION/);
 });
 
 test('CSV parser preserves quoted commas, escaped quotes, multiline fields and CRLF', () => {

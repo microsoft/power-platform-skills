@@ -36,6 +36,10 @@ layouts, and both aggregate and per-record web-role layouts. Capture canonical
 prefixed/unprefixed states, nested advanced-form steps and per-record page-access
 rules. Wire new inventories through diff identities, meaningful values and report
 grouping. The live comparison must use record-level diff semantics, not just counts.
+Snapshot and source-remediation commands require a real `website.yml` file in the
+resolved metadata root before scanning or replacing saved evidence/proposals.
+Do not treat an arbitrary directory or an empty managed metadata folder as a
+successful zero-record scan; retain report-only CSV generation without a site path.
 Initialization must verify the website and
 environment identity before resuming or resetting an existing folder. Remediation
 reruns rebuild the selected FetchXML/Liquid passes from current source, preserving

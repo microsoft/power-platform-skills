@@ -26,7 +26,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { parseSimpleYaml } = require('../../../scripts/lib/powerpages-config');
 const { loadAggregateRecords } = require('../../../scripts/lib/non-spa-metadata');
-const { resolvePowerPagesSiteRoot } = require('../../../scripts/lib/validation-helpers');
+const { requirePowerPagesSiteRoot } = require('../../../scripts/lib/validation-helpers');
 
 function parseArgs(argv) {
   const out = {};
@@ -377,11 +377,7 @@ function main() {
   if (!label || !['sdm', 'edm'].includes(label)) {
     console.error('--label must be "sdm" or "edm"'); process.exit(1);
   }
-  if (!fs.existsSync(siteRoot)) {
-    console.error(`Site root not found: ${siteRoot}`); process.exit(1);
-  }
-
-  siteRoot = resolvePowerPagesSiteRoot(siteRoot) || path.resolve(siteRoot);
+  siteRoot = requirePowerPagesSiteRoot(siteRoot);
   const webLinkSets = mergeScans(
     scanWebLinkSets(siteRoot, 'web-link-sets'),
     scanWebLinkSets(siteRoot, 'weblink-sets'));

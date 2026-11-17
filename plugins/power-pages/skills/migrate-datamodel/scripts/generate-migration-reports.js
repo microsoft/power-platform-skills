@@ -32,7 +32,7 @@
 const fs = require('fs');
 const path = require('path');
 const { pathToFileURL } = require('node:url');
-const { getAuthToken, makeRequest } = require('../../../scripts/lib/validation-helpers');
+const { getAuthToken, makeRequest, requirePowerPagesSiteRoot } = require('../../../scripts/lib/validation-helpers');
 
 // Map of adx_* entity logical names to their powerpagecomponenttype value.
 // Source: https://learn.microsoft.com/en-us/power-pages/admin/migrate-enhanced-data-model#site-component-type-and-values
@@ -1485,12 +1485,13 @@ async function main() {
     }
   }
 
-  // Create output directory if it doesn't exist
-  if (!fs.existsSync(args['output-dir'])) {
-    fs.mkdirSync(args['output-dir'], { recursive: true });
-  }
-
   try {
+    const sitePath = args['automate-fetchxml'] || args['automate-liquid']
+      ? requirePowerPagesSiteRoot(args['site-path'] || args['sitePath'])
+      : null;
+    if (!fs.existsSync(args['output-dir'])) {
+      fs.mkdirSync(args['output-dir'], { recursive: true });
+    }
     // Parse customization report if provided
     let customizations = {};
     const customizationReportPath =
@@ -1521,11 +1522,7 @@ async function main() {
     }
 
     let remediationKinds = new Set();
-    if (args['automate-fetchxml'] || args['automate-liquid']) {
-      const sitePath = args['site-path'] || args['sitePath'];
-      if (!sitePath || !fs.existsSync(sitePath)) {
-        throw new Error('--site-path must identify an existing downloaded site for remediation');
-      }
+    if (sitePath) {
       remediationKinds = prepareRemediation(sitePath, args['output-dir'], [
         ...(args['automate-fetchxml'] ? ['fetchxml'] : []),
         ...(args['automate-liquid'] ? ['liquid'] : []),
@@ -1536,11 +1533,6 @@ async function main() {
     let fetchXmlRewriteResults = null;
     let sitePathUsed = null;
     if (remediationKinds.has('fetchxml')) {
-      const sitePath = args['site-path'] || args['sitePath'];
-      if (!sitePath) {
-        console.error('Error: --site-path <path> is required with --automate-fetchxml. Point this at your `pac pages download` output directory.');
-        process.exit(1);
-      }
       sitePathUsed = sitePath;
       console.log(`Rewriting FetchXML in: ${sitePath} → staging to remediation-staged/`);
       fetchXmlRewriteResults = executeFetchXmlRewrites(sitePath, args['output-dir']);
@@ -1550,11 +1542,6 @@ async function main() {
     // Run Liquid entities[''] semi-auto rewriter if requested
     let liquidRewriteResults = null;
     if (remediationKinds.has('liquid')) {
-      const sitePath = args['site-path'] || args['sitePath'];
-      if (!sitePath) {
-        console.error('Error: --site-path <path> is required with --automate-liquid. Point this at your `pac pages download` output directory.');
-        process.exit(1);
-      }
       sitePathUsed = sitePathUsed || sitePath;
       console.log(`Annotating Liquid entities[adx_*] usages in: ${sitePath} → staging to remediation-staged/`);
       liquidRewriteResults = executeLiquidRewrites(sitePath, args['output-dir']);

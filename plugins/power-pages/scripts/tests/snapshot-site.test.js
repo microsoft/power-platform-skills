@@ -14,6 +14,7 @@ function fixture(t) {
   const site = path.join(root, 'site');
   const output = path.join(root, 'reports');
   fs.mkdirSync(site);
+  fs.writeFileSync(path.join(site, 'website.yml'), 'adx_websiteid: 00000000-0000-0000-0000-000000000001\n');
   function write(relative, text) {
     const file = path.join(site, ...relative.split(/[\\/]/));
     fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -25,7 +26,7 @@ function fixture(t) {
     assert.equal(result.status, 0, result.stderr);
     return JSON.parse(fs.readFileSync(path.join(output, 'sdm-snapshot.json'), 'utf8'));
   }
-  return { write, run, site };
+  return { write, run, site, output };
 }
 
 test('missing optional snapshot directories remain empty', (t) => {
@@ -40,6 +41,25 @@ test('unreadable snapshot directories report errors rather than empty inventorie
     throw Object.assign(new Error('permission denied'), { code: 'EACCES' });
   });
   assert.throws(() => safeReaddir('restricted'), /Could not read snapshot directory restricted: permission denied/);
+});
+
+test('snapshot rejects arbitrary roots without creating or replacing saved evidence', (t) => {
+  const { write, run, site, output } = fixture(t);
+  const empty = path.join(site, 'not-a-site');
+  fs.mkdirSync(empty);
+  const attempt = () => spawnSync(process.execPath, [script, '--site-root', empty,
+    '--output-dir', output, '--label', 'sdm'], { encoding: 'utf8' });
+  let result = attempt();
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /downloaded Power Pages site containing website\.yml/);
+  assert.equal(fs.existsSync(output), false);
+  write('webrole.yml', '- adx_name: Members');
+  run();
+  const snapshot = path.join(output, 'sdm-snapshot.json');
+  const original = fs.readFileSync(snapshot, 'utf8');
+  result = attempt();
+  assert.equal(result.status, 1);
+  assert.equal(fs.readFileSync(snapshot, 'utf8'), original);
 });
 
 test('nested configuration and both setting layouts are captured with content hashes', (t) => {
