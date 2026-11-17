@@ -281,7 +281,7 @@ function cmdInit(args) {
     // Reset only generated migration artifacts, never the downloaded site tree.
     for (const filename of [
       'sdm-snapshot.json', 'edm-snapshot.json', 'migration-data-diff.json',
-      'remediation-diff.json', 'customization-report.html',
+      'remediation-diff.json', 'customization-report.html', 'customization-assessment.json',
       'plugin-remediation-prompt.txt', 'dme-remediation-prompt.txt',
       'migration-status.json', 'migration-status.txt',
     ]) {

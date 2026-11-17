@@ -222,7 +222,7 @@ test('force reset clears generated artifacts but keeps downloaded source and inp
   assert.equal(fixture.run().status, 0);
   const artifacts = [
     'sdm-snapshot.json', 'edm-snapshot.json', 'migration-data-diff.json',
-    'remediation-diff.json', 'customization-report.html',
+    'remediation-diff.json', 'customization-report.html', 'customization-assessment.json',
     'plugin-remediation-prompt.txt', 'dme-remediation-prompt.txt',
     'migration-status.json', 'migration-status.txt',
   ];

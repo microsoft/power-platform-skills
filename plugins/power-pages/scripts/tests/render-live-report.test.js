@@ -2,8 +2,66 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const vm = require('node:vm');
 const { buildInitialState } = require('../../skills/migrate-datamodel/scripts/lib/migration-state-schema');
 const { renderLiveReport } = require('../../skills/migrate-datamodel/scripts/lib/render-live-report');
+
+test('live report refreshes at 40 seconds without changing PAC polling', async () => {
+  const state = buildInitialState({ webSiteId: 'site-id', outputDir: 'migration-reports' });
+  const html = renderLiveReport(state);
+  assert.match(html, /Auto-refreshing every 40s/);
+  const script = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)]
+    .map((match) => match[1]).find((content) => content.includes('var POLL_MS'));
+  assert.ok(script, 'generated HTML must include its refresh script');
+
+  for (const protocol of ['file:', 'https:']) {
+    let tick;
+    let reloads = 0;
+    let fetches = 0;
+    let latest = state.lastUpdatedAt;
+    const stored = new Map();
+    const document = {
+      visibilityState: 'visible',
+      getElementById: () => null,
+      querySelector: () => null,
+      querySelectorAll: () => [],
+    };
+    vm.runInNewContext(script, {
+      document,
+      window: { scrollY: 123 },
+      location: { protocol, pathname: '/report.html', reload() { reloads++; } },
+      sessionStorage: {
+        getItem: (key) => stored.get(key) ?? null,
+        setItem: (key, value) => stored.set(key, value),
+        removeItem: (key) => stored.delete(key),
+      },
+      setInterval(callback, interval) {
+        assert.equal(interval, 40000);
+        tick = callback;
+      },
+      fetch: async () => {
+        fetches++;
+        return { ok: true, text: async () => `data-live-updated-at-token="${latest}"` };
+      },
+    });
+    assert.equal(typeof tick, 'function');
+    assert.equal(reloads, 0, 'must wait for the timer');
+    tick();
+    await new Promise(setImmediate);
+    assert.equal(reloads, protocol === 'file:' ? 1 : 0);
+    latest = 'changed-token';
+    tick();
+    await new Promise(setImmediate);
+    assert.equal(reloads, protocol === 'file:' ? 2 : 1);
+    assert.equal(stored.get('sdmEdmReport:scrollY'), '123');
+    document.visibilityState = 'hidden';
+    const before = { reloads, fetches };
+    tick();
+    await new Promise(setImmediate);
+    assert.deepEqual({ reloads, fetches }, before, 'hidden tabs must not refresh');
+    assert.equal(fetches, protocol === 'file:' ? 0 : 2);
+  }
+});
 
 function components(sdm, edm, sdmErrors = {}) {
   const state = buildInitialState({ webSiteId: 'site-id', outputDir: 'migration-reports' });
@@ -16,27 +74,62 @@ function components(sdm, edm, sdmErrors = {}) {
     ? html.indexOf('id="tab-migration"') : undefined);
 }
 
-test('equal inventory counts cannot hide replacement identities or changed values in the report', () => {
+test('equal inventory counts show count matches independently of identity or value differences', () => {
   const replaced = components({ webTemplates: [{ name: 'Before' }] }, { webTemplates: [{ name: 'After' }] });
-  assert.match(replaced, /comp-pill mismatch/);
-  assert.match(replaced, /Different records/);
-  assert.doesNotMatch(replaced, /comp-pill match"/);
+  assert.match(replaced, /comp-pill match"/);
+  assert.match(replaced, /Counts match/);
+  assert.match(replaced, /Missing in EDM: 1 · Extra in EDM: 1/);
+  assert.doesNotMatch(replaced, /comp-pill (?:mismatch|warn)/);
   const changed = components({ siteSettings: [{ name: 'Search', value: 'true' }] },
     { siteSettings: [{ name: 'Search', value: 'false' }] });
-  assert.match(changed, /comp-pill warn/);
-  assert.match(changed, /Changed records/);
-  assert.match(changed, /0 of 1 categories matched/);
+  assert.match(changed, /comp-pill match"/);
+  assert.match(changed, /Changed values: 1/);
+  assert.match(changed, /1 of 1 category counts match/);
+  assert.doesNotMatch(changed, /comp-pill (?:mismatch|warn)/);
 });
 
-test('parse failures, ambiguous identities and one-sided content loss cannot render a clean match', () => {
+test('count status rejects incomplete evidence but separates duplicate identities and content changes', () => {
   const records = { webTemplates: [{ name: 'Header', contentHash: 'hash' }] };
   assert.match(components(records, records, { webTemplates: [{ message: 'invalid YAML' }] }),
     /Incomplete snapshot/);
   const duplicate = { basicForms: [{ name: 'Same', slug: 'one' }, { name: 'Same', slug: 'two' }] };
-  assert.match(components(duplicate, duplicate), /comp-pill mismatch/);
-  assert.match(components(records, { webTemplates: [{ name: 'Header', contentHash: null }] }),
-    /comp-pill warn/);
-  assert.match(components(records, records), /1 of 1 categories matched/);
+  const ambiguous = components(duplicate, duplicate);
+  assert.match(ambiguous, /comp-pill match"/);
+  assert.match(ambiguous, /Duplicate SDM identities: 1 · Duplicate EDM identities: 1/);
+  assert.match(ambiguous, /separate migration safety gate still uses the full comparison/);
+  const changed = components(records, { webTemplates: [{ name: 'Header', contentHash: null }] });
+  assert.match(changed, /comp-pill match"/);
+  assert.match(changed, /Changed content hashes: 1/);
+  assert.match(components(records, records), /1 of 1 category counts match/);
+});
+
+test('matching webpage-rule and snippet counts have no warning or error count indicators', () => {
+  const snippets = [
+    { name: 'Forum Post Create Heading', language: 'en-US', slug: 'first' },
+    { name: 'Forum Post Create Heading', language: 'en-US', slug: 'second' },
+  ];
+  const html = components({
+    contentSnippets: snippets,
+    webpageRules: [{ name: 'Grant Change to Content', webRoleIds: '[]' }],
+  }, {
+    contentSnippets: snippets,
+    webpageRules: [{ name: 'Grant Change to Content', webRoleIds: null }],
+  });
+  assert.equal((html.match(/class="comp-pill match"/g) || []).length, 2);
+  assert.match(html, /2 of 2 category counts match/);
+  assert.doesNotMatch(html, /comp-pill (?:warn|mismatch)|Changed records|Different records|⚠|✗/);
+  assert.match(html, /Record-level comparison \(separate from count status\)/);
+});
+
+test('overview equal totals claim count equality rather than verified migration', () => {
+  const state = buildInitialState({ webSiteId: 'site-id', outputDir: 'migration-reports' });
+  const html = renderLiveReport(state, {
+    sdmSnapshot: { counts: { webTemplates: 1 }, inventory: { webTemplates: [{ name: 'Before' }] } },
+    edmSnapshot: { counts: { webTemplates: 1 }, inventory: { webTemplates: [{ name: 'After' }] } },
+  });
+  assert.match(html, /Counts match: 1 components on each side/);
+  assert.match(html, /Equal totals do not verify individual records/);
+  assert.doesNotMatch(html, /All 1 components migrated/);
 });
 
 test('prompt links allow local files but never executable URI schemes', () => {
@@ -67,6 +160,24 @@ test('customization report links reuse local-file validation and visibly reject 
     state.customizationReport.path = value;
     assert.ok(renderLiveReport(state).includes(`class="cust-open-btn" href="${value}"`));
   }
+});
+
+test('customization catalog uses neutral raw counts without implying fixes or runtime compatibility', () => {
+  const state = buildInitialState({ webSiteId: 'site-id', outputDir: 'migration-reports' });
+  let html = renderLiveReport(state);
+  assert.match(html, /scan presence alone does not establish a defect/);
+  state.customizationReport = { totalFindings: 30, breakdown: { liquid: 25, fetchxml: 5 },
+    path: 'customization-report.html' };
+  html = renderLiveReport(state);
+  assert.match(html, /scan references, not confirmed defects/);
+  assert.match(html, /Expected references do not require a risk acknowledgment/);
+  assert.match(html, /Zero proposals does not mean all findings have been reviewed/);
+  assert.match(html, /cust-card\.has-findings \{ border-left:3px solid var\(--info\)/);
+  assert.match(html, /Per-finding informational \/ actionable \/ context-review assessments and reasons/);
+  state.customizationReport = { totalFindings: 0 };
+  html = renderLiveReport(state);
+  assert.match(html, /This does not prove complete coverage or runtime compatibility/);
+  assert.doesNotMatch(html, /Clean scan — nothing to remediate/);
 });
 
 test('portal links allow HTTPS without credentials and otherwise render inert text with an explanation', () => {
@@ -112,8 +223,8 @@ test('form steps and access-rule changes participate in the live comparison', ()
   assert.match(missing, /Details in Order/);
   const changed = components({ webpageRules: [{ name: 'Restrict', right: 2 }] },
     { webpageRules: [{ name: 'Restrict', right: 0 }] });
-  assert.match(changed, /comp-pill warn/);
-  assert.match(changed, /Changed records/);
+  assert.match(changed, /comp-pill match"/);
+  assert.match(changed, /Changed values: 1/);
 });
 
 for (const track of ['A', 'B']) {

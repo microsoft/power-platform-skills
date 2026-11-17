@@ -11,6 +11,22 @@ The generator never writes the execution/progress report. Do not replace the liv
 report with a static template, example command results, or a fabricated success.
 The authoritative workflow and approval gates are in [SKILL.md](./SKILL.md).
 
+## Count status versus record-level validation
+
+The Overview totals and Pages & Components badges are count comparisons, not
+proof that each record migrated unchanged. With complete snapshots, equal category
+counts show **Counts match**, including duplicate-name snippets or records with
+different values. These differences do not produce warning/error count badges or
+reduce the matched-count summary. Incomplete inventories and parse errors cannot
+produce a clean count result.
+
+The existing record-level comparator still runs: its findings are available under
+each affected category's **Record-level comparison (separate from count status)**.
+The pre-refs migration safety gate continues to use the full comparison; matching
+counts do not approve ambiguous identities or incomplete evidence. No migration
+approval or runtime result is inferred from a count check. SDM-only categories and
+excluded nonconfiguration categories retain their existing handling.
+
 ## Waiting for user input
 
 The live report displays one required-action notice above all tabs. Existing
@@ -73,8 +89,9 @@ for an explicit defer/skip does not mean runtime validation passed.
 ## Customization analysis and staged remediation
 
 On the Authoring Track, locate the CSV at step 2.3 and remediate at step 2.4.
-On the Downstream Track, these are steps 3.3 and 3.4; findings can indicate an
-upstream ALM gap. Reuse an applicable CSV emitted by the approved PAC migration;
+On the Downstream Track, these are steps 3.3 and 3.4; confirmed unresolved
+customizations can indicate an upstream ALM gap, but raw PAC references alone do
+not. Reuse an applicable CSV emitted by the approved PAC migration;
 verify its run/site provenance rather than selecting by timestamp or filename.
 If missing, retain the explicit report-only compatibility fallback via
 `migration-runtime.js report` as specified in SKILL.md; do not rerun metadata
@@ -111,11 +128,29 @@ perform Dataverse writes. No `--env-url` is needed for local report generation.
 
 Outputs:
 
-- `customization-report.html`: escaped findings, HTTP(S) guidance links and snippet previews.
+- `customization-report.html`: escaped findings, HTTP(S) guidance links, snippet previews
+  and per-finding informational/actionable/context-review assessments with reasons.
+- `customization-assessment.json`: initial static assessments and separate counts, retaining
+  original finding evidence. This does not certify manual work or runtime compatibility.
 - `remediation-staged/`: proposed source files; live source remains unchanged.
 - `remediation-diff.json`: combined FetchXML/Liquid diff, bound to its source site root.
 - `plugin-remediation-prompt.txt`: guidance for customer-owned plugin source, when applicable.
 - `dme-remediation-prompt.txt`: solution-package guidance for supported metadata tables.
+
+Logical-property access and complete FetchXML without `adx_` references can be
+informational. Mixed/unrecognized references, incomplete queries and unmapped
+tables require source-context review, not automatic critical/risk labeling. Known
+PAC FetchXML category spelling variants share the same assessment logic. The skill
+records contextual reclassification and evidence with `update-state.js --add-decision`
+and summarizes dispositions in the live step output; the standalone catalog
+retains the initial static assessment and raw CSV remains unchanged.
+
+Show apply/upload approval only for a valid nonempty `remediation-diff.json`
+whose staged files exist. Zero proposals does not resolve manual or context-review
+items. Expected-only references get optional verification, not a risk acknowledgment;
+actual unreviewed/unfixed items require specific impact and named deferral approval.
+Readiness says **configuration metadata has migrated**, not that migration is complete.
+These rules apply to both tracks without changing the pre-refs comparison gate.
 
 Data Model Extensions are manual: create a reviewed custom table with a lookup to
 `powerpagecomponent`, preserve the custom column types, migrate all pages of source

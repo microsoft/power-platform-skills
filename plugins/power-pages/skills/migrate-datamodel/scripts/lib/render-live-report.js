@@ -273,7 +273,7 @@ function renderConfidenceStat(sdmSnapshot, edmSnapshot) {
   if (!sdmSnapshot) {
     return `<div class="card confidence-card empty">
   <div class="card-title">Migration totals</div>
-  <div class="empty-note">This card appears once the SDM snapshot is captured during configuration setup (after <code>pac pages download --modelVersion 1</code>). After Phase 4.1 runs, it shows <code>SDM total → EDM total</code> with a check mark when every record migrated. Per-category breakdown lives in the Pages &amp; Components tab.</div>
+  <div class="empty-note">This card appears once the SDM snapshot is captured during configuration setup (after <code>pac pages download --modelVersion 1</code>). After Phase 4.1 runs, it shows <code>SDM total → EDM total</code> with a check mark when the totals match. This is a count comparison, not record-level verification. Per-category breakdown lives in the Pages &amp; Components tab.</div>
 </div>`;
   }
 
@@ -306,7 +306,7 @@ function renderConfidenceStat(sdmSnapshot, edmSnapshot) {
   </div>
   <div class="confidence-label">${
     isMatch
-      ? 'All ' + sdmTotal + ' components migrated from SDM to EDM. Open <strong>Pages &amp; Components</strong> for the per-category breakdown.'
+      ? 'Counts match: ' + sdmTotal + ' components on each side. Equal totals do not verify individual records. Open <strong>Pages &amp; Components</strong> for the per-category breakdown.'
       : Math.abs(diff) + ' component difference — open <strong>Pages &amp; Components</strong> for the per-category breakdown.'
   }</div>
 </div>`;
@@ -474,7 +474,7 @@ function renderPagesComponentsSection({ sdmSnapshot, edmSnapshot }) {
   if (!sdmSnapshot) {
     return `<div class="section" id="tab-pages">
   <h2>Pages &amp; Components</h2>
-  <p class="section-desc">Side-by-side inventory of your site's components — captured before migration (SDM) and after (EDM) so you can verify every record made it across.</p>
+  <p class="section-desc">Side-by-side component counts before migration (SDM) and after (EDM). Count status does not verify individual records; record-level comparison and migration safety checks are separate.</p>
 
   <div class="card empty-card">
     <div class="empty-icon">○</div>
@@ -540,21 +540,17 @@ function renderPagesComponentsSection({ sdmSnapshot, edmSnapshot }) {
       pillCls = 'warn';
       icon = '⚠';
       meta = 'SDM-only';
-    } else if (!incomplete && comparison.status === 'pass') {
+    } else if (!incomplete && sdmN === edmN) {
       pillCls = 'match';
       icon = '✓';
-      meta = '';
+      meta = 'Counts match';
       isMatchForGroup = true;
       matchedCount++;
-    } else if (!incomplete && comparison.status === 'warn') {
-      pillCls = 'warn';
-      icon = '⚠';
-      meta = 'Changed records';
     } else {
       pillCls = 'mismatch';
       icon = '✗';
       const delta = edmN - sdmN;
-      meta = incomplete ? 'Incomplete snapshot' : delta === 0 ? 'Different records' : (delta > 0 ? '+' : '') + delta;
+      meta = incomplete ? 'Incomplete snapshot' : (delta > 0 ? '+' : '') + delta;
     }
 
     const pillRight = isPending
@@ -595,6 +591,24 @@ function renderPagesComponentsSection({ sdmSnapshot, edmSnapshot }) {
       </details>`
       : '';
 
+    // Count badges deliberately ignore record differences, but retain the full
+    // comparison separately so equal counts cannot approve an ambiguous migration.
+    const recordIssues = [
+      ['Missing in EDM', comparison.missingInEdm.length],
+      ['Extra in EDM', comparison.extraInEdm.length],
+      ['Changed states', comparison.stateChanged.length],
+      ['Changed content hashes', comparison.contentChanged.length],
+      ['Changed values', comparison.valueChanged.length],
+      ['Duplicate SDM identities', comparison.duplicateKeys?.sdm.length || 0],
+      ['Duplicate EDM identities', comparison.duplicateKeys?.edm.length || 0],
+    ].filter(([, count]) => count > 0);
+    const recordComparison = !isPending && !incomplete && !isSdmOnlyExpected && recordIssues.length > 0
+      ? `
+      <details class="cat-records">
+        <summary>Record-level comparison (separate from count status)</summary>
+        <p>${recordIssues.map(([label, count]) => `${label}: ${count}`).join(' · ')}. These findings do not change the count badge; the separate migration safety gate still uses the full comparison.</p>
+      </details>`
+      : '';
     const desc = categoryDescription(cat);
     const descHtml = desc ? `<div class="cat-desc">${escapeHtml(desc)}</div>` : '';
     const html = `      <div class="cat-row">
@@ -604,7 +618,7 @@ function renderPagesComponentsSection({ sdmSnapshot, edmSnapshot }) {
             ${descHtml}
           </div>
           ${pill}
-        </div>${recordsBlock}
+        </div>${recordsBlock}${recordComparison}
       </div>`;
 
     return { cat, group: groupForCategory(cat), sdmN, edmN, isMatch: isMatchForGroup, html };
@@ -632,7 +646,7 @@ function renderPagesComponentsSection({ sdmSnapshot, edmSnapshot }) {
         ? `<span class="cat-group-stats">${items.length} categor${items.length === 1 ? 'y' : 'ies'} · ${groupSdmTotal} SDM record${groupSdmTotal === 1 ? '' : 's'}</span>`
         : groupHasMismatch
           ? `<span class="cat-group-stats warn">${items.length} categor${items.length === 1 ? 'y' : 'ies'} · ${groupSdmTotal} \u2192 ${groupEdmTotal} records · needs attention <span class="cat-group-icon mismatch">⚠</span></span>`
-          : `<span class="cat-group-stats ok">${items.length} categor${items.length === 1 ? 'y' : 'ies'} · ${groupSdmTotal} \u2192 ${groupEdmTotal} records · all matched <span class="cat-group-icon match">✓</span></span>`;
+          : `<span class="cat-group-stats ok">${items.length} categor${items.length === 1 ? 'y' : 'ies'} · ${groupSdmTotal} \u2192 ${groupEdmTotal} records · counts match <span class="cat-group-icon match">✓</span></span>`;
 
       return `  <details class="cat-group" ${openByDefault ? 'open' : ''}>
     <summary class="cat-group-summary">
@@ -659,10 +673,10 @@ ${items.map((i) => i.html).join('\n')}
     const allMatched = matchedCount === totalCats;
     const unmatched = totalCats - matchedCount;
     summary = `<div class="comp-summary ${allMatched ? 'match' : 'partial'}">
-    <strong>${matchedCount} of ${totalCats} categories matched ${allMatched ? '✓' : '⚠'}</strong>
+    <strong>${matchedCount} of ${totalCats} category counts match ${allMatched ? '✓' : '⚠'}</strong>
     ${allMatched
-      ? '— captured metadata identities, states, values and available content hashes match. This does not replace runtime validation.'
-      : `— ${unmatched} ${unmatched === 1 ? 'category needs' : 'categories need'} review. Differences and incomplete snapshots are flagged even when counts match; SDM-only download categories are expected differences, not verified matches.`}
+      ? '— count comparison only, not verification of identities, values or content. Record-level migration safety checks and runtime validation remain separate.'
+      : `— ${unmatched} ${unmatched === 1 ? 'category has' : 'categories have'} a count difference or incomplete snapshot. SDM-only download categories are labeled separately. Record-level findings do not affect count status.`}
   </div>`;
   }
 
@@ -676,7 +690,7 @@ ${items.map((i) => i.html).join('\n')}
 
   return `<div class="section" id="tab-pages">
   <h2>Pages &amp; Components</h2>
-  <p class="section-desc">Side-by-side inventory of your site's components — captured before migration (SDM) and after (EDM) so you can verify every record made it across.</p>
+  <p class="section-desc">Side-by-side component counts before migration (SDM) and after (EDM). Count status does not verify individual records; record-level comparison and migration safety checks are separate.</p>
 
   ${summary}
 
@@ -968,7 +982,7 @@ ${fileRows}
 function renderCustomizationSection(state) {
   return `<div class="section" id="tab-customization">
   <h2>Customization Findings</h2>
-  <p class="section-desc">Catalog of <code>adx_*</code> usage detected by <code>pac pages migrate-datamodel</code> — what needs review or remediation before EDM activation.</p>
+  <p class="section-desc">Catalog of <code>adx_*</code> scan references detected by <code>pac pages migrate-datamodel</code>. Raw counts are not defect counts or severity ratings.</p>
 
 ${renderCustomizationCard(state)}
 </div>`;
@@ -990,7 +1004,7 @@ function renderCustomizationCard(state) {
   if (!report) {
     return `<div class="card cust-card pending">
   <div class="card-title">Customization Findings <span class="cust-card-subtitle">— catalog of <code>adx_*</code> usage detected in your site</span></div>
-  <p class="cust-blurb">Customization report will appear here after the metadata migration scans your site (Authoring Track step 2.3 / Downstream Track step 3.2). The catalog lists every FetchXML, Liquid, DME, plugin, workflow, and relationship reference that needs review before EDM activation.</p>
+  <p class="cust-blurb">Customization report will appear here after the metadata migration scans your site (Authoring Track step 2.3 / Downstream Track step 3.2). The catalog distinguishes informational references, actionable changes, and items needing context review; scan presence alone does not establish a defect.</p>
 </div>`;
   }
 
@@ -1004,8 +1018,8 @@ function renderCustomizationCard(state) {
   <div class="cust-clean-row">
     <div class="cust-clean-icon">✓</div>
     <div class="cust-clean-text">
-      <div class="cust-clean-title">Clean scan — nothing to remediate.</div>
-      <div class="cust-clean-sub">No FetchXML, Liquid, DME, plugin, workflow, or relationship references to <code>adx_*</code> tables were found. Remediation steps will be skipped.</div>
+      <div class="cust-clean-title">No scan findings.</div>
+      <div class="cust-clean-sub">PAC reported no references in this scan. This does not prove complete coverage or runtime compatibility; runtime validation remains required.</div>
     </div>
   </div>
   ${scannedAt ? `<div class="cust-meta">Scanned at ${escapeHtml(scannedAt)}</div>` : ''}
@@ -1028,7 +1042,7 @@ function renderCustomizationCard(state) {
       <span class="cust-open-icon">📄</span>
       <span class="cust-open-text">
         <span class="cust-open-title">Open customization-report.html</span>
-        <span class="cust-open-sub">Standalone catalog with per-finding details and remediation guidance</span>
+        <span class="cust-open-sub">Per-finding informational / actionable / context-review assessments and reasons</span>
       </span>
     </a>`
     : report.path ? '<div class="cust-meta">Customization report unavailable: unsupported link.</div>' : '';
@@ -1038,7 +1052,8 @@ function renderCustomizationCard(state) {
     : '';
 
   return `<div class="card cust-card has-findings">
-  <div class="card-title">Customization Findings <span class="cust-card-subtitle">— review before EDM activation</span></div>
+  <div class="card-title">Customization Findings <span class="cust-card-subtitle">— scan references, not confirmed defects</span></div>
+  <p class="cust-blurb">Expected references do not require a risk acknowledgment. Open the catalog for assessments; use the Remediation Diff card only for actual staged proposals. Zero proposals does not mean all findings have been reviewed.</p>
   <div class="cust-summary-row">
     <div class="cust-total">
       <div class="cust-total-num">${total}</div>
@@ -1389,7 +1404,7 @@ body { font-family:var(--sans); background:var(--bg); color:var(--text); font-si
 
 /* Now running banner — always-visible pointer for the active long-running step.
    Elapsed clock + estimate bar are advanced client-side every second so they keep
-   moving between the 60s auto-refreshes, even while a blocking pac call stops the
+   moving between the 40s auto-refreshes, even while a blocking pac call stops the
    agent from writing new state. */
 .now-running { background:var(--accent-bg); border-bottom:1px solid var(--accent-border); padding:12px 28px; display:flex; flex-direction:column; gap:8px; }
 .now-running-row { display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
@@ -1709,7 +1724,7 @@ details[open] > summary { margin-bottom:6px; }
 .cust-card-subtitle code { font-family:var(--mono); font-size:11.5px; background:var(--surface2); padding:1px 5px; border-radius:3px; color:var(--text-bright); }
 .cust-card.pending { border-left:3px solid var(--border-light); opacity:0.85; }
 .cust-card.clean { border-left:3px solid var(--pass); }
-.cust-card.has-findings { border-left:3px solid var(--warning); }
+.cust-card.has-findings { border-left:3px solid var(--info); }
 .cust-blurb { font-size:13px; color:var(--text-dim); line-height:1.65; margin:0; }
 .cust-clean-row { display:flex; align-items:center; gap:14px; padding:6px 0; }
 .cust-clean-icon { font-size:28px; color:var(--pass); font-weight:700; min-width:30px; text-align:center; }
@@ -1719,12 +1734,12 @@ details[open] > summary { margin-bottom:6px; }
 .cust-clean-sub code { font-family:var(--mono); font-size:11.5px; background:var(--surface2); padding:1px 5px; border-radius:3px; color:var(--text-bright); }
 .cust-summary-row { display:flex; align-items:center; gap:18px; flex-wrap:wrap; padding:6px 0 12px; }
 .cust-total { display:flex; flex-direction:column; align-items:flex-start; padding-right:18px; border-right:1px solid var(--border); }
-.cust-total-num { font-size:32px; font-weight:700; color:var(--warning); line-height:1; font-family:var(--mono); }
+.cust-total-num { font-size:32px; font-weight:700; color:var(--info); line-height:1; font-family:var(--mono); }
 .cust-total-label { font-size:11px; color:var(--text-dim); text-transform:uppercase; letter-spacing:0.5px; margin-top:4px; font-weight:600; }
 .cust-chips { display:flex; flex-wrap:wrap; gap:6px; flex:1; }
 .cust-chip { display:inline-flex; align-items:center; gap:6px; padding:4px 10px; background:var(--surface2); border:1px solid var(--border); border-radius:14px; font-size:11.5px; }
 .cust-chip-label { color:var(--text); font-weight:600; }
-.cust-chip-count { color:var(--warning); font-weight:700; font-family:var(--mono); background:var(--surface); padding:1px 7px; border-radius:10px; min-width:18px; text-align:center; }
+.cust-chip-count { color:var(--info); font-weight:700; font-family:var(--mono); background:var(--surface); padding:1px 7px; border-radius:10px; min-width:18px; text-align:center; }
 .cust-open-btn { display:inline-flex; align-items:center; gap:12px; padding:12px 18px; margin-top:4px; background:var(--accent); color:#ffffff; text-decoration:none; border-radius:var(--radius-sm); box-shadow:var(--shadow-4); transition:background 0.15s; }
 .cust-open-btn:hover { background:#106ebe; box-shadow:var(--shadow-8); }
 .cust-open-icon { font-size:22px; line-height:1; opacity:0.95; }
@@ -1993,7 +2008,7 @@ ${renderMigrationReviewSection(state, snapshots)}
 </div>
 
 <div class="footer">
-  Generated by <strong>migrate-datamodel</strong> skill · Last updated <span data-live-updated-at>${escapeHtml(formatTimestamp(state.lastUpdatedAt))}</span> · <span id="live-refresh-status">Auto-refreshing every 60s</span> · AI-generated content may be incorrect
+  Generated by <strong>migrate-datamodel</strong> skill · Last updated <span data-live-updated-at>${escapeHtml(formatTimestamp(state.lastUpdatedAt))}</span> · <span id="live-refresh-status">Auto-refreshing every 40s</span> · AI-generated content may be incorrect
 </div>
 
 <script>
@@ -2001,7 +2016,7 @@ ${TAB_JS}
 </script>
 <script>
 // Now-running live ticker: advance the elapsed clock and estimate bar every second
-// from data attributes on the banner, independent of the 60s auto-refresh — so
+// from data attributes on the banner, independent of the 40s auto-refresh — so
 // progress stays visibly moving even while a blocking pac call prevents the agent
 // from writing new state.
 (function () {
@@ -2087,7 +2102,7 @@ ${TAB_JS}
 (function () {
   var CURRENT_UPDATED_AT = ${JSON.stringify(state.lastUpdatedAt || '')};
   var TOKEN = 'data-live-updated-at-token="';
-  var POLL_MS = 60000;
+  var POLL_MS = 40000;
   var SCROLL_KEY = 'sdmEdmReport:scrollY';
   var TAB_KEY = 'sdmEdmReport:activeTab';
   var DETAILS_KEY = 'sdmEdmReport:openDetails';

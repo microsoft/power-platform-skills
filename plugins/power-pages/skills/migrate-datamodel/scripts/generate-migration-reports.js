@@ -225,6 +225,8 @@ function generateCustomizationSection(type, items) {
   const badgeMap = {
     'Liquid contains adx references': 'badge-liquid',
     'FetchXML contains adx references': 'badge-fetchxml',
+    'Fetch Xml contains adx references': 'badge-fetchxml',
+    'FetchXml contains adx references': 'badge-fetchxml',
     'Custom workflow': 'badge-workflow',
     'Data Model Extension': 'badge-data-model',
     'Plugins registered on adx entities': 'badge-plugin'
@@ -245,6 +247,7 @@ function generateCustomizationSection(type, items) {
           <tr>
             <th>Location</th>
             <th>Snippet</th>
+            <th>Assessment</th>
             <th>Guidance</th>
           </tr>
         </thead>
@@ -252,6 +255,7 @@ function generateCustomizationSection(type, items) {
   `;
 
   items.forEach(item => {
+    const assessment = classifyCustomizationFinding(type, item);
     const snippet = item.snippet ? item.snippet.substring(0, 200) + (item.snippet.length > 200 ? '...' : '') : '';
     let guidance = escapeHtml(item.guidance || 'No guidance provided');
     try {
@@ -266,6 +270,7 @@ function generateCustomizationSection(type, items) {
           <tr>
             <td>${escapeHtml(item.location || 'N/A')}</td>
             <td><div class="snippet">${escapeHtml(snippet)}</div></td>
+            <td><strong>${escapeHtml(ASSESSMENT_LABELS[assessment.status])}</strong><br>${escapeHtml(assessment.reason)}</td>
             <td>${guidance}</td>
           </tr>
     `;
@@ -310,7 +315,7 @@ function fillPlaceholders(template, replacements) {
 /**
  * Generate customization report HTML
  */
-function generateCustomizationReportHtml(args, customizations) {
+function generateCustomizationReportHtml(args, customizations, assessment = assessCustomizations(customizations)) {
   const templatePath = path.join(__dirname, '../assets/customization-report.html');
   let template = fs.readFileSync(templatePath, 'utf-8');
 
@@ -320,9 +325,8 @@ function generateCustomizationReportHtml(args, customizations) {
     customizationSections = `
       <div class="no-data">
         <div class="no-data-icon">✓</div>
-        <h3>No Customizations Found</h3>
-        <p>This site has no custom columns, relationships, Liquid references, FetchXML references, or workflows/plugins on adx tables.</p>
-        <p style="margin-top: 16px; color: #27ae60; font-weight: 600;">Migration should proceed without post-migration remediation!</p>
+        <h3>No Scan Findings</h3>
+        <p>PAC reported no customization references in this scan. This is not proof of complete coverage or runtime compatibility; runtime validation is still required.</p>
       </div>
     `;
   } else {
@@ -334,8 +338,13 @@ function generateCustomizationReportHtml(args, customizations) {
   // Generate summary text
   const totalCustomizations = Object.values(customizations).reduce((sum, items) => sum + items.length, 0);
   const summaryText = totalCustomizations === 0
-    ? 'No customizations were found in your site. This means migration from SDM to EDM should be straightforward without any post-migration fixes needed.'
-    : `Found ${totalCustomizations} customization(s) across ${Object.keys(customizations).length} category(ies). Each customization will need specific post-migration remediation steps. See detailed guidance below.`;
+    ? 'No scan findings. Retain the normal migration approval gates and runtime validation.'
+    : `${totalCustomizations} scan references across ${Object.keys(customizations).length} categories: ` +
+      `${assessment.summary.informational} informational (no rewrite identified), ` +
+      `${assessment.summary.actionable} actionable, ${assessment.summary.needsReview} need context review. ` +
+      'A scan reference is not automatically a defect or a critical customization. ' +
+      'Context review is not a confirmed risk; investigate before deciding whether a change is necessary. ' +
+      'Proposed changes require separate review and approval; runtime validation remains required.';
 
   // Fill placeholders. Scalars first, large HTML blocks last so block content is
   // never re-scanned for a later token. fillPlaceholders replaces EVERY occurrence
@@ -462,7 +471,7 @@ async function createStringAttribute(envUrl, tableLogicalName, columnLogicalName
 /**
  * Categorize a Liquid customization-report finding by the patterns it contains.
  *
- * The PAC customization report flags any file containing `adx_*` in Liquid context, but most
+ * The PAC customization report flags files containing `adx_*` in Liquid context, but many
  * patterns work as-is on EDM via the documented `[logical_name]` accessor. Only a small subset
  * requires actual rewriting. This categorizer scans the snippet for known patterns and emits
  * the highest-priority signal:
@@ -477,7 +486,7 @@ function categorizeLiquidFinding(snippet) {
 
   const patterns = {
     entitiesCollection: /entities\s*\[\s*['"]?adx_\w+['"]?\s*\]/,
-    fetchxmlBlock: /\{%\s*fetchxml\b[\s\S]*?<entity\s+name\s*=\s*['"]adx_/,
+    fetchxmlBlock: /\{%\s*fetchxml\b[\s\S]*?<(?:link-)?entity\b[^>]*\bname\s*=\s*['"]adx_/i,
     editableTag: /\{%\s*editable\s+\w+\s+['"]adx_\w+['"]/,
     lookupKey: /\b(?:snippets|weblinks|sitemarkers|settings|ads|polls|events|forums|blogs)\s*\[\s*['"]adx_\w+['"]\s*\]/,
     propertyAccess: /\.\s*adx_\w+\b/,
@@ -498,10 +507,20 @@ function categorizeLiquidFinding(snippet) {
       action: 'Embedded FetchXML inside Liquid — automatically rewritten by `--automate-fetchxml` (renames `adx_*` entity to `powerpagecomponent` + injects type filter).',
     };
   }
+  if (/\bentities\s*(?:\[|\.)/.test(snippet)) {
+    return {
+      category: 'unknown',
+      action: 'Inspect the entity collection target and consumers; dynamic or unsupported collection access must not be treated as ordinary logical-property access.',
+    };
+  }
 
-  // From here on, the only adx_ usages are documented runtime-safe patterns.
-  const onlyFalsePositive =
-    !patterns.entitiesCollection.test(snippet) && !patterns.fetchxmlBlock.test(snippet);
+  // A safe property accessor must not hide another, unclassified reference:
+  // "{{ page.adx_copy }} ... <entity name='adx_webpage'>" still needs review.
+  const remaining = snippet
+    .replace(/\b[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*\.\s*adx_\w+\b/g, '')
+    .replace(/\{%\s*editable\s+\w+\s+['"]adx_\w+['"]/g, '')
+    .replace(/\b(?:snippets|weblinks|sitemarkers|settings|ads|polls|events|forums|blogs)\s*\[\s*['"]adx_\w+['"]\s*\]/g, '');
+  const onlyFalsePositive = !/adx_/i.test(remaining);
 
   if (onlyFalsePositive) {
     const reasons = [];
@@ -530,6 +549,69 @@ function categorizeLiquidFinding(snippet) {
   }
 
   return { category: 'unknown', pattern: 'mixed', action: 'Review manually.' };
+}
+
+const ASSESSMENT_LABELS = {
+  informational: 'Informational - no rewrite identified',
+  actionable: 'Action required - review proposed or manual changes',
+  needsReview: 'Context review needed - not a confirmed defect',
+};
+
+function classifyCustomizationFinding(type, item) {
+  const snippet = item.snippet || '';
+  if (type === 'Liquid contains adx references') {
+    const result = categorizeLiquidFinding(snippet);
+    if (result.category === 'auto-fetchxml') {
+      return classifyCustomizationFinding('FetchXML contains adx references', item);
+    }
+    if (result.category === 'needs-rewrite' &&
+        ![...snippet.matchAll(/entities\s*\[\s*['"](adx_\w+)['"]\s*\]/g)]
+          .some((match) => Object.hasOwn(LIQUID_OBJECT_MAP, match[1]))) {
+      return { status: 'needsReview', reason: 'Inspect the collection target and consumers; no supported Liquid replacement is known for this table. Do not infer a metadata rewrite from the adx_ prefix alone.' };
+    }
+    return {
+      status: result.category === 'false-positive' ? 'informational'
+        : result.category === 'needs-rewrite' ? 'actionable' : 'needsReview',
+      reason: result.action,
+    };
+  }
+  // PAC has emitted "Fetch Xml", "FetchXml" and "FetchXML". Do not use the
+  // category's spelling, filename or template ownership as a severity signal.
+  if (/^fetch\s*xml contains adx references$/i.test(type)) {
+    const names = [...snippet.matchAll(/<(?:link-)?entity\b[^>]*\bname\s*=\s*['"]([\w]+)['"]/gi)]
+      .map((match) => match[1].toLowerCase());
+    if (names.some((name) => Object.hasOwn(COMPONENT_TYPE_MAP, name))) {
+      return { status: 'actionable', reason: 'FetchXML targets migrated metadata. Review supported staged rewrites and any skipped blocks before applying changes.' };
+    }
+    if (/<fetch\b[^>]*>[\s\S]*<\/fetch>/i.test(snippet) && names.length && !/adx_/i.test(snippet)) {
+      return { status: 'informational', reason: 'The complete supplied FetchXML contains no adx_ reference; no SDM metadata rewrite is identified in this snippet.' };
+    }
+    return { status: 'needsReview', reason: 'Inspect the full local query and referenced tables. A truncated snippet or unmapped transactional table is not automatically a migration defect; do not guess a component mapping.' };
+  }
+  if (type === 'Data Model Extension') {
+    const { table, column } = parseDataModelExtension(snippet);
+    if (table && column && Object.hasOwn(COMPONENT_TYPE_MAP, table.toLowerCase())) {
+      return { status: 'actionable', reason: 'A custom column targets migrated metadata; review the schema/data-copy checklist. No schema or data changes are automated.' };
+    }
+  }
+  if (type === 'Plugins registered on adx entities') {
+    const plugin = categorizePlugin(snippet);
+    if (plugin.category === 'custom' && plugin.pluginName !== 'unknown' &&
+        Object.hasOwn(COMPONENT_TYPE_MAP, (plugin.entity || '').toLowerCase())) {
+      return { status: 'actionable', reason: plugin.action };
+    }
+  }
+  return { status: 'needsReview', reason: 'Verify the full component, target table and installed version in this customer environment. Scan presence or a built-in-looking name alone does not establish a defect, safety, or a required rewrite.' };
+}
+
+function assessCustomizations(customizations) {
+  const summary = { informational: 0, actionable: 0, needsReview: 0 };
+  const findings = Object.entries(customizations).flatMap(([type, items]) => items.map((item) => {
+    const assessment = classifyCustomizationFinding(type, item);
+    summary[assessment.status]++;
+    return { type, ...item, ...assessment };
+  }));
+  return { schemaVersion: 1, summary, findings };
 }
 
 /**
@@ -660,6 +742,8 @@ async function executeAutomatedRemediation(customizations, envUrl) {
   const remediationResults = {
     automated: [],
     manual: [],
+    informational: [],
+    needsReview: [],
     errors: [],
     dataModelChecklists: [],
     pluginCategorySummary: { system: 0, adxstudio: 0, custom: 0 },
@@ -736,6 +820,14 @@ async function executeAutomatedRemediation(customizations, envUrl) {
     });
   });
 
+  const records = remediationResults.manual;
+  remediationResults.manual = [];
+  for (const record of records) {
+    const assessment = classifyCustomizationFinding(record.type, record);
+    record.assessment = assessment;
+    const bucket = assessment.status === 'actionable' ? 'manual' : assessment.status;
+    remediationResults[bucket].push(record);
+  }
   return remediationResults;
 }
 
@@ -1395,12 +1487,10 @@ async function main() {
     if (Object.keys(customizations).length > 0) {
       const envUrl = args['env-url'] || args['envUrl'] || null;
       remediationResults = await executeAutomatedRemediation(customizations, envUrl);
-      const total =
-        remediationResults.manual.length +
-        remediationResults.automated.length +
-        remediationResults.errors.length;
+      const total = Object.values(customizations).reduce((sum, items) => sum + items.length, 0);
       console.log(
-        `Categorized ${total} findings: ${remediationResults.manual.length} manual, ${remediationResults.automated.length} automated, ${remediationResults.errors.length} errors`,
+        `Categorized ${total} scan references: ${remediationResults.informational.length} informational, ` +
+        `${remediationResults.manual.length} actionable, ${remediationResults.needsReview.length} need context review`,
       );
     }
 
@@ -1468,7 +1558,10 @@ async function main() {
     }
 
     // Generate customization report
-    const customizationHtml = generateCustomizationReportHtml(args, customizations);
+    const assessment = assessCustomizations(customizations);
+    fs.writeFileSync(path.join(args['output-dir'], 'customization-assessment.json'),
+      JSON.stringify(assessment, null, 2) + '\n', 'utf8');
+    const customizationHtml = generateCustomizationReportHtml(args, customizations, assessment);
     const customizationPath = path.join(args['output-dir'], 'customization-report.html');
     fs.writeFileSync(customizationPath, customizationHtml, 'utf-8');
     console.log(`✓ Customization report generated: ${customizationPath}`);
@@ -1497,4 +1590,6 @@ module.exports = {
   fillPlaceholders, generateCustomizationSection, rewriteFetchXmlInContent,
   annotateLiquidEntitiesInContent, buildDataModelExtensionChecklists, categorizePlugin,
   makeRequestWithRetry,
+  categorizeLiquidFinding, classifyCustomizationFinding, assessCustomizations,
+  executeAutomatedRemediation,
 };

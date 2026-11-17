@@ -9,6 +9,7 @@ const {
   parseCSV, normalizeLocationPath, fillPlaceholders, generateCustomizationSection,
   rewriteFetchXmlInContent, annotateLiquidEntitiesInContent,
   buildDataModelExtensionChecklists, categorizePlugin,
+  classifyCustomizationFinding, assessCustomizations, executeAutomatedRemediation,
 } = require('../../skills/migrate-datamodel/scripts/generate-migration-reports');
 
 const script = path.join(__dirname, '../../skills/migrate-datamodel/scripts/generate-migration-reports.js');
@@ -129,6 +130,139 @@ test('CSV parser preserves quoted commas, escaped quotes, multiline fields and C
   assert.deepEqual(parseCSV('type,snippet,location\r\nLiquid,"say ""hi"",\nthen go",header.html\r\n'), [
     ['type', 'snippet', 'location'], ['Liquid', 'say "hi",\nthen go', 'header.html'],
   ]);
+});
+
+test('expected Liquid references are informational, but mixed or unknown usage is not suppressed', () => {
+  const liquidType = 'Liquid contains adx references';
+  for (const snippet of [
+    '{{ page.adx_copy }}', '{{ website.adx_partialurl }}',
+    "{% editable page 'adx_copy' %}", "{{ snippets['adx_name'] }}",
+    '{{ botconsumer.adx_configjson }} {{ botconsumer.adx_botschemaname }}',
+    '{{ incident.adx_resolutiondate }} {{ forums_sm.adx_name }}',
+  ]) {
+    assert.equal(classifyCustomizationFinding(liquidType, { snippet }).status, 'informational', snippet);
+  }
+  for (const snippet of [
+    '', '{{ page.adx_copy }} adx_unknown',
+    '{{ page.adx_copy }} <entity name="adx_webpage">',
+    '{{ page.adx_copy }} {{ entities[adx_webpage] }}',
+    '{{ entities.adx_webpage }}', '{{ page.adx_copy }} {{ entities[tableName] }}',
+    "{{#label entityLogicalName 'adx_event'}}",
+    "{{ entities['adx_communityforumthread'] }}",
+  ]) {
+    assert.equal(classifyCustomizationFinding(liquidType, { snippet }).status, 'needsReview', snippet);
+  }
+  for (const snippet of [
+    liquid, `{{ page.adx_copy }} ${liquid}`,
+    `{% fetchxml query %}${fetchXml}{% endfetchxml %}`,
+    '{% fetchxml query %}<fetch><entity name="category"><link-entity name="adx_webpage"/></entity></fetch>{% endfetchxml %}',
+  ]) {
+    assert.equal(classifyCustomizationFinding(liquidType, { snippet }).status, 'actionable', snippet);
+  }
+  assert.equal(classifyCustomizationFinding(liquidType, {
+    snippet: '{% fetchxml query %}<fetch><entity name="adx_communityforumthread"/></fetch>{% endfetchxml %}',
+  }).status, 'needsReview');
+});
+
+test('FetchXML category variants share conservative target-aware assessment', () => {
+  for (const type of ['Fetch Xml contains adx references', 'FetchXml contains adx references',
+    'FetchXML contains adx references']) {
+    assert.equal(classifyCustomizationFinding(type, { snippet: fetchXml }).status, 'actionable');
+    assert.equal(classifyCustomizationFinding(type, {
+      snippet: '<fetch><entity name="category"><link-entity name="knowledgearticle"/></entity></fetch>',
+    }).status, 'informational');
+    for (const snippet of [
+      '<fetch><entity name="category">',
+      '<fetch><entity name="adx_communityforumthread"><attribute name="adx_postcount"/></entity></fetch>',
+      '<fetch><entity name="knowledgearticle"><attribute name="adx_custom"/></entity></fetch>',
+    ]) {
+      assert.equal(classifyCustomizationFinding(type, { snippet }).status, 'needsReview', snippet);
+    }
+  }
+});
+
+test('analysis and report counts separate expected references, actual manual work and investigation', async () => {
+  const customizations = {
+    'Liquid contains adx references': [
+      { snippet: '{{ page.adx_copy }}', location: 'page.html' },
+      { snippet: liquid, location: 'snippet.html' },
+      { snippet: 'adx_unknown', location: 'unknown.html' },
+    ],
+    'Data Model Extension': [
+      { snippet: 'Table name : adx_webpage   Column name : contoso_value' },
+      { snippet: 'Table name : adx_invitation   Column name : contoso_value' },
+    ],
+    'Plugins registered on adx entities': [
+      { snippet: 'Plugin name : Contoso.Plugin   Step name : Update  Entity Name : adx_webpage' },
+      { snippet: 'Plugin name : Microsoft.Plugin   Step name : Update  Entity Name : adx_webpage' },
+    ],
+  };
+  const assessment = assessCustomizations(customizations);
+  assert.deepEqual(assessment.summary, { informational: 1, actionable: 3, needsReview: 3 });
+  assert.equal(assessment.findings.length, 7);
+  assert.equal(assessment.findings[0].location, 'page.html');
+  assert.ok(assessment.findings.every((finding) => finding.reason.length > 0));
+  const results = await executeAutomatedRemediation(customizations);
+  assert.equal(results.informational.length, 1);
+  assert.equal(results.manual.length, 3);
+  assert.equal(results.needsReview.length, 3);
+  assert.equal(results.automated.length, 0);
+  assert.ok(results.manual.every((finding) => finding.assessment.status === 'actionable'));
+});
+
+test('CLI retains assessments with no proposals and does not report unknown work as completed', (t) => {
+  const fixture = setup(t);
+  const csv = path.join(fixture.site, 'SiteCustomization.csv');
+  const assessmentPath = path.join(fixture.output, 'customization-assessment.json');
+  const htmlPath = path.join(fixture.output, 'customization-report.html');
+  const writeFinding = (snippet) => fs.writeFileSync(csv,
+    'Type of customization,Snippet,Location,Guidance\n' +
+    ['Liquid contains adx references', snippet, 'page.html', ''].map(
+      (field) => `"${field.replace(/"/g, '""')}"`,
+    ).join(',') + '\n');
+  const expected = '{{ page.adx_copy }}';
+  fs.writeFileSync(path.join(fixture.site, 'page.html'), expected);
+  writeFinding(expected);
+  let result = fixture.run('--customization-report', csv, '--automate-fetchxml', '--automate-liquid');
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /1 informational, 0 actionable, 0 need context review/);
+  assert.deepEqual(JSON.parse(fs.readFileSync(assessmentPath, 'utf8')).summary,
+    { informational: 1, actionable: 0, needsReview: 0 });
+  assert.equal(fs.existsSync(fixture.manifestPath), false);
+  let html = fs.readFileSync(htmlPath, 'utf8');
+  assert.match(html, /1 informational \(no rewrite identified\), 0 actionable, 0 need context review/);
+  assert.match(html, /Informational - no rewrite identified/);
+  assert.doesNotMatch(html, /Each customization will need|without post-migration remediation|Migration should proceed/);
+  assert.equal(fs.readFileSync(path.join(fixture.site, 'page.html'), 'utf8'), expected);
+
+  writeFinding('{{ page.adx_copy }} adx_unknown');
+  result = fixture.run('--customization-report', csv, '--automate-fetchxml', '--automate-liquid');
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(fs.readFileSync(assessmentPath, 'utf8')).summary,
+    { informational: 0, actionable: 0, needsReview: 1 });
+  html = fs.readFileSync(htmlPath, 'utf8');
+  assert.match(html, /Context review needed - not a confirmed defect/);
+  assert.match(html, /0 informational \(no rewrite identified\), 0 actionable, 1 need context review/);
+  assert.equal(fs.existsSync(fixture.manifestPath), false);
+});
+
+test('workflow gates only real proposals and distinguishes expected review from named-risk deferral on both tracks', () => {
+  const skill = fs.readFileSync(path.join(path.dirname(script), '..', 'SKILL.md'), 'utf8');
+  const authoring = skill.slice(skill.indexOf('### 2.4 Remediate Customizations'),
+    skill.indexOf('## Phase 2 — Downstream Track'));
+  const downstream = skill.slice(skill.indexOf('### 3.4 Remediate Customizations'),
+    skill.indexOf('### 3.5 Activate EDM'));
+  assert.match(authoring, /Configuration metadata has migrated\./);
+  assert.match(authoring, /Only show this checkpoint and approval question when `files\[\]` is nonempty/);
+  assert.match(authoring, /missing\/empty manifest means skip steps 6–7/);
+  assert.match(authoring, /Review expected references \(optional\)/);
+  assert.match(authoring, /Defer these named items and proceed \(acknowledge their risk\)/);
+  assert.match(authoring, /--add-decision/);
+  assert.match(authoring, /No unresolved actionable items and no unresolved context review/);
+  assert.match(downstream, /Raw references on Prod\/Test\/UAT do not by themselves establish an ALM gap/);
+  assert.match(downstream, /only a valid nonempty manifest with existing staged files triggers/);
+  assert.doesNotMatch(authoring, /Configuration is migrated|One or more findings.*proceed with auto-rewriters/);
+  assert.doesNotMatch(downstream, /finding them here indicates an ALM gap/);
 });
 
 test('retry requests request headers so Retry-After is available', () => {

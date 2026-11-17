@@ -112,7 +112,7 @@ pac application install --application-name "<PACKAGE_NAME>"
 
 ### Pointing the user at the report
 
-The skill **opens the live report in the user's default browser exactly once** — right after `--init` succeeds at Checkpoint 1 (see step 1.2). On every subsequent state change, the file is rewritten in place, so the user just refreshes the already-open tab. After each major state change, **explicitly tell the user where the report is and prompt them to refresh** so they can verify before approving the next phase. The user shouldn't have to guess where files live. Use this pattern in the chat:
+The skill **opens the live report in the user's default browser exactly once** — right after `--init` succeeds at Checkpoint 1 (see step 1.2). On every subsequent state change, the file is rewritten in place. The visible browser tab checks every **40 seconds**: local files reload, while HTTP(S) reports reload only when the saved update token changes. Background tabs skip refreshes. This browser timer does not query PAC; migration-status polling remains every **60 seconds**. After each major state change, **explicitly tell the user where the report is and prompt them to refresh** if they want to see it immediately before approving the next phase. The user shouldn't have to guess where files live. Use this pattern in the chat:
 
 ```
 📄 Live execution report updated:
@@ -879,9 +879,9 @@ This phase has **two completely different shapes** depending on the migration tr
 
 ### 2.4 Remediate Customizations
 
-**Goal**: If customization findings exist, apply auto-rewrites + augmented prompts and upload the cleaned source back to Dataverse. SDM source is already downloaded into `<SITE_ROOT>` from step 2.1; this step works against that tree.
+**Goal**: Distinguish expected scan references from actual customization work, then stage and approve only necessary changes. SDM source is already downloaded into `<SITE_ROOT>` from step 2.1; this step works against that tree. Configuration **metadata** has migrated; references migration, activation and runtime validation are not complete yet.
 
-> **Important — most flagged Liquid is a false positive.** The customization report greps for any `adx_` substring in Liquid files, but Power Pages Liquid runtime handles legacy attribute names transparently. Patterns like `page.adx_copy`, `website.adx_partialurl`, `{% editable page 'adx_copy' %}`, and `snippets['adx_name']` use documented logical-name access and **don't need rewriting**. See per-category table below.
+> **A scan reference is not automatically a defect or a risk.** PAC can flag expected logical-name access and operational-table usage. Classify each finding from this customer's current source, not conversation memory, template ownership, or a previous customer's successful smoke test. Keep the original CSV for traceability. Zero proposed changes does **not** mean all findings are reviewed.
 
 **Actions**:
 
@@ -889,19 +889,37 @@ This phase has **two completely different shapes** depending on the migration tr
 
 | Customization category | Action | Reasoning |
 |---|---|---|
-| FetchXML with `<entity name='adx_*'>` | **Auto-fix** | Doc shows mechanical rewrite: rename entity to `powerpagecomponent` + inject `powerpagecomponenttype` filter |
+| FetchXML targeting a mapped metadata entity or link-entity | **Stage supported rewrite** | Use the generator's component type map; inspect skipped blocks and approve the diff before applying |
 | Liquid `entities['adx_*']` collection | **Semi-auto fix (user reviews)** | Doc shows replacing with dedicated Liquid object (`weblinks`, `snippets`, etc.). Semantics may shift; user must approve |
 | Liquid property access (`page.adx_X`, `website.adx_X`, `botconsumer.adx_X`) | **Leave alone** | Documented `[logical_name]` accessor; works on EDM via virtualization |
 | Liquid `{% editable page 'adx_*' %}` tag | **Leave alone** | Uses logical attribute name; same access rule |
 | Liquid `snippets['adx_*']`, `weblinks['adx_*']` | **Leave alone** | Index is a user-defined name, not an attribute |
-| Data Model Extensions (custom columns on `adx_*`) | **Manual only** | Per migration doc, the fix is to create a new custom table with a lookup to `powerpagecomponent` and migrate data — multi-step schema operation, not automatable safely |
+| Data Model Extensions (custom columns on mapped metadata tables) | **Manual only** | Per migration doc, the fix is to create a new custom table with a lookup to `powerpagecomponent` and migrate data — multi-step schema operation, not automatable safely |
 | Relationships between custom and `adx_*` tables | **Manual only** | New relationship to `powerpagecomponent`-side; user-driven |
 | Custom plugins/workflows on `adx_*` tables | **Manual only** | Code refactor + re-registration — semantic, not mechanical |
 
+Generate/read `customization-assessment.json` alongside `customization-report.html` using the report generator from step 2.3. It separates `informational`, `actionable`, and `needsReview`, with a reason and the original evidence for each finding. These are initial static assessments, **not completed manual fixes** or runtime-test results. Category counts are not severity ratings.
+
+For `needsReview`, inspect the full matching local file and its consumers, not only PAC's possibly truncated snippet. Confirm the file belongs to this run/site before classifying it. Use these reusable context checks:
+
+| Scan pattern | Check before treating as informational / no change required |
+|---|---|
+| `page.adx_copy`, `website.adx_partialurl`, editable logical attributes, `forums_sm.adx_name` | Confirm logical-property or editable access only; no direct migrated-table query or mixed unclassified reference. Preserve supported legacy logical names. |
+| `incident.adx_publishtoweb`, `incident.adx_resolutiondate`, `incident.adx_resolution`, `incident_adx_portalcomments` | Confirm these are business/operational attributes or navigation references, not metadata-table queries. An `adx_` substring alone does not require an EDM rewrite. |
+| Client-side labels such as `{{#label entityLogicalName 'adx_event'}}`, `adx_eventschedule`, `adx_issue` | Confirm client-side label/template context and actual consumers. Do not mistake a display-label argument for a Liquid entity collection. |
+| FetchXML querying `category` or `knowledgearticle` | Read the entire query, including links, filters and dynamic names. If no migrated metadata target/consumer exists, record the PAC reference as informational. |
+| Forum queries such as `adx_communityforumthread` and fields `adx_forumid`, `adx_postcount` | Verify operational-table schema and consumers. Absence from the metadata map is a reason to investigate, **not** proof of a broken customization or permission to invent a rewrite. |
+| `botconsumer.adx_configjson`, `botconsumer.adx_botschemaname` | Confirm supported logical-property access and configuration consumers; preserve values rather than rewriting attributes solely because of the prefix. |
+
+Use the [migration metadata-table guidance](https://learn.microsoft.com/en-us/power-pages/admin/migrate-enhanced-data-model) and [Liquid objects documentation](https://learn.microsoft.com/en-us/power-pages/configure/liquid/liquid-objects) to verify context. A comment-only reference can be informational after confirming it is not executable Liquid or consumed elsewhere. Never blanket-allow Microsoft/template code or all `adx_*` references.
+
+Record contextual review outcomes through `update-state.js --add-decision` in the live report: affected file/reference, disposition, evidence/reason, and any remaining action. Use stable decision IDs so a re-review updates rather than duplicates the entry. Keep the generated assessment as the initial scan assessment; recorded source-review decisions explain any reclassification. Summarize raw, informational, actionable, needs-review and actual staged-file counts in the step output. Deduplicate identical required fixes without deleting their raw CSV references.
+
 ### 2. Branch on findings
 
-- **Zero customization findings**: skip steps 3–7, jump to step 8 (readiness gate).
-- **One or more findings**: proceed with auto-rewriters below.
+- **Zero findings or reviewed informational-only references**: skip steps 3–7 and jump to step 8. Expected references are not deferred fixes.
+- **Needs context review**: investigate the full source now. If evidence/tools are unavailable, name the affected items and offer **Inspect affected files / Provide missing context / Pause**. Do not silently classify them as safe, completed, or critical.
+- **Confirmed actionable findings**: run the applicable staging/manual-guidance steps below. Separate proposed source changes from manual work; neither is complete merely because a prompt was generated.
 
 ### 3. Stage automated FetchXML rewrites
 
@@ -946,7 +964,7 @@ The script in step 3/4 also emits:
 - `<OUTPUT_DIR>/plugin-remediation-prompt.txt` (if plugin findings exist)
 - `<OUTPUT_DIR>/dme-remediation-prompt.txt` (if DME findings exist)
 
-> **→ Update report (before asking for upload approval):**
+> **→ Update report (only when actual staged proposals exist, before asking for upload approval):**
 >
 > ```
 > --set-step 2.4 --status in-progress --output "Auto-rewrites staged · awaiting diff review"
@@ -955,9 +973,11 @@ The script in step 3/4 also emits:
 > --set-approval 2 in-phase
 > ```
 >
-> (Skip a category's `--set-prompt` if zero findings — placeholder card remains.)
+> (Skip a category's `--set-prompt` unless its prompt file actually exists. If there are no proposals, report "No source changes proposed" with the classification counts; do not claim auto-rewrites were staged or set an apply/upload approval.)
 
 ### 6. Review and approve changes
+
+**Proposal gate:** Read `remediation-diff.json`. Only show this checkpoint and approval question when `files[]` is nonempty and the referenced staged files exist. A missing/empty manifest means skip steps 6–7: no apply, discard/edit prompt, or upload. A malformed manifest or missing referenced file is an explicit error to resolve, not a zero-proposal result. Manual actionable work still goes to step 8.
 
 > **📄 Checkpoint 4 — Tell the user where to review.** Print this in chat before asking for upload approval:
 >
@@ -1015,24 +1035,26 @@ node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-datamodel/scripts/apply-remediation.j
 
 ### 8. Final readiness gate
 
-After auto-rewrites are uploaded (or skipped due to zero findings) and any manual prompts have been handed off:
+After approved proposals are uploaded (or no source changes were proposed), reconcile every actionable/manual item against actual completion evidence. Handing off a prompt, discarding changes, or producing zero rewrites does not complete an item.
+
+**No unresolved actionable items and no unresolved context review** (including informational-only references):
 
 | Question | Header | Options |
 |----------|--------|---------|
-| Configuration is migrated, customizations addressed (or knowingly deferred). Proceed to Phase 3 (Migration Execution)? | Migration Readiness | Yes — proceed to migration execution, Defer manual items and proceed (acknowledge risk), Pause skill — I'll finish manual fixes and re-run |
+| Configuration metadata has migrated. `<N>` expected references require no changes; `<M>` actual changes are verified complete. Continue to Phase 3, or review the expected references once? | Migration Readiness | Continue to Phase 3, Review expected references (optional), Pause |
 
-- **Proceed**: continue to Phase 3.
-- **Defer manual items**: log the user's acknowledgment in the execution report and proceed.
-- **Pause skill**: halt cleanly. User can re-invoke later.
+- **Continue**: continue through the existing Phase 3 approval gate. Do not ask for a risk acknowledgment for expected references.
+- **Review expected references**: show file/context/reason, then return to this choice; this is optional verification, not remediation.
+- **Pause**: halt cleanly.
 
-> **Why this gate exists:** Data Model Extension custom columns and custom plugins typically need to land before activation so EDM behaves correctly. This gate makes the choice explicit rather than implicit.
+**Actual actionable customizations remain unreviewed or unfixed:** list the specific files/components, required actions and concrete possible impact, then ask **Finish/review fixes now / Defer these named items and proceed (acknowledge their risk) / Pause**. Record any explicit deferral and its scope in the execution report; never turn raw scan counts or expected references into a blanket risk warning. Unresolved context-review items follow step 2's investigation choices instead of being silently bundled into deferral.
 
-**Output**: FetchXML/Liquid auto-rewrites applied and uploaded (if findings); augmented prompts handed off; readiness gate confirmed.
+**Output**: Classification/review evidence recorded; actual proposals applied/uploaded only if approved; manual outcomes or specifically acknowledged deferrals recorded; readiness gate confirmed. Keep the pre-refs metadata comparison and all later approval gates unchanged.
 
 > **→ Update report (end of Phase 2 Authoring Track):**
 >
 > ```
-> --set-step 2.4 --status completed --output "<auto-rewrites done|no remediation needed> · readiness confirmed"
+> --set-step 2.4 --status completed --output "<N informational; M fixes verified; K named items explicitly deferred> · readiness confirmed"
 > --set-phase 2 --status completed
 > --set-approval 3 phase-start
 > ```
@@ -1043,7 +1065,7 @@ After auto-rewrites are uploaded (or skipped due to zero findings) and any manua
 > 📄 Phase 2 complete. Review the outcomes in your browser before approving Phase 3:
 >    <ABSOLUTE_PATH_TO_OUTPUT_DIR>/datamodel-migration-report.html
 >
-> The report shows: customization findings handled, SDM snapshot captured, and the
+> The report shows: scan assessments, actual fixes and any named deferrals, SDM snapshot captured, and the
 > Phase 3 sub-steps that will run if you approve.
 > ```
 >
@@ -1650,20 +1672,21 @@ Follow **all** of Authoring Track Phase 2.3: verify CSV provenance, reuse an app
 
 ### 3.4 Remediate Customizations
 
-**Goal**: If customizations are flagged, apply auto-rewrites + augmented prompts and upload. Findings on Prod/Test/UAT usually indicate an ALM gap, so the warning is stronger than the Authoring Track's.
+**Goal**: Apply the same evidence-based classification and proposal gates as Authoring Track step 2.4. Raw references on Prod/Test/UAT do not by themselves establish an ALM gap.
 
 **Actions**:
 
 1. **Branch on findings**
 
-   - **Zero findings**: log "no customizations to remediate" and proceed to step 3.5.
-   - **Has findings**: surface ALM-gap warning, ask user how to proceed.
+   - **Zero findings or reviewed informational-only references**: record the assessment and proceed through the existing activation approval in step 3.5. Offer optional review of expected references without a risk acknowledgment.
+   - **Needs context review**: investigate full local source using step 2.4's context checks. Offer targeted inspection/missing-context/pause choices if blocked; do not assume an ALM gap.
+   - **Confirmed unresolved actionable customizations**: list the actual files/components and evidence before asking how to proceed.
 
-2. **Surface ALM-gap warning**
+2. **Discuss confirmed downstream work**
 
    | Question | Header | Options |
    |----------|--------|---------|
-   | Found `<N>` customization findings on this Prod/Test/UAT env. Customizations should have been remediated in Dev and shipped via solution import — finding them here indicates an ALM gap. How do you want to proceed? | Prod Customizations | Remediate now (auto-rewrite + augmented prompts + upload), Pause skill — I'll fix at source in Dev and re-import the solution, Cancel — stop the skill |
+   | These verified customizations still need changes: `<named items and impact>`. They may indicate an upstream ALM gap. How do you want to address them? | Downstream Customizations | Review/remediate the named items here, Pause — fix at source in Dev and re-import, Cancel |
 
    - **Remediate now**: proceed with the auto-rewriter steps below.
    - **Pause skill**: halt cleanly; user fixes upstream and re-runs.
@@ -1675,7 +1698,7 @@ Follow **all** of Authoring Track Phase 2.3: verify CSV provenance, reuse an app
 
 5. **Generate augmented prompts** — same as Authoring Track Phase 2.4 step 5 (plugin + DME prompts surfaced for separate Claude sessions).
 
-6. **Review and approve** — same as Authoring Track Phase 2.4 step 6 (`--set-approval 3 in-phase`, AskUserQuestion gates the apply+upload). Users review the **Remediation Diff** card in the live report.
+6. **Review and approve** — same proposal gate as Authoring Track Phase 2.4 step 6: only a valid nonempty manifest with existing staged files triggers `--set-approval 3 in-phase` and the apply/upload question. Zero proposals skips steps 6–7; manual work remains unresolved until verified or explicitly deferred.
 
 7. **Apply staged changes and upload** — same as Authoring Track Phase 2.4 step 7 (`apply-remediation.js` copies staged → live, then `pac pages upload`). On "No — discard staged changes", run `apply-remediation.js --discard` and skip upload.
 
@@ -1687,9 +1710,11 @@ Follow **all** of Authoring Track Phase 2.3: verify CSV provenance, reuse an app
 
    > **→ Update report (after upload):** `--clear-approval`.
 
-**Output**: Customizations remediated and uploaded (or zero findings, skipped).
+Before activation, reconcile manual work using step 2.4's readiness rules: expected references get optional verification only; actual unreviewed/unfixed items require specific impact and explicit named-risk deferral if the user chooses to proceed. Preserve the existing activation/restart approvals.
 
-> **→ Update report:** `--set-step 3.4 --status completed --output "<Auto-rewrites uploaded | No customizations to remediate>"`
+**Output**: Assessments and source-review evidence recorded; only actual approved changes applied/uploaded; manual outcomes or specifically acknowledged deferrals recorded.
+
+> **→ Update report:** `--set-step 3.4 --status completed --output "<N informational; M fixes verified; K named items explicitly deferred>"`
 
 ---
 

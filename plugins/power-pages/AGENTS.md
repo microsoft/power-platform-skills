@@ -23,6 +23,12 @@ Initialization must verify the website and
 environment identity before resuming or resetting an existing folder. Remediation
 reruns rebuild the selected FetchXML/Liquid passes from current source, preserving
 both passes without modifying live files before the approved apply step.
+Treat PAC customization counts as scan references, not severity or required-fix
+counts. Preserve the CSV and per-finding informational/actionable/context-review
+assessment; inspect full source for uncertain findings and record evidence in the
+live report. Do not blanket-allow templates or unmapped tables. Only real staged
+proposals trigger apply/upload approval; only named unresolved actionable work
+requires risk acknowledgment. Expected references alone are not an ALM gap.
 Validate saved state and snapshot/remediation records before dereferencing them;
 invalid input must produce a clear error without replacing usable state or partially
 applying a proposal with missing staged files.
