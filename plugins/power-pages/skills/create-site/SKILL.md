@@ -177,14 +177,20 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
 
 5. Render `TEMPLATE_PREVIEW_FAMILIES` for browser preview:
 
-   - Download each `previewImages` artifact into the SHA-keyed cache before rendering:
+   - For each SPA family and variant, prefer `responsivePreviews` when present, including an empty array.
+     Each page has `{ id, displayName, desktop, mobile }`; download both device artifacts into the SHA-keyed cache before rendering:
      ```bash
      node "${PLUGIN_ROOT}/scripts/fetch-template-artifact.js" --sha "<catalog-sha>" --artifactPath "<preview-image-path>"
      ```
-     Replace each preview image path with the returned `localUrl`. If a preview download returns `ok: false`, omit that one image from the gallery and continue; a missing preview should not block using an otherwise-valid template.
+     Replace each device path with the returned `localUrl`, preserving the page's `id` and `displayName`.
+     If either download returns `ok: false`, explain the unavailable preview and omit that page from the gallery; previews must not block an otherwise-valid template.
+     Use legacy `previewImages` only when `responsivePreviews` is absent, replacing each path with its downloaded `localUrl` and omitting failed images.
+     A variant's own preview definition overrides the family's, even if the variant uses legacy `previewImages`.
+     Inherit family previews only when the variant defines neither field.
+     Reuse cached downloads for inherited paths.
    - Write a temporary JSON file containing a `TEMPLATES_JSON` array with the templates the user
      should preview. Preserve `kind` so the HTML shows `SPA` or `Non-SPA` beside every template
-     name. Include SPA variants and cached `previewImages`; include non-SPA responsive `previews`
+     name. Include SPA variants with their effective cached `responsivePreviews` or legacy `previewImages`; include non-SPA responsive `previews`
      unchanged. Keep the browser read-only.
    - Run:
      ```bash
@@ -441,14 +447,18 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
         --templateName "<SELECTED_TEMPLATE.displayName>" \
         --templateDescription "<SELECTED_TEMPLATE.description>" \
         --statusPath "<temp-import-status-dir>/status.json" \
-        --previewImagesJson '<JSON array of SELECTED_TEMPLATE.previewImages localUrl values from the template browser step>' \
+        --responsivePreviewsJson '<JSON array of SELECTED_TEMPLATE_VARIANT.responsivePreviews with cached desktop/mobile localUrl values from the template browser step>' \
         --solutionCount "<TEMPLATE_SOLUTIONS_TO_IMPORT.length, or SELECTED_TEMPLATE_SOLUTIONS.length when imports are skipped>" \
         --outputPath "<temp-import-status-dir>/index.html"
       node "${PLUGIN_ROOT}/scripts/serve-static-dir.js" --root "<temp-import-status-dir>" --urlFile "<temp-import-status-dir>/url.txt" --cleanupRoot
       node "${PLUGIN_ROOT}/scripts/open-url.js" --url "<url from <temp-import-status-dir>/url.txt>"
       ```
+      When the selected variant has only legacy `previewImages`, replace `--responsivePreviewsJson` with `--previewImagesJson` and pass that variant's cached URL array.
+      Use the selected variant's effective previews, including inherited family previews resolved in the browser step.
       Reuse the already-downloaded local preview image URLs from the browser step; do not fetch preview images again for this page.
-      Name device-specific captures `desktop-<page>.<ext>` and `mobile-<page>.<ext>` so the status page can pair them. Unprefixed images count as desktop previews, and the Mobile control appears only when a mobile-prefixed image is present.
+      Structured previews use explicit page/device fields regardless of filenames.
+      For legacy `previewImages` only, name device-specific captures `desktop-<page>.<ext>` and `mobile-<page>.<ext>` so the status page can pair them.
+      Unprefixed legacy images count as desktop previews; the Mobile control appears when the selected page has a mobile image.
       The server command returns only after the listener is ready. It removes the temporary status directory after a successful redirect, after the browser stops polling, or when the maximum lifetime expires.
    7. Unless `SKIP_TEMPLATE_SOLUTION_IMPORT = true`, mark **Import template supporting solutions** as `in_progress`. Process `TEMPLATE_SOLUTIONS_TO_IMPORT` sequentially in its existing case-insensitive lexical unique-name order. For each entry, set `CURRENT_TEMPLATE_SOLUTION` and prepare its unmanaged solution for import:
       ```bash

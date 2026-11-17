@@ -2473,6 +2473,48 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
         if (a.sendWindow) a.sendWindow.possible += 1;
       });
     },
+    /**
+     * The send-once transport (lib/managed-create-transport.js), after the service answered ONE sealed create request (a
+     * POST whose every row is a create) with a rejection that says it was not carried out (lib/managed-feature-contract.js
+     * notStartedAnswer: a 400, 403, 404 or 412 carrying a Dataverse error code, or a 412 to an If-Match request; never a
+     * `$batch`), while the scope that sent it was
+     * still open (#847). A single Dataverse operation that fails is rolled back whole — a deep insert's children with its
+     * root — and the client never re-sends a send-once request, so nothing that request carried exists: its rows go back
+     * to what they were before sealRowDispatch (`dispatched: false`, no sealed projection) and its one count moves from
+     * `possible` to `notStarted`, in one write. Then the attempt's own record proves nothing it sent can land
+     * (attemptProvenUnsent) unless another of its requests was dispatched, and the run that holds it can release it
+     * (retireProvenUnsentAttempt) instead of leaving a pending create no later build can settle.
+     * rows: [{ kind, key, id, sentSha256 }] — exactly the rows that request sealed, each still dispatched under that same
+     * sealed projection. Checked under the lease against the record reread there: a configuration attempt still sending,
+     * with an observed send window at exactly `epoch` that counts at least one possible send. Anything else (another run
+     * claimed the attempt, a row was never sealed or was sealed by another request) is refused with nothing written, and
+     * the attempt stays possibly sent: a refusal here only ever leaves the stricter state.
+     */
+    noteRowsNotStarted({ token, epoch, rows } = {}) {
+      if (!Array.isArray(rows) || rows.length === 0) throw storeError(CODES.notSettled, 'noteRowsNotStarted needs the rows the refused request carried');
+      if (!Number.isInteger(epoch)) throw storeError(CODES.notSettled, 'noteRowsNotStarted needs the send window epoch the request was sent under');
+      mutate((env, disk, spend) => {
+        const a = sendingRowAttempt(env, disk, token, epoch);
+        spend(token);
+        const name = `the managed ${a.family} "${a.key}"`;
+        if (!a.sendWindow || a.sendWindow.epoch !== epoch || a.sendWindow.possible < 1) throw storeError(CODES.notSettled, `${name} attempt has no counted send at this epoch to answer`);
+        const found = rows.map((s) => {
+          const r = a.rowProtocol.rows.find((x) => x.kind === s.kind && x.key === s.key);
+          if (!r || r.id !== normalizeGuid(s.id) || !r.dispatched || r.sentSha256 !== s.sentSha256) {
+            throw storeError(CODES.requestMismatch, `the ${s.kind} row ${s.id} of ${name} is not dispatched under the request that was refused; it stays possibly sent`);
+          }
+          return r;
+        });
+        if (new Set(found).size !== found.length) throw storeError(CODES.requestMismatch, `the refused request of ${name} names one row twice; it stays possibly sent`);
+        for (const r of found) {
+          r.sentFields = null;
+          r.sentSha256 = null;
+          r.dispatched = false;
+        }
+        a.sendWindow.possible -= 1;
+        a.sendWindow.notStarted += 1;
+      });
+    },
     /** Mark one completion effect (a solution membership, a rule's state) of a sending configuration attempt dispatched, before it leaves. */
     markRowEffectDispatch({ token, epoch, kind, id } = {}) {
       mutate((env, disk, spend) => {
@@ -2515,6 +2557,60 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
         spend(token);
         a.sendWindow.epoch += 1;
         a.phase = 'sending';
+        epoch = a.sendWindow.epoch;
+      });
+      return { epoch };
+    },
+    /**
+     * Claim the ONE value row of an unfinished environment-variable create that its own record proves was never
+     * dispatched (#847): the definition POST was sent (and acknowledged, or its saved row is approved by the maker),
+     * and the value POST was refused before it started (noteRowsNotStarted reset it) or was never reached. Checked
+     * against the record reread under the lease, never against what the caller read before:
+     *   - `capture` (readOnlyCapture, taken before the caller's fresh read) still describes the attempt exactly, so no
+     *     other run wrote it between that read and this claim;
+     *   - the attempt is a sending create of a new root (no base generation, no base observation, no saved observation),
+     *     prepared for `declarationSha256`, with exactly two rows: the dispatched definition create and its value create
+     *     at `id` under `parentId`, a sensitive input still `dispatched: false` with no sealed fields and no child receipt;
+     *   - nothing preserved, no rule state and no rule-state effect (the variable family has neither);
+     *   - its root was acknowledged by its own answer (`acknowledgedRoot`), or `rootApproved` (the maker's adoption approval
+     *     of the saved definition: a record without that receipt).
+     * Anything else refuses typed and writes nothing. The claim only moves the window to a new epoch (a run still holding
+     * the old one is refused) — it sets no flag — so the one value request goes through the same fenced transport as the
+     * original: sealRowDispatch marks it dispatched before it leaves, and a value that was, or may have been, dispatched is
+     * never claimed again. Answers { epoch }.
+     */
+    claimUnsentValueRow({ token, id, parentId, capture, declarationSha256, rootApproved = false } = {}) {
+      let epoch = null;
+      mutate((env, disk, spend) => {
+        const now = readOnlyCapture(disk.envelope, token);
+        const was = capture || {};
+        if (!now || now.digest !== was.digest || now.generation !== was.generation || now.epoch !== was.epoch) {
+          throw storeError(CODES.conflict, 'a managed variable changed since its value was checked; nothing is sent for it');
+        }
+        const a = requireAttempt(env, disk, token);
+        const name = `the managed ${a.family} "${a.key}"`;
+        const p = a.rowProtocol;
+        if (a.family !== 'environmentVariable' || !p || a.phase !== 'sending' || a.baseGeneration !== null || !a.expected
+          || a.expected.baseObservation !== null || a.savedObservation !== null || !a.sendWindow) {
+          throw storeError(CODES.pending, `${name} attempt is not an unfinished variable create whose value alone is owed; nothing is sent under it`);
+        }
+        if (a.declarationSha256 !== declarationSha256) throw storeError(CODES.conflict, `${name} attempt was prepared for another declaration; nothing is sent under it`);
+        const root = p.rows.find((r) => r.parentId === null);
+        const value = p.rows.find((r) => r.parentId !== null);
+        if (p.rows.length !== 2 || !root || !value || root.mode !== 'create' || rowIdKey(root.id) !== rowIdKey(a.root.id) || !root.dispatched
+          || value.kind !== 'environmentVariableValue' || value.mode !== 'create' || value.sensitiveInput !== true
+          || value.id !== normalizeGuid(id) || value.parentId !== normalizeGuid(parentId) || value.parentId !== root.id) {
+          throw storeError(CODES.requestMismatch, `${name} attempt does not hold a sent definition and its value at ${id}; nothing is sent under it`);
+        }
+        if (value.dispatched || value.sentFields !== null || value.sentSha256 !== null || (a.acknowledgedChildCreates || []).some((c) => c.kind === value.kind && c.key === value.key)) {
+          throw storeError(CODES.pending, `the value of ${name} was, or may have been, sent; it is not sent again`);
+        }
+        if (p.preserved.length || p.completion.ruleState !== null || p.effects.some((e) => e.kind === 'rule-state')) {
+          throw storeError(CODES.requestMismatch, `${name} attempt owes more than its value; nothing is sent under it`);
+        }
+        if (a.acknowledgedRoot !== true && rootApproved !== true) throw storeError(CODES.pending, `${name} definition is neither acknowledged as this attempt's create nor approved; nothing is sent under it`);
+        spend(token);
+        a.sendWindow.epoch += 1;
         epoch = a.sendWindow.epoch;
       });
       return { epoch };
@@ -2774,6 +2870,33 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
         removed = owned.length;
       });
       // As retireUnsentAttempt: only after the durable write does the attempt's own hold end.
+      if (barrier) barrier.release(token);
+      return { retired: true, effects: removed };
+    },
+    /**
+     * Stop tracking the unfinished configuration attempt `token` of (`family`, `key`), under the maker's exact approval
+     * (`--authorize retire:<family>:<key>@<token>`, lib/configuration-protected.js pendingSweep) — for an item the App
+     * Spec no longer declares, whose attempt may have been sent, so neither retire above applies (#847: a create whose
+     * answer was lost, or one an earlier plugin left pending after the service refused it). Without this an attempt
+     * nobody declares any more could never be settled (only its own declaration settles it) and every build of the app
+     * stopped on it. Nothing is deleted or sent: one write removes only that attempt and the effects it owns; its
+     * committed group, if any, its publication debt and every other attempt and effect stay. Rows the attempt may have
+     * created stay on the service, unmanaged — a later declaration of the item goes through the unbound create path, whose
+     * reads stop on a row already at the derived id, so nothing is ever created twice or bound unseen. Checked under the
+     * lease against the record reread there: the attempt must still be `token`, of a configuration family, for exactly
+     * that family and key (an approval given for one attempt never retires another). Answers { retired: true, effects }.
+     */
+    abandonAttempt({ token, family, key } = {}) {
+      if (typeof token !== 'string' || !token) throw storeError(CODES.notSettled, 'abandonAttempt needs the attempt token');
+      let removed = 0;
+      mutate((env, disk) => {
+        const a = requireAttempt(env, disk, token);
+        if (!isRowFamily(a.family) || a.family !== family || a.key !== key) throw storeError(CODES.notSettled, `the attempt ${token} is not the configuration attempt of the managed ${family} "${key}"; nothing is retired`);
+        const owned = env.workflowEffects.filter((e) => e.attemptToken === a.token);
+        env.attempts = env.attempts.filter((x) => x !== a);
+        env.workflowEffects = env.workflowEffects.filter((e) => e.attemptToken !== a.token);
+        removed = owned.length;
+      });
       if (barrier) barrier.release(token);
       return { retired: true, effects: removed };
     },

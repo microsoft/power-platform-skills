@@ -120,7 +120,7 @@ Its path filter covers Code Apps, its Codex catalog, and the compatibility valid
 `pcf` → `plugins/pcf/**` + `evals/pcf/**` + the model-apps/shared sources it bundles), or,
 for code no plugin owns, to that code (`shared-telemetry-tests` → `shared/telemetry/**`;
 `showcase-site` → `site/**` plus every input the site reads: `marketplace.json`, plugin manifests and
-skills, `README.md` and `scripts/install.js`). `showcase-site` also deploys the site to GitHub Pages from `main`.
+skills, evaluation sources, `README.md` and `scripts/install.js`). `showcase-site` also deploys the site to GitHub Pages from `main`.
 This is deliberate — a PR should not spend CI on a plugin it never touched — but it has a corollary:
 *a green PR does not mean the repo is green*, only that the paths you touched are. A plugin that ships
 copies of `shared/` sources may list those sources too, so a change to one runs that plugin's drift
@@ -134,6 +134,13 @@ A plugin that has adopted telemetry must also set its opt-out env var on any job
 telemetry-emitting hook or script (see `## Shared Telemetry`) — e.g.
 `POWER_PLATFORM_SKILLS_TELEMETRY_MODEL_APPS_OPTOUT: "1"`. It suppresses transmission only, so it
 cannot change what a test asserts.
+
+### Skill evaluations
+
+When changing Power Pages evaluation cases, graders, isolation or published evidence, read [`evals/README.md`](evals/README.md).
+`power-pages-eval-validation` runs deterministic checks across Linux, Windows and macOS.
+Paid `power-pages-evals` measurements are default-branch manual dispatches using native Copilot Actions authentication; they are report-only, offline, and never connect to a Power Pages environment.
+The showcase dashboard consumes sanitized summaries and marks source mismatches or missing evidence explicitly.
 
 ## Plugin Conventions
 

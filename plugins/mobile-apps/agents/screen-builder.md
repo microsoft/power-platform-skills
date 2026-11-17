@@ -27,6 +27,18 @@ You will be invoked by `/create-mobile-app` Step 11 or `/edit-app` screen-rebuil
 
 ## Hard Rules
 
+- **App-matched release context.** Read
+  [release lifecycle](../shared/references/mobile-release-lifecycle.md) and use
+  the orchestrator's sanitized resolved context, not the newest bundled
+  template. A missing context is `NEEDS_CONTEXT`; unknown/missing release
+  records block new/changed native use. Existing pure source/UI work may
+  continue against installed APIs with native compatibility explicitly
+  unverified. Never install/upgrade a host, Expo package, controls aggregate,
+  or leaf to make a screen compile, and never claim native validation from tsc.
+  Preserve and forward the same context on any handoff.
+  Release-matched installed APIs take precedence over illustrative samples in
+  this file; do not adopt a newer host/Tamagui/Expo API merely because an example
+  uses it. For an unavailable required API, return `NEEDS_CONTEXT`, not a shim.
 - **MANDATORY progress reporting.** Every step in the workflow has a `**Print before starting:**` block. You MUST emit that exact line as a plain text message to the orchestrator before doing the step's work, prefixed with `[<screen_name>]` so parallel builds can be told apart. Do not skip, do not paraphrase. Without these prints, the user sees nothing for 30–60 seconds while N screens build in parallel.
 - **Write exactly one screen file.** No new hooks, no new services beyond your assigned screen file. **`src/components/`, `src/hooks/`, `src/utils/`, `src/tokens/` are guaranteed to exist** — the orchestrator creates them at Step 7 before any builder runs. NEVER create or modify these shared files from a builder. If `src/components/index.tsx` appears missing, your working directory is wrong — STOP and report `BLOCKED [<screen_name>]: src/components/index.tsx is missing — orchestrator should have created it at Step 7`.
 - **Use shared code via path aliases — NEVER re-define inline.** The project has `@/components`, `@/hooks`, `@/utils`, `@/tokens` configured in tsconfig. Import from them:
@@ -93,7 +105,7 @@ You will be invoked by `/create-mobile-app` Step 11 or `/edit-app` screen-rebuil
   | Tokens: `$4`, `$color12`, `$background`, `$sm` | Screen options: `<Stack.Screen options={{ presentation: 'modal' \| 'formSheet', headerSearchBarOptions, headerLargeTitle }}>` |
   | Theme switching, breakpoints (`useMedia()`) | Scroll insets: `<ScrollView contentInsetAdjustmentBehavior="automatic">` |
   |  | Platform branching: `process.env.EXPO_OS`, `useWindowDimensions` |
-  |  | Capabilities: `expo-camera`, `expo-document-picker`, `expo-print`, `expo-secure-store`, `expo-file-system`, `expo-sharing`, `@microsoft/power-apps-native-pdf-viewer`, `@microsoft/power-apps-native-pen-input`, `@microsoft/power-apps-native-bglocation` when allowlisted by the plan (see AGENTS.md §2) |
+  |  | Capabilities: only packages/versions in the app's resolved native inventory; controls use approved wrappers and release-conditional subpaths |
   |  | Animations: Reanimated |
 
   **Translation rule:** when the Expo `building-native-ui` skill shows `<View style={{ padding: 16, gap: 8 }}>`, write `<YStack p="$4" gap="$2">`. When it shows `<Stack.Screen options={{...}}>`, copy that **verbatim** — Tamagui never replaces navigation primitives.
@@ -219,7 +231,27 @@ You will be invoked by `/create-mobile-app` Step 11 or `/edit-app` screen-rebuil
 
 - **Dataverse image rendering rule (detail/list screens).** If a screen displays a Dataverse Image column, include the real image/base64 field in `select` and render a `data:image/<mime>;base64,...` URI when base64 is present. Do not rely on guessed URL/display pseudo-fields alone.
 
-- **Native capabilities use `src/native/` wrappers.** `/add-native` creates typed wrappers under `src/native/` (e.g., `camera.ts`, `cameraUpload.ts`, `secureStore.ts`, `documentPicker.ts`, `pdfReport.ts`, `pdfViewer.ts`, `penInput.ts`, `geolocation.ts`, `haptics.ts`). For non-Dataverse native workflows, screen files import these wrappers; the wrapper implementation owns imports from `expo-camera`, `expo-image-picker`, `expo-document-picker`, `expo-print`, `expo-secure-store`, `expo-file-system`, `expo-sharing`, `expo-haptics`, `@microsoft/power-apps-native-pdf-viewer`, `@microsoft/power-apps-native-pen-input`, or `@microsoft/power-apps-native-bglocation`. The wrappers handle permissions, iOS/Android platform differences, URL validation, and return discriminated-union results (`{ ok: true, ... } | { ok: false, reason }`). If a wrapper doesn't exist yet, write the screen with the expected import path and a `// TODO(native-not-yet-added): run /add-native <capability> to create src/native/<wrapper>.ts` comment. For `camera.ts`, use `/add-native camera`; for `barcodeScanner.tsx`, use `/add-native barcode-scanner`; for `pdfReport.ts`, use `/add-native pdf-report`; for `pdfViewer.ts`, use `/add-native pdf-viewer` or `/add-native @microsoft/power-apps-native-pdf-viewer`; for `penInput.ts`, use `/add-native pen-input` or `/add-native @microsoft/power-apps-native-pen-input`; for `geolocation.ts`, use `/add-native geolocation` or `/add-native @microsoft/power-apps-native-bglocation`; for `haptics.ts`, use `/add-native haptics`. `expo-notifications` remains unavailable. If the plan tells you to use an unavailable capability, return `NEEDS_CONTEXT`.
+- **Native capabilities use existing `src/native/` wrappers.** `/add-native`
+  owns `camera.ts`, `barcodeScanner.tsx`, `pdfReport.ts`, `pdfViewer.ts`,
+  `penInput.ts`, `location.ts`, `geolocation.ts`, and `haptics.ts`. For
+  non-Dataverse native workflows, import these wrappers only after they exist
+  and their APIs match the approved spec. A missing wrapper is `BLOCKED`, never
+  a TODO import or fake implementation. Wrappers guard the native platform
+  before lazy imports and return discriminated results. Read the
+  [conditional controls contract](../skills/add-native/references/native-controls.md):
+  the aggregate root is metadata; runtime subpaths are `/pdf`, `/pen`, and
+  `/geolocation`, with no barcode subpath. Legacy leaf imports require matching
+  resolved inventory. Do not install the aggregate to fix older binaries.
+- **Location mode is explicit.** One-shot `BgLocationClient.getCurrentLocation()`
+  requires no `app_id`, data source, table, or `startTracking`. Continuous
+  tracking has one coordinated owner; do not stop shared tracking when a
+  screen unmounts. Background-location 0.2.3 uses background permissions even
+  with `trackInBackground: false`; `stopTracking()` and `isTracking()` have no
+  `app_id`. Do not introduce `configureSync` / `HttpSyncContract`.
+- **Usage is not permission selection.** Keep package inclusion, OS declarations,
+  runtime grants, and app use distinct. Disabling controls does not remove
+  default Android permissions. A different declaration set requires another
+  verified base; optional per-customer permission wrapping is deferred.
 
 - **Planned pure-JavaScript dependencies may be imported directly.** Follow `${PLUGIN_ROOT}/shared/references/javascript-dependency-planning.md`'s Builder Contract. Before importing any non-template package, verify it appears with an exact version in `## Screens → ### JavaScript Dependencies` and in the project's `package.json` `dependencies`, and that `require.resolve('<package>', { paths: [working_dir] })` succeeds. If the plan lists it but installation is missing, return `BLOCKED [<screen_name>]: approved JavaScript dependency <package>@<version> is not installed — orchestrator must install dependencies before builders run.` If it is not in the approved table, return `NEEDS_CONTEXT` instead of adding it yourself. Builders never select packages, edit `package.json`, or run installs. Import and use only the package APIs named by the approved per-screen spec.
 

@@ -8,7 +8,7 @@ const path = require('node:path');
 
 const { TranscriptParser, parseTranscript } = require('../lib/transcript.js');
 const { gradeTrial, summarizeCase, validateEvals, acceptable } = require('../lib/grade.js');
-const { buildInvocation, quoteForCmd, TELEMETRY_OPTOUT } = require('../lib/agents.js');
+const { buildInvocation, quoteForCmd, trialPrompt, TRIAL_NOTE, TELEMETRY_OPTOUT } = require('../lib/agents.js');
 
 const PLUGIN = { pluginName: 'model-apps', pluginSkills: ['app-builder', 'genpage', 'report-issue', 'telemetry'] };
 const sample = (name) => fs.readFileSync(path.join(__dirname, 'transcripts', name), 'utf8');
@@ -188,6 +188,19 @@ test('agents(copilot): isolated COPILOT_HOME required; variadic --available-tool
     assert.ok(inv.args.includes(flag), `missing ${flag}`);
   }
   assert.deepEqual(inv.args.slice(inv.args.indexOf('--disable-mcp-server'), inv.args.indexOf('--disable-mcp-server') + 2), ['--disable-mcp-server', 'playwright']);
+});
+
+// A read-only menu leaves an agent that has decided no skill fits with nothing to do the work with, and it
+// then asks for the nearest generic skill as a stand-in (a correct "none" graded as a mis-route). The note
+// gives it a way to finish, and must not steer a request toward or away from any skill.
+test('agents: trialPrompt sends the case prompt verbatim after a note that tells the agent how to finish without a skill', () => {
+  const prompt = 'Build a React dashboard.\nNo Power Platform.';
+  const sent = trialPrompt(prompt);
+  assert.ok(sent.endsWith(`\n\n${prompt}`), 'the user\'s words are untouched, and last');
+  assert.equal(sent.slice(0, sent.length - prompt.length - 2), TRIAL_NOTE);
+  assert.match(TRIAL_NOTE, /nothing can be written or run/);
+  assert.match(TRIAL_NOTE, /If none of them does, reply in one short sentence[^.]*, and stop/);
+  assert.doesNotMatch(TRIAL_NOTE, /genpage|app-builder|report-issue|telemetry|Power|Dataverse|model-driven|React/i, 'names no skill and no product');
 });
 
 test('agents: quoteForCmd quotes paths with spaces and cmd metacharacters only', () => {

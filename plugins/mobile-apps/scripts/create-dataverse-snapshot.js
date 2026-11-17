@@ -1479,7 +1479,12 @@ async function loadDetailedEntity(request, entity, {
         validForCreate: Boolean(attribute.IsValidForCreate),
         validForRead: Boolean(attribute.IsValidForRead),
         validForUpdate: Boolean(attribute.IsValidForUpdate),
-        sourceType: normalizeIntegerMetadata(attribute.SourceType),
+        // { SourceType: null } is valid for non-specializable columns. Missing
+        // or malformed evidence must not become null and authorize reuse.
+        ...(hasOwn(attribute, 'SourceType')
+          && (attribute.SourceType === null || Number.isInteger(attribute.SourceType))
+          ? { sourceType: attribute.SourceType }
+          : {}),
         sourceTypeMask: normalizeIntegerMetadata(attribute.SourceTypeMask),
         attributeOf: attribute.AttributeOf || null,
         logical: Boolean(attribute.IsLogical),

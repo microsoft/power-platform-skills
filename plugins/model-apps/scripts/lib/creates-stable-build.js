@@ -115,16 +115,42 @@ function stableIntents(spec) {
   const solution = spec && spec.solution && spec.solution.uniqueName;
   const intents = [];
   for (const v of (spec && spec.views) || []) {
-    if (!viewReconcile.isDeclaredView(v) || !nonempty(v.entity) || !nonempty(v.name)) continue;
-    const key = viewReconcile.declaredViewKey(v);
-    const declaration = typeof v.key === 'string' && v.key ? { queryType: 0, key: v.key } : { queryType: 0, name: v.name };
-    intents.push({ catalogKind: 'view', key, scope: { kind: 'table', solution, table: lc(v.entity) }, declaration });
+    const intent = viewIntentOf(spec, v);
+    if (intent) intents.push(intent);
   }
   for (const c of (spec && spec.charts) || []) {
     if (!chartReconcile.isDeclaredChart(c) || !nonempty(c.entity) || !nonempty(c.name)) continue;
     intents.push({ catalogKind: 'chart', key: chartReconcile.declaredChartKey(c), scope: { kind: 'table', solution, table: lc(c.entity) }, declaration: { name: c.name.trim() } });
   }
   return intents;
+}
+
+// The catalog intent of one declared view, or null for a view that is not declared or does not compile. The one construction the
+// build's catalog (stableIntents) and verification's per-view identity (stableViewIdentityFor) share.
+function viewIntentOf(spec, v) {
+  if (!viewReconcile.isDeclaredView(v) || !nonempty(v.entity) || !nonempty(v.name)) return null;
+  const solution = spec && spec.solution && spec.solution.uniqueName;
+  const key = viewReconcile.declaredViewKey(v);
+  const declaration = typeof v.key === 'string' && v.key ? { queryType: 0, key: v.key } : { queryType: 0, name: v.name };
+  return { catalogKind: 'view', key, scope: { kind: 'table', solution, table: lc(v.entity) }, declaration };
+}
+
+/**
+ * The stable create id the build would look for (and create at) for ONE declared view, or null when the spec does not use stable
+ * create identities or the view is not a declared one. Pure: derived through the same composite port the build makes
+ * (createCompositePortForSpec, with the same shipped kinds), from a catalog of this view alone. A catalog of the whole spec is
+ * not made on purpose: it refuses two keys that derive one id before either id is returned, and verification must report such
+ * a pair as two declarations claiming one row — and an unrelated declaration it refuses must not stop this view's proof. Like the
+ * build's view adapter, no incarnation is supplied. Throws what the derivation throws (a create-identity stop).
+ * @returns {{ key: string, id: string } | null}
+ */
+function stableViewIdentityFor(spec, view) {
+  const intent = viewIntentOf(spec, view);
+  if (!intent) return null;
+  const port = createCompositePortForSpec(spec, { intents: [intent], shippedKinds: SHIPPED_KINDS });
+  const found = typeof port.identityFor === 'function' ? port.identityFor('view', intent.key) : null;
+  const id = found ? normalizeGuid(found.id) : '';
+  return id ? { key: intent.key, id } : null;
 }
 
 const isNotFound = (err) => !!err && (err.statusCode === 404 || err.status === 404);
@@ -634,4 +660,4 @@ function tableOf(intents, kind, key) {
   return i ? i.scope.table : '';
 }
 
-module.exports = { createStableCreates, stableIntents, SHIPPED_KINDS, PROOF_SCHEMA };
+module.exports = { createStableCreates, stableIntents, stableViewIdentityFor, SHIPPED_KINDS, PROOF_SCHEMA };

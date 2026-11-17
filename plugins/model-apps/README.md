@@ -41,13 +41,15 @@ no timeout setting, for pages.
 ## Feature flags (defaults and overrides)
 
 Some capabilities ship **OFF by default** while their cross-repo dependencies roll
-out to production: custom telemetry and built-in Dataverse operation authoring are OFF.
+out to production: built-in Dataverse operation authoring remains OFF. Custom telemetry
+is ON by default, but pages are instrumented only when the maker explicitly asks to
+measure or track something. Set `GENPAGE_ENABLE_CUSTOM_TELEMETRY=0` to disable it for a run.
 Flags are catalogued (with lifecycle status) in `scripts/lib/feature-flags.js`; their on/off
 value lives in `feature-flags.json` at the plugin root.
 
 | Flag | Status | Default | Enables | Depends on |
 |---|---|---|---|---|
-| `custom-telemetry` | in-progress | OFF | A generated page reporting its own events, metrics, traces and exceptions to your Application Insights resource via `props.appInsights` | the page telemetry facade in the UCI host runtime, the GenUX authoring control, the AIBuilder telemetry prompt, and the `GenUxEnableCustomTelemetry` setting — all live in PROD |
+| `custom-telemetry` | in-progress | ON | A generated page reporting its own events, metrics, traces and exceptions to your Application Insights resource via `props.appInsights` | the page telemetry facade in the UCI host runtime, the GenUX authoring control, the AIBuilder telemetry prompt, and the `GenUxEnableCustomTelemetry` setting — all live in PROD |
 | `dataverse-operations` | experimental | OFF | Offering two reviewed built-in Dataverse Functions, WhoAmI and RetrieveVersion, as explicitly selected, button-only page calls (`executeFunction`); `scripts/list-dataverse-operations.js` lists them without contacting the environment | a host runtime that implements `executeFunction`, the page `actionBindings` the plugin writes, and the `GenUxPluginActionAllowList` setting; the environment, the page player and the signed-in user's permissions are not checked — see [the built-in operations reference](references/dataverse-operations.md) |
 
 Connector authoring is in **public preview** and no longer has a feature flag. Connector discovery, binding, deploy, and ALM packaging are always available when the required PAC and host capabilities are present.
@@ -136,6 +138,14 @@ vendored `cds-maker-sdk`. It runs an interactive, multi-turn authoring flow and 
 6. **Build** — applies the spec idempotently phase by phase, then optionally `--verify` reconciles
    the deployed app against the spec
 7. **Edit** — downloads a deployed app back into an editable App Spec so you can change and rebuild it
+
+A default build (one without `configurationIdentity`) creates declared environment variables, connection
+references, Custom APIs and duplicate detection rules one row at a time, at ids fixed in advance, and reads
+them back. If it is interrupted while it creates them, the next build and teardown stop with a
+`configuration-create-*` code and send no write; recover with the read-only `configuration-recovery.js`
+described in [Configuration create recovery](docs/configuration-create-recovery.md). Under
+`configurationIdentity: "stable-v1"`, an interrupted create is decided by the next build instead (see
+`configurationIdentity` in [app-spec-schema-advanced.md](references/app-spec-schema-advanced.md)).
 
 **Usage:** Invoke directly with `/app-builder`, or use any of the keywords below:
 

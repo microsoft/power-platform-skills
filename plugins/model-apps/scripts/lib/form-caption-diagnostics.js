@@ -89,6 +89,44 @@ function cellsOf(xml) {
 const sameControls = (a, b) => a.length === b.length && a.every((c, i) => c === b[i]);
 
 /**
+ * The cells of ONE form XML document, for a caller that needs more than the pair answer below (form-caption-sharing.js):
+ *   { ok: true, cells: Map<cellId, { tab, section, controls, captions: Map<lcid, description | null> }> }
+ *   { ok: false, reason: 'invalid-xml' | 'ambiguous-xml' }
+ * `cellId` is the cell's normalized GUID; a cell whose id is not a GUID is not in the map. `captions` maps each language
+ * code of the cell's own labels to the label's `description` ATTRIBUTE, or null when the label has none — a language
+ * with no label is simply absent. 'invalid-xml': not text, too long, or not one document the strict reader accepts;
+ * 'ambiguous-xml': a cell id twice, a language twice in one cell, or a language code that is not a whole number. The
+ * same reading rules as cellCaptionDifferences, so the two never disagree about one document.
+ */
+function readFormCaptionCells(xml) {
+  let cells;
+  try {
+    cells = cellsOf(xml);
+  } catch (e) {
+    if (e instanceof Ambiguous) return { ok: false, reason: 'ambiguous-xml' };
+    throw e;
+  }
+  return cells ? { ok: true, cells } : { ok: false, reason: 'invalid-xml' };
+}
+
+/**
+ * The same-form caption pairs that differ, given the two layers' cell maps (readFormCaptionCells' `cells`):
+ * [{ cellId, languageCode }] in saved-layer document order, every one of them. A pair needs the cell in both layers, in
+ * the same tab and section and holding the same controls, and exactly one label in that language on each side.
+ */
+function captionPairDifferences(saved, published) {
+  const found = [];
+  for (const [cellId, s] of saved) {
+    const p = published.get(cellId);
+    if (!p || s.tab !== p.tab || s.section !== p.section || !sameControls(s.controls, p.controls)) continue;
+    for (const [lcid, text] of s.captions) {
+      if (p.captions.has(lcid) && p.captions.get(lcid) !== text) found.push({ cellId, languageCode: lcid });
+    }
+  }
+  return found;
+}
+
+/**
  * The cells whose caption in one language reads differently in `savedXml` and `publishedXml`:
  *   { entries: [{ cellId: '<normalized GUID>', languageCode: 1033 }], omittedCount: 0 }
  * sorted by cell id then language code, at most MAX_ENTRIES named. Answers null when there is no such cell, or when
@@ -105,14 +143,7 @@ function cellCaptionDifferences(savedXml, publishedXml) {
     throw e;
   }
   if (!saved || !published) return null;
-  const found = [];
-  for (const [cellId, s] of saved) {
-    const p = published.get(cellId);
-    if (!p || s.tab !== p.tab || s.section !== p.section || !sameControls(s.controls, p.controls)) continue;
-    for (const [lcid, text] of s.captions) {
-      if (p.captions.has(lcid) && p.captions.get(lcid) !== text) found.push({ cellId, languageCode: lcid });
-    }
-  }
+  const found = captionPairDifferences(saved, published);
   if (!found.length) return null;
   found.sort((a, b) => (a.cellId < b.cellId ? -1 : a.cellId > b.cellId ? 1 : a.languageCode - b.languageCode));
   return { entries: found.slice(0, MAX_ENTRIES), omittedCount: Math.max(0, found.length - MAX_ENTRIES) };
@@ -138,4 +169,4 @@ function formatCaptionDifferences(differences) {
   return `Caption difference${plural ? 's' : ''} at ${named.join(', ')}${more}. This observation does not show whether the difference is an unpublished edit or a platform read projection.`;
 }
 
-module.exports = { cellCaptionDifferences, formatCaptionDifferences, MAX_CAPTION_DIFFERENCES: MAX_ENTRIES };
+module.exports = { cellCaptionDifferences, formatCaptionDifferences, readFormCaptionCells, captionPairDifferences, MAX_CAPTION_DIFFERENCES: MAX_ENTRIES };

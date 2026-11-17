@@ -71,7 +71,7 @@ function createManagedWire({ platform = {} } = {}) {
   };
   const publishRow = (id, r) => { published.set(id, { ...r }); if (platform.rewritingReads) rewriting.set(id, platform.rewritingReads); };
 
-  function apply(method, p, body, query = new URLSearchParams()) {
+  function apply(method, p, body, query = new URLSearchParams(), headers = {}) {
     let m = /^systemforms\(([^)]+)\)\/Microsoft\.Dynamics\.CRM\.RetrieveUnpublished\(\)$/i.exec(p);
     if (m && method === 'GET') {
       const id = m[1].toLowerCase();
@@ -133,6 +133,33 @@ function createManagedWire({ platform = {} } = {}) {
       return json(204);
     }
     if (m && method === 'GET') { const r = workflows.get(m[1].toLowerCase()); return r ? json(200, { ...r }) : notFound(); }
+    // A table's forms, as the caption-sharing diagnostic lists them (lib/form-caption-sharing.js), in either layer:
+    //   GET systemforms?$select=formid,…&$filter=objecttypecode eq 'account'                                       published
+    //   GET systemforms/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()?$select=…&$filter=objecttypecode eq 'account'   saved
+    // paged by the request's `Prefer: odata.maxpagesize=<n>` with an absolute `@odata.nextLink` that carries `$skiptoken=<offset>`,
+    // as the platform pages a collection. Rows are each layer as a single-row read answers it (the saved read with the platform's
+    // second-language captions, the published read without them), with only the selected fields. No rewriting read is consumed.
+    const tableFilter = method === 'GET' && /^systemforms(\/Microsoft\.Dynamics\.CRM\.RetrieveUnpublishedMultiple\(\))?$/i.test(p)
+      ? /^objecttypecode eq '((?:[^']|'')*)'$/.exec(query.get('$filter') || '') : null;
+    if (tableFilter) {
+      const table = tableFilter[1].replace(/''/g, "'");
+      const savedLayer = /RetrieveUnpublishedMultiple/i.test(p);
+      const select = (query.get('$select') || '').split(',').filter(Boolean);
+      const rows = [...(savedLayer ? saved : published).values()].filter((r) => r.objecttypecode === table)
+        .map((r) => (savedLayer ? savedRead(r) : (lcid ? { ...r, formxml: withoutLanguage(r.formxml, lcid) } : r)))
+        .map((r) => (select.length ? Object.fromEntries(select.filter((f) => f in r).map((f) => [f, r[f]])) : { ...r }));
+      const prefer = Object.entries(headers || {}).find(([k]) => k.toLowerCase() === 'prefer');
+      const size = Number((/odata\.maxpagesize=(\d+)/.exec(prefer ? String(prefer[1]) : '') || [])[1]) || 5000;
+      const from = Number(query.get('$skiptoken')) || 0;
+      const page = rows.slice(from, from + size);
+      const body = { value: page };
+      if (from + size < rows.length) {
+        const next = new URLSearchParams(query);
+        next.set('$skiptoken', String(from + size));
+        body['@odata.nextLink'] = `${ORIGIN}/api/data/v9.0/${p}?${next.toString()}`;
+      }
+      return json(200, body);
+    }
     // The build's dashboard name lookup (sdk-build.js findDashboardsByName, the SDK's resolveArtifact):
     //   GET systemforms?$select=formid,name&$filter=name eq 'Ops' and type eq 0
     // answers the PUBLISHED dashboards (type 0) of that name, compared as Dataverse compares names here: case and trailing
@@ -158,11 +185,11 @@ function createManagedWire({ platform = {} } = {}) {
     const at = scripted.findIndex((s) => s.match(entry));
     if (at >= 0) {
       const [{ answer }] = scripted.splice(at, 1);
-      if (!answer.unapplied) apply(entry.method, p, body, url.searchParams);
+      if (!answer.unapplied) apply(entry.method, p, body, url.searchParams, entry.headers);
       if (answer.error) return { error: answer.error, code: answer.code || 'ECONNRESET' };
       return json(answer.statusCode, answer.body);
     }
-    return apply(entry.method, p, body, url.searchParams);
+    return apply(entry.method, p, body, url.searchParams, entry.headers);
   }
 
   return {

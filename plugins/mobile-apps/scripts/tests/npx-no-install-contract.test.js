@@ -18,11 +18,9 @@ const test = require('node:test');
 const pluginRoot = path.resolve(__dirname, '..', '..');
 const testsDir = path.join(pluginRoot, 'scripts', 'tests');
 
-// Commands the developer types by hand; no skill runs them. The degit scaffold creates the project
-// before it has any dependencies, and the native-host upgrade deliberately runs the newest
-// `upgrade-template` (`/check-updates` says "Do not run `upgrade-template`").
+// Developer-run examples retained in the legacy template documentation; no
+// operational skill executes these acquisition or floating-upgrade commands.
 const USER_RUN = [
-  ['README.md', 'npx degit microsoft/power-platform-skills/plugins/mobile-apps/template#main'],
   ['template/README.md', 'npx degit microsoft/power-platform-skills/plugins/mobile-apps/template#main'],
   ['template/README.md', 'npx --package @microsoft/power-apps-native-host@latest'],
   ['template/CUSTOMIZATION.md', 'npx --package @microsoft/power-apps-native-host@latest'],

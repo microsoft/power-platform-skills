@@ -165,7 +165,9 @@ function createLifecycleHarness(org, root, { createMakerSdk = createVendoredMake
   // configuration write is sent once (configurationSendOnce). `connections` are the environment's connections the build may bind a
   // reference to ({ connectionId, connectorId, displayName }, as the SDK lists them); the strict org does not model the listing.
   // A build without protected configuration gets neither, so it sends what it always did.
-  async function build(spec, { apply = true, publish = true, sampleData = true, verify = true, appFolder = appDir, workspace = workspaceDir, sdkWorkspace = workspace, languageCode = 1033, gated = false, configurationBindings, connections } = {}) {
+  // `sleep`: the build's wait between its runs (buildModelApp's retry loop) — none by default; a test that records the waits, or changes the environment while one runs,
+  // hands in its own.
+  async function build(spec, { apply = true, publish = true, sampleData = true, verify = true, appFolder = appDir, workspace = workspaceDir, sdkWorkspace = workspace, languageCode = 1033, gated = false, configurationBindings, connections, sleep = async () => {} } = {}) {
     const publicationBarrier = gated ? createPublicationBarrier() : undefined;
     const managedCreateGate = apply && protectedConfigurationInPlay(spec, { apply: true, env: org.origin, workspaceDir: workspace, appDir: appFolder }) ? createDeferredManagedCreateGate() : null;
     const configured = managedCreateGate ? { sendOnce: (method, url) => configurationSendOnce(method, url), workflowEffectGate: composeWriteGates(managedCreateGate) } : {};
@@ -185,7 +187,7 @@ function createLifecycleHarness(org, root, { createMakerSdk = createVendoredMake
         appDir: appFolder, env: org.origin, workspaceDir: workspace, preResolvedLanguageCode: apply ? languageCode : undefined,
         ...(configurationBindings ? { configurationBindings } : {}),
       }, {
-        sdk, provisionSdk, genpage, ...(publicationBarrier ? { publicationBarrier } : {}), ...(managedCreateGate ? { managedCreateGate } : {}), ...(connections ? { connections: async () => connections.map(connectionRowFromSdk) } : {}), sleep: async () => {}, warn: (m) => warnings.push(String(m)), log: (m) => log.push(String(m)), provisionedLanguages: async () => org.pageServer.languages.provisioned,
+        sdk, provisionSdk, genpage, ...(publicationBarrier ? { publicationBarrier } : {}), ...(managedCreateGate ? { managedCreateGate } : {}), ...(connections ? { connections: async () => connections.map(connectionRowFromSdk) } : {}), sleep, warn: (m) => warnings.push(String(m)), log: (m) => log.push(String(m)), provisionedLanguages: async () => org.pageServer.languages.provisioned,
         verify: async (s, o) => verifySpec(s, readerFor(provisionSdk, appUniqueName(s), { genpage, workspaceDir: workspace }), o),
       });
       return { result, warnings, log };

@@ -1,0 +1,18 @@
+{
+  "siteName": "Contoso Service",
+  "siteType": "non-SPA",
+  "desiredLocale": "fr-FR",
+  "templateExport": {
+    "id": "template-service",
+    "name": "Customer service",
+    "supportedLanguages": [
+      "en-US",
+      "fr-FR"
+    ]
+  },
+  "environmentLanguagesExport": [
+    "en-US"
+  ],
+  "websiteRecord": null,
+  "activation": null
+}

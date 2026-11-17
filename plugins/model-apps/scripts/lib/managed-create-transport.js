@@ -26,7 +26,9 @@
 //   - a mutation the classifier does not recognise, a token outside the set, a row the protocol does not name under
 //     that id and parent, or a row or effect already sent once in this scope or by an earlier run.
 // Response facts are kept in memory only, per row and effect (see answerOf); they are evidence a driver turns into
-// receipts after a fresh read (lib/managed-create-context.js), never a binding by themselves.
+// receipts after a fresh read (lib/managed-create-context.js), never a binding by themselves. One answer also writes the
+// store: a row request the service refused with an answer that says it was never carried out is un-sealed again
+// (managed-bindings.js noteRowsNotStarted), so the run can release an attempt nothing of which exists (#847).
 // Every local refusal or store failure is also recorded in the scope: the SDK may catch the thrown error and report its
 // own (or nothing), so runWithManagedCreateSet answers the FIRST local failure as `localError`, and a caller must surface
 // it as the typed local failure it is — never as a network error to retry, and never as a saved result.
@@ -190,7 +192,9 @@ function memberNameRepeats(text, arrays) {
  * `expect`: null for a completion effect (only its status is read); otherwise { id, table?, key?, children? } — the
  * row the request prepared, its entity set and primary-key field, and [{ id, at, key, match }] for each deep-insert
  * child to find in the body's `at` array by its `match` fields. A string is taken as { id }.
- * A non-2xx answer is not treated as "not started" here: only a fresh read decides what is there.
+ * A non-2xx answer is never an outcome but `unknown` here. Only one kind of rejection is used at all, and not as an
+ * outcome: an answer that says a create request was never carried out (managed-feature-contract.js notStartedAnswer)
+ * un-seals the rows of that one request in the store (rowHandle, refusedUnstarted); everything else waits for a fresh read.
  */
 function answerOf(res, expect) {
   const status = res && Number.isInteger(res.statusCode) ? res.statusCode : res && Number.isInteger(res.status) ? res.status : null;
@@ -288,7 +292,7 @@ function checkRows(scope, store, c) {
   return rows;
 }
 
-function rowHandle(scope, store, entry, c, rows) {
+function rowHandle(scope, store, entry, c, rows, req) {
   for (const r of rows) scope.sent.add(`row\u0000${c.token}\u0000${r.id}`);
   const expectId = c.expectId === undefined ? rows[0].id : c.expectId === null ? null : normalizeGuid(c.expectId);
   const expect = { id: expectId, table: c.expectTable, key: c.expectKey, children: rows.filter((r) => r.answer).map((r) => ({ id: r.id, ...r.answer })) };
@@ -309,9 +313,33 @@ function rowHandle(scope, store, entry, c, rows) {
       if (state.answered || scope.closed) return;
       state.answered = true;
       // The answer is to the whole request: a deep insert is one transaction, so every row it carried shares it.
-      scope.facts.push(...fact(answerOf(res, expect)));
+      const answer = answerOf(res, expect);
+      const refused = answer.outcome === 'unknown' && state.dispatched ? refusedUnstarted(store, entry, c.token, rows, req, res) : null;
+      scope.facts.push(...fact(refused ? { ...answer, ...refused } : answer));
     },
   };
+}
+
+// #847: a rejection that says a CREATE request was never carried out (notStartedAnswer) un-seals the rows it carried in
+// the store (managed-bindings.js noteRowsNotStarted), so the run can release an attempt nothing of which exists instead of
+// leaving a pending create that no later build can settle. Only a POST whose every row is a create (a root's deep insert,
+// or a new child such as a variable's value row): an edit of a row that exists (a PATCH) keeps its pinned recovery, where
+// a refused edit stays owed until a fresh read settles it. The fact stays `unknown` (no answer here is ever a receipt);
+// `notStarted` only says the store now records the request as not started, and `serviceCode` is the Dataverse error code
+// the answer carried (`0x80072040`, never its message, which can echo what was sent). Best effort and never a throw into
+// the SDK's answer path: a store that refuses or cannot be written leaves the rows possibly sent, the stricter state, and
+// the attempt on its usual recovery path. Loaded lazily: only a refused request needs the contract module, which itself
+// loads the store.
+function refusedUnstarted(store, entry, token, rows, req, res) {
+  if (!req || req.method !== 'POST' || !rows.every((r) => r.mode === 'create') || typeof store.noteRowsNotStarted !== 'function') return null;
+  const { notStartedAnswer, dataverseErrorCode } = require('./managed-feature-contract.js');
+  if (!notStartedAnswer(req, res)) return null;
+  try {
+    store.noteRowsNotStarted({ token, epoch: entry.epoch, rows: rows.map(({ kind, key, id, sentSha256 }) => ({ kind, key, id, sentSha256 })) });
+  } catch {
+    return null;
+  }
+  return { notStarted: true, serviceCode: dataverseErrorCode(res.body) };
 }
 
 function effectHandle(scope, store, entry, c) {
@@ -451,7 +479,7 @@ function createDeferredManagedCreateGate() {
         if (!c) throw mismatch(`a ${m} was not sent: it is not a change the protected ${scope.label} prepared`);
         const entry = scope.entries.get(c.token);
         if (!entry) throw mismatch(`a ${m} was not sent: it names an attempt outside this create set`);
-        if (c.type === 'rows') return rowHandle(scope, store, entry, c, checkRows(scope, store, c));
+        if (c.type === 'rows') return rowHandle(scope, store, entry, c, checkRows(scope, store, c), { method: m, url, headers });
         if (c.type === 'effect') return effectHandle(scope, store, entry, c);
         throw mismatch(`a ${m} was not sent: the classifier answered an unknown request type`);
       });
