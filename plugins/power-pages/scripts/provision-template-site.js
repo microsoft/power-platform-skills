@@ -28,7 +28,12 @@ function findCodeSiteRoot(outputDirectory, fsImpl = fs) {
   const matches = [];
   while (queue.length > 0) {
     const { dir, depth } = queue.shift();
-    if (fsImpl.existsSync(path.join(dir, 'powerpages.config.json'))) matches.push(dir);
+    // Newer PAC versions clone only `.powerpages-site/`; project files such as
+    // powerpages.config.json are restored from the template afterwards.
+    if (fsImpl.existsSync(path.join(dir, 'powerpages.config.json')) ||
+        fsImpl.existsSync(path.join(dir, '.powerpages-site', 'website.yml'))) {
+      matches.push(dir);
+    }
     if (depth >= 3) continue;
     for (const entry of fsImpl.readdirSync(dir, { withFileTypes: true })) {
       if (entry.isDirectory() && entry.name !== '.git' && entry.name !== 'node_modules') {
