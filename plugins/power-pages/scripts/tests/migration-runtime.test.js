@@ -161,6 +161,23 @@ test('polling stops after exactly 30 attempts with no final unnecessary sleep', 
   assert.ok(f.sleeps.every((ms) => ms === 60000));
 });
 
+for (const mode of ['configurationData', 'all', 'configurationDataReferences']) {
+  test(`${mode} polling stops immediately on Unknown and preserves the raw tracker`, async (t) => {
+    const unknown = response('Unknown', 'ConfigurationDataCompleted');
+    const f = polling(t, [unknown], mode);
+    const result = await pollMigration(f.args, f.deps);
+    assert.equal(result.outcome, 'CheckFailed');
+    assert.equal(result.status, 'Unknown');
+    assert.match(result.error, /Unknown/);
+    assert.equal(f.calls.length, 1);
+    assert.equal(f.sleeps.length, 0);
+    assert.equal(f.records.length, 1);
+    assert.equal(result.rawOutput, unknown.stdout);
+    assert.equal(fs.readFileSync(path.join(f.outputDir, 'migration-status.txt'), 'utf8'), unknown.stdout);
+    assert.equal(JSON.parse(fs.readFileSync(path.join(f.outputDir, 'migration-status.json'), 'utf8')).outcome, 'CheckFailed');
+  });
+}
+
 for (const status of ['Failed', 'Reverted']) {
   test(`${status} takes precedence over a metadata-completed step`, async (t) => {
     const f = polling(t, [response(status, 'ConfigurationDataCompleted')], 'configurationData');
@@ -388,6 +405,7 @@ test('refused, failed and unverifiable reference starts do not retry or report m
     [{ status: 1, stderr: 'This website is already under migration.' }, response('Running', 'ConfigurationDataReferencesStarted'), 'StartRefused'],
     [{ status: 1, stderr: 'authentication failed' }, response('Running'), 'StartFailed'],
     [{ status: 0, stdout: 'Submitted' }, { status: 1, stderr: 'status check failed' }, 'CheckFailed'],
+    [{ status: 0, stdout: 'Submitted' }, response('Unknown'), 'CheckFailed'],
   ]) {
     const f = handoff(t, (args) => args.includes('--checkMigrationStatus') ? tracker : command);
     const result = startReferences(f.args, f.deps);
@@ -398,6 +416,8 @@ test('refused, failed and unverifiable reference starts do not retry or report m
       'pages', 'migrate-datamodel', '--webSiteId', websiteId, '--mode', 'configurationDataReferences',
     ]);
     assert.ok(f.calls[1].args.includes('--checkMigrationStatus'));
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(f.outputDir, 'references-start.json'), 'utf8')).tracker.rawOutput,
+      tracker.stdout || tracker.stderr);
   }
 });
 
@@ -499,6 +519,7 @@ test('polling CLI returns distinct success, migration-failure and elapsed-window
   `);
   for (const [status, exitCode, outcome, attempts] of [
     ['Completed', 0, 'Completed', 1], ['Failed', 1, 'Failed', 1], ['Running', 2, 'TimedOut', 30],
+    ['Unknown', 1, 'CheckFailed', 1],
   ]) {
     const output = path.join(root, status);
     const result = spawnSync(process.execPath, [
@@ -526,7 +547,8 @@ test('report and references-start CLI return nonzero for missing artifacts, trac
       let output;
       if (args.includes('--checkMigrationStatus')) {
         const step = reported && process.env.TEST_CASE === 'changed' ? 'PrecheckCompleted' : 'ConfigurationDataCompleted';
-        output = 'Current migration status is : Running\\nCurrent Step: ' + step + '\\n';
+        const status = process.env.TEST_CASE === 'unknown' ? 'Unknown' : 'Running';
+        output = 'Current migration status is : ' + status + '\\nCurrent Step: ' + step + '\\n';
       } else if (args.includes('--siteCustomizationReportPath')) {
         const directory = args[args.indexOf('--siteCustomizationReportPath') + 1];
         if (process.env.TEST_CASE === 'generated') {
@@ -546,6 +568,7 @@ test('report and references-start CLI return nonzero for missing artifacts, trac
     ['report', 'changed', 'TrackerChanged', 1],
     ['start-references', 'refused', 'StartRefused', 1],
     ['start-references', 'accepted', 'StartAccepted', 0],
+    ['start-references', 'unknown', 'CheckFailed', 1],
   ]) {
     const output = path.join(root, scenario);
     fs.mkdirSync(output);
@@ -566,6 +589,8 @@ test('migration instructions use portable commands for both tracks', () => {
     assert.doesNotMatch(content, / [`\\]\r?$/m, `${filename} must not require shell line-continuation syntax`);
   }
   const skill = fs.readFileSync(path.join(skillRoot, 'SKILL.md'), 'utf8');
+  assert.match(skill, /state\.site\.migrationMode === 'all'/);
+  assert.doesNotMatch(skill, /\bstate\.mode\b/);
   assert.equal((skill.match(/migration-runtime\.js" poll /g) || []).length, 3);
   assert.match(skill, /agent is the sole report-state writer/);
   assert.match(skill, /PowerShell is not a prerequisite/);

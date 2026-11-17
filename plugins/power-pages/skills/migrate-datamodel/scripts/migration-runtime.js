@@ -94,6 +94,9 @@ function checkMigrationStatus(websiteId, deps = {}, verboseSupported = true) {
   let error = null;
   try {
     tracker = parseTracker(rawOutput);
+    if (tracker.status === 'Unknown') {
+      error = 'PAC reported an Unknown migration status; review the saved tracker response before continuing.';
+    }
   } catch (parseError) {
     error = parseError.message;
   }

@@ -147,9 +147,10 @@ function scanWebPages(siteRoot, withContentHash) {
       });
     }
 
-    // Content (localized) pages under content-pages/<Name>.<lang>.webpage.yml
+    // PAC layouts include content-pages/<Name>.<lang>.webpage.yml and
+    // content-pages/<locale>/<Name>.<lang>.webpage.yml.
     const contentPagesDir = path.join(slugDir, 'content-pages');
-    for (const f of findFilesBySuffix(contentPagesDir, '.webpage.yml')) {
+    for (const f of findFilesBySuffix(contentPagesDir, '.webpage.yml', true)) {
       const rec = safeParseYaml(f, errors);
       if (!rec) continue;
       inventory.push({

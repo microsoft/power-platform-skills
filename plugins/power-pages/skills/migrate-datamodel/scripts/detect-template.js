@@ -28,6 +28,8 @@
 const fs = require('fs');
 const path = require('path');
 const { resolvePowerPagesSiteRoot } = require('../../../scripts/lib/validation-helpers');
+const { parseTopLevelSequence } = require('../../../scripts/lib/non-spa-metadata');
+const { loadYamlRecordsWithErrors, WEB_ROLE_FILE_SUFFIX } = require('../../../scripts/lib/powerpages-config');
 
 // D365 portals — have a site-inspection signal (except CSS) AND an anchor solution.
 const D365 = {
@@ -96,9 +98,17 @@ function dirExists(p) {
 function inspectSite(siteRoot) {
   const signals = [];
 
+  // PAC exports webrole.yml sequences and web-roles/*.webrole.yml mappings.
+  // Merge both so a per-record or mixed export cannot hide template signals.
+  const webRoleFile = path.join(siteRoot, 'webrole.yml');
+  const { records, errors } = loadYamlRecordsWithErrors(path.join(siteRoot, 'web-roles'), WEB_ROLE_FILE_SUFFIX);
+  if (errors.length) {
+    throw new Error(`Could not read template detection web roles: ${errors.map(({ message }) => message).join('\n')}`);
+  }
+  const webRoles = [...parseTopLevelSequence(readText(webRoleFile), webRoleFile), ...records];
+
   // Partner — dedicated partner web roles with fixed keys (stable across installs).
-  const webrole = readText(path.join(siteRoot, 'webrole.yml'));
-  if (/adx_key:\s*(partneradmin|partnermanager|partnerseller|nonpartneruser)\b/i.test(webrole)) {
+  if (webRoles.some((role) => /^(partneradmin|partnermanager|partnerseller|nonpartneruser)$/i.test(role.adx_key ?? role.key ?? ''))) {
     signals.push('partner web roles (partneradmin / partnermanager / partnerseller / nonpartneruser)');
     return { match: 'Partner', signals };
   }
@@ -110,7 +120,7 @@ function inspectSite(siteRoot) {
     signals.push('web-pages/blogs and web-pages/ideas present');
     return { match: 'Community', signals };
   }
-  if (/adx_name:\s*Blog Authors\b/i.test(webrole) && dirExists(path.join(webPages, 'blogs'))) {
+  if (webRoles.some((role) => /^Blog Authors$/i.test(role.adx_name ?? role.name ?? '')) && dirExists(path.join(webPages, 'blogs'))) {
     signals.push('"Blog Authors" web role with blog pages');
     return { match: 'Community', signals };
   }

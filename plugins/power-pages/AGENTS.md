@@ -36,6 +36,9 @@ layouts, and both aggregate and per-record web-role layouts. Capture canonical
 prefixed/unprefixed states, nested advanced-form steps and per-record page-access
 rules. Wire new inventories through diff identities, meaningful values and report
 grouping. The live comparison must use record-level diff semantics, not just counts.
+Template inspection must read aggregate and per-record web roles, and localized
+page snapshots must traverse locale subdirectories. Use `site.migrationMode`
+when deciding whether mode `all` already covered transactional references.
 Snapshot and source-remediation commands require a real `website.yml` file in the
 resolved metadata root before scanning or replacing saved evidence/proposals.
 Do not treat an arbitrary directory or an empty managed metadata folder as a
@@ -72,6 +75,8 @@ tracker evidence. Exit 0 without a valid CSV is not success. Distinguish a refus
 references start from an active operation; reset requires separate explicit
 approval and verified status before one references-only retry. Never reset from
 a polling timeout alone or automatically edit Dataverse tracker fields.
+An explicit `Unknown` tracker status is a failed check, not running or accepted;
+retain the raw response and stop for recovery rather than polling it as progress.
 After report initialization, every skill-owned input/manual-action pause must
 show the report-wide required-action notice. Reuse approval gates for existing
 approvals; use `--set-input` for other questions and clear it when resolved.

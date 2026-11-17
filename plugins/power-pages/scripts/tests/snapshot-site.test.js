@@ -86,6 +86,37 @@ test('malformed aggregate fields are reported instead of silently dropped', (t) 
     assert.match(snapshot.parseErrors.siteSettings[0].message, /Invalid YAML line/);
   });
 
+test('localized page snapshots include flat and locale-subdirectory layouts and detect missing translations', (t) => {
+  const { write, run, site } = fixture(t);
+  write('web-pages\\home\\Home.webpage.yml', 'adx_name: Home\nadx_partialurl: home');
+  write('web-pages\\home\\content-pages\\Home.en-US.webpage.yml', 'adx_name: Home\nadx_partialurl: home');
+  const french = 'web-pages\\home\\content-pages\\fr-FR\\Home.fr-FR.webpage.yml';
+  write(french, 'name: Home\npartialurl: home\nstatecode: 1');
+  write(french.replace('.webpage.yml', '.webpage.copy.html'), '<p>Bonjour</p>');
+  const before = run();
+  assert.equal(before.counts.webPages, 3);
+  const translations = before.inventory.webPages.filter((record) => record.kind === 'content');
+  assert.deepEqual(translations.map((record) => record.language).sort(), ['en-US', 'fr-FR']);
+  const nested = translations.find((record) => record.language === 'fr-FR');
+  assert.equal(nested.stateCode, 1);
+  assert.match(nested.contentHash, /^[a-f0-9]{16}$/);
+  fs.unlinkSync(path.join(site, ...french.split('\\')));
+  const after = run();
+  assert.equal(after.counts.webPages, 2);
+  const diff = diffCategory('webPages', before.inventory.webPages, after.inventory.webPages);
+  assert.equal(diff.status, 'fail');
+  assert.equal(diff.missingInEdm[0].language, 'fr-FR');
+});
+
+test('malformed localized pages in locale subdirectories retain parse errors', (t) => {
+  const { write, run } = fixture(t);
+  write('web-pages\\home\\content-pages\\fr-FR\\Home.fr-FR.webpage.yml', 'adx_name: Home\nmalformed field');
+  const snapshot = run();
+  assert.equal(snapshot.counts.webPages, 0);
+  assert.match(snapshot.parseErrors.webPages[0].filePath, /Home\.fr-FR\.webpage\.yml$/);
+  assert.match(snapshot.parseErrors.webPages[0].message, /Invalid YAML line/);
+});
+
 test('review regression: web roles merge aggregate and per-record layouts with prefixed and unprefixed states', (t) => {
   const { write, run } = fixture(t);
   write('webrole.yml', '- adx_name: Aggregate\n  adx_statecode: 1');

@@ -11,6 +11,9 @@ const NONCONFIGURATION_TABLES = [
   { category: 'portalComments', label: 'Portal comments', table: 'Portal comment' },
   { category: 'invitations', label: 'Invitations', table: 'Invitation' },
   { category: 'invitationRedemptions', label: 'Invitation redemptions', table: 'Invitation Redemption' },
+  // "Setting" is not adx_sitesetting: siteSettings contains migrated metadata
+  // and must retain count/value validation.
+  // https://learn.microsoft.com/en-us/power-pages/admin/migrate-enhanced-data-model
   { category: 'settings', label: 'Settings', table: 'Setting' },
   { category: 'webFormSessions', label: 'Web form sessions', table: 'WebFormSession' },
 ];

@@ -29,6 +29,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { requirePowerPagesSiteRoot } = require('../../../scripts/lib/validation-helpers');
 
 function parseArgs(argv) {
   const out = {};
@@ -128,7 +129,7 @@ function main() {
   if (typeof payload.siteRoot !== 'string' || !path.isAbsolute(payload.siteRoot)) {
     throw new Error('remediation-diff.json must contain an absolute siteRoot');
   }
-  const liveRoot = fs.realpathSync(siteRoot);
+  const liveRoot = fs.realpathSync(requirePowerPagesSiteRoot(siteRoot));
   if (liveRoot !== fs.realpathSync(payload.siteRoot)) {
     throw new Error('Selected site root does not match the remediation manifest siteRoot');
   }

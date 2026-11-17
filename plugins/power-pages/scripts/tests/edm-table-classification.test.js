@@ -5,6 +5,19 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const classification = require('../../skills/migrate-datamodel/scripts/lib/edm-table-classification');
+const { diffCategory } = require('../../skills/migrate-datamodel/scripts/diff-snapshots');
+
+test('nonconfiguration Settings do not exclude migrated site settings from metadata validation', () => {
+  assert.equal(classification.isNonconfigurationCategory('settings'), true);
+  assert.equal(classification.isNonconfigurationCategory('siteSettings'), false);
+  assert.equal(classification.isReportExcludedCategory('siteSettings'), false);
+  const before = [{ name: 'Search/Enabled', value: 'true' }];
+  const missing = diffCategory('siteSettings', before, []);
+  assert.equal(missing.status, 'fail');
+  assert.equal(missing.missingInEdm.length, 1);
+  const changed = diffCategory('siteSettings', before, [{ name: 'Search/Enabled', value: 'false' }]);
+  assert.equal(changed.valueChanged.length, 1);
+});
 
 test('nonconfiguration categories are excluded while poll placements remain comparable', () => {
   assert.deepEqual(classification.NONCONFIGURATION_TABLES.map(({ table }) => table), [

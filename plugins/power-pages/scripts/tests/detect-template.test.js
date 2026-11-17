@@ -5,7 +5,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const {
-  resolve, loadInstalledSolutions,
+  resolve, loadInstalledSolutions, inspectSite,
 } = require('../../skills/migrate-datamodel/scripts/detect-template');
 
 for (const [label, inspection, anchors, decision, templateKey] of [
@@ -56,4 +56,43 @@ test('template inspection accepts the nested downloaded configuration root', (t)
   ], { encoding: 'utf8' });
   assert.equal(result.status, 0, result.stderr);
   assert.equal(JSON.parse(result.stdout).resolution.templateKey, 'Partner');
+});
+
+for (const [layout, files] of [
+  ['aggregate', { 'webrole.yml': '- adx_key: partneradmin' }],
+  ['per-record', { 'web-roles\\Partner.webrole.yml': 'key: "partneradmin"' }],
+  ['mixed', {
+    'webrole.yml': '- adx_name: Members',
+    'web-roles\\Partner.webrole.yml': "adx_key: 'partnermanager'",
+  }],
+]) {
+  test(`Partner V2 detection includes ${layout} web roles`, (t) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'migration-partner-'));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    for (const [relative, content] of Object.entries({ 'website.yml': 'adx_name: Contoso', ...files })) {
+      const filename = path.join(root, ...relative.split('\\'));
+      fs.mkdirSync(path.dirname(filename), { recursive: true });
+      fs.writeFileSync(filename, content);
+    }
+    const result = spawnSync(process.execPath, [
+      path.join(__dirname, '../../skills/migrate-datamodel/scripts/detect-template.js'),
+      '--site-root', root, '--solutions', 'PartnerPortal',
+    ], { encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr);
+    const { resolution } = JSON.parse(result.stdout);
+    assert.equal(resolution.decision, 'install-v2');
+    assert.equal(resolution.v2Package, 'PowerPages_PartnerPortal_V2');
+  });
+}
+
+test('Community inspection reads normalized per-record role names and surfaces malformed roles', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'migration-community-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(root, 'web-pages', 'blogs'), { recursive: true });
+  fs.mkdirSync(path.join(root, 'web-roles'));
+  const role = path.join(root, 'web-roles', 'Authors.webrole.yml');
+  fs.writeFileSync(role, 'name: "Blog Authors"');
+  assert.equal(inspectSite(root).match, 'Community');
+  fs.writeFileSync(role, 'name: Authors\nmalformed field');
+  assert.throws(() => inspectSite(root), /Invalid YAML line.*Authors\.webrole\.yml/);
 });

@@ -14,6 +14,7 @@ function setup(t) {
   const output = path.join(root, 'reports');
   const staged = path.join(output, 'remediation-staged');
   fs.mkdirSync(site);
+  fs.writeFileSync(path.join(site, 'website.yml'), 'adx_name: Contoso\n');
   fs.mkdirSync(staged, { recursive: true });
   const manifestPath = path.join(output, 'remediation-diff.json');
   const writeManifest = (value) => fs.writeFileSync(manifestPath,
@@ -31,6 +32,59 @@ function setup(t) {
   `], { encoding: 'utf8' });
   return { site, output, staged, manifestPath, writeManifest, run, injectFailure };
 }
+
+for (const marker of ['missing', 'directory']) {
+  test(`apply and dry-run reject a ${marker} website marker without changing source or proposals`, (t) => {
+    const fixture = setup(t);
+    const website = path.join(fixture.site, 'website.yml');
+    fs.unlinkSync(website);
+    if (marker === 'directory') fs.mkdirSync(website);
+    fs.writeFileSync(path.join(fixture.site, 'page.html'), 'original');
+    fs.writeFileSync(path.join(fixture.staged, 'page.html'), 'proposal');
+    fixture.writeManifest({ files: [{ relativePath: 'page.html' }] });
+    const manifest = fs.readFileSync(fixture.manifestPath, 'utf8');
+    for (const args of [[], ['--dry-run']]) {
+      const result = fixture.run(...args);
+      assert.equal(result.status, 4, result.stderr);
+      assert.match(result.stderr, /downloaded Power Pages site containing website\.yml/);
+      assert.equal(fs.readFileSync(path.join(fixture.site, 'page.html'), 'utf8'), 'original');
+      assert.equal(fs.readFileSync(path.join(fixture.staged, 'page.html'), 'utf8'), 'proposal');
+      assert.equal(fs.readFileSync(fixture.manifestPath, 'utf8'), manifest);
+      assert.deepEqual(fs.readdirSync(fixture.output).sort(), ['remediation-diff.json', 'remediation-staged']);
+    }
+    assert.equal(fixture.run('--discard').status, 0);
+    assert.equal(fs.readFileSync(path.join(fixture.site, 'page.html'), 'utf8'), 'original');
+  });
+}
+
+test('editing both selected root and manifest cannot apply to a non-site directory', (t) => {
+  const fixture = setup(t);
+  const other = path.join(path.dirname(fixture.site), 'not-a-site');
+  fs.mkdirSync(other);
+  fs.writeFileSync(path.join(other, 'page.html'), 'original');
+  fs.writeFileSync(path.join(fixture.staged, 'page.html'), 'proposal');
+  fixture.writeManifest({ siteRoot: other, files: [{ relativePath: 'page.html' }] });
+  const result = fixture.run('--site-root', other);
+  assert.equal(result.status, 4, result.stderr);
+  assert.match(result.stderr, /downloaded Power Pages site containing website\.yml/);
+  assert.equal(fs.readFileSync(path.join(other, 'page.html'), 'utf8'), 'original');
+  assert.equal(fs.readFileSync(path.join(fixture.staged, 'page.html'), 'utf8'), 'proposal');
+  assert.equal(fs.existsSync(fixture.manifestPath), true);
+});
+
+test('apply resolves a managed project to the downloaded root recorded by the generator', (t) => {
+  const fixture = setup(t);
+  const metadata = path.join(fixture.site, '.powerpages-site');
+  fs.mkdirSync(metadata);
+  fs.renameSync(path.join(fixture.site, 'website.yml'), path.join(metadata, 'website.yml'));
+  fs.writeFileSync(path.join(metadata, 'page.html'), 'original');
+  fs.writeFileSync(path.join(fixture.staged, 'page.html'), 'proposal');
+  fixture.writeManifest({ siteRoot: metadata, files: [{ relativePath: 'page.html' }] });
+  const result = fixture.run();
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(fs.readFileSync(path.join(metadata, 'page.html'), 'utf8'), 'proposal');
+  assert.equal(fs.existsSync(path.join(fixture.site, 'page.html')), false);
+});
 
 test('successful apply removes both staged files and their diff manifest, but dry-run preserves both', (t) => {
   const fixture = setup(t);

@@ -1304,7 +1304,7 @@ Phase 3 has **two different shapes** depending on the migration track. The Autho
 
 1. **Check whether to skip**
 
-   - If `state.mode === 'all'`: refs were already migrated in Phase 2.2. Mark this sub-step completed with output `"Skipped — refs already migrated in Phase 2.2 (mode=all)"` and proceed to step 3.3.
+   - If `state.site.migrationMode === 'all'`: refs were already migrated in Phase 2.2. Mark this sub-step completed with output `"Skipped — refs already migrated in Phase 2.2 (mode=all)"` and proceed to step 3.3.
    - Otherwise: proceed with the migration command below.
 
 2. **Execute Migration Command**
