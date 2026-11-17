@@ -179,6 +179,9 @@ Do not collapse distinct nested package versions into a name-only allowlist.
 Planning-only `--requirements-only` output cannot authorize native mutation.
 Map the resolved packages to capabilities using this table; every “present”
 condition below also requires matching versions and native support.
+This is capability-planning guidance, not a migration step: it does not install
+the Controls bundle or rewrite existing imports. `/check-updates` owns any
+separately approved release migration.
 
 | Capability | Module | Add via |
 |---|---|---|

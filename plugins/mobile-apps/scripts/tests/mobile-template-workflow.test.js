@@ -16,7 +16,7 @@ const lifecycle = read('shared/references/mobile-release-lifecycle.md');
 
 test('native updates are evaluated independently of outdated-host discovery', () => {
   assert.match(updates, /even when the host is absent from `outdated\.json`/);
-  assert.match(updates, /--requirements-only/);
+  assert.match(updates, /The plan below reads the recorded source state and installed host identity/);
   assert.match(updates, /Equal supported targets are valid/);
   assert.match(updates, /Do not require or fabricate template advancement/);
   assert.match(updates, /even if `hostInstallRequired` is false/);
@@ -52,6 +52,24 @@ test('JavaScript updates retain approval and audit safeguards without native bum
     'check_mobile_app_plugin_version', 'update_native_host_dependency',
     'update_microsoft_dependencies', 'update_remaining_npm_dependencies',
   ]) assert.ok(updates.includes(`\`${checkpoint}\``), checkpoint);
+});
+
+test('JavaScript package updates check installed native drift before accepting changes and roll back failures', () => {
+  const javascript = updates.slice(updates.indexOf('## Step 3:'));
+  const snapshot = javascript.indexOf('snapshot-native');
+  const install = javascript.indexOf('Install with `--ignore-scripts`');
+  const check = javascript.indexOf(' check-native ');
+  assert.ok(snapshot >= 0 && snapshot < install && install < check);
+  const commands = shellBlocks(javascript);
+  assert.equal(commands.length, 2);
+  assert.match(commands[0], /snapshot-native[\s\S]*--project-root '<working_dir>'/);
+  assert.match(commands[1], /check-native[\s\S]*--baseline '<working_dir>\/\.tmp\/dependency-maintenance\/native-before\.json'/);
+  assert.match(javascript, /A failed snapshot blocks installation/);
+  assert.match(javascript, /Do not recapture the\s+baseline after installation/);
+  assert.match(javascript, /including `check-native`, restore that package's snapshot/);
+  assert.match(javascript, /does\s+not replace `check-native`/);
+  assert.doesNotMatch(updates.slice(0, updates.indexOf('## Step 3:')), /snapshot-native|check-native/);
+  assert.match(lifecycle, /Host-owned native migration\/repair/);
 });
 
 test('registry authentication recovery preserves the reviewed feed and interrupted-install boundary', () => {

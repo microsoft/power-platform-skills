@@ -3,13 +3,14 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const { randomUUID } = require('node:crypto');
+const { spawnSync } = require('node:child_process');
 const path = require('node:path');
 const test = require('node:test');
 const {
   acquireTemplate, assertEmptyDestination, assertTemplateManifest, checkSdk, inspectDestination, main,
   restorePreviewDependencies,
 } = require('../mobile-template-lifecycle');
-const { fixtureRelease, writeJson } = require('./helpers/mobile-release-fixture');
+const { fixtureRelease, writeJson, writeProject, modifyJson, installPackage, addDependency } = require('./helpers/mobile-release-fixture');
 
 const HOST = '@microsoft/power-apps-native-host';
 const TEMPLATE = '@microsoft/power-apps-native-template';
@@ -79,6 +80,100 @@ function packageRunner(entry, overrides = {}) {
   };
   return { calls, run: execute };
 }
+
+function nativeSnapshotFixture(t) {
+  const root = directory(t);
+  writeProject(root, fixtureRelease());
+  addDependency(root, 'ordinary-ui', '1.0.0', { properties: { peerDependencies: { react: '*' } } });
+  const baseline = path.join(root, '.tmp/native-before.json');
+  fs.mkdirSync(path.dirname(baseline));
+  main(['snapshot-native', '--project-root', root, '--baseline', baseline]);
+  const check = () => spawnSync(process.execPath, [
+    path.join(__dirname, '../mobile-template-lifecycle.js'), 'check-native',
+    '--project-root', root, '--baseline', baseline,
+  ], { encoding: 'utf8' });
+  return { root, baseline, check };
+}
+
+test('JS-only native comparison permits pure-JS updates and existing peers without matching a template lock', t => {
+  const fixture = nativeSnapshotFixture(t);
+  addDependency(fixture.root, 'ordinary-ui', '2.0.0', { properties: { peerDependencies: { react: '*' } } });
+  assert.equal(fixture.check().status, 0);
+  fs.unlinkSync(path.join(fixture.root, 'package-lock.json'));
+  assert.equal(fixture.check().status, 0, 'A lockless JS workflow keeps the same installed native baseline');
+  const snapshot = JSON.parse(fs.readFileSync(fixture.baseline, 'utf8'));
+  assert.doesNotMatch(JSON.stringify(snapshot), /fixture-secret-do-not-echo/);
+});
+
+test('JS-only comparison rejects new native code in updated packages and their installed transitive closure', t => {
+  for (const mode of ['direct-codegen', 'nested-bridge', 'nested-peer']) {
+    const { root, check } = nativeSnapshotFixture(t);
+    if (mode === 'direct-codegen') {
+      addDependency(root, 'ordinary-ui', '2.0.0', { properties: { codegenConfig: {} } });
+    } else {
+      addDependency(root, 'ordinary-ui', '2.0.0', { properties: {
+        [mode === 'nested-peer' ? 'peerDependencies' : 'dependencies']: { 'ordinary-bridge': '1.0.0' },
+      } });
+      addDependency(root, 'ordinary-bridge', '1.0.0', {
+        section: null, installPath: 'node_modules/ordinary-ui/node_modules/ordinary-bridge',
+      });
+      fs.writeFileSync(path.join(root, 'node_modules/ordinary-ui/node_modules/ordinary-bridge/Bridge.swift'), 'import Foundation\n');
+    }
+    const result = check();
+    assert.equal(result.status, 2, mode);
+    assert.match(result.stderr, /BLOCKED: JavaScript-only update changed native\/runtime.*Restore the package snapshot/);
+  }
+});
+
+test('JS-only comparison rejects changed native identity, placement, declarations and recorded requirements', t => {
+  for (const change of [
+    root => installPackage(root, 'node_modules/expo-haptics', '1.0.1'),
+    root => modifyJson(path.join(root, 'node_modules/expo-haptics/package.json'), pkg => { pkg.codegenConfig = {}; }),
+    root => {
+      fs.mkdirSync(path.join(root, 'node_modules/ordinary-ui/node_modules'));
+      fs.renameSync(path.join(root, 'node_modules/expo-haptics'), path.join(root, 'node_modules/ordinary-ui/node_modules/expo-haptics'));
+    },
+    root => modifyJson(path.join(root, 'package.json'), pkg => { pkg.dependencies['expo-haptics'] = '^1.0.0'; }),
+    root => modifyJson(path.join(root, 'app.json'), app => { app.expo.extra.powerappsNative.nativeRuntimeVersions.ios = 2; }),
+    root => fs.rmSync(path.join(root, 'node_modules/expo-haptics'), { recursive: true }),
+  ]) {
+    const { root, check } = nativeSnapshotFixture(t);
+    change(root);
+    const result = check();
+    assert.equal(result.status, 2);
+    assert.match(result.stderr, /BLOCKED:/);
+    assert.doesNotMatch(result.stderr, /fixture-secret-do-not-echo/);
+  }
+});
+
+test('native comparison fails closed on missing, malformed or wrong-app snapshots without rewriting them', t => {
+  const fixture = nativeSnapshotFixture(t);
+  const other = nativeSnapshotFixture(t);
+  for (const data of ['not JSON', '{}', fs.readFileSync(other.baseline, 'utf8')]) {
+    fs.writeFileSync(fixture.baseline, data);
+    assert.equal(fixture.check().status, 2);
+    assert.equal(fs.readFileSync(fixture.baseline, 'utf8'), data);
+  }
+  fs.unlinkSync(fixture.baseline);
+  assert.equal(fixture.check().status, 2);
+  assert.throws(() => main(['snapshot-native']), /Required/);
+  assert.throws(() => main(['check-native', '--project-root', fixture.root]), /--baseline/);
+});
+
+test('native snapshots cannot be replaced after an update and accept only restored native state', t => {
+  const { root, baseline, check } = nativeSnapshotFixture(t);
+  const before = fs.readFileSync(baseline);
+  installPackage(root, 'node_modules/expo-haptics', '1.0.1');
+  assert.throws(() => main(['snapshot-native', '--project-root', root, '--baseline', baseline]), { code: 'EEXIST' });
+  assert.deepEqual(fs.readFileSync(baseline), before);
+  assert.equal(check().status, 2);
+  installPackage(root, 'node_modules/expo-haptics', '1.0.0');
+  assert.equal(check().status, 0);
+  assert.deepEqual(fs.readFileSync(baseline), before);
+  const outside = path.join(directory(t), 'native-before.json');
+  assert.throws(() => main(['snapshot-native', '--project-root', root, '--baseline', outside]), /inside this app/);
+  assert.equal(fs.existsSync(outside), false);
+});
 
 test('SDK validation binds the installed Expo CLI and cwd without changing the parent environment', t => {
   const root = directory(t);

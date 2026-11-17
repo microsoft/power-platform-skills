@@ -171,14 +171,27 @@ rewrite first-party packages or use Player-build scripts to repair an app.
 After every edge, recheck the target requirements and run changed-file validation before
 advancing through the reviewed migration chain.
 
-During `/check-updates`, do not run strict app-lock or installed-package/native
-inventory admission. The host CLI owns installation; re-run its published plan
+During the Host-owned native migration/repair in `/check-updates` Step 2, do not
+run strict app-lock or installed-package/native inventory admission. The host
+CLI owns installation; re-run its published plan
 and require `current` to confirm the target host/template/runtime requirements.
 Pass `--upgrade-only` to changed-file validation to retain file/package policies
 without duplicating npm's dependency checks. Expo compatibility, Expo Doctor,
 TypeScript and platform bundles are mandatory, blocking checks. Fingerprint
 differences are warnings only; Player/Wrap compatibility remains unverified.
 Strict creation, native feature and deployment admission are unchanged.
+
+Ordinary JavaScript-only updates in Steps 3 and 4 have a separate boundary:
+run `mobile-template-lifecycle.js snapshot-native --project-root '<working_dir>' --baseline '<saved-native-before.json>'`
+before the approved installation, then `check-native --project-root '<working_dir>' --baseline '<saved-native-before.json>'`
+afterward. The comparison uses the app's own installed native package paths,
+identities, versions and manifest digests, native declarations and protected
+requirements. It does not compare the app to a reference template lock or claim
+Player compatibility. Any drift, unreadable baseline or failed check requires
+the package-scoped rollback. Store the snapshot in the app's recovery directory;
+creation refuses an existing file or a directory resolving outside the app.
+Never use `--upgrade-only` or `--requirements-only`
+alone as proof that a JavaScript update did not introduce native dependencies.
 
 Compare app requirements with the actual supported counters of a selected Player
 when available. A mismatch requires a matching binary or an approved migration,

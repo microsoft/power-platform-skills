@@ -4,12 +4,17 @@
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { createHash } = require('node:crypto');
+const { isDeepStrictEqual } = require('node:util');
 const { runCliSync, CliLaunchError } = require('./lib/process-runner');
 const { withNpmContext } = require('./lib/npm-context');
-const { planPublishedUpdate } = require('./lib/mobile-published-packages');
+const { planPublishedUpdate, readSourceRequirements } = require('./lib/mobile-published-packages');
 const {
   selectRelease,
   summarizeRelease,
+  dependencySections,
+  inspectInstalledPackages,
+  isRuntimePackage,
 } = require('./lib/mobile-release');
 
 const HOST = '@microsoft/power-apps-native-host';
@@ -265,20 +270,80 @@ function checkSdk(projectRoot, options = {}) {
   return { projectRoot: root, expoVersion: expo.version, versionSource: 'installed-expo', output: output.trim() };
 }
 
+function snapshotNativeDependencies(projectRoot) {
+  const root = fs.realpathSync.native(path.resolve(projectRoot));
+  const requirements = readSourceRequirements(root);
+  const installed = inspectInstalledPackages(root);
+  const declarations = dependencySections(readJson(path.join(root, 'package.json')));
+  const nativeDeclarations = {};
+  for (const [section, dependencies] of Object.entries(declarations)) {
+    nativeDeclarations[section] = Object.fromEntries(Object.entries(dependencies).filter(([name]) => {
+      const actual = installed.get(`node_modules/${name}`);
+      if (isRuntimePackage(name) && !actual) {
+        throw new Error('Restore the missing native/runtime dependency before preparing a JavaScript-only update.');
+      }
+      return isRuntimePackage(name) || actual?.native;
+    }));
+    if (!Object.keys(nativeDeclarations[section]).length) delete nativeDeclarations[section];
+  }
+  return {
+    schemaVersion: 1,
+    projectRoot: root,
+    requirements,
+    nativeDeclarations,
+    nativePackages: Object.fromEntries([...installed].filter(([, item]) => item.native)
+      .map(([installPath, item]) => [installPath, {
+        name: item.canonicalName,
+        version: item.version,
+        manifestSha256: createHash('sha256').update(JSON.stringify(item.pkg)).digest('hex'),
+      }])),
+  };
+}
+
+function checkNativeDependencies(projectRoot, baselinePath) {
+  if (!fs.lstatSync(baselinePath).isFile() || fs.lstatSync(baselinePath).isSymbolicLink()) {
+    throw new Error('The JavaScript update baseline must be a regular snapshot file.');
+  }
+  const baseline = readJson(baselinePath);
+  const current = snapshotNativeDependencies(projectRoot);
+  if (baseline?.schemaVersion !== 1 || baseline.projectRoot !== current.projectRoot) {
+    throw new Error('The native dependency snapshot is invalid or belongs to another app.');
+  }
+  if (!isDeepStrictEqual(baseline, current)) {
+    throw new Error('JavaScript-only update changed native/runtime dependencies or app requirements. Restore the package snapshot and its installation before continuing.');
+  }
+  return { nativeDependenciesUnchanged: true };
+}
+
 function main(argv) {
   const [action, ...args] = argv;
   const values = {};
   const allowed = action === 'check-sdk' ? ['--project-root']
+    : ['snapshot-native', 'check-native'].includes(action) ? ['--project-root', '--baseline']
     : action === 'restore-preview' ? ['--project-root', '--preview-root']
     : action === 'destination' ? ['--destination'] : action === 'acquire'
     ? ['--destination', '--release', '--host-version', '--template-version']
     : ['--project-root', '--release', '--host-version'];
-  if (!['acquire', 'plan', 'destination', 'restore-preview', 'check-sdk'].includes(action)) throw new Error('Use acquire, plan, destination, restore-preview or check-sdk with explicit arguments; the published host CLI owns migration writes');
+  if (!['acquire', 'plan', 'destination', 'restore-preview', 'check-sdk', 'snapshot-native', 'check-native'].includes(action)) throw new Error('Use acquire, plan, destination, restore-preview, check-sdk, snapshot-native or check-native with explicit arguments; the published host CLI owns migration writes');
   for (let index = 0; index < args.length; index += 2) {
     const key = args[index];
     if (!allowed.includes(key) || values[key] !== undefined || !args[index + 1]
       || args[index + 1].startsWith('--')) throw new Error('Unknown, duplicate, or missing lifecycle argument');
     values[key] = args[index + 1];
+  }
+  if (action === 'snapshot-native' || action === 'check-native') {
+    if (!values['--project-root'] || !values['--baseline']) {
+      throw new Error('Required: --project-root and --baseline for the JavaScript-only update snapshot.');
+    }
+    if (action === 'check-native') return checkNativeDependencies(values['--project-root'], values['--baseline']);
+    const snapshot = snapshotNativeDependencies(values['--project-root']);
+    const baseline = path.resolve(values['--baseline']);
+    const relative = path.relative(snapshot.projectRoot, fs.realpathSync.native(path.dirname(baseline)));
+    if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+      throw new Error('Save the native dependency snapshot inside this app recovery directory.');
+    }
+    fs.writeFileSync(baseline, `${JSON.stringify(snapshot, null, 2)}\n`, { flag: 'wx', mode: 0o600 });
+    return { snapshotCreated: true };
   }
   if (action === 'check-sdk') {
     if (!values['--project-root']) throw new Error('Required: --project-root for installed SDK validation.');
@@ -313,4 +378,7 @@ if (require.main === module) {
   }
 }
 
-module.exports = { acquireTemplate, acquireHost, assertEmptyDestination, assertTemplateManifest, checkSdk, inspectDestination, main, restorePreviewDependencies };
+module.exports = {
+  acquireTemplate, acquireHost, assertEmptyDestination, assertTemplateManifest, checkSdk,
+  snapshotNativeDependencies, checkNativeDependencies, inspectDestination, main, restorePreviewDependencies,
+};

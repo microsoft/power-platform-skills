@@ -170,6 +170,8 @@ After success re-run the metadata-only plan and the same mandatory checks as the
 **Telemetry checkpoint: `update_microsoft_dependencies`**
 
 Offer each other outdated direct `@microsoft/*` **JavaScript-only** package separately, preserving its dependency section and version style. Exclude the release's managed packages and all native/runtime packages, including `@microsoft/power-apps-native-*`. Unknown native closure requires investigation, not a name-based JS assumption. Validate each approved package before offering the next one.
+Use the per-package snapshot, native-drift check and recovery steps below for
+these Microsoft JavaScript packages too.
 
 ## Step 4: Update All Remaining Npm Packages
 
@@ -177,12 +179,41 @@ Offer each other outdated direct `@microsoft/*` **JavaScript-only** package sepa
 
 Offer each remaining outdated direct **JavaScript-only** registry package separately. Exclude every managed/native/runtime dependency and any package whose installed transitive closure adds native code. Use the [JS dependency review](../../shared/references/javascript-dependency-planning.md), not the newest bundled template's package names. Skip non-registry declarations such as file, git, workspace, URL, alias, or tag specs and record them as unmanaged. If an updated package has an exact-version row in `native-app-plan.md` under `### JavaScript Dependencies`, update that row to the same version.
 
-For each approved package update:
+For each approved JavaScript-only package update in Steps 3 and 4:
 
 1. Snapshot `package.json`, existing npm lockfiles, and `native-app-plan.md` when that package will change it under `.tmp/dependency-maintenance/`.
+   Before installation, capture the app's actual installed native dependencies
+   and protected requirements in this package's recovery directory. The helper
+   creates a new local snapshot and refuses to overwrite an existing one.
+
+   ```bash
+   node "${PLUGIN_ROOT}/scripts/mobile-template-lifecycle.js" snapshot-native \
+     --project-root '<working_dir>' \
+     --baseline '<working_dir>/.tmp/dependency-maintenance/native-before.json'
+   ```
+
+   A failed snapshot blocks installation. This records the current app, not the
+   reference template's lock or an approval of native compatibility.
 2. Install with `--ignore-scripts`; use `--package-lock=false` when the project had no npm lockfile.
-3. Validate that installation with `mobile-template-lifecycle.js check-sdk --project-root '<working_dir>'`, Expo Doctor, the project's `type-check` script (or `npx --no-install tsc --noEmit` when TypeScript is declared), and `validate-mobile-files.js --upgrade-only` for each changed file (including `package.json`). All checks must pass. Read `resolve-mobile-release.js --project-root '<working_dir>' --requirements-only` to confirm that this JS-only update preserved the host/template/runtime requirements, without validating the app lock or scanning its installed native inventory. Never run `npx expo install --fix`.
-4. If any command fails, restore that package's snapshot, reconcile `node_modules`, return `BLOCKED` with the failed command, and do not offer later packages. Otherwise delete the snapshot and continue.
+3. Before accepting the update, compare the actual installation with the saved
+   baseline:
+
+   ```bash
+   node "${PLUGIN_ROOT}/scripts/mobile-template-lifecycle.js" check-native \
+     --project-root '<working_dir>' \
+     --baseline '<working_dir>/.tmp/dependency-maintenance/native-before.json'
+   ```
+
+   New, removed, changed or relocated native packages, including transitive
+   dependencies, and changed native declarations or protected requirements
+   block the JavaScript update and require rollback. Do not recapture the
+   baseline after installation to make the check pass.
+   Also require `mobile-template-lifecycle.js check-sdk --project-root '<working_dir>'`,
+   Expo Doctor, the project's `type-check` script (or `npx --no-install tsc --noEmit`
+   when TypeScript is declared), and `validate-mobile-files.js --upgrade-only`
+   for each changed file (including `package.json`). That file-policy mode does
+   not replace `check-native`. Never run `npx expo install --fix`.
+4. If any command fails, including `check-native`, restore that package's snapshot, reconcile `node_modules`, return `BLOCKED` with the failed command, and do not offer later packages. Keep `native-before.json` until recovery is verified; otherwise delete it with the successful package snapshot and continue.
 
 Do not update transitive packages directly, add overrides, move packages between dependency sections, or use Git to roll back project files.
 
