@@ -116,6 +116,12 @@ process.stdin.on('end', () => {
           const why = rec.error ? rec.error.message : rec.signal ? `signal ${rec.signal}` : `exit ${rec.status}`;
           process.stderr.write(`[power-pages] ALM plan reconcile did not complete (${why}). Details below.\n`);
           if (rec.stderr) process.stderr.write(rec.stderr);
+        } else if (DEBUG && rec.stderr) {
+          // On successful reconciliation, clean runs remain quiet on stderr by default so
+          // regular tool execution produces no noise. When debugging is enabled, forward
+          // child stderr so best-effort diagnostic messages (e.g. from refresh-alm-plan-data.js)
+          // are visible to developers.
+          process.stderr.write(rec.stderr);
         }
         debug(`[power-pages hook] reconcile reconciled=${JSON.stringify(reconciled)} failed=${JSON.stringify(failed)} spawnFailed=${spawnFailed} parsed=${parsed}\n`);
       } catch (e) {
