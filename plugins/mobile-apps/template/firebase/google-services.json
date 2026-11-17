@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "gcm_defaultSenderId_tag",
+    "project_id": "project_id_tag",
+    "storage_bucket": "google_storage_bucket_tag"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "google_app_id_tag",
+        "android_client_info": {
+          "package_name": "com.test.wrap"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "google_api_key_tag"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
