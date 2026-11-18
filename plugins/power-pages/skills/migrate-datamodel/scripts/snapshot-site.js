@@ -25,7 +25,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { parseSimpleYaml } = require('../../../scripts/lib/powerpages-config');
-const { loadAggregateRecords } = require('../../../scripts/lib/non-spa-metadata');
+const { parseTopLevelSequence } = require('../../../scripts/lib/non-spa-metadata');
 const { requirePowerPagesSiteRoot } = require('../../../scripts/lib/validation-helpers');
 
 function parseArgs(argv) {
@@ -56,7 +56,6 @@ function safeReaddir(p) {
 }
 
 function findFilesBySuffix(dir, suffix, recursive = false) {
-  if (!fs.existsSync(dir)) return [];
   return safeReaddir(dir)
     .flatMap((e) => {
       const file = path.join(dir, e.name);
@@ -93,10 +92,13 @@ function safeParseYaml(filePath, errors) {
 }
 
 function sha256OfFileIfExists(p) {
-  if (!p || !fs.existsSync(p)) return null;
-  const h = crypto.createHash('sha256');
-  h.update(fs.readFileSync(p));
-  return h.digest('hex').slice(0, 16);
+  if (!p) return null;
+  try {
+    return crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex').slice(0, 16);
+  } catch (error) {
+    if (error.code === 'ENOENT') return null;
+    throw new Error(`Could not hash snapshot content ${p}: ${error.message}`);
+  }
 }
 
 // Extract a language tag from a filename like "About-Footer.en-US.contentsnippet.yml".
@@ -113,8 +115,11 @@ function extractLanguageTag(filename, suffix) {
 // from a migration baseline. It also handles quoted and multiline YAML scalars.
 function parseCollectionFile(filePath, errors) {
   try {
-    return loadAggregateRecords(filePath);
+    // Read directly: existsSync can report false for inaccessible files too,
+    // but only ENOENT is an optional missing collection, not incomplete evidence.
+    return parseTopLevelSequence(fs.readFileSync(filePath, 'utf8'), filePath);
   } catch (e) {
+    if (e.code === 'ENOENT') return [];
     errors.push({ filePath, message: e.message });
     return [];
   }
@@ -126,7 +131,6 @@ function scanWebPages(siteRoot, withContentHash) {
   const errors = [];
   const inventory = [];
   const root = path.join(siteRoot, 'web-pages');
-  if (!fs.existsSync(root)) return { count: 0, inventory: [], parseErrors: [] };
 
   for (const slug of safeReaddir(root)) {
     if (!slug.isDirectory()) continue;
@@ -206,7 +210,7 @@ function scanWebLinkSets(siteRoot, folder) {
 
       // Read sibling weblinks file (collection format)
       const linksFile = f.replace('.weblinkset.yml', '.weblinkset.weblink.yml');
-      const linkRecs = fs.existsSync(linksFile) ? parseCollectionFile(linksFile, errors) : [];
+      const linkRecs = parseCollectionFile(linksFile, errors);
       const links = linkRecs
         .map((r) => ({
           name: recordField(r, 'adx_name'),
@@ -316,7 +320,6 @@ function scanTopLevelCollection(siteRoot, file, identity) {
   const errors = [];
   const inventory = [];
   const full = path.join(siteRoot, file);
-  if (!fs.existsSync(full)) return { count: 0, inventory: [], parseErrors: [] };
   for (const rec of parseCollectionFile(full, errors)) {
     const item = {};
     for (const [outKey, ymlKey] of Object.entries(identity)) {
@@ -415,14 +418,16 @@ function main() {
       { name: 'adx_name' }),
     advancedForms,
     advancedFormSteps: scanAdvancedFormSteps(siteRoot, advancedForms),
-    lists: scanPerSlugFolder(siteRoot, 'lists', '.entitylist.yml',
-      { name: 'adx_name' }),
+    lists: mergeScans(
+      scanFlatFolder(siteRoot, 'lists', '.list.yml', { name: 'adx_name' }),
+      scanPerSlugFolder(siteRoot, 'lists', '.entitylist.yml', { name: 'adx_name' })),
     polls: scanPerSlugFolder(siteRoot, 'polls', '.poll.yml',
       { name: 'adx_name' }),
     pollPlacements: scanPerSlugFolder(siteRoot, 'poll-placements', '.pollplacement.yml',
       { name: 'adx_name' }),
-    cloudFlowConsumers: scanPerSlugFolder(siteRoot, 'cloud-flow-consumer', '.cloudflowconsumer.yml',
-      { name: 'adx_name' }),
+    cloudFlowConsumers: mergeScans(
+      scanFlatFolder(siteRoot, 'cloud-flow-consumer', '.cloudflowconsumer.yml', { name: 'adx_name' }),
+      scanPerSlugFolder(siteRoot, 'cloud-flow-consumer', '.cloudflowconsumer.yml', { name: 'adx_name' })),
     columnPermissionProfiles: scanPerSlugFolder(siteRoot, 'column-permission-profiles', '.columnpermissionprofile.yml',
       { name: 'adx_name' }),
     siteSettings,

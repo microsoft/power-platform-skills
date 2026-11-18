@@ -27,7 +27,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { resolvePowerPagesSiteRoot } = require('../../../scripts/lib/validation-helpers');
+const { requirePowerPagesSiteRoot } = require('../../../scripts/lib/validation-helpers');
 const { parseTopLevelSequence } = require('../../../scripts/lib/non-spa-metadata');
 const { loadYamlRecordsWithErrors, WEB_ROLE_FILE_SUFFIX } = require('../../../scripts/lib/powerpages-config');
 
@@ -258,12 +258,7 @@ function main() {
     process.stderr.write('ERROR: --site-root is required\n');
     process.exit(1);
   }
-  if (!dirExists(opts.siteRoot)) {
-    process.stderr.write(`ERROR: site root not found or not a directory: ${opts.siteRoot}\n`);
-    process.exit(1);
-  }
-
-  opts.siteRoot = resolvePowerPagesSiteRoot(opts.siteRoot) || path.resolve(opts.siteRoot);
+  opts.siteRoot = requirePowerPagesSiteRoot(opts.siteRoot);
   const inspection = inspectSite(opts.siteRoot);
   const installed = loadInstalledSolutions(opts);
   const resolution = resolve(inspection, installed);

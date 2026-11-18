@@ -241,7 +241,8 @@ async function pollMigration({ websiteId, mode, outputDir }, deps = {}) {
     let outcome = 'Running';
     if (error) outcome = 'CheckFailed';
     else if (['Failed', 'Reverted'].includes(tracker.status)) outcome = tracker.status;
-    else if (mode === 'configurationData' && tracker.currentStep?.toLowerCase() === 'configurationdatacompleted') {
+    else if (mode === 'configurationData' && (tracker.status === 'Completed' ||
+        tracker.currentStep?.toLowerCase() === 'configurationdatacompleted')) {
       outcome = 'ConfigurationDataCompleted';
     } else if (mode !== 'configurationData' && tracker.status === 'Completed') outcome = 'Completed';
     else if (attempt === maxAttempts) outcome = 'TimedOut';

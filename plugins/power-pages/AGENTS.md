@@ -39,8 +39,11 @@ grouping. The live comparison must use record-level diff semantics, not just cou
 Template inspection must read aggregate and per-record web roles, and localized
 page snapshots must traverse locale subdirectories. Use `site.migrationMode`
 when deciding whether mode `all` already covered transactional references.
-Snapshot and source-remediation commands require a real `website.yml` file in the
+Template detection, snapshot and source-remediation commands require a real `website.yml` file in the
 resolved metadata root before scanning or replacing saved evidence/proposals.
+Snapshot lists and cloud-flow consumers in their flat downloaded layouts while
+retaining legacy per-slug layouts. Only missing optional inputs may be empty;
+permission and I/O failures must surface without claiming a clean comparison.
 Do not treat an arbitrary directory or an empty managed metadata folder as a
 successful zero-record scan; retain report-only CSV generation without a site path.
 Initialization must verify the website and
@@ -77,6 +80,8 @@ approval and verified status before one references-only retry. Never reset from
 a polling timeout alone or automatically edit Dataverse tracker fields.
 An explicit `Unknown` tracker status is a failed check, not running or accepted;
 retain the raw response and stop for recovery rather than polling it as progress.
+A top-level `Completed` also completes metadata-only polling even when PAC omits
+the current step or returns a different final step.
 After report initialization, every skill-owned input/manual-action pause must
 show the report-wide required-action notice. Reuse approval gates for existing
 approvals; use `--set-input` for other questions and clear it when resolved.

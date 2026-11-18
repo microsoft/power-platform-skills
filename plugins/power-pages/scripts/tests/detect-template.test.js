@@ -58,6 +58,35 @@ test('template inspection accepts the nested downloaded configuration root', (t)
   assert.equal(JSON.parse(result.stdout).resolution.templateKey, 'Partner');
 });
 
+test('template detection rejects arbitrary or incomplete roots rather than skipping V2 installation', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'migration-template-invalid-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const run = () => spawnSync(process.execPath, [
+    path.join(__dirname, '../../skills/migrate-datamodel/scripts/detect-template.js'),
+    '--site-root', root, '--solutions', 'PartnerPortal',
+  ], { encoding: 'utf8' });
+  fs.mkdirSync(path.join(root, '.powerpages-site'));
+  for (const marker of ['missing', 'directory']) {
+    if (marker === 'directory') fs.mkdirSync(path.join(root, '.powerpages-site', 'website.yml'));
+    const result = run();
+    assert.equal(result.status, 1, result.stdout);
+    assert.match(result.stderr, /downloaded Power Pages site containing website\.yml/);
+    assert.equal(result.stdout, '');
+  }
+});
+
+test('valid low-complexity downloaded sites still skip template installation', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'migration-template-blank-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(root, 'website.yml'), 'adx_name: Contoso');
+  const result = spawnSync(process.execPath, [
+    path.join(__dirname, '../../skills/migrate-datamodel/scripts/detect-template.js'),
+    '--site-root', root,
+  ], { encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(JSON.parse(result.stdout).resolution.decision, 'low-complexity-skip');
+});
+
 for (const [layout, files] of [
   ['aggregate', { 'webrole.yml': '- adx_key: partneradmin' }],
   ['per-record', { 'web-roles\\Partner.webrole.yml': 'key: "partneradmin"' }],

@@ -126,6 +126,22 @@ test('milestone matching retains the original case-insensitive behavior', async 
   assert.equal((await pollMigration(f.args, f.deps)).outcome, 'ConfigurationDataCompleted');
 });
 
+for (const step of [null, 'StatusUpdated', 'configurationdatacompleted']) {
+  test(`metadata polling accepts top-level Completed with step ${step}`, async (t) => {
+    const terminal = step === null
+      ? { status: 0, stdout: 'Current migration status is : Completed\n' }
+      : response('Completed', step);
+    const f = polling(t, [terminal], 'configurationData');
+    const result = await pollMigration(f.args, f.deps);
+    assert.equal(result.outcome, 'ConfigurationDataCompleted');
+    assert.equal(result.status, 'Completed');
+    assert.equal(result.currentStep, step);
+    assert.equal(f.calls.length, 1);
+    assert.equal(f.sleeps.length, 0);
+    assert.equal(JSON.parse(fs.readFileSync(path.join(f.outputDir, 'migration-status.json'), 'utf8')).rawOutput, terminal.stdout);
+  });
+}
+
 test('all mode waits past the metadata handoff for top-level Completed', async (t) => {
   const f = polling(t, [response('Running', 'ConfigurationDataCompleted'), response('Completed')], 'all');
   const result = await pollMigration(f.args, f.deps);

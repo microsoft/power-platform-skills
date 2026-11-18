@@ -43,6 +43,115 @@ test('unreadable snapshot directories report errors rather than empty inventorie
   assert.throws(() => safeReaddir('restricted'), /Could not read snapshot directory restricted: permission denied/);
 });
 
+for (const relative of ['web-pages', 'site-settings', 'web-templates\\header']) {
+  test(`inaccessible ${relative} cannot replace a saved snapshot with an empty inventory`, (t) => {
+    const { write, run, site, output } = fixture(t);
+    write('web-templates\\header\\Header.webtemplate.yml', 'adx_name: Header');
+    run();
+    const saved = fs.readFileSync(path.join(output, 'sdm-snapshot.json'), 'utf8');
+    const target = path.join(site, ...relative.split('\\'));
+    const preload = path.join(path.dirname(site), 'unreadable.cjs');
+    fs.writeFileSync(preload, `
+      const fs = require('node:fs');
+      const path = require('node:path');
+      const target = ${JSON.stringify(target)};
+      const exists = fs.existsSync;
+      const readdir = fs.readdirSync;
+      fs.existsSync = (p) => path.resolve(p) === target ? false : exists(p);
+      fs.readdirSync = (p, ...args) => {
+        if (path.resolve(p) === target) throw Object.assign(new Error('permission denied'), { code: 'EACCES' });
+        return readdir(p, ...args);
+      };
+    `);
+    const result = spawnSync(process.execPath, ['--require', preload, script, '--site-root', site,
+      '--output-dir', output, '--label', 'sdm'], { encoding: 'utf8' });
+    assert.equal(result.status, 1, result.stdout);
+    assert.match(result.stderr, /Could not read snapshot directory.*permission denied/);
+    assert.equal(fs.readFileSync(path.join(output, 'sdm-snapshot.json'), 'utf8'), saved);
+  });
+}
+
+test('unreadable companion content cannot silently lose its hash or replace saved evidence', (t) => {
+  const { write, run, site, output } = fixture(t);
+  write('web-templates\\header\\Header.webtemplate.yml', 'adx_name: Header');
+  write('web-templates\\header\\Header.webtemplate.source.html', '<header>Before</header>');
+  run();
+  const saved = fs.readFileSync(path.join(output, 'sdm-snapshot.json'), 'utf8');
+  const target = path.join(site, 'web-templates', 'header', 'Header.webtemplate.source.html');
+  const preload = path.join(path.dirname(site), 'unreadable-content.cjs');
+  fs.writeFileSync(preload, `
+    const fs = require('node:fs');
+    const path = require('node:path');
+    const target = ${JSON.stringify(target)};
+    const exists = fs.existsSync;
+    const read = fs.readFileSync;
+    fs.existsSync = (p) => path.resolve(p) === target ? false : exists(p);
+    fs.readFileSync = (p, ...args) => {
+      if (path.resolve(p) === target) throw Object.assign(new Error('permission denied'), { code: 'EACCES' });
+      return read(p, ...args);
+    };
+  `);
+  const result = spawnSync(process.execPath, ['--require', preload, script, '--site-root', site,
+    '--output-dir', output, '--label', 'sdm', '--with-content-hash'], { encoding: 'utf8' });
+  assert.equal(result.status, 1, result.stdout);
+  assert.match(result.stderr, /Could not hash snapshot content.*permission denied/);
+  assert.equal(fs.readFileSync(path.join(output, 'sdm-snapshot.json'), 'utf8'), saved);
+});
+
+for (const [relative, category] of [
+  ['sitesetting.yml', 'siteSettings'],
+  ['web-link-sets\\primary\\Primary.weblinkset.weblink.yml', 'webLinkSets'],
+]) {
+  test(`unreadable ${relative} retains explicit category errors instead of claiming no records`, (t) => {
+    const { write, site, output } = fixture(t);
+    write('web-link-sets\\primary\\Primary.weblinkset.yml', 'adx_name: Primary');
+    const target = path.join(site, ...relative.split('\\'));
+    const preload = path.join(path.dirname(site), 'unreadable-file.cjs');
+    fs.writeFileSync(preload, `
+      const fs = require('node:fs');
+      const path = require('node:path');
+      const target = ${JSON.stringify(target)};
+      const exists = fs.existsSync;
+      const read = fs.readFileSync;
+      fs.existsSync = (p) => path.resolve(p) === target ? false : exists(p);
+      fs.readFileSync = (p, ...args) => {
+        if (path.resolve(p) === target) throw Object.assign(new Error('I/O failure'), { code: 'EIO' });
+        return read(p, ...args);
+      };
+    `);
+    const result = spawnSync(process.execPath, ['--require', preload, script, '--site-root', site,
+      '--output-dir', output, '--label', 'sdm'], { encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr);
+    const snapshot = JSON.parse(fs.readFileSync(path.join(output, 'sdm-snapshot.json'), 'utf8'));
+    assert.equal(snapshot.parseErrors[category]?.length, 1);
+    assert.match(snapshot.parseErrors[category][0].message, /I\/O failure/);
+  });
+}
+
+for (const [category, flat, legacy] of [
+  ['lists', 'lists\\Current.list.yml', 'lists\\legacy\\Legacy.entitylist.yml'],
+  ['cloudFlowConsumers', 'cloud-flow-consumer\\Current.cloudflowconsumer.yml',
+    'cloud-flow-consumer\\legacy\\Legacy.cloudflowconsumer.yml'],
+]) {
+  test(`${category} snapshots include flat and legacy layouts and detect missing records`, (t) => {
+    const { write, run, site } = fixture(t);
+    write(flat, 'name: Current\nstatecode: 1');
+    write(legacy, 'adx_name: Legacy\nadx_statecode: 0');
+    const before = run();
+    assert.equal(before.counts[category], 2);
+    assert.deepEqual(before.inventory[category].map(({ name }) => name).sort(), ['Current', 'Legacy']);
+    assert.equal(before.inventory[category].find(({ name }) => name === 'Current').stateCode, 1);
+    fs.unlinkSync(path.join(site, ...flat.split('\\')));
+    const after = run();
+    const diff = diffCategory(category, before.inventory[category], after.inventory[category]);
+    assert.equal(diff.status, 'fail');
+    assert.equal(diff.missingInEdm[0].name, 'Current');
+    write(flat, 'name: Current\nmalformed field');
+    const broken = run();
+    assert.match(broken.parseErrors[category][0].message, /Invalid YAML line/);
+  });
+}
+
 test('snapshot rejects arbitrary roots without creating or replacing saved evidence', (t) => {
   const { write, run, site, output } = fixture(t);
   const empty = path.join(site, 'not-a-site');
