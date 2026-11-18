@@ -160,6 +160,24 @@ A GUID's syntax does not prove that the correct view exists. Saved queries
 omit null-valued properties, so model optional fields explicitly and fail if
 a required identity/display column is absent.
 
+**App-helper capability check (before choosing the recipe):** SDK/service
+support does not upgrade the app's copied hooks. The capability report's
+`cursorHelper.status` is `matches-bundled` only for an LF-normalized copy of
+the current tested sample; `missing` and `requires-review` do not establish
+complete-link support. Resolve the actual imported helper (including its
+barrel/alias), then verify all three behaviors: it accepts `cursorMode:
+'nextLink'`, passes `pageParam` as `nextLink` to `fetchPage`, and returns the
+complete response link as the next page parameter without token extraction.
+A type declaration or SDK upgrade alone is insufficient.
+
+Use the shared-hook example below only after that check. For an older or
+unverified helper, the orchestrator must use the direct `useInfiniteQuery`
+fallback below in the approved screen, or create one focused app-specific
+saved-view hook for its affected consumers before spawning builders. Preserve
+the existing shared hook, exports, and unrelated consumers; do not overwrite
+the scaffold, add casts to accept `cursorMode`, or send links as `skipToken`.
+This is implementation of the approved saved-view feature, not an app migration.
+
 ```typescript
 type ActiveContactRow = { contactid: string; fullname?: string };
 
@@ -172,6 +190,36 @@ const contacts = useCursorListData<ActiveContactRow>({
   ),
 });
 ```
+
+#### Existing-app saved-view fallback
+
+This uses the installed React Query API directly and does not depend on the
+app's existing `useCursorListData`. Reuse the approved row type, generated
+service, environment, and view ID:
+
+```typescript
+import { useInfiniteQuery } from '@tanstack/react-query';
+
+const contacts = useInfiniteQuery({
+  queryKey: ['contacts', environmentId, savedQueryId],
+  initialPageParam: undefined as string | undefined,
+  queryFn: async ({ pageParam }) => {
+    const result = await ContactsService.getSavedQuery<ActiveContactRow>(savedQueryId, {
+      maxPageSize: 50,
+      ...(pageParam ? { nextLink: pageParam } : {}),
+    });
+    if (!result.success) throw result.error ?? new Error('Could not load contacts');
+    return result;
+  },
+  getNextPageParam: (page) => page.nextLink ?? undefined,
+});
+const items = contacts.data?.pages.flatMap((page) => page.data) ?? [];
+```
+
+Render `contacts.error` explicitly. Wire `fetchNextPage` only when
+`hasNextPage && !isFetchingNextPage`, and use `refetch` for refresh. Record the
+selected helper/import or direct-query path in the Data spec and compile the
+new skeleton with the existing helpers unchanged.
 
 Pass the complete returned link unchanged to the same service/view. Do not
 extract its skip token, decode/re-encode it, append options, or log/persist

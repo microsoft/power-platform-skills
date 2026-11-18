@@ -14,18 +14,27 @@ const templateRequire = createRequire(path.join(templateRoot, 'package.json'));
 const ts = templateRequire('typescript');
 const hookFile = path.join(pluginRoot, 'shared/samples/src/hooks/useCursorListData.ts');
 const utilsFile = path.join(pluginRoot, 'shared/samples/src/utils/dataverse.ts');
+const reference = fs.readFileSync(path.join(pluginRoot, 'shared/references/data-performance.md'), 'utf8')
+  .replace(/\r\n?/g, '\n');
+const savedViewFallback = reference.split('#### Existing-app saved-view fallback')[1]
+  ?.match(/```typescript\n([\s\S]*?)\n```/)?.[1];
+assert.ok(savedViewFallback, 'Expected the documented existing-app saved-view fallback');
 
-function loadSample(file, imports) {
-  const { outputText } = ts.transpileModule(fs.readFileSync(file, 'utf8'), {
+function loadCode(source, imports, globals = {}, fileName = 'sample.ts') {
+  const { outputText } = ts.transpileModule(source, {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
-    fileName: file,
+    fileName,
   });
   const exports = {};
-  Function('exports', 'require', outputText)(exports, (name) => {
+  Function('exports', 'require', ...Object.keys(globals), outputText)(exports, (name) => {
     assert.ok(Object.hasOwn(imports, name), `Unexpected sample dependency: ${name}`);
     return imports[name];
-  });
+  }, ...Object.values(globals));
   return exports;
+}
+
+function loadSample(file, imports) {
+  return loadCode(fs.readFileSync(file, 'utf8'), imports, {}, file);
 }
 
 function hookHarness(options, state = {}) {
@@ -94,6 +103,41 @@ test('ordinary OData retains skip-token paging and keeps mode in cache identity'
   assert.equal(harness.queryOptions.queryKey.at(-1).cursorMode, 'skipToken');
 });
 
+test('documented fallback pages saved views without importing an older shared hook', async () => {
+  const nextLink = 'https://contoso.crm.dynamics.com/api/data/v9.0/contacts?$skiptoken=a%2Bb%2520&view=opaque';
+  const calls = [];
+  let queryOptions;
+  let fail = false;
+  loadCode(`${savedViewFallback}\nexport { contacts };`, {
+    '@tanstack/react-query': {
+      useInfiniteQuery: (options) => { queryOptions = options; return {}; },
+    },
+  }, {
+    environmentId: 'environment',
+    savedQueryId: '00000000-0000-0000-00aa-000010001002',
+    ContactsService: {
+      getSavedQuery: async (id, options) => {
+        calls.push({ id, options });
+        if (fail) return { success: false, data: [], error: new Error('Access denied') };
+        return options.nextLink
+          ? { success: true, data: [{ contactid: 'second' }] }
+          : { success: true, data: [{ contactid: 'first' }], nextLink, skipToken: 'do-not-use' };
+      },
+    },
+  });
+  const first = await queryOptions.queryFn({ pageParam: undefined });
+  const cursor = queryOptions.getNextPageParam(first);
+  assert.equal(cursor, nextLink);
+  const second = await queryOptions.queryFn({ pageParam: cursor });
+  assert.deepEqual(calls[0].options, { maxPageSize: 50 });
+  assert.deepEqual(calls[1].options, { maxPageSize: 50, nextLink });
+  assert.equal(calls[0].id, calls[1].id);
+  assert.deepEqual([...first.data, ...second.data], [{ contactid: 'first' }, { contactid: 'second' }]);
+  assert.equal(queryOptions.getNextPageParam(second), undefined);
+  fail = true;
+  await assert.rejects(queryOptions.queryFn({ pageParam: undefined }), /Access denied/);
+});
+
 test('query failures and incomplete saved cursors cannot become successful empty/mock pages', async () => {
   for (const response of [
     { success: false, data: [] },
@@ -137,7 +181,7 @@ test('the actual cursor sample compiles with installed React Query and SDK query
   t.after(() => fs.rmSync(root, { force: true, recursive: true }));
   const probe = path.join(root, 'query-probe.ts');
   fs.writeFileSync(probe, `
-import { getClient, type DataClient } from '@microsoft/power-apps/data';
+import { getClient, type DataClient, type IDataverseQueryOptions } from '@microsoft/power-apps/data';
 import { useCursorListData } from '${hookFile.replace(/\\/g, '/').replace(/\.ts$/, '')}';
 type Row = { contactid: string; related?: { choices?: number[]; name?: string | null } | null };
 const client = getClient({});
@@ -153,6 +197,16 @@ useCursorListData<Row>({
 legacy.retrieveSavedQueryAsync('contacts', 'view');
 // @ts-expect-error Generic OData accepts skipToken, not the saved-query continuation input.
 client.retrieveMultipleRecordsAsync('contacts', { nextLink: 'link' });
+
+type ActiveContactRow = Row;
+const environmentId = 'environment';
+const savedQueryId = '00000000-0000-0000-00aa-000010001002';
+const ContactsService = {
+  getSavedQuery<TResult>(id: string, options?: IDataverseQueryOptions) {
+    return client.retrieveSavedQueryAsync<TResult>('contacts', id, options);
+  },
+};
+${savedViewFallback}
 `);
   const program = ts.createProgram([probe, hookFile], {
     noEmit: true,

@@ -1031,6 +1031,13 @@ Shared scaffold algorithm:
 
 - If `src/components/index.tsx`, `src/hooks/index.ts`, `src/utils/index.ts`, or `src/tokens/index.ts` is missing, copy the missing file from `shared/samples/src/`. Never overwrite an existing shared file.
 - If affected screens share an entity card/row, choice map, cursor hook, detail hook, or save helper, create or update a focused app-specific shared file before spawning builders.
+- For an approved saved-view read, follow the App-helper capability check in
+  `data-performance.md` and the report's `cursorHelper.status`. SDK/services
+  can be current while an existing shared hook still only forwards skipToken.
+  Preserve that hook and its consumers; generate a focused nextLink-capable
+  app-specific hook, or use the documented direct `useInfiniteQuery` fallback
+  in the affected screen. Record the choice in its Data spec and type-check the
+  skeleton before delegation. Do not replace shared scaffold to enable the feature.
 - For brand-new screens, write a typed skeleton at the `target_file` using the relevant `/create-mobile-app` Step 10.8b template. The skeleton must compile with `return null` before screen-builder runs.
 - For existing screens, never replace the whole file with a skeleton. Patch imports/hooks only when the approved edit changes the data/native surface, then ask the builder to preserve existing behavior.
 

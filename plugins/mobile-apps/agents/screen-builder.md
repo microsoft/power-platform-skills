@@ -157,8 +157,11 @@ You will be invoked by `/create-mobile-app` Step 11 or `/edit-app` screen-rebuil
 
   Follow the reference's apply/saved-view and all-column contracts. Use
   `getAll<AggregateRow>({ apply })` for approved aggregates, not loaded-page
-  totals. Use `getSavedQuery<ViewRow>` with `cursorMode: 'nextLink'` for saved
-  system views; replay complete links unchanged and do not append search/sort
+  totals. For saved system views, use the orchestrator's verified nextLink helper
+  or direct `useInfiniteQuery` skeleton from `data-performance.md`. Do not pass
+  `cursorMode: 'nextLink'` to an older/unverified shared hook or replace it
+  yourself; return `NEEDS_CONTEXT: saved-view helper contract` if the choice
+  is missing. Replay complete links unchanged and do not append search/sort
   options. Ordinary `getAll` keeps skipToken paging. Never send expanded objects,
   computed values, or display labels back as write payloads. Normalize nested
   multi-select Choice fields with the SDK helper when the wire shape requires

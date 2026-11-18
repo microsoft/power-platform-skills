@@ -77,6 +77,20 @@ function inspectService(servicePath) {
   };
 }
 
+function inspectCursorHelper(projectRoot) {
+  const file = 'src/hooks/useCursorListData.ts';
+  const installed = path.join(projectRoot, file);
+  if (!fs.existsSync(installed)) return { file, status: 'missing' };
+  const bundled = path.join(__dirname, '../shared/samples/src/hooks/useCursorListData.ts');
+  const read = (filename) => fs.readFileSync(filename, 'utf8').replace(/\r\n?/g, '\n');
+  // Preparation preserves app-owned helpers. A nextLink property alone does not
+  // prove forwarding: older helpers expose it but still pass only skipToken.
+  return {
+    file,
+    status: read(installed) === read(bundled) ? 'matches-bundled' : 'requires-review',
+  };
+}
+
 function checkQuerySupport(projectRoot, tables = []) {
   const root = path.resolve(projectRoot);
   const sdkVersion = installedVersion(root, '@microsoft/power-apps');
@@ -117,6 +131,7 @@ function checkQuerySupport(projectRoot, tables = []) {
     generatorSupported: supportsRelease(cliVersion, CLI_VERSION),
     testedVersions: { sdk: SDK_VERSION, cli: CLI_VERSION },
     scope: 'SDK and generated online Dataverse services; offline execution is not verified by this check',
+    cursorHelper: inspectCursorHelper(root),
     messages,
     services,
   };

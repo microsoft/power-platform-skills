@@ -2925,6 +2925,11 @@ under this snapshot: installed SDK/CLI versions and per-service
 `expand`, `apply`, and `saved-query` support. Methods alone do not prove option
 support. Mark this as online support, not offline evidence. Gate every planned
 new query against its actual service before generating the skeleton.
+For saved views, also resolve the app's actual cursor helper and follow the
+App-helper capability check in `data-performance.md`. `cursorHelper.status`
+does not become compatible merely because services were refreshed. Record
+the verified shared helper or focused/direct `useInfiniteQuery` choice in the
+Data spec; preserve older shared helpers and their existing consumers.
 
 ### Step 10.8 — Generate app-specific shared code + screen skeletons
 
@@ -2973,9 +2978,10 @@ If no cross-screen patterns are found (e.g. only 2 screens total with no overlap
 
 Choose the fetch contract from the approved Data spec before applying a
 skeleton. The cursor skeleton below is for **ordinary OData**. A saved system
-view instead uses the `getSavedQuery` example in `data-performance.md`,
-`cursorMode: 'nextLink'`, complete-link callbacks, and no unsupported search,
-select, or orderBy arguments. An expanded query uses its app-owned generic
+view instead calls `getSavedQuery` using the verified-helper recipe in `data-performance.md` with
+`cursorMode: 'nextLink'`, or its direct `useInfiniteQuery` fallback when the
+app helper is older/unverified. Both use complete links and no unsupported
+search, select, or orderBy arguments. An expanded query uses its app-owned generic
 projection type and exact expand/select options on every page. An aggregate
 uses the approved aliases and grouping keys, not a base-model row type or an
 invented primary ID. Never overwrite these contracts with a generic skeleton.

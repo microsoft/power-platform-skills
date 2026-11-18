@@ -110,6 +110,33 @@ test('SDK upgrade does not hide stale services or mutate customer files', (t) =>
   assert.match(result.stderr, /refresh the retained data sources/);
 });
 
+test('saved-query service support does not imply the preserved app helper supports nextLink', (t) => {
+  const { root, write } = fixture(t);
+  assert.equal(checkQuerySupport(root).cursorHelper.status, 'missing');
+  const file = 'src/hooks/useCursorListData.ts';
+  const legacy = `
+export interface CursorPageFetchArgs { skipToken?: string; nextLink?: string; }
+export function useCursorListData({ fetchPage }) {
+  return useInfiniteQuery({
+    queryFn: ({ pageParam }) => fetchPage({ skipToken: pageParam }),
+    getNextPageParam: page => extractSkipToken(page.nextLink),
+  });
+}
+`;
+  write(file, legacy);
+  const report = checkQuerySupport(root);
+  assert.equal(report.services[0].supported['saved-query'], true);
+  assert.deepEqual(report.cursorHelper, { file, status: 'requires-review' });
+  assert.equal(fs.readFileSync(path.join(root, file), 'utf8'), legacy);
+
+  const current = fs.readFileSync(path.join(pluginRoot, 'shared/samples/src/hooks/useCursorListData.ts'), 'utf8')
+    .replace(/\r\n?/g, '\n');
+  write(file, current.replace(/\n/g, '\r\n'));
+  assert.equal(checkQuerySupport(root).cursorHelper.status, 'matches-bundled');
+  write(file, `${current}\n// App-owned customizations require inspection, not overwrite.\n`);
+  assert.equal(checkQuerySupport(root).cursorHelper.status, 'requires-review');
+});
+
 test('missing/malformed generated options are explicit failures', (t) => {
   const { root, write } = fixture(t);
   fs.unlinkSync(path.join(root, 'src/generated/models/CommonModels.ts'));
@@ -312,6 +339,18 @@ test('screen pagination and skeleton rules distinguish saved views from ordinary
     assert.match(source, /getSavedQuery/, file);
     assert.match(source, /cursorMode:[^\n]*nextLink/, file);
     assert.match(source, /[Oo]rdinary OData/, file);
+  }
+});
+
+test('saved-view workflows check app helpers and preserve existing shared consumers', () => {
+  const reference = fs.readFileSync(path.join(pluginRoot, 'shared/references/data-performance.md'), 'utf8');
+  assert.match(reference, /SDK\/service\s+support does not upgrade the app's copied hooks/);
+  assert.match(reference, /Existing-app saved-view fallback/);
+  for (const file of ['skills/create-mobile-app/SKILL.md', 'skills/edit-app/SKILL.md']) {
+    const source = fs.readFileSync(path.join(pluginRoot, file), 'utf8');
+    assert.match(source, /App-helper capability check/, file);
+    assert.match(source, /cursorHelper\.status/, file);
+    assert.match(source, /useInfiniteQuery.*fallback|fallback.*useInfiniteQuery/s, file);
   }
 });
 
