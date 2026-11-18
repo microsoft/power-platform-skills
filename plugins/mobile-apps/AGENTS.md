@@ -58,6 +58,7 @@ archive selected by the immutable template lock, never from mutable installed
 hashes alone.
 Metadata checks do not certify offline synchronization or database migration.
 Never patch, fork or locally rewrite a first-party package to work around a defect.
+For fixable upgrade failures, follow the [check-updates repair loop](skills/check-updates/SKILL.md#explain-choices-clearly-and-work-through-fixable-problems).
 
 Do not add preparation rewrites for `scheme`, `package`, `bundleIdentifier`, `src/playerConfig.ts`, `fingerprint.config.js`, or `native-runtime.json` unless those files exist in the synced main template.
 

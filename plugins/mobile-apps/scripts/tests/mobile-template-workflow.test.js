@@ -24,11 +24,11 @@ test('native updates are evaluated independently of outdated-host discovery', ()
 });
 
 test('rehearsal, full-chain approval, drift checks and recovery are separate gates', () => {
-  const rehearsal = updates.indexOf('Prepare isolated preview');
+  const rehearsal = updates.indexOf('Test the upgrade in a copy of my app');
   const perEdge = updates.indexOf('repeat dry-run and apply');
-  const approval = updates.indexOf('Apply reviewed release');
+  const approval = updates.indexOf('Apply the tested upgrade to my app');
   const apply = updates.indexOf('### Apply only the approved plan');
-  assert.ok(rehearsal < perEdge && perEdge < approval && approval < apply);
+  assert.ok(rehearsal >= 0 && rehearsal < perEdge && perEdge < approval && approval < apply);
   assert.match(updates, /nonzero preview is never automatically a clean plan/);
   assert.match(updates, /`--no-install` to simulate state advancement/);
   assert.match(updates, /under `<working_dir>`/);
@@ -37,6 +37,29 @@ test('rehearsal, full-chain approval, drift checks and recovery are separate gat
   assert.match(updates, /rollback or journal recovery cannot complete safely/);
   assert.match(updates, /Never report `DONE` for a partial migration/);
   assert.match(updates, /Skipping excludes all coupled packages/);
+});
+
+test('upgrade failures require actionable app-owned repairs without weakening validation', () => {
+  assert.match(updates, /For every failed preparation, install, migration or validation check/);
+  assert.match(updates, /Explain the failure, its impact and a concrete possible fix/);
+  assert.match(updates, /minimal app-owned source\/configuration fixes in the test copy/);
+  assert.match(updates, /Test-copy approval covers these\s+repairs, not original-app edits/);
+  assert.match(updates, /never\s+weaken types\/checks, suppress diagnostics or disable offline/);
+  assert.match(updates, /Rerun the failed check, then all mandatory checks and relevant existing app\s+tests/);
+  assert.match(updates, /including the approved app-code fixes in their rehearsed order/);
+  assert.match(updates, /After successful recovery, diagnose and repair the failure in the test copy/);
+  assert.match(updates, /Existing plugin-restart, publication, approval and recovery gates still apply/);
+  assert.match(updates, /Never patch npm packages via `node_modules`, `patch-package`/);
+});
+
+test('individual package failures allow approved repairs or safe skipping, not immediate abandonment', () => {
+  const packageUpdates = updates.slice(updates.indexOf('For each approved JavaScript-only package update in Steps 3 and 4:'));
+  assert.match(packageUpdates, /any approved app-code repair files \(including modes and absent-file state\)/);
+  assert.match(updates, /obtain approval and back up additional\s+app-code repair files before editing them/);
+  assert.match(packageUpdates, /If any command fails, follow the repair loop above/);
+  assert.match(packageUpdates, /If the user declines the repair, restore safely, record the package as skipped and continue/);
+  assert.match(packageUpdates, /stop mutations if restoration is unsafe/);
+  assert.doesNotMatch(packageUpdates, /return `BLOCKED` with the failed command, and do not offer later packages/);
 });
 
 test('JavaScript updates retain approval and audit safeguards without native bumps', () => {

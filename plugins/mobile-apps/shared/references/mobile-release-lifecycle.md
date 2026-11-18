@@ -193,6 +193,9 @@ creation refuses an existing file or a directory resolving outside the app.
 Never use `--upgrade-only` or `--requirements-only`
 alone as proof that a JavaScript update did not introduce native dependencies.
 
+A failed upgrade check pauses application, not diagnosis. Follow the
+[`/check-updates` repair loop](../../skills/check-updates/SKILL.md#explain-choices-clearly-and-work-through-fixable-problems).
+
 Compare app requirements with the actual supported counters of a selected Player
 when available. A mismatch requires a matching binary or an approved migration,
 never rewriting compatibility labels. Package publication does not establish
