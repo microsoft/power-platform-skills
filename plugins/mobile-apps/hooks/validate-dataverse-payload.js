@@ -95,12 +95,12 @@ function extractContent(toolName, toolInput) {
 }
 
 /**
- * Walk forward from `startIdx` (which points at the `{` opening an object
- * literal) and return the index of the matching `}`. Tracks nested braces,
+ * Walk forward from an opening delimiter and return its matching index. Tracks nesting,
  * single/double/back-tick string literals, and line/block comments. Returns
  * -1 if unbalanced.
  */
-function findMatchingBrace(content, startIdx) {
+function findMatchingDelimiter(content, startIdx, opening, closing) {
+  if (content[startIdx] !== opening) return -1;
   let depth = 0;
   let i = startIdx;
   let inString = null; // '"' | "'" | '`' | null
@@ -151,15 +151,20 @@ function findMatchingBrace(content, startIdx) {
       i++;
       continue;
     }
-    if (ch === '{') {
+    if (ch === opening) {
       depth++;
-    } else if (ch === '}') {
+    } else if (ch === closing && !(closing === '>' && content[i - 1] === '=')) {
+      // Function types inside generics contain `=>`, which does not close `<...>`.
       depth--;
       if (depth === 0) return i;
     }
     i++;
   }
   return -1;
+}
+
+function findMatchingBrace(content, startIdx) {
+  return findMatchingDelimiter(content, startIdx, '{', '}');
 }
 
 /**
@@ -441,6 +446,7 @@ if (require.main === module) {
 
 // Exported for tests / cross-module reuse.
 module.exports = {
+  findMatchingDelimiter,
   findMatchingBrace,
   findForbiddenSelectColumns,
   findServerManagedCreatePayload,

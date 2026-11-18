@@ -152,6 +152,79 @@ test('saved-view cursor validation accepts generic typed calls without invented 
   assert.match(findCursorViolations(source.replace("cursorMode: 'nextLink',", '')).join('\n'), /cursorMode/);
 });
 
+test('cursor hooks and service calls accept inline object and multiline nested type arguments', () => {
+  const types = [
+    '{ contactid: string; fullname?: string }',
+    `\n    Pick<ContactRow, 'contactid'> & {
+      related?: Pick<AccountRow, 'name'> | null;
+      onSelect?: (id: string) => Promise<void>;
+    }\n  `,
+  ];
+  for (const type of types) {
+    for (const hook of ['useCursorListData', 'useInfiniteQuery']) {
+      const source = `${hook}<${type}>({
+        queryFn: ({ pageParam }) => ContactsService.getAll<${type}>({
+          select: ['contactid', 'fullname'], orderBy: ['contactid asc'],
+          maxPageSize: 50, skipToken: pageParam,
+        }),
+      });`;
+      assert.deepEqual(findCursorViolations(source), []);
+      assert.match(findCursorViolations(source.replace("select: ['contactid', 'fullname'],", '')).join('\n'),
+        /include `select`/);
+    }
+    const saved = `useCursorListData<${type}>({
+      cursorMode: 'nextLink',
+      fetchPage: ({ pageSize, nextLink }) => ContactsService.getSavedQuery<${type}>(viewId, {
+        maxPageSize: pageSize, nextLink,
+      }),
+    });`;
+    assert.deepEqual(findCursorViolations(saved), []);
+    assert.match(findCursorViolations(saved.replace("cursorMode: 'nextLink',", '')).join('\n'), /cursorMode/);
+  }
+});
+
+test('bounded auxiliary reads do not inherit a separate cursor query contract', () => {
+  const source = `
+    const contacts = useCursorListData<ContactRow>({
+      fetchPage: ({ pageSize, skipToken }) => ContactsService.getAll<ContactRow>({
+        select: ['contactid'], orderBy: ['contactid asc'], maxPageSize: pageSize, skipToken,
+      }),
+    });
+    const categories = CategoriesService.getAll<{ categoryid: string; name: string }>({
+      top: 20, select: ['categoryid', 'name'],
+    });
+    const total = AccountsService.getAll<{ total: number }>({ apply: 'aggregate($count as total)' });
+  `;
+  assert.deepEqual(findCursorViolations(source), []);
+  const invalidCursor = source.replace("orderBy: ['contactid asc'],", '');
+  assert.match(findCursorViolations(invalidCursor).join('\n'), /deterministic `orderBy`/);
+});
+
+test('separate query calls cannot supply a missing cursor or saved-view mode', () => {
+  const source = `
+    const first = useCursorListData<ContactRow>({
+      fetchPage: () => ContactsService.getAll<ContactRow>({
+        select: ['contactid'], orderBy: ['contactid asc'], top: 50,
+      }),
+    });
+    const second = useCursorListData<ViewRow>({
+      cursorMode: 'nextLink',
+      fetchPage: ({ pageSize, nextLink }) => ContactsService.getSavedQuery<ViewRow>(viewId, {
+        maxPageSize: pageSize, nextLink,
+      }),
+    });
+    const third = useCursorListData<ViewRow>({
+      fetchPage: ({ pageSize, nextLink }) => AccountsService.getSavedQuery<ViewRow>(viewId, {
+        maxPageSize: pageSize, nextLink,
+      }),
+    });
+  `;
+  const issues = findCursorViolations(source).join('\n');
+  assert.match(issues, /must use SDK `maxPageSize`/);
+  assert.match(issues, /must carry the SDK cursor/);
+  assert.match(issues, /cursorMode/);
+});
+
 test('generic OData reads still require ordinary cursor selection and ordering', () => {
   const source = `
     useCursorListData<ExpandedRow>({

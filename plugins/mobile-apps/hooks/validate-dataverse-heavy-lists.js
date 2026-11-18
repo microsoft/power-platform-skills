@@ -11,7 +11,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { findMatchingBrace, topLevelKeys } = require('./validate-dataverse-payload');
+const { findMatchingBrace, findMatchingDelimiter, topLevelKeys } = require('./validate-dataverse-payload');
 
 function isWriteTool(toolName) {
   return toolName === 'Write' || toolName === 'Edit' || toolName === 'MultiEdit';
@@ -95,6 +95,28 @@ function isCursorSpec(spec) {
   return /\bPagination\b[\s\S]{0,140}\bcursor\b/i.test(spec);
 }
 
+function skipTrivia(content, start) {
+  return start + /^(?:\s+|\/\*[\s\S]*?\*\/|\/\/[^\r\n]*)*/.exec(content.slice(start))[0].length;
+}
+
+function findCalls(content, pattern) {
+  const calls = [];
+  for (const match of content.matchAll(pattern)) {
+    let open = skipTrivia(content, match.index + match[0].length);
+    if (content[open] === '<') {
+      // `getAll<{ id: string; related?: Pick<Row, 'name'> }>(...)` and multiline
+      // types need balanced delimiters, not a regex that stops at ';' or '\n'.
+      const typeEnd = findMatchingDelimiter(content, open, '<', '>');
+      if (typeEnd < 0) continue;
+      open = skipTrivia(content, typeEnd + 1);
+    }
+    if (content[open] !== '(') continue;
+    const end = findMatchingDelimiter(content, open, '(', ')');
+    if (end >= 0) calls.push({ name: match[1], start: match.index, open, end });
+  }
+  return calls;
+}
+
 function findCursorViolations(content) {
   const violations = [];
 
@@ -106,7 +128,8 @@ function findCursorViolations(content) {
     violations.push('Cursor-paginated screens must not use `useSearchFilter`; it filters only loaded rows. Push search into the service `filter` option.');
   }
 
-  if (!/\b(useCursorListData|useInfiniteQuery)(?:<[^;\n]*>)?\s*\(/.test(content)) {
+  const cursorHooks = findCalls(content, /\b(useCursorListData|useInfiniteQuery)\b/g);
+  if (cursorHooks.length === 0) {
     violations.push('Cursor-paginated screens must use `useCursorListData` or React Query `useInfiniteQuery`.');
   }
 
@@ -114,38 +137,43 @@ function findCursorViolations(content) {
     violations.push('Cursor-paginated FlatList must wire `onEndReached` to load the next page.');
   }
 
-  const getAllCalls = [...content.matchAll(/\b\w+Service\.getAll(?:<[^;\n]*>)?\s*\(\s*(\{)?/g)];
-  const hasSavedQuery = /\b\w+Service\.getSavedQuery(?:<[^;\n]*>)?\s*\(/.test(content);
-  for (const call of getAllCalls) {
-    const start = call[1] ? call.index + call[0].lastIndexOf('{') : -1;
-    const end = start >= 0 ? findMatchingBrace(content, start) : -1;
-    const options = end >= 0 ? content.slice(start + 1, end) : content;
-    // An aggregate elsewhere on the screen must not exempt an ordinary list query.
-    const hasAggregation = end >= 0 && topLevelKeys(options).includes('apply');
+  const serviceCalls = findCalls(content, /\b\w+Service\.(getAll|getSavedQuery)\b/g);
+  for (const call of serviceCalls) {
+    const owner = cursorHooks.find((hook) => call.start > hook.open && call.end < hook.end);
+    // Auxiliary lookups/totals outside a cursor hook do not inherit its paging
+    // contract. Named external loaders remain the owning workflow's responsibility.
+    if (!owner) continue;
+    const argumentsText = content.slice(call.open + 1, call.end);
+    if (call.name === 'getSavedQuery') {
+      if (!/\bmaxPageSize\s*:/.test(argumentsText) || !/\bnextLink\b/.test(argumentsText)) {
+        violations.push('Saved-query pages must pass maxPageSize and the complete returned nextLink to getSavedQuery.');
+      }
+      const hookOptions = content.slice(owner.open + 1, owner.end);
+      if (owner.name === 'useCursorListData' && !/\bcursorMode\s*:\s*['"]nextLink['"]/.test(hookOptions)) {
+        violations.push('Saved queries require useCursorListData cursorMode: "nextLink"; the default skip-token mode loses the saved-query continuation.');
+      }
+      continue;
+    }
+    const start = skipTrivia(content, call.open + 1);
+    if (content[start] !== '{') continue;
+    const end = findMatchingBrace(content, start);
+    if (end < 0) continue;
+    const options = content.slice(start + 1, end);
+    const hasAggregation = topLevelKeys(options).includes('apply');
     if (!hasAggregation && !/\bselect\s*:/.test(options)) {
       violations.push('Cursor-paginated Dataverse `getAll` calls must include `select` so heavy lists do not fetch every column.');
     }
     if (!hasAggregation && !/\borderBy\s*:/.test(options)) {
       violations.push('Cursor-paginated Dataverse `getAll` calls must include deterministic `orderBy`, including a unique key.');
     }
-    if (!/\bmaxPageSize\s*:/.test(content)) {
+    if (!/\bmaxPageSize\s*:/.test(options)) {
       violations.push('Cursor-paginated Dataverse `getAll` calls must use SDK `maxPageSize` for page size. `top` alone is a capped first page, not server paging.');
     }
-    if (!/\b(skipToken|skiptoken|nextLink|pageParam|fetchNextPage|loadMore)\b/.test(content)) {
+    if (!/\b(skipToken|skiptoken|pageParam)\b/.test(options)) {
       violations.push('Cursor-paginated Dataverse reads must carry the SDK cursor (`skipToken`) or a React Query next-page path. `top: 50` alone is only a cap.');
     }
-    if (/\bskip\s*:/.test(content) && !/\bskipToken\s*:/.test(content)) {
+    if (/\bskip\s*:/.test(options) && !/\bskipToken\b/.test(options)) {
       violations.push('Cursor-paginated Dataverse reads must not use SDK `skip`; use returned `skipToken` for the next page.');
-    }
-  }
-
-  if (hasSavedQuery) {
-    if (!/\bmaxPageSize\s*:/.test(content) || !/\bnextLink\s*(?:[:,}])/.test(content)) {
-      violations.push('Saved-query pages must pass maxPageSize and the complete returned nextLink to getSavedQuery.');
-    }
-    if (/\buseCursorListData(?:<[^;\n]*>)?\s*\(/.test(content)
-      && !/\bcursorMode\s*:\s*['"]nextLink['"]/.test(content)) {
-      violations.push('Saved queries require useCursorListData cursorMode: "nextLink"; the default skip-token mode loses the saved-query continuation.');
     }
   }
 
