@@ -42,6 +42,11 @@ services/features actually used. Missing services, stale generated options,
 and failed type-checks are blockers, not permission to hand-edit generated code.
 Include the verified features alongside the Generated Services snapshot.
 Recheck after dependency, binding, environment, or generated-code changes.
+This is a query-API check, not a native-release admission gate. Follow the
+[local-development policy](mobile-release-lifecycle.md#local-installation-and-startup-are-not-release-admission-gates):
+unverified native compatibility must not block local preparation or startup.
+An unavailable query API affects only the requested query feature, not
+unrelated existing reads or source edits.
 
 ### Existing apps: manual prerequisites
 

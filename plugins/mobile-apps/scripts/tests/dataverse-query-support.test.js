@@ -310,10 +310,13 @@ test('query guidance preserves the base release workflow and leaves refresh manu
   assert.match(skill, /Offer A Coordinated Native Release Or Host Repair/);
   assert.match(skill, /Do not execute data-source\s+refreshes/);
   assert.match(skill, /does not bypass the coordinated release\/approval rules/);
+  assert.match(skill, /compatibility repairs that preserve existing behavior still follow the\s+test-copy repair loop/);
   assert.doesNotMatch(skill, /scope\s+updates to `@microsoft\/power-apps` and `@microsoft\/power-apps-cli`/);
   const reference = fs.readFileSync(path.join(pluginRoot, 'shared/references/data-performance.md'), 'utf8');
   assert.match(reference, /never\s+installs packages, starts `\/check-updates`, refreshes sources/);
   assert.match(reference, /manual guidance, not an instruction for the agent to execute/);
+  assert.match(reference, /not a native-release admission gate/);
+  assert.match(reference, /unverified native compatibility must not block local preparation or startup/);
 });
 
 test('all query-producing surfaces reference the shared contract or capability checker', () => {
