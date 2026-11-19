@@ -297,8 +297,27 @@ test('PDF viewer compares URI behavior and installed version, not just an export
   const versionGate = section(skill('add-pdf-viewer'), '### 2. Verify the app-matched release and import path');
   assert.match(versionGate, /resolve-mobile-release\.js/);
   assert.match(versionGate, /file URI support requires the PDF 0\.2\.9\+ contract/);
-  assert.match(versionGate, /If resolution fails,\s+STOP/);
-  assert.match(versionGate, /exact leaf\/version is included/);
+  assert.match(versionGate, /--local-development/);
+  assert.match(versionGate, /shared\s+local-development policy/);
+  assert.match(versionGate, /import-selection rules/);
+});
+
+test('native wrapper and import gates allow installed APIs with unverified local context', () => {
+  const gate = section(native, '## Native capability gate');
+  assert.match(gate, /Strict context[\s\S]*exact installed package\/version[\s\S]*published inventory/);
+  assert.match(gate, /Local context[\s\S]*local-development-only[\s\S]*no published\s+inventory is required/);
+  assert.match(gate, /installed `expo-haptics` APIs can support an approved\s+local wrapper/);
+  const verify = section(native, '### Step 4 — Verify installed API in context');
+  assert.match(verify, /In local context,[\s\S]*without requiring a resolved inventory/);
+  assert.match(verify, /In strict context,[\s\S]*published inventory/);
+  const imports = section(read('skills/add-native/references/native-controls.md'), '## Public imports are release-conditional');
+  assert.match(imports, /Strict context[\s\S]*exact installed aggregate or legacy leaf[\s\S]*published inventory/);
+  assert.match(imports, /Local context[\s\S]*public exports, docs and types;[\s\S]*no published inventory is required/);
+  assert.match(imports, /matching installed legacy\s+leaf/);
+  assert.match(imports, /Keep Player\/base compatibility unverified/);
+  for (const helper of ['add-pdf-viewer', 'add-pen-input', 'add-geolocation']) {
+    assert.match(skill(helper), /import-selection rules to\s+the\s+strict\/local context/, helper);
+  }
 });
 
 test('pen capture-only reuse cannot conceal required Image/File normalization', () => {

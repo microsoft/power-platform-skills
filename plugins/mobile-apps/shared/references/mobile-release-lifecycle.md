@@ -13,17 +13,46 @@ player or wrapped binary contains the same native runtime.
 node "${PLUGIN_ROOT}/scripts/resolve-mobile-release.js" --project-root '<working_dir>'
 ```
 
-Only exit 0 authorizes using the returned release as a native dependency
-baseline. Pass the sanitized result to planners/builders, not a copy of
+Only strict resolution with exit 0 authorizes using the returned release as a
+native dependency baseline. Pass the sanitized result to planners/builders, not a copy of
 `app.json`, auth settings, or connection strings. Never substitute the plugin's
 bundled `template/package.json`. An old app does not gain capabilities when its
 plugin is updated.
+
+### Local installation and startup are not release-admission gates
+
+For local creation, editing and startup preflight, use:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/resolve-mobile-release.js" --project-root '<working_dir>' --local-development
+```
+
+This mode reads recorded requirements only, with no registry/lock/inventory
+admission. It reports a warning, exit 0 and
+`validationScope: "local-development-only"` with
+`packageCompatibility: "unverified"`. This is not a resolved release or evidence
+of native support. Continue approved installation, preparation and local code
+generation against installed public APIs; preserve unverified status in all
+planner/builder/helper handoffs. Missing APIs require a scoped capability
+decision, not an assumed package installation or Player/base change.
+Do not force repair/upgrades before trying the app. If Dev Player actually fails,
+invoke `/debug-app` and compare installed packages with the actual Player runtime.
+
+Use `validate-mobile-files.js --local-development` for local changed-file checks.
+It retains forbidden-package, vendor-source and file-safety policies, plus exact
+JS-plan approval and scoped installed-closure checks for added/changed libraries, without
+requiring native admission. npm installation and TypeScript/bundle checks still
+apply; this mode grants no dependency/behavior-change approval.
+Deployment still requires
+strict project/base validation; local mode cannot select a release or deployment
+target. Omit the flag for strict diagnostics and existing debug/update repairs.
 
 The protected source is `app.json` → `expo.extra.powerappsNative`:
 `schemaVersion`, `templateVersion`, and per-platform `nativeRuntimeVersions`.
 These are not npm versions. Preserve them during preparation and ordinary app
 edits. Only a successful host migration may advance them. Missing, malformed,
-or unknown state blocks native work; do not backfill it from installed packages.
+or unknown state blocks strict native admission, not approved local wrappers;
+do not backfill it from installed packages.
 App-owned extras, telemetry preferences, branding, navigation, authentication,
 offline settings, and custom instruction files remain customer-owned.
 Tenant settings such as `tenantMode`, `appDisplayName`, `appName` and
@@ -54,10 +83,20 @@ the helper never treats a missing hash as success.
 The published host's `compatibility/current.json` owns target template/runtime
 requirements, managed dependencies and migration references. A matching published
 template's protected metadata and packaged lock provide the immutable native
-inventory, including nested packages. The app's own lock is checked against that
-reference; it is not allowed to declare new native packages compatible with a
-fixed binary. Missing or malformed metadata, fingerprint disagreement, an
-unpublished/unfinalized target, and dependency drift remain blockers.
+inventory, including nested package versions. The release dependency gate is
+limited to the published first-party host, offline, assets, auth, common,
+controls, push-notifications and template packages under
+`@microsoft/power-apps-native-*`. It compares their identities and exact versions,
+not npm hoisting paths. Equivalent declaration ranges are allowed when the
+installed version satisfies both the app and host requirements.
+It does not compare third-party versions (including Expo, React Native and React)
+or JavaScript/tooling versions with the template lock. The app's own manifest,
+lock and installation must still agree; npm/Expo checks remain required.
+Package-owned offline integrity, peers and runtime requirements remain enforced.
+This narrow gate alone does not certify third-party native or Player compatibility.
+Missing or malformed metadata, fingerprint disagreement, an
+unpublished/unfinalized target, and incompatible first-party dependency drift remain
+blockers.
 
 Inspect a target without changing the app:
 
@@ -96,9 +135,13 @@ retain their separate archive validation. Explicit template selections remain
 attached to subsequent project resolution rather than silently choosing a
 different, newer template with the same runtime.
 
+Automatic selection skips otherwise valid templates whose managed native versions
+do not satisfy the selected host, and continues searching compatible publications.
+Malformed publications still block; explicit template selections never fall back.
+
 Package compatibility and binary availability are separate. A same-runtime
 patch/minor host update needs no new Player/base record. Native changes need a
-host major, a template migration and matching native binaries before those
+template migration and matching native binaries before those
 features can run. Compare actual Player metadata when available; do not invent
 store availability or a future release date. Wrap must supply and verify its
 selected base's version, native runtime and fingerprint before deployment.
@@ -156,8 +199,8 @@ against the installed SDK's bundled versions; it does not skip validation or
 adopt newer online recommendations. Keep npm installation, Expo Doctor,
 configuration, TypeScript and bundle checks in their normal environment.
 Do not use target-reference `NODE_PATH` instead of the source dependency context.
-Preview one edge with `--project '<preview_dir>' --dry-run`, then apply only an
-approved clean edge with the same CLI and its normal validated installation.
+Preview the complete chain with `--project '<preview_dir>' --dry-run`, then apply
+the approved clean plan with the same CLI and its normal validated installation.
 An intermediate write-only operation must use `--no-install` separately; it
 does not advance state and is not completed migration.
 
@@ -168,8 +211,8 @@ pins distinguishable from genuine customer customizations.
 Published migrations use the host-owned strict npm installer and guarded lock
 regeneration. A broken published CLI requires a producer fix; do not locally
 rewrite first-party packages or use Player-build scripts to repair an app.
-After every edge, recheck the target requirements and run changed-file validation before
-advancing through the reviewed migration chain.
+After the transaction, recheck the final target requirements and run changed-file
+validation against the reviewed aggregate diff.
 
 During the Host-owned native migration/repair in `/check-updates` Step 2, do not
 run strict app-lock or installed-package/native inventory admission. The host
@@ -192,6 +235,9 @@ the package-scoped rollback. Store the snapshot in the app's recovery directory;
 creation refuses an existing file or a directory resolving outside the app.
 Never use `--upgrade-only` or `--requirements-only`
 alone as proof that a JavaScript update did not introduce native dependencies.
+
+A failed upgrade check pauses application, not diagnosis. Follow the
+[`/check-updates` repair loop](../../skills/check-updates/SKILL.md#explain-choices-clearly-and-work-through-fixable-problems).
 
 Compare app requirements with the actual supported counters of a selected Player
 when available. A mismatch requires a matching binary or an approved migration,
@@ -239,9 +285,10 @@ Runtime counter or fingerprint changes require a published template migration.
 No independent host, Expo, React Native, controls, or other native package bumps
 are permitted.
 
-At published planning, a native transition must target a **new host major** and
-a host-owned template migration, not only new runtime counters. Producers own
-the coordinated host/template release-version rules.
+At published planning, a native transition requires a host-owned template
+migration, not only new runtime counters. Native changes may ship in a host
+patch/minor; an Expo SDK major requires a host major. Actual source-to-target
+host majors cannot be skipped. Producers own the coordinated release-version rules.
 Published host and template identities require exact stable versions; prerelease
 hosts are restricted to the diagnostic contract. Scaffoldable local diagnostics and controlled private prerelease targets require
 a new host and template package major for a native transition.
@@ -249,8 +296,9 @@ Previously verified `0.x` source-version `upgrade-inspection-only` artifacts
 instead report the required production major and cannot claim to satisfy that
 production release requirement.
 
-The currently supported `upgrade-template` CLI previews **one edge** per call
-with `--dry-run`. It has no promised JSON/multi-edge planning API or
+The current `upgrade-template` CLI previews the **entire remaining chain**
+with `--dry-run`, composes its configuration changes in memory and installs only
+the selected release's final dependency graph once. It has no promised JSON API or
 `--from-version` flag. `--no-install` does not advance template state. A nonzero
 dry-run can mean conflicts, not just a broken command. Diagnose its sanitized
 output; never treat every failure as a clean preview or apply it to the real app.
@@ -279,8 +327,8 @@ An older published host without a safe install path requires a producer fix,
 not a force/legacy-peer bypass or a skill-authored repair.
 
 To approve a whole chain, first rehearse it in a user-approved private disposable
-copy of the app, with the exact target host, normal validated installs, and a
-separate preview and diff for **every edge**. Record source/target state and
+copy of the app, with the exact target host, one final validated installation, and
+an aggregate preview containing **every edge**. Record source/target state and
 customer conflicts throughout. Stop on conflicts, no progress, skipped edges,
 overshoot, unsupported CLI behavior, or an interrupted journal. Never guess
 later operations from the first preview. If a complete safe rehearsal cannot
@@ -291,7 +339,7 @@ plan with the user before touching the real app. Approval of the rehearsal is
 not approval of application. Preserve local uncommitted changes with a bounded
 file snapshot; never use a Git reset. Recheck source bytes and dependency state
 after approval. Any changed input or newly discovered operation invalidates
-approval. Apply only the reviewed sequence and validate after each edge.
+approval. Apply only the reviewed transaction and validate its final state.
 
 ## Controls and binary boundaries
 

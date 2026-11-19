@@ -189,7 +189,7 @@ test('controls adoption is conditional and documents the public aggregate contra
   assert.match(source, /Expo 55/);
   assert.match(source, /not evidence of Expo 57 compatibility/);
   assert.match(source, /Do not install the aggregate to[\s\S]{0,20}fix older binaries/);
-  assert.match(source, /Legacy leaf imports are allowed only when the resolved release actually includes[\s\S]{0,50}matching leaf and version/);
+  assert.match(source, /Legacy leaf imports follow the same strict\/local rules for the matching version/);
   assert.match(source, /installed public README, exports, and types/);
 });
 
@@ -208,7 +208,6 @@ test('control wrapper examples guard platforms before lazy literal subpath impor
     assert.doesNotMatch(example, /from ['"]@microsoft\/power-apps-native-/);
     assert.doesNotMatch(example, /import\(['"]@microsoft\/power-apps-native-controls['"]\)/);
     assert.match(source, /legacy/i);
-    assert.match(source, /verified release|resolved release/);
   }
 });
 
@@ -259,7 +258,8 @@ test('source-only editing and JS planning stay available without a native compat
   const edit = read('skills/edit-app/SKILL.md');
   const js = read('shared/references/javascript-dependency-planning.md');
   const version = read('shared/version-check.md');
-  assert.match(edit, /block native mutations, not[\s\S]{0,60}pure source\/UI planning and editing/);
+  assert.match(edit, /source-only work can use installed contracts/);
+  assert.match(edit, /Do not force repair before local startup/);
   assert.match(edit, /exact verified release/);
   assert.match(edit, /Release context: <sanitized resolved tuple/);
   assert.match(edit, /Approve and apply/);

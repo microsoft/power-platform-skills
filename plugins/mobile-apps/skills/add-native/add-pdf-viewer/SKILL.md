@@ -35,19 +35,18 @@ If this fails, tell the user to run `/create-mobile-app` first and STOP.
 
 ```bash
 cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
-node "${PLUGIN_ROOT}/scripts/resolve-mobile-release.js" --project-root '<working_dir>'
+node "${PLUGIN_ROOT}/scripts/resolve-mobile-release.js" --project-root '<working_dir>' --local-development
 ```
 
 Read [release lifecycle](../../../shared/references/mobile-release-lifecycle.md)
-and [native controls](../references/native-controls.md). If resolution fails,
-STOP before writing wrappers. Do not install packages, run local native builds,
-or edit native config. Check installed docs/types against the resolved native
-inventory; file URI support requires the PDF 0.2.9+ contract in the binary.
+and [native controls](../references/native-controls.md), including the shared
+local-development policy. Do not install packages, run local native builds,
+or edit native config. Apply the native-controls import-selection rules to the
+strict/local context; file URI support requires the PDF 0.2.9+ contract in the binary.
 
-The example below is conditional on a verified release containing
-`@microsoft/power-apps-native-controls/pdf`. For a verified legacy release,
-replace only the literal import with `@microsoft/power-apps-native-pdf-viewer`
-after confirming that exact leaf/version is included. Do not import the root
+The example below uses `@microsoft/power-apps-native-controls/pdf`. When the
+import-selection rules select the legacy leaf, replace only the literal import
+with `@microsoft/power-apps-native-pdf-viewer`. Do not import the root
 aggregate or emit a runtime fallback between packages.
 
 ### 2a. Reconcile requested artifacts

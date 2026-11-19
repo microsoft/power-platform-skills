@@ -46,12 +46,12 @@ If this fails, tell the user to run `/create-mobile-app` first and STOP.
 ### 2. Verify the app's release and packages
 
 Read [release lifecycle](../../../shared/references/mobile-release-lifecycle.md)
-and [native controls](../references/native-controls.md). Resolve the app before
-native mutations; unknown/missing records block even if a dependency is present.
+and [native controls](../references/native-controls.md). Use the shared
+local-development policy for installed APIs with unverified compatibility.
 
 ```bash
 cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
-node "${PLUGIN_ROOT}/scripts/resolve-mobile-release.js" --project-root '<working_dir>' || exit $?
+node "${PLUGIN_ROOT}/scripts/resolve-mobile-release.js" --project-root '<working_dir>' --local-development || exit $?
 node -e "const p=require('./package.json'); const deps={...p.dependencies,...p.devDependencies}; const required='expo-print'; if (!deps[required]) { console.error('MISSING: expo-print is not in package.json. The template/app must already ship it for /add-native pdf-report. This skill will not install it or edit native config. Capability not added.'); process.exit(1); } console.log('OK: expo-print package present'); console.log(deps['expo-sharing'] ? 'OK: expo-sharing package present' : 'OPTIONAL_MISSING: expo-sharing is not in package.json; generated PDFs can be created/viewed/uploaded, but sharing helpers must not be generated.');"
 ```
 

@@ -20,8 +20,8 @@ every shell call and file tool, not a previous shell's cwd.
 **Entry routing:** use the shared [App feature entry points](../../shared/shared-instructions.md#app-feature-entry-points)
 preflight before the workflow below.
 
-Generate a typed wrapper under `src/native/` for a native capability in the app's
-[verified release context](../../shared/references/mobile-release-lifecycle.md).
+Generate a typed wrapper under `src/native/` using the app's
+[release or unverified local context](../../shared/references/mobile-release-lifecycle.md).
 Screens import the wrapper instead of touching native packages directly.
 Read [native controls](references/native-controls.md) for conditional aggregate
 adoption, legacy imports, permission boundaries, and location ownership.
@@ -31,7 +31,7 @@ adoption, legacy imports, permission boundaries, and location ownership.
 1. **Never run `npx expo install`, `npm install`, or `yarn add` for a native module.** Native support is fixed by the app-matched verified release and selected player/base, not the newest bundled template or the customer's manifest.
 2. **Never edit `app.config.js`** — plugins, `ios.infoPlist`, `android.permissions`, or anything else. Native config belongs to the verified fixed-capability base; arbitrary additions cannot be honored at rewrap time.
 3. **Never edit `package.json` `dependencies` for native modules.** Native means the package ships platform source/projects, a podspec, codegen, an Expo module/config plugin, or `react-native.config.js`; a package-name prefix alone is not proof. Pure-JavaScript dependencies are out of scope for `/add-native` and are installed from an approved `JavaScript Dependencies` plan by `/create-mobile-app` or `/edit-app`.
-4. **If release resolution fails, or package/version/native inventory disagree — STOP before native mutation.** A dependency being present is necessary, not sufficient. Do not install the controls aggregate or newer leaf to repair an older binary.
+4. **Do not claim Player/base support from package presence.** Follow the shared [local-development policy](../../shared/references/mobile-release-lifecycle.md#local-installation-and-startup-are-not-release-admission-gates) for approved wrappers against installed APIs; missing packages/APIs still block that capability, not trying the rest of the app. Do not install the controls aggregate or newer leaf to repair an older binary.
 5. **Keep inclusion, declarations, grants, and usage separate.** The base owns OS declarations. Dependency/config toggles do not remove unused default Android permissions; different declarations require another verified base. Optional permission wrapping is deferred.
 
 ## Routing — `/add-native` is the public entry point
@@ -57,14 +57,20 @@ For every other capability listed below, this skill writes the wrapper directly.
 Before adding any native control or wrapper, verify the project and run the
 package-contract resolver in Step 1.
 
-Use its sanitized tuple as the shared resolved context for helpers/planners/builders.
-Unknown/missing published contracts block native mutations, not permission to
-assume a runtime. No separate skills release list is required. Classify the intent, resolve
-the exact package and version from this app's inventory, confirm it is not
-runtime-banned, and verify input/output/storage constraints. The newest bundled
-template is never a runtime allowlist. Every “present” requirement below means
-present in both this release context and the installed app, with compatible
-native support; manifest presence alone cannot pass the gate.
+Pass its sanitized context to helpers/planners/builders. Apply one branch:
+
+- **Strict context:** require the exact installed package/version in the resolved
+  published inventory with compatible native support.
+- **Local context** (`validationScope: "local-development-only"`): no published
+  inventory is required. Inspect the exact installed version, public exports,
+  docs and types for the requested API, and preserve native compatibility as
+  unverified. For example, installed `expo-haptics` APIs can support an approved
+  local wrapper without claiming Player/base support.
+
+In both branches, confirm the package is not runtime-banned and verify
+input/output/storage constraints. Every “present” requirement below follows
+this branch policy; manifest presence alone is insufficient. The newest bundled
+template is never a runtime allowlist.
 
 For controls, select aggregate subpaths or legacy leaves using the
 [version-conditional import contract](references/native-controls.md).
@@ -85,7 +91,7 @@ published host 0.4.0 lacks it. No root barrel or barcode subpath is available.
 | Continuous/background GPS tracking with durable Dataverse upload | `/add-native geolocation` | Resolved controls `/geolocation` or matching legacy background-location leaf | Do not use a one-shot read for tracking; background-location 0.2.3 tracking uses background permissions even with `trackInBackground: false` |
 | Tactile feedback for presses, selections, and operation results | `/add-native haptics` | `expo-haptics` present | Use the typed wrapper and pair every haptic with visible UI feedback |
 | Store generated PDF/signature artifact | Generated Dataverse services after parent row exists | File/Image column or child Evidence/Attachment table exists | Never put File bytes in create/update JSON |
-| Native capability not listed in this table | Resolve from the app-matched native inventory, then add an inline wrapper only when installed and not runtime-banned | Exact relevant package/version in the verified release | If no relevant package exists, or the package is runtime-banned, add a transparency note and stop |
+| Native capability not listed in this table | Apply the strict/local branch above, then add an inline wrapper only when installed and not runtime-banned | Exact installed package/version and requested API; published inventory in strict context | If no relevant package exists, or the package is runtime-banned, add a transparency note and stop |
 
 Handle multi-part requests row-by-row. Example: "capture signature and attach signed report PDF" requires `pen-input`, `pdf-report`, Dataverse artifact storage, and possibly `sharing`; do not add only the native capability while leaving storage or screen states undefined. The map is not closed: for new shipped packages, resolve by capability semantics, use the directly matching package when safe, and ask once only if multiple installed packages plausibly match.
 
@@ -155,9 +161,9 @@ Use `/add-native` wrappers only when the workflow is not a Dataverse File/Image 
 ## Supported capabilities
 
 Apply the Native capability gate above. This is a capability map, not release
-evidence. Legacy leaf names below are aliases only; use aggregate subpaths when
-the resolved release includes controls, and keep a leaf import only when that
-release includes the matching leaf. Read installed public docs/types first.
+evidence. Select aggregate subpaths or legacy leaves through the
+[strict/local import-selection rules](references/native-controls.md#public-imports-are-release-conditional).
+Read installed public docs/types first.
 
 | Capability | Module | Wrapper to generate | Notes |
 |---|---|---|---|
@@ -165,16 +171,16 @@ release includes the matching leaf. Read installed public docs/types first.
 | `image-picker`, `gallery`, `expo-image-picker` | `expo-image-picker` | `src/native/camera.ts` (`pickImage`) | `/add-native` routes internally to `add-camera`; preserve compatible existing re-exports |
 | `barcode-scanner`, `qr-scanner`, `scanner`, `barcode`, `qr` | `expo-camera` | `src/native/barcodeScanner.tsx` | `/add-native` routes internally to `add-camera` |
 | `document-picker` | `expo-document-picker` | `src/native/documentPicker.ts` | Picks/imports user-selected files (PDF, docs, etc.) from the device |
-| `pdf-viewer`, `native-pdf-viewer`, `pdf-control`, `open-pdf`, `@microsoft/power-apps-native-pdf-viewer` | Controls `/pdf` or verified legacy PDF leaf | `src/native/pdfViewer.ts` | `/add-native` routes internally to `add-pdf-viewer`; require the resolved contract's HTTPS/file URI support |
+| `pdf-viewer`, `native-pdf-viewer`, `pdf-control`, `open-pdf`, `@microsoft/power-apps-native-pdf-viewer` | Controls `/pdf` or matching installed legacy PDF leaf | `src/native/pdfViewer.ts` | `/add-native` routes internally to `add-pdf-viewer`; require the selected API's HTTPS/file URI support |
 | `pdf-report`, `pdf-export`, `generate-pdf`, `print-report`, `evidence-packet` | `expo-print` (+ optional `expo-sharing`) | `src/native/pdfReport.ts` | `/add-native` routes internally to `add-pdf-report`; generated local files are shared only when `expo-sharing` is present, or uploaded to Dataverse |
-| `pen-input`, `signature`, `ink`, `draw`, `@microsoft/power-apps-native-pen-input` | Controls `/pen` or verified legacy pen leaf | `src/native/penInput.ts` | `/add-native` routes internally to `add-pen-input`; captures PNG data URI |
-| `geolocation`, `location-tracking`, `background-location`, `gps-tracking`, `geo-tracking`, `@microsoft/power-apps-native-bglocation` | Controls `/geolocation` or verified background-location leaf | `src/native/geolocation.ts` | `/add-native` routes internally to `add-geolocation`; tracking + durable Dataverse sync, distinct from one-shot `location` |
+| `pen-input`, `signature`, `ink`, `draw`, `@microsoft/power-apps-native-pen-input` | Controls `/pen` or matching installed legacy pen leaf | `src/native/penInput.ts` | `/add-native` routes internally to `add-pen-input`; captures PNG data URI |
+| `geolocation`, `location-tracking`, `background-location`, `gps-tracking`, `geo-tracking`, `@microsoft/power-apps-native-bglocation` | Controls `/geolocation` or matching installed background-location leaf | `src/native/geolocation.ts` | `/add-native` routes internally to `add-geolocation`; tracking + durable Dataverse sync, distinct from one-shot `location` |
 | `secure-store` | `expo-secure-store` | `src/native/secureStore.ts` | |
 | `file-system` | `expo-file-system` | `src/native/fileSystem.ts` | |
 | `sharing` | `expo-sharing` | `src/native/sharing.ts` | |
 | `location` | Resolved controls `/geolocation` or matching leaf; independently verified `expo-location` if applicable | `src/native/location.ts` | One-shot only; geolocation helper skips tracking/table setup |
-| `biometrics`, `local-authentication` | `expo-local-authentication` | `src/native/biometrics.ts` | Use only when included in the app's verified release |
-| `clipboard` | `expo-clipboard` | `src/native/clipboard.ts` | Use only when included in the app's verified release |
+| `biometrics`, `local-authentication` | `expo-local-authentication` | `src/native/biometrics.ts` | Apply the strict/local capability gate |
+| `clipboard` | `expo-clipboard` | `src/native/clipboard.ts` | Apply the strict/local capability gate |
 | `mail-composer`, `email-draft` | `expo-mail-composer` | `src/native/mailComposer.ts` | Opens native mail compose when the package is present; connectors still own server-side email sends |
 | `audio` | `expo-audio` | `src/native/audio.ts` | Use for audio recording/playback only when package is present |
 | `video` | `expo-video` | `src/native/video.ts` | Use for video playback only when package is present |
@@ -206,13 +212,13 @@ For custom workflows outside Dataverse File/Image form fields, use the `image-pi
 - Never put File column bytes in the create/update JSON body. File bytes are uploaded only after the parent row ID exists.
 - Screens must handle unsupported, cancelled, upload failed, and viewer failed states explicitly. Pen cancellation is a non-error result that screens can ignore.
 
-**Missing or gated packages:** the resolved release, installed versions, and
-matching native runtime are authoritative together. If any evidence is missing,
-stop with a transparency note; never claim native readiness from TypeScript alone.
+**Missing or gated packages:** apply the strict/local capability gate. Missing
+installed APIs or runtime bans stop that capability; absent published inventory
+alone does not stop local wrappers. Never claim native readiness from TypeScript.
 
 ## Workflow
 
-1. Verify project → 2. Resolve release and capability → 3. Auto-route to dedicated skill if one exists → 4. Verify package in resolved release → 5. Write wrapper → 6. Type-check → 7. Summary
+1. Verify project → 2. Resolve context and capability → 3. Auto-route to dedicated skill if one exists → 4. Verify installed API in context → 5. Write wrapper → 6. Type-check → 7. Summary
 
 ---
 
@@ -227,7 +233,7 @@ After the project gate succeeds, resolve its native contract:
 
 ```bash
 cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
-node "${PLUGIN_ROOT}/scripts/resolve-mobile-release.js" --project-root '<working_dir>'
+node "${PLUGIN_ROOT}/scripts/resolve-mobile-release.js" --project-root '<working_dir>' --local-development
 ```
 
 ### Step 2 — Resolve capability
@@ -278,11 +284,12 @@ esac
   `/add-native` remains the only user-facing command for these controls.
 - **INLINE:** continue to Step 4.
 
-### Step 4 — Verify module in the resolved release
+### Step 4 — Verify installed API in context
 
-Require a successful release resolution before this installed-manifest check.
-Confirm the exact installed version against the resolved inventory and read its
-public docs/types. A matching package name alone does not prove compatibility.
+Apply the Native capability gate's strict/local branch before this manifest
+check. In local context, inspect the installed version, exports and public
+docs/types without requiring a resolved inventory. In strict context, also
+confirm the exact version against the published inventory.
 
 ```bash
 cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
@@ -478,8 +485,8 @@ created/updated/reused paths and do not claim completion for unresolved artifact
 ```
 ✅ Native wrapper generated: <capability>
 ─────────────────────────────────────────────
-Module (release-matched)  : <package>@<resolved-version>
-Release context          : <verified-release-id>
+Module (installed)       : <package>@<installed-version>
+Release context          : <verified-release-id or local-development-only; compatibility unverified>
 Wrapper created           : src/native/<capability>.ts
 package.json              : unchanged ✓
 app.config.js             : unchanged ✓
@@ -497,8 +504,8 @@ Sample usage:
     showToast('Camera permission required');
   }
 
-⚠️  No local native build performed. Wrapper edits use the matching verified
-    player/base; package changes require a verified release migration.
+⚠️  No local native build performed. Local context leaves Player/base support
+    unverified; package changes require a verified release migration.
     Type-check alone does not prove native execution or permission grants.
 ─────────────────────────────────────────────
 ```
@@ -506,7 +513,6 @@ Sample usage:
 ## Notes
 
 - This skill never modifies `package.json`, `app.config.js`, `src/playerConfig.ts`, `src/generated/`, or any screen file.
-- For unlisted capabilities, resolve against the app's verified native inventory.
-  Missing support requires another verified release, not a new dependency or
-  configuration toggle. Do NOT install or configure native modules yourself.
+- For unlisted capabilities, apply the same strict/local capability gate.
+  Do NOT install or configure native modules yourself.
 - Pure-JavaScript libraries are out of scope for this skill. `/create-mobile-app` or `/edit-app` selects and installs them through [`shared/references/javascript-dependency-planning.md`](${PLUGIN_ROOT}/shared/references/javascript-dependency-planning.md); no native wrapper or Android/iOS rebuild is needed. The prohibition above applies only to packages with native source/config.

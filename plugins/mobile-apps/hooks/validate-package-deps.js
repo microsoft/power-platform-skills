@@ -151,6 +151,40 @@ function main(input) {
     fail('Diagnostic artifact mode is retired. Resolve the app against its published host and template packages.');
   }
   const explicit = toolInput.validation_mode === 'explicit-mobile-workflow';
+  const approved = approvedJsDependencies(toolInput);
+  if (explicit && toolInput.validation_scope === 'local-development') {
+    const before = toolInput.before_package_json ?? reconstructBefore(toolName, toolInput, content);
+    const baseline = before === null ? null : packageDeps(parseJson(before, 'previous package.json'));
+    // Installation workflows supply the pre-install manifest. Ordinary local
+    // checks have no dependency delta and must not re-admit existing packages.
+    const planned = baseline ? new Set(Object.keys(dependencies).filter((name) =>
+      dependencies[name] !== baseline[name] && !isRuntimePackage(name))) : new Set(approved.keys());
+    for (const name of planned) {
+      if (approved.get(name) !== dependencies[name]) {
+        fail(`Dependency \`${name}\` requires the same exact name/version from the user-approved JavaScript Dependencies plan.`);
+      }
+    }
+    if (planned.size) {
+      const installed = inspectInstalledPackages(projectRoot, null, planned);
+      // Existing root peers (e.g. React/RN) do not make a JS UI library native.
+      // Inspect only the planned packages' closures, without release admission.
+      const peers = new Set(Object.keys(dependencies).filter((name) => installed.has(`node_modules/${name}`)
+        && (!baseline || baseline[name] === dependencies[name]))
+        .map((name) => `node_modules/${name}`));
+      for (const name of planned) {
+        if (installed.get(`node_modules/${name}`)?.version !== approved.get(name)) {
+          fail(`Approved JavaScript dependency \`${name}\` must be installed at its exact approved version.`);
+        }
+        if (hasNativeClosure(installed, `node_modules/${name}`, peers)) {
+          fail(`Dependency \`${name}\` contains native/runtime code and cannot be added through a JavaScript Dependencies plan.`);
+        }
+      }
+    }
+    // Package policy still applies above, but a template-lock/native mismatch
+    // must not prevent npm installation or trying the app in Dev Player.
+    process.stderr.write('WARNING: Local development does not verify Dev Player/Wrap compatibility. Use /debug-app for observed native failures.\n');
+    return;
+  }
   if (explicit && toolInput.validation_scope === 'upgrade-only') {
     // The host CLI owns installation; upgrades rely on Expo/Doctor/TypeScript,
     // not this separate app-lock and native-inventory admission policy.
@@ -168,7 +202,6 @@ function main(input) {
     installed = inspectInstalledPackages(projectRoot);
     baseline = legacyBaseline(toolName, toolInput, content, projectRoot, installed);
   }
-  const approved = approvedJsDependencies(toolInput);
   const unchangedPeers = new Set(Object.entries(baseline).filter(([name, version]) => dependencies[name] === version
     && installed.has(`node_modules/${name}`)).map(([name]) => `node_modules/${name}`));
   for (const name of new Set([...Object.keys(baseline), ...Object.keys(dependencies)])) {

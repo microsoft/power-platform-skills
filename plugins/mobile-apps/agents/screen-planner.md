@@ -38,8 +38,8 @@ The planner gives you:
   for existing pure source/UI work. Read
   [release lifecycle](../shared/references/mobile-release-lifecycle.md); use the
   same context throughout planning and builder handoffs. Do not use the newest
-  bundled template as a runtime allowlist. Unknown/missing release records
-  block new/changed native use, not pure source/UI planning. Mark native
+  bundled template as a runtime allowlist. An explicit `local-development-only`
+  result follows the shared lifecycle policy, not a startup admission gate. Mark native
   compatibility unverified; approval and previews are not native validation.
   Treat sample APIs as illustrative: verify them against installed release
   docs/types before planning their use, rather than assuming newest-host APIs.

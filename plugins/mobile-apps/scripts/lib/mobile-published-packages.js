@@ -3,6 +3,7 @@
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const semver = require('../vendor/semver.cjs');
 const { runCliSync, CliLaunchError } = require('./process-runner');
 const { unpack, hashFile, readOfflineContract, verifyInstalledOfflineSdk } = require('./mobile-package-artifacts');
 const {
@@ -197,6 +198,7 @@ function templateState(template) {
 }
 
 function findTemplate(source, host, requestedVersion) {
+  const managed = validateHost(host);
   const versions = requestedVersion ? [requestedVersion]
     : source.versions().filter((version) => exactVersion(version, true)).sort((a, b) => compareVersions(b, a));
   for (const version of versions) {
@@ -227,6 +229,19 @@ function findTemplate(source, host, requestedVersion) {
     })) {
       requireValue(template.lock.packages[`node_modules/${name}`]?.version === version,
         'The template lock does not match the selected host Expo/React/React Native requirements.');
+    }
+    // Validate the publication against its own host before skipping an incompatible candidate.
+    const baselineContract = contractFromPackages(baseline, template);
+    const compatible = Object.values(managed).every((dependencies) => Object.entries(dependencies).every(([name, spec]) => {
+      if (name === HOST) return true;
+      const version = baselineContract.nativePackages[`node_modules/${name}`];
+      return version
+        ? spec.startsWith('file:./vendor/') || semver.satisfies(version, spec)
+        : !isRuntimePackage(name);
+    }));
+    if (!compatible) {
+      if (requestedVersion) requireValue(false, 'Selected host and template have incompatible managed native dependency requirements.');
+      continue;
     }
     return template;
   }
@@ -326,6 +341,8 @@ function planPublishedUpdate(projectRoot, hostVersion, options = {}) {
   const sourceRequirements = readSourceRequirements(projectRoot);
   requireValue(compareVersions(sourceRequirements.hostVersion, hostVersion) <= 0,
     'Selected published host would downgrade the app; choose a supported forward version.');
+  requireValue(semver.major(hostVersion) <= semver.major(sourceRequirements.hostVersion) + 1,
+    `Cannot skip host majors; upgrade to the latest supported ${semver.major(sourceRequirements.hostVersion) + 1}.x.x release first.`);
   const source = createSource({ ...options, cwd: projectRoot });
   const host = source.read(HOST, hostVersion);
   validateHost(host);
@@ -349,18 +366,9 @@ function planPublishedUpdate(projectRoot, hostVersion, options = {}) {
       }
     }
   }
-  const edges = [];
   for (let version = sourceRequirements.templateVersion; version < target.templateVersion; version += 1) {
     const matching = host.migrations.filter((migration) => migration.fromTemplateVersion === version);
     requireValue(matching.length === 1, 'The selected published host does not contain an unambiguous migration chain for this app.');
-    edges.push(matching[0]);
-  }
-  if (nativeChanged) {
-    const fromSpec = edges[0]?.packageTransitions?.dependencies?.[HOST]?.from;
-    const fromVersion = typeof fromSpec === 'string' ? fromSpec.replace(/^[~^]/, '') : sourceRequirements.hostVersion;
-    requireValue(exactVersion(fromVersion, true)
-      && BigInt(hostVersion.split('.')[0]) > BigInt(fromVersion.split('.')[0]),
-    'A native runtime transition requires a new host major; the published migration must identify the source host requirement.');
   }
   const hostInstallRequired = sourceRequirements.hostVersion !== hostVersion;
   return {

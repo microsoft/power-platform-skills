@@ -35,18 +35,18 @@ If this fails, tell the user to run `/create-mobile-app` first and STOP.
 
 ```bash
 cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
-node "${PLUGIN_ROOT}/scripts/resolve-mobile-release.js" --project-root '<working_dir>'
+node "${PLUGIN_ROOT}/scripts/resolve-mobile-release.js" --project-root '<working_dir>' --local-development
 ```
 
 Read [release lifecycle](../../../shared/references/mobile-release-lifecycle.md)
-and [native controls](../references/native-controls.md). Unknown/missing release
-records STOP native mutation. Match installed public docs/types and native
-inventory before using the example. Do not install packages or edit native config.
+and [native controls](../references/native-controls.md), including the shared
+local-development policy. Apply the native-controls import-selection rules to
+the strict/local context. Do not install packages or edit native config.
 
-The example uses `@microsoft/power-apps-native-controls/pen` only when the
-verified release contains it. A verified legacy release may instead use the
-literal `@microsoft/power-apps-native-pen-input` import if the matching leaf
-is included. Never import both, the aggregate root, or a runtime fallback.
+The example uses `@microsoft/power-apps-native-controls/pen`. When the
+import-selection rules select the legacy leaf, use the literal
+`@microsoft/power-apps-native-pen-input` import instead. Never import both,
+the aggregate root, or a runtime fallback.
 
 ### 2a. Reconcile requested artifacts
 

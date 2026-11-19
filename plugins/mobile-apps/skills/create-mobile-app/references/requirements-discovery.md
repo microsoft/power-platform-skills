@@ -24,7 +24,7 @@ Scan the user's description and wizard answers for these signals, then confirm i
 | "Teams", "chat", "message" | Teams connector |
 | "report", "dashboard", "history", "view all" | Read/list screens |
 
-Resolve every native signal against the app-version-matched context from `resolve-mobile-release.js`, following [mobile-release-lifecycle.md](../../../shared/references/mobile-release-lifecycle.md). Do not use the newest plugin template as an old app's inventory. If support or fixed-base declarations cannot be verified, block that capability instead of pretending it exists. Follow `agents/native-app-planner.md` Step 3.0 and `/add-native` for version-conditional controls/legacy-leaf routing.
+Resolve every native signal against the app-version-matched context from `resolve-mobile-release.js`, following [mobile-release-lifecycle.md](../../../shared/references/mobile-release-lifecycle.md), including its `local-development-only` policy for unverified local planning. Do not use the newest plugin template as an old app's inventory or invent missing packages/APIs. Follow `agents/native-app-planner.md` Step 3.0 and `/add-native` for version-conditional controls/legacy-leaf routing.
 
 Apply the shared
 [`connectivity-intent-ownership.md`](${PLUGIN_ROOT}/shared/references/connectivity-intent-ownership.md)

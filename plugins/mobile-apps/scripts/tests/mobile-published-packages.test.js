@@ -112,6 +112,22 @@ test('requirements-only inspection reads recorded state without a catalogue or r
   assert.deepEqual(f.requests, []);
 });
 
+test('local-development CLI reads requirements without lock, inventory or registry admission', (t) => {
+  const f = fixture(t);
+  fs.writeFileSync(path.join(f.projectRoot, 'package-lock.json'), 'not JSON');
+  fs.writeFileSync(path.join(f.projectRoot, 'node_modules/expo-haptics/package.json'), 'not JSON');
+  const result = spawnSync(process.execPath, [
+    path.resolve(__dirname, '../resolve-mobile-release.js'),
+    '--project-root', f.projectRoot, '--local-development',
+  ], { cwd: f.projectRoot, encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr);
+  const summary = JSON.parse(result.stdout);
+  assert.equal(summary.templateVersion, 1);
+  assert.equal(summary.hostVersion, '1.0.0');
+  assert.equal(summary.packageCompatibility, 'unverified');
+  assert.equal(summary.nativePackages, undefined);
+});
+
 test('published contract derives native pins from the template lock without inventing binary availability', (t) => {
   const f = fixture(t);
   const result = selectPublishedContract('1.0.0', f.options);
@@ -170,6 +186,60 @@ test('same-runtime host patch uses the existing compatible template without a Pl
   assert.match(result.binaryAvailability, /not-checked/);
 });
 
+test('same-runtime host selection accepts an older template SDK and CLI without retaining their JavaScript versions', t => {
+  const f = fixture(t);
+  const sdk = '@microsoft/power-apps';
+  const cli = '@microsoft/power-apps-cli';
+  const baseline = f.packages.get(`${HOST}@1.0.0`);
+  baseline.profile.managedDependencies[sdk] = '1.5.0';
+  baseline.profile.managedDevDependencies = { [cli]: '1.2.0' };
+  const template = f.packages.get(`${TEMPLATE}@1.0.0`);
+  for (const manifest of [template.manifest, template.lock.packages['']]) {
+    manifest.dependencies[sdk] = '1.5.0';
+    manifest.devDependencies = { [cli]: '1.2.0' };
+  }
+  template.lock.packages[`node_modules/${sdk}`] = { version: '1.5.0' };
+  template.lock.packages[`node_modules/${cli}`] = { version: '1.2.0' };
+  const selected = f.host('1.0.4');
+  selected.profile.managedDependencies[sdk] = '1.6.0';
+  selected.profile.managedDevDependencies = { [cli]: '1.4.1' };
+
+  const contract = selectPublishedContract('1.0.4', f.options);
+  assert.equal(contract.template.version, '1.0.0');
+  assert.equal(contract.managedDependencies.dependencies[sdk], '1.6.0');
+  assert.equal(contract.managedDependencies.devDependencies[cli], '1.4.1');
+  assert.equal(Object.hasOwn(contract.nativePackages, `node_modules/${sdk}`), false);
+  assert.equal(Object.hasOwn(contract.nativePackages, `node_modules/${cli}`), false);
+  assert.equal(planPublishedUpdate(f.projectRoot, '1.0.4', f.options).kind, 'host-repair');
+});
+
+test('template discovery skips a valid maintenance publication with incompatible managed native versions', t => {
+  const f = fixture(t);
+  const offline = '@microsoft/power-apps-native-offline';
+  for (const [hostVersion, templateVersion, sdkVersion] of [
+    ['1.1.0', '1.1.0', '0.2.2'],
+    ['1.0.5', '1.1.1', '0.2.3'],
+  ]) {
+    f.host(hostVersion).profile.managedDependencies[offline] = sdkVersion;
+    const template = f.template(templateVersion, hostVersion);
+    template.manifest.dependencies[offline] = sdkVersion;
+    template.lock.packages[''].dependencies[offline] = sdkVersion;
+    template.lock.packages[`node_modules/${offline}`] = { version: sdkVersion };
+  }
+  assert.equal(selectPublishedContract('1.0.5', { ...f.options, templateVersion: '1.1.1' }).template.version, '1.1.1');
+  assert.equal(selectPublishedContract('1.1.0', f.options).template.version, '1.1.0');
+  assert.equal(planPublishedUpdate(f.projectRoot, '1.1.0', f.options).target.template.version, '1.1.0');
+  assert.throws(() => selectPublishedContract('1.1.0', {
+    ...f.options, templateVersion: '1.1.1',
+  }), /incompatible managed native dependency/);
+
+  f.packages.get(`${HOST}@1.1.0`).profile.managedDependencies[offline] = '^0.2.2';
+  assert.equal(selectPublishedContract('1.1.0', f.options).template.version, '1.1.1');
+
+  f.packages.get(`${TEMPLATE}@1.1.1`).lock.packages[`node_modules/${offline}`].version = 'invalid';
+  assert.throws(() => selectPublishedContract('1.1.0', f.options), /invalid native lock entry/);
+});
+
 test('a non-native template migration advances template state without changing native runtime', (t) => {
   const f = fixture(t);
   f.host('1.1.0', 2, 1, [migration('1.1.0')]);
@@ -204,11 +274,41 @@ test('a manually updated host does not hide the older recorded template or requi
   assert.equal(result.target.templateVersion, 2);
 });
 
-test('native changes cannot be hidden in a patch or minor target', (t) => {
+test('native patch/minor transitions are supported through an explicit template migration', (t) => {
   const f = fixture(t);
   f.host('1.1.0', 2, 2, [migration('1.1.0')]);
   f.template('1.1.0', '1.1.0');
-  assert.throws(() => planPublishedUpdate(f.projectRoot, '1.1.0', f.options), /new host major/);
+  const result = planPublishedUpdate(f.projectRoot, '1.1.0', f.options);
+  assert.equal(result.kind, 'template-upgrade');
+  assert.equal(result.nativeChanged, true);
+  f.host('3.0.0', 2, 2, [migration('3.0.0')]);
+  assert.throws(() => planPublishedUpdate(f.projectRoot, '3.0.0', f.options), /2\.x\.x release first/);
+});
+
+test('0.5.1 and 1.0.3 apps select the final 1.0.4 native release without acquiring the intermediate host', async (t) => {
+  for (const [sourceHost, version] of [['0.5.1', 1], ['1.0.3', 2]]) {
+    await t.test(sourceHost, (t) => {
+      const f = fixture(t);
+      modifyJson(path.join(f.projectRoot, 'node_modules', HOST, 'package.json'), (pkg) => { pkg.version = sourceHost; });
+      modifyJson(path.join(f.projectRoot, 'app.json'), (app) => {
+        Object.assign(app.expo.extra.powerappsNative, {
+          templateVersion: version, nativeRuntimeVersions: { android: version, ios: version },
+        });
+      });
+      const first = migration('1.0.3', '^0.5.1');
+      const next = {
+        ...migration('1.0.4', '^1.0.3'), id: 'template-v3', fromTemplateVersion: 2, toTemplateVersion: 3,
+      };
+      f.host('1.0.4', 3, 3, [first, next]);
+      f.template('1.0.4', '1.0.4');
+      const result = planPublishedUpdate(f.projectRoot, '1.0.4', f.options);
+      assert.equal(result.kind, 'template-upgrade');
+      assert.equal(result.target.host.version, '1.0.4');
+      assert.equal(result.target.templateVersion, 3);
+      assert.equal(result.nativeChanged, true);
+      assert.equal(f.requests.includes(`${HOST}@1.0.3`), false);
+    });
+  }
 });
 
 test('unpublished or unfinalized targets fail before mutation without falling back', (t) => {
@@ -242,22 +342,26 @@ test('current-version upgrade planning does not read the app lock or dependency 
   assert.equal(planPublishedUpdate(f.projectRoot, '1.0.0', f.options).kind, 'current');
 });
 
-test('native inventory comes from the published lock, never from the customer lock', (t) => {
+test('first-party inventory comes from the published lock, never from the customer lock', (t) => {
   const f = fixture(t);
+  const name = '@microsoft/power-apps-native-common';
+  const installPath = `node_modules/${name}`;
+  f.packages.get(`${TEMPLATE}@1.0.0`).lock.packages[installPath] = { version: '1.0.0' };
+  addDependency(f.projectRoot, name, '1.0.0', { section: null });
   const project = () => readProject(f.projectRoot, readPlatformContext());
   validateProjectAgainstRelease(project(), projectContract(f.projectRoot, project(), f.options));
-  modifyJson(path.join(f.projectRoot, 'node_modules/expo-haptics/package.json'), (pkg) => { pkg.version = '1.0.1'; });
-  modifyJson(path.join(f.projectRoot, 'package-lock.json'), (lock) => { lock.packages['node_modules/expo-haptics'].version = '1.0.1'; });
+  modifyJson(path.join(f.projectRoot, installPath, 'package.json'), (pkg) => { pkg.version = '1.0.1'; });
+  modifyJson(path.join(f.projectRoot, 'package-lock.json'), (lock) => { lock.packages[installPath].version = '1.0.1'; });
   const changed = project();
   assert.throws(() => validateProjectAgainstRelease(changed, projectContract(f.projectRoot, changed, f.options)), /native inventory/);
 });
 
-test('custom native code cannot extend the fixed runtime', (t) => {
+test('third-party native packages are outside the first-party release gate', (t) => {
   const f = fixture(t);
   addDependency(f.projectRoot, 'ordinary-wrapper', '1.0.0');
   fs.mkdirSync(path.join(f.projectRoot, 'node_modules/ordinary-wrapper/android'));
   const project = readProject(f.projectRoot, readPlatformContext());
-  assert.throws(() => validateProjectAgainstRelease(project, projectContract(f.projectRoot, project, f.options)), /not managed|Unreviewed native/);
+  assert.doesNotThrow(() => validateProjectAgainstRelease(project, projectContract(f.projectRoot, project, f.options)));
 });
 
 test('runtime labels cannot excuse mismatching published fingerprints', (t) => {

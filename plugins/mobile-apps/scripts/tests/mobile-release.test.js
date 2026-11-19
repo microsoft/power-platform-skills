@@ -539,6 +539,96 @@ test('declared managed dependencies cannot be moved to another section', (t) => 
   blocked(runCli(fixture, ['--project-root', fixture.projectRoot]), /Managed dependency/);
 });
 
+test('equivalent first-party declarations may differ while resolving to the reviewed version', (t) => {
+  const fixture = createFixture(t);
+  for (const file of ['package.json', 'package-lock.json']) modifyJson(path.join(fixture.projectRoot, file), (data) => {
+    (data.packages?.[''] || data).dependencies[HOST] = '1.0.0';
+  });
+  assert.equal(resolveProjectRelease(fixture.projectRoot, fixture.catalog), fixture.release);
+});
+
+test('third-party runtime and tooling lock versions need not match the template', (t) => {
+  const release = fixtureRelease();
+  release.managedDependencies.devDependencies = { typescript: '5.0.0' };
+  release.nativePackages['node_modules/@expo/cli'] = '1.0.0';
+  const fixture = createFixture(t, { release });
+  addDependency(fixture.projectRoot, 'typescript', '5.1.0', { section: 'devDependencies' });
+  addDependency(fixture.projectRoot, '@expo/cli', '1.1.0');
+  for (const name of ['expo', 'react', 'react-native', 'expo-haptics']) {
+    addDependency(fixture.projectRoot, name, '1.1.0');
+  }
+  assert.equal(resolveProjectRelease(fixture.projectRoot, fixture.catalog), fixture.release);
+});
+
+test('first-party inventory tolerates npm hoisting but checks each installed version', (t) => {
+  const release = fixtureRelease();
+  const name = '@microsoft/power-apps-native-common';
+  const original = `node_modules/expo/node_modules/${name}`;
+  release.nativePackages[original] = '1.0.0';
+  const fixture = createFixture(t, { release });
+  const hoisted = `node_modules/${name}`;
+  fs.mkdirSync(path.dirname(path.join(fixture.projectRoot, hoisted)), { recursive: true });
+  fs.renameSync(path.join(fixture.projectRoot, original), path.join(fixture.projectRoot, hoisted));
+  modifyJson(path.join(fixture.projectRoot, 'package-lock.json'), (lock) => {
+    lock.packages[hoisted] = lock.packages[original];
+    delete lock.packages[original];
+  });
+  assert.equal(resolveProjectRelease(fixture.projectRoot, fixture.catalog), fixture.release);
+  addDependency(fixture.projectRoot, name, '1.0.1', {
+    section: null, installPath: original, properties: { codegenConfig: {} },
+  });
+  assert.throws(() => resolveProjectRelease(fixture.projectRoot, fixture.catalog), /Unreviewed first-party package @microsoft\/power-apps-native-common@1.0.1/);
+});
+
+test('offline lock versions must match the reviewed first-party release', (t) => {
+  const release = fixtureRelease();
+  const name = '@microsoft/power-apps-native-offline';
+  release.managedDependencies.dependencies[name] = '^1.0.0';
+  release.nativePackages[`node_modules/${name}`] = '1.0.0';
+  const fixture = createFixture(t, { release });
+  assert.equal(resolveProjectRelease(fixture.projectRoot, fixture.catalog), fixture.release);
+  addDependency(fixture.projectRoot, name, '1.0.1');
+  assert.throws(() => resolveProjectRelease(fixture.projectRoot, fixture.catalog), /Unreviewed first-party package.*offline/);
+});
+
+test('local development reports mismatch or preinstall state without blocking installation/startup', (t) => {
+  for (const change of [
+    (fixture) => addDependency(fixture.projectRoot, '@microsoft/power-apps-native-controls', '1.0.0'),
+    (fixture) => fs.unlinkSync(path.join(fixture.projectRoot, 'package-lock.json')),
+    (fixture) => fs.rmSync(path.join(fixture.projectRoot, 'node_modules'), { recursive: true }),
+  ]) {
+    const fixture = createFixture(t);
+    change(fixture);
+    blocked(runCli(fixture, ['--project-root', fixture.projectRoot]));
+    const result = runCli(fixture, ['--project-root', fixture.projectRoot, '--local-development']);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stderr, /WARNING:[\s\S]*installation\/startup may continue[\s\S]*\/debug-app/);
+    const summary = JSON.parse(result.stdout);
+    assert.equal(summary.validationScope, 'local-development-only');
+    assert.equal(summary.packageCompatibility, 'unverified');
+    assert.ok(summary.warnings.length > 0);
+    assert.equal(summary.nativePackages, undefined, 'Local diagnostics must not fabricate a verified inventory');
+    assert.equal(summary.id, undefined);
+    assert.doesNotMatch(result.stdout + result.stderr, /fixture-secret-do-not-echo/);
+  }
+});
+
+test('local-development mode cannot bypass deployment or argument validation', (t) => {
+  const fixture = createFixture(t);
+  const platform = fixture.release.platforms.android;
+  for (const args of [
+    ['--local-development'],
+    ['--project-root', fixture.projectRoot, '--local-development', '--requirements-only'],
+    ['--project-root', fixture.projectRoot, '--local-development', '--platform', 'android',
+      '--base-version', platform.base.version, '--base-fingerprint', platform.fingerprint],
+    ['--project-root', fixture.projectRoot, '--local-development', '--unknown'],
+    ['--project-root', path.join(fixture.projectRoot, 'missing'), '--local-development'],
+    ...[
+      ['--host-version', '1.0.0'], ['--template-version', '1.0.0'], ['--default'],
+    ].map((selection) => ['--project-root', fixture.projectRoot, '--local-development', ...selection]),
+  ]) blocked(runCli(fixture, args));
+});
+
 test('uninstalled, untracked and lock-mismatched native dependencies cannot pass', (t) => {
   for (const edit of [
     (root) => fs.rmSync(path.join(root, 'node_modules/expo'), { recursive: true }),
@@ -588,14 +678,15 @@ test('missing CLI implementation files still produce sanitized BLOCKED errors', 
   blocked(runCli(fixture, ['--default']), /Unable to verify/);
 });
 
-test('a nested second native instance cannot borrow approval from a root instance', (t) => {
+test('a nested second first-party instance cannot borrow approval from a root instance', (t) => {
   const release = fixtureRelease();
-  release.nativePackages['node_modules/ordinary-bridge'] = '1.0.0';
+  const name = '@microsoft/power-apps-native-common';
+  release.nativePackages[`node_modules/${name}`] = '1.0.0';
   const fixture = createFixture(t, { release });
-  addDependency(fixture.projectRoot, 'ordinary-bridge', '2.0.0', {
-    section: null, installPath: 'node_modules/expo/node_modules/ordinary-bridge', properties: { codegenConfig: {} },
+  addDependency(fixture.projectRoot, name, '2.0.0', {
+    section: null, installPath: `node_modules/expo/node_modules/${name}`, properties: { codegenConfig: {} },
   });
-  blocked(runCli(fixture, ['--project-root', fixture.projectRoot]), /Unreviewed native/);
+  blocked(runCli(fixture, ['--project-root', fixture.projectRoot]), /Unreviewed first-party/);
 });
 
 test('unsafe lock paths and symlinked installations fail closed', (t) => {
@@ -856,19 +947,19 @@ test('missing required lock entries are not optional merely because a skipped pa
   assert.throws(() => resolveProjectRelease(fixture.projectRoot, fixture.catalog, LINUX_GLIBC), /locked dependency is not installed/);
 });
 
-test('all reviewed native entries remain mandatory even inside an exclusively omitted optional subtree', (t) => {
+test('unused reviewed native entries do not require installing an omitted optional subtree', (t) => {
   const release = fixtureRelease();
   const nativePath = 'node_modules/fixture-required-native';
   release.nativePackages[nativePath] = '1.0.0';
   const fixture = createFixture(t, { release });
   addOmittedWindowsSubtree(fixture, { childName: 'fixture-required-native' });
   fs.rmSync(path.join(fixture.projectRoot, nativePath), { recursive: true });
-  assert.throws(() => resolveProjectRelease(fixture.projectRoot, fixture.catalog, LINUX_GLIBC), /native inventory/);
+  assert.equal(resolveProjectRelease(fixture.projectRoot, fixture.catalog, LINUX_GLIBC), fixture.release);
 });
 
-test('an installed native leftover is inspected even when its optional parent is omitted', (t) => {
+test('an installed first-party leftover is inspected even when its optional parent is omitted', (t) => {
   const fixture = createFixture(t);
-  const { childPath } = addOmittedWindowsSubtree(fixture);
+  const { childPath } = addOmittedWindowsSubtree(fixture, { childName: '@microsoft/power-apps-native-auth' });
   installPackage(fixture.projectRoot, childPath, '1.0.0', { codegenConfig: {} });
-  assert.throws(() => resolveProjectRelease(fixture.projectRoot, fixture.catalog, LINUX_GLIBC), /Unreviewed native package/);
+  assert.throws(() => resolveProjectRelease(fixture.projectRoot, fixture.catalog, LINUX_GLIBC), /Unreviewed first-party package/);
 });

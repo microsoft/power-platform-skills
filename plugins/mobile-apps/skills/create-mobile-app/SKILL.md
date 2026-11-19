@@ -39,7 +39,11 @@ and summary.
 
 ## Fresh-template working-directory mode
 
-Only after confirming new-app intent through the state routing below, read [mobile-release-lifecycle.md](../../shared/references/mobile-release-lifecycle.md). Discover published template versions through npm, select an exact stable version, and inspect it with `resolve-mobile-release.js --template-version "<exact-template-version>"`. Missing or incompatible published package metadata means `BLOCKED` before scaffolding or data-platform mutations. The helper checks the immutable template against its published host contract; there is no plugin-owned release list. npm channel names, the plugin's bundled snapshot, and a mutable Git branch are not compatibility evidence. Report Player availability separately; if its native runtime differs, offer an explicitly selected compatible template for the new app rather than promising the latest package can run in that Player.
+After confirming new-app intent, classify the directory using the state routing below before any registry request. Read [mobile-release-lifecycle.md](../../shared/references/mobile-release-lifecycle.md).
+
+**New/empty-directory acquisition only:** discover published template versions through npm, select an exact stable version, and inspect it with `resolve-mobile-release.js --template-version "<exact-template-version>"`. Missing or incompatible published package metadata means `BLOCKED` before scaffolding or data-platform mutations on this path. The helper checks the immutable template against its published host contract; there is no plugin-owned release list. npm channel names, the plugin's bundled snapshot, and a mutable Git branch are not compatibility evidence. Report Player availability separately; if its native runtime differs, offer an explicitly selected compatible template rather than promising the latest package can run in that Player.
+
+**Existing fresh starters, installed or awaiting installation:** skip npm template discovery and strict `--template-version` resolution. Use the shipped-lock installation and local diagnostic paths below; unavailable registry metadata does not block this routing.
 
 **Fresh template required for creation.** If the working directory is not a fresh
 template, STOP creation and follow the state-specific routing below. Do not send
@@ -53,7 +57,11 @@ permission to reconstruct a template or copy a bundled snapshot.
 
 For a new/empty target, offer **Acquire reviewed template** or **Cancel**. After explicit approval, run `mobile-template-lifecycle.js acquire --template-version "<exact-template-version>" --destination '<working_dir>'`. It verifies the immutable package and metadata before using the package's creation CLI. Separately approve dependency installation with the shipped lockfile (`npm ci`); use existing registry authentication, never print/provision credentials here. Do not fall back to `degit` or copy a bundled template on failure.
 
-An existing **fresh installed** template may be used only after `resolve-mobile-release.js --project-root '<working_dir>' --template-version "<exact-template-version>"` succeeds. Preserve its shipped instructions and all compatibility metadata. Never run acquisition over a non-empty directory or adopt an already-created app through this gate.
+For an existing **fresh installed** template, run `resolve-mobile-release.js --project-root '<working_dir>' --local-development`. Compatibility warnings do not block installation, preparation or trying the app in Dev Player. Preserve its shipped instructions and all compatibility metadata. Never run acquisition over a non-empty directory or adopt an already-created app through this gate.
+
+Follow the shared [local-development policy](../../shared/references/mobile-release-lifecycle.md#local-installation-and-startup-are-not-release-admission-gates)
+for unverified handoffs and observed startup failures; do not add a pre-start
+repair gate or bypass the state routing.
 
 Resolve the original request before classifying project state. Apply this
 state-routing table once in Step 0, in the order below; file markers are
@@ -63,8 +71,8 @@ supporting evidence, not user intent or approval.
 |---|---|---|
 | Creation continuation | Explicit creation-continuation intent or a valid current create handoff for this app, not a request to edit an existing app | Use Step 0's continuation path. Require matching unfinished creation progress and confirm the next phase before continuing; missing or conflicting progress requires clarification, not fresh scaffolding. |
 | Already-created app | Existing-app intent or confirmed app customizations/materialized state, even when generated markers are missing. `memory-bank.md`, `.datamodel-manifest.json`, and `src/generated/services/*.ts` can corroborate state, but do not select creation resume | STOP creation: never re-scaffold it. If the request changes this app, preserve the original request and execute the shared existing-app entry routing; invoke `/edit-app` only after **Full app integration**. If the user wants a separate new app, ask for a fresh template folder. |
-| Fresh template | Confirmed new-app intent and a confirmed uncustomized starter; `package.json`, `app.config.js`, `auth.config.json`, and `tamagui.config.ts` exist; `node_modules/expo` exists; no materialized app bindings, `memory-bank.md`, `.datamodel-manifest.json`, or generated Dataverse services. An approved creation plan and its planning artifacts are allowed | Proceed to Step 1 only when every condition is satisfied and the selected published package contract resolves. Missing generated markers alone do not establish freshness. |
-| Template not installed | Confirmed new-app intent and a confirmed uncustomized starter with the required template files, but `node_modules/expo` is absent | Offer the separately approved `npm ci` install from its shipped lock, then resolve the package contract. Stop for a missing/mismatched lock; do not provision registry credentials or regenerate native pins here. |
+| Fresh template | Confirmed new-app intent and a confirmed uncustomized starter; `package.json`, `app.config.js`, `auth.config.json`, and `tamagui.config.ts` exist; `node_modules/expo` exists; no materialized app bindings, `memory-bank.md`, `.datamodel-manifest.json`, or generated Dataverse services. An approved creation plan and its planning artifacts are allowed | Proceed to Step 1 only when every condition is satisfied and the local-development diagnostic has run; compatibility warnings are non-blocking. Missing generated markers alone do not establish freshness. |
+| Template not installed | Confirmed new-app intent and a confirmed uncustomized starter with the required template files, but `node_modules/expo` is absent | Offer the separately approved `npm ci` install from its shipped lock, then run the local-development diagnostic. Stop for a missing/mismatched lock; do not provision registry credentials or regenerate native pins here. |
 | New/empty directory | Confirmed new-app intent after excluding existing-app work and creation continuation, with no existing customer files | Offer the immutable acquisition described above, then separately approve the shipped-lock installation. |
 | Not template | Confirmed new-app intent in a non-empty unsupported directory, after excluding existing-app work and creation continuation | STOP: preserve every file and select a separate empty target. Never re-scaffold existing work or copy a mutable bundled template. |
 | Unclear state or intent | New-app versus edit intent, customization, or creation progress cannot be established | Ask before selecting a workflow. Preserve the directory, plan, and history; do not default to fresh creation or resume. |
@@ -313,7 +321,7 @@ Use only a validated phase ID from the recorded creation state. Resolve the CLI
 below before entering the verified phase; do not skip unresolved approval or
 validation gates merely because an older plan exists.
 
-Before continuing or resuming native work, resolve the app against its published host/template contract. Pass its sanitized compatibility context to every planner/builder; do not use the plugin template's current dependencies as the app's inventory.
+Before continuing or resuming local work, run the local-development diagnostic. Pass its sanitized compatibility context to every planner/builder, including any unverified warning; do not use the plugin template's current dependencies as the app's inventory or treat a warning-only result as a resolved release.
 
 **Do not silently copy a bundled template over the user's folder.** A fresh template may contain an empty placeholder `power.config.json`; Step 5 removes only that empty placeholder immediately before Step 6 runs `pa app init`. Preserve populated settings even when `environmentId` is empty.
 
@@ -1544,7 +1552,7 @@ node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' step --i
 ```
 
 This step is template-only and foreground-only. Do not clone/copy templates, do not run background scaffold jobs, and do not use any legacy fallback path.
-Acquisition and release resolution must already have passed Step 0.
+Acquisition and the local-development diagnostic must already have completed Step 0; compatibility warnings do not block this preparation.
 
 **Print before starting:**
 > "→ [Step 5/13] Preparing existing Expo standalone template in <working_dir> …"
@@ -2508,7 +2516,7 @@ If the plan says "None — this app uses only standard React Native components a
 
 **Telemetry checkpoint: `install_approved_javascript_dependencies`**
 
-Read and execute the Installation Contract in [`shared/references/javascript-dependency-planning.md`](${PLUGIN_ROOT}/shared/references/javascript-dependency-planning.md) for every approved row in `## Screens → ### JavaScript Dependencies`. If the subsection is absent or says `None.`, continue without changing dependencies.
+Read and execute the Installation Contract in [`shared/references/javascript-dependency-planning.md`](${PLUGIN_ROOT}/shared/references/javascript-dependency-planning.md) for new or changed approved rows in `## Screens → ### JavaScript Dependencies`; reuse unchanged existing rows. If the subsection is absent or says `None.`, continue without changing dependencies.
 
 Gate 4 approval is consent for exactly the packages and versions in the table. Install them into `<working_dir>` before any skeleton or builder imports them, validate `package.json` and the lockfile, and verify module resolution. Do not substitute another package/version, infer a package from a compiler error, or route a JS-only package through `/add-native`. If final inspection finds native code/config or incompatible runtime dependencies, remove only the newly added package and STOP with the exact failed criterion.
 

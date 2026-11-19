@@ -10,6 +10,16 @@ const semver = require('../vendor/semver.cjs');
 const HOST = '@microsoft/power-apps-native-host';
 const SECTIONS = ['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies'];
 const CORE = [HOST, 'expo', 'react-native', 'react'];
+const RELEASE_MANAGED_PACKAGES = new Set([
+  HOST,
+  '@microsoft/power-apps-native-assets',
+  '@microsoft/power-apps-native-auth',
+  '@microsoft/power-apps-native-common',
+  '@microsoft/power-apps-native-controls',
+  '@microsoft/power-apps-native-offline',
+  '@microsoft/power-apps-native-push-notifications',
+  '@microsoft/power-apps-native-template',
+]);
 const TOKEN = /^[a-zA-Z0-9][a-zA-Z0-9._+-]{0,127}$/;
 const PACKAGE_PART = '[a-z0-9][a-z0-9._-]*';
 const PACKAGE_NAME = new RegExp(`^(?:@${PACKAGE_PART}/)?${PACKAGE_PART}$`);
@@ -242,38 +252,61 @@ function detectsNative(directory, pkg) {
   return visit(directory);
 }
 
-function inspectInstalledPackages(projectRoot, lock) {
+function inspectInstalledPackages(projectRoot, lock, dependencyRoots) {
   const installed = new Map();
+  const scoped = dependencyRoots !== undefined;
+  const available = { has: (relativePath) => fs.existsSync(path.join(projectRoot, relativePath)) };
+  function visitPackage(relativePath) {
+    if (installed.has(relativePath)) return;
+    requireValue(safeInstallPath(relativePath), 'Unsupported installed package path.');
+    const absolutePath = path.join(projectRoot, relativePath);
+    if (scoped) {
+      // Scoped reads bypass visitModules, so check the containing scopes and
+      // node_modules directories too, without enumerating unrelated packages.
+      let directory = projectRoot;
+      for (const part of relativePath.split('/').slice(0, -1)) {
+        directory = path.join(directory, part);
+        requireValue(!fs.lstatSync(directory).isSymbolicLink(), 'Linked packages cannot be verified against the reviewed runtime.');
+      }
+    }
+    requireValue(!fs.lstatSync(absolutePath).isSymbolicLink(), 'Linked packages cannot be verified against the reviewed runtime.');
+    const pkg = readJson(path.join(absolutePath, 'package.json'), 'installed package manifest');
+    const name = relativePath.split('/node_modules/').pop().replace(/^node_modules\//, '');
+    requireValue(safePackageName(pkg.name) && exactVersion(pkg.version), 'Installed package identity or version is invalid.');
+    dependencySections(pkg);
+    const native = isRuntimePackage(name) || isRuntimePackage(pkg.name) || detectsNative(absolutePath, pkg);
+    const alias = pkg.name !== name;
+    const locked = lock?.packages?.[relativePath];
+    if (alias) {
+      // npm aliases retain the canonical package name, e.g.
+      // string-width-cjs -> string-width. Strict admission also binds the lock;
+      // scoped JS inspection classifies actual contents without consulting it.
+      requireValue(!native, 'Native/runtime npm aliases cannot be admitted by the reviewed inventory schema.');
+      if (!scoped) requireValue([2, 3].includes(lock?.lockfileVersion) && object(locked) && !locked.link
+        && locked.name === pkg.name && locked.version === pkg.version,
+      'Installed npm alias must match its canonical name and exact version in the app lock.');
+    }
+    requireValue(locked?.name === undefined || locked.name === pkg.name, 'Installed package canonical identity differs from the app lock.');
+    installed.set(relativePath, {
+      name, canonicalName: pkg.name, alias, version: pkg.version, pkg, native,
+    });
+    if (scoped) {
+      // A native node already answers the JS-only question. Do not inspect its
+      // subtree or unrelated nested packages; root React/RN peers are reusable.
+      if (native) return;
+      for (const [name, edge] of dependencyEdges(pkg)) {
+        const dependency = resolveInstalledDependency(available, relativePath, name);
+        requireValue(dependency || edge.optional, `Cannot inspect missing JavaScript dependency ${name}. Install the approved package before validation.`);
+        if (dependency) visitPackage(dependency);
+      }
+    } else {
+      visitModules(`${relativePath}/node_modules`);
+    }
+  }
   function visitModules(relativeDirectory) {
     const directory = path.join(projectRoot, relativeDirectory);
     if (!fs.existsSync(directory)) return;
     requireValue(!fs.lstatSync(directory).isSymbolicLink(), 'Linked node_modules cannot be verified against the reviewed runtime.');
-    function visitPackage(relativePath) {
-      requireValue(safeInstallPath(relativePath), 'Unsupported installed package path.');
-      const absolutePath = path.join(projectRoot, relativePath);
-      requireValue(!fs.lstatSync(absolutePath).isSymbolicLink(), 'Linked packages cannot be verified against the reviewed runtime.');
-      const pkg = readJson(path.join(absolutePath, 'package.json'), 'installed package manifest');
-      const name = relativePath.split('/node_modules/').pop().replace(/^node_modules\//, '');
-      requireValue(safePackageName(pkg.name) && exactVersion(pkg.version), 'Installed package identity or version is invalid.');
-      dependencySections(pkg);
-      const native = isRuntimePackage(name) || isRuntimePackage(pkg.name) || detectsNative(absolutePath, pkg);
-      const alias = pkg.name !== name;
-      const locked = lock?.packages?.[relativePath];
-      if (alias) {
-        // npm aliases retain the canonical package name in package.json and the
-        // v2/v3 lock entry, e.g. string-width-cjs -> string-width. The release
-        // inventory cannot bind a separate canonical native identity safely.
-        requireValue(!native, 'Native/runtime npm aliases cannot be admitted by the reviewed inventory schema.');
-        requireValue([2, 3].includes(lock?.lockfileVersion) && object(locked) && !locked.link
-          && locked.name === pkg.name && locked.version === pkg.version,
-        'Installed npm alias must match its canonical name and exact version in the app lock.');
-      }
-      requireValue(locked?.name === undefined || locked.name === pkg.name, 'Installed package canonical identity differs from the app lock.');
-      installed.set(relativePath, {
-        name, canonicalName: pkg.name, alias, version: pkg.version, pkg, native,
-      });
-      visitModules(`${relativePath}/node_modules`);
-    }
     for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
       if (entry.name.startsWith('.')) continue;
       if (entry.name.startsWith('@')) {
@@ -289,8 +322,12 @@ function inspectInstalledPackages(projectRoot, lock) {
   }
   try {
     const lockPath = path.join(projectRoot, 'package-lock.json');
-    if (lock === undefined && fs.existsSync(lockPath)) lock = readJson(lockPath, 'package-lock.json');
-    visitModules('node_modules');
+    if (!scoped && lock === undefined && fs.existsSync(lockPath)) lock = readJson(lockPath, 'package-lock.json');
+    if (scoped) {
+      for (const name of dependencyRoots) visitPackage(`node_modules/${name}`);
+    } else {
+      visitModules('node_modules');
+    }
     return installed;
   } catch (error) {
     if (error.code === 'MOBILE_RELEASE_BLOCKED') throw error;
@@ -459,25 +496,48 @@ function readProject(projectRoot, platformContext) {
 
 function validateProjectAgainstRelease(project, release) {
   const { declarations, installed, lock } = project;
+  // This gate owns published first-party compatibility, not a byte-for-byte
+  // template dependency graph. npm/Expo and the app's own lock validate the rest.
   const managed = new Set();
   for (const section of SECTIONS) {
     for (const [name, spec] of Object.entries(release.managedDependencies[section] || {})) {
-      requireValue(declarations[section]?.[name] === spec, `Managed dependency ${name} does not match the reviewed release declaration. Restore the release dependency set.`);
+      if (!RELEASE_MANAGED_PACKAGES.has(name)) continue;
+      const actual = installed.get(`node_modules/${name}`);
+      const declared = declarations[section]?.[name];
+      // "^1.0.0" and "1.0.0" can resolve to the same admitted native version.
+      // Vendor archives have no SemVer range, so retain their exact declaration.
+      requireValue(typeof declared === 'string' && (spec.startsWith('file:')
+        ? declared === spec
+        : semver.validRange(declared) !== null && semver.satisfies(actual?.version || '', declared)
+          && semver.satisfies(actual?.version || '', spec)),
+      `Managed dependency ${name} does not satisfy the reviewed release requirements. Restore the release dependency set.`);
       requireValue(SECTIONS.every((other) => other === section || !Object.hasOwn(declarations[other] || {}, name)), 'A managed dependency is shadowed in another dependency section.');
       managed.add(name);
     }
   }
   for (const dependencies of Object.values(declarations)) {
     for (const name of Object.keys(dependencies)) {
-      requireValue(managed.has(name) || !(isRuntimePackage(name) || installed.get(`node_modules/${name}`)?.native), `Native/runtime dependency ${name} is not managed by this app's verified release.`);
+      requireValue(managed.has(name) || !RELEASE_MANAGED_PACKAGES.has(name), `Native/runtime dependency ${name} is not managed by this app's verified first-party release.`);
     }
   }
+  const reviewed = new Set();
   for (const [installPath, version] of Object.entries(release.nativePackages)) {
-    requireValue(installed.get(installPath)?.version === version && lock.packages[installPath]?.version === version, 'Installed native inventory does not match the reviewed release, including nested package versions. Restore the release lock and installation.');
+    const name = installPath.split('/node_modules/').pop().replace(/^node_modules\//, '');
+    if (RELEASE_MANAGED_PACKAGES.has(name)) reviewed.add(`${name}@${version}`);
   }
+  const missing = new Set(reviewed);
   for (const [installPath, actual] of installed) {
-    requireValue(!actual.native || release.nativePackages[installPath] === actual.version, 'Unreviewed native package detected in the installed dependency tree. Select a verified runtime that includes it; JavaScript approval cannot add native code.');
+    if (!RELEASE_MANAGED_PACKAGES.has(actual.canonicalName)) continue;
+    // npm may hoist an unchanged first-party package to a different path. Check every
+    // installed instance by identity/version, not against the template's layout;
+    // the app's own lock still has to match that instance at its actual path.
+    const identity = `${actual.canonicalName}@${actual.version}`;
+    requireValue(reviewed.has(identity)
+      && lock.packages[installPath]?.version === actual.version,
+    `Unreviewed first-party package ${identity}: first-party native inventory does not match the reviewed release, including nested package versions. Restore the release dependency set.`);
+    missing.delete(identity);
   }
+  requireValue(missing.size === 0, 'First-party native inventory is missing reviewed package versions. Restore the release dependency set.');
 }
 
 function reviewedProjectCatalog(catalog) {

@@ -24,11 +24,12 @@ test('native updates are evaluated independently of outdated-host discovery', ()
 });
 
 test('rehearsal, full-chain approval, drift checks and recovery are separate gates', () => {
-  const rehearsal = updates.indexOf('Prepare isolated preview');
-  const perEdge = updates.indexOf('repeat dry-run and apply');
-  const approval = updates.indexOf('Apply reviewed release');
+  const rehearsal = updates.indexOf('Test the upgrade in a copy of my app');
+  const transaction = updates.indexOf('clean full-chain plan');
+  const approval = updates.indexOf('Apply the tested upgrade to my app');
   const apply = updates.indexOf('### Apply only the approved plan');
-  assert.ok(rehearsal < perEdge && perEdge < approval && approval < apply);
+  assert.ok(rehearsal >= 0 && rehearsal < transaction && transaction < approval && approval < apply);
+  assert.doesNotMatch(updates, /repeat dry-run and apply until/);
   assert.match(updates, /nonzero preview is never automatically a clean plan/);
   assert.match(updates, /`--no-install` to simulate state advancement/);
   assert.match(updates, /under `<working_dir>`/);
@@ -37,6 +38,64 @@ test('rehearsal, full-chain approval, drift checks and recovery are separate gat
   assert.match(updates, /rollback or journal recovery cannot complete safely/);
   assert.match(updates, /Never report `DONE` for a partial migration/);
   assert.match(updates, /Skipping excludes all coupled packages/);
+});
+
+test('upgrade failures require actionable app-owned repairs without weakening validation', () => {
+  assert.match(updates, /For every failed preparation, install, migration or validation check/);
+  assert.match(updates, /Explain the failure, its impact and a concrete possible fix/);
+  assert.match(updates, /minimal app-owned source\/configuration fixes in the test copy/);
+  assert.match(updates, /Test-copy approval covers these\s+repairs, not original-app edits/);
+  assert.match(updates, /never\s+weaken types\/checks, suppress diagnostics or disable offline/);
+  assert.match(updates, /Rerun the failed check, then all mandatory checks and relevant existing app\s+tests/);
+  assert.match(updates, /including the approved app-code fixes in their rehearsed order/);
+  assert.match(updates, /After successful recovery, diagnose and repair the failure in the test copy/);
+  assert.match(updates, /Existing plugin-restart, publication, approval and recovery gates still apply/);
+  assert.match(updates, /Never patch npm packages via `node_modules`, `patch-package`/);
+});
+
+test('local workflows carry unverified compatibility without gating installation or startup', () => {
+  assert.match(create, /resolve-mobile-release\.js[^\n]*--local-development/);
+  assert.match(create, /Compatibility warnings do not block installation, preparation or trying the app/);
+  assert.match(create, /do not add a pre-start\s+repair gate/);
+  assert.match(lifecycle, /packageCompatibility: "unverified"/);
+  assert.match(lifecycle, /not a resolved release or evidence\s+of native support/);
+  assert.match(lifecycle, /If Dev Player actually fails,\s+invoke `\/debug-app`/);
+  assert.match(lifecycle, /Deployment still requires\s+strict project\/base validation/);
+  const shared = read('shared/shared-instructions.md');
+  const validation = shellBlocks(shared).find(block => block.includes('scripts/validate-mobile-files.js'));
+  assert.match(validation, /--local-development/);
+  assert.match(read('skills/edit-app/SKILL.md'), /resolve-mobile-release\.js[^\n]*--local-development/);
+  assert.match(read('skills/debug-app/SKILL.md'), /compare the actual Player runtime and installed\s+package versions/);
+  for (const file of [
+    'agents/native-app-planner.md', 'agents/screen-planner.md', 'agents/screen-builder.md',
+    'skills/create-mobile-app/references/requirements-discovery.md',
+  ]) assert.match(read(file), /local-development-only/, file);
+  for (const helper of ['add-camera', 'add-geolocation', 'add-pdf-report', 'add-pdf-viewer', 'add-pen-input']) {
+    assert.match(read(`skills/add-native/${helper}/SKILL.md`), /resolve-mobile-release\.js[^\n]*--local-development/, helper);
+  }
+});
+
+test('strict template discovery is limited to empty targets, not existing fresh starters', () => {
+  const acquisition = create.slice(create.indexOf('**New/empty-directory acquisition only:**'),
+    create.indexOf('**Existing fresh starters, installed or awaiting installation:**'));
+  assert.match(acquisition, /discover published template versions through npm/);
+  assert.match(acquisition, /resolve-mobile-release\.js --template-version/);
+  assert.match(acquisition, /`BLOCKED` before scaffolding/);
+  const existing = create.slice(create.indexOf('**Existing fresh starters, installed or awaiting installation:**'),
+    create.indexOf('**Fresh template required for creation.**'));
+  assert.match(existing, /skip npm template discovery and strict `--template-version` resolution/);
+  assert.match(existing, /shipped-lock installation and local diagnostic/);
+  assert.ok(create.indexOf('before any registry request') < create.indexOf('**New/empty-directory acquisition only:**'));
+});
+
+test('individual package failures allow approved repairs or safe skipping, not immediate abandonment', () => {
+  const packageUpdates = updates.slice(updates.indexOf('For each approved JavaScript-only package update in Steps 3 and 4:'));
+  assert.match(packageUpdates, /any approved app-code repair files \(including modes and absent-file state\)/);
+  assert.match(updates, /obtain approval and back up additional\s+app-code repair files before editing them/);
+  assert.match(packageUpdates, /If any command fails, follow the repair loop above/);
+  assert.match(packageUpdates, /If the user declines the repair, restore safely, record the package as skipped and continue/);
+  assert.match(packageUpdates, /stop mutations if restoration is unsafe/);
+  assert.doesNotMatch(packageUpdates, /return `BLOCKED` with the failed command, and do not offer later packages/);
 });
 
 test('JavaScript updates retain approval and audit safeguards without native bumps', () => {
