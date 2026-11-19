@@ -3,6 +3,7 @@
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const semver = require('../vendor/semver.cjs');
 const { runCliSync, CliLaunchError } = require('./process-runner');
 const { unpack, hashFile, readOfflineContract, verifyInstalledOfflineSdk } = require('./mobile-package-artifacts');
 const {
@@ -197,6 +198,7 @@ function templateState(template) {
 }
 
 function findTemplate(source, host, requestedVersion) {
+  const managed = validateHost(host);
   const versions = requestedVersion ? [requestedVersion]
     : source.versions().filter((version) => exactVersion(version, true)).sort((a, b) => compareVersions(b, a));
   for (const version of versions) {
@@ -227,6 +229,19 @@ function findTemplate(source, host, requestedVersion) {
     })) {
       requireValue(template.lock.packages[`node_modules/${name}`]?.version === version,
         'The template lock does not match the selected host Expo/React/React Native requirements.');
+    }
+    // Validate the publication against its own host before skipping an incompatible candidate.
+    const baselineContract = contractFromPackages(baseline, template);
+    const compatible = Object.values(managed).every((dependencies) => Object.entries(dependencies).every(([name, spec]) => {
+      if (name === HOST) return true;
+      const version = baselineContract.nativePackages[`node_modules/${name}`];
+      return version
+        ? spec.startsWith('file:./vendor/') || semver.satisfies(version, spec)
+        : !isRuntimePackage(name);
+    }));
+    if (!compatible) {
+      if (requestedVersion) requireValue(false, 'Selected host and template have incompatible managed native dependency requirements.');
+      continue;
     }
     return template;
   }

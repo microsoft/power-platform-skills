@@ -96,6 +96,10 @@ retain their separate archive validation. Explicit template selections remain
 attached to subsequent project resolution rather than silently choosing a
 different, newer template with the same runtime.
 
+Automatic selection skips otherwise valid templates whose managed native versions
+do not satisfy the selected host, and continues searching compatible publications.
+Malformed publications still block; explicit template selections never fall back.
+
 Package compatibility and binary availability are separate. A same-runtime
 patch/minor host update needs no new Player/base record. Native changes need a
 host major, a template migration and matching native binaries before those

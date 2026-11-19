@@ -170,6 +170,33 @@ test('same-runtime host patch uses the existing compatible template without a Pl
   assert.match(result.binaryAvailability, /not-checked/);
 });
 
+test('template discovery skips a valid maintenance publication with incompatible managed native versions', t => {
+  const f = fixture(t);
+  const offline = '@microsoft/power-apps-native-offline';
+  for (const [hostVersion, templateVersion, sdkVersion] of [
+    ['1.1.0', '1.1.0', '0.2.2'],
+    ['1.0.5', '1.1.1', '0.2.3'],
+  ]) {
+    f.host(hostVersion).profile.managedDependencies[offline] = sdkVersion;
+    const template = f.template(templateVersion, hostVersion);
+    template.manifest.dependencies[offline] = sdkVersion;
+    template.lock.packages[''].dependencies[offline] = sdkVersion;
+    template.lock.packages[`node_modules/${offline}`] = { version: sdkVersion };
+  }
+  assert.equal(selectPublishedContract('1.0.5', { ...f.options, templateVersion: '1.1.1' }).template.version, '1.1.1');
+  assert.equal(selectPublishedContract('1.1.0', f.options).template.version, '1.1.0');
+  assert.equal(planPublishedUpdate(f.projectRoot, '1.1.0', f.options).target.template.version, '1.1.0');
+  assert.throws(() => selectPublishedContract('1.1.0', {
+    ...f.options, templateVersion: '1.1.1',
+  }), /incompatible managed native dependency/);
+
+  f.packages.get(`${HOST}@1.1.0`).profile.managedDependencies[offline] = '^0.2.2';
+  assert.equal(selectPublishedContract('1.1.0', f.options).template.version, '1.1.1');
+
+  f.packages.get(`${TEMPLATE}@1.1.1`).lock.packages[`node_modules/${offline}`].version = 'invalid';
+  assert.throws(() => selectPublishedContract('1.1.0', f.options), /invalid native lock entry/);
+});
+
 test('a non-native template migration advances template state without changing native runtime', (t) => {
   const f = fixture(t);
   f.host('1.1.0', 2, 1, [migration('1.1.0')]);
