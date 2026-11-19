@@ -117,6 +117,26 @@ function findCalls(content, pattern) {
   return calls;
 }
 
+function returnedPageCalls(content, owner, calls) {
+  // Only infer a page source from code, not `return page` inside comments,
+  // query text, or labels. Keep offsets aligned with the original call spans.
+  const code = content.replace(
+    /\/\*[\s\S]*?\*\/|\/\/[^\r\n]*|"(?:\\[\s\S]|[^"\\])*"|'(?:\\[\s\S]|[^'\\])*'|`(?:\\[\s\S]|[^`\\])*`/g,
+    (text) => text.replace(/[^\r\n]/g, ' '),
+  );
+  const body = code.slice(owner.open + 1, owner.end);
+  const returnedNames = new Set([...body.matchAll(
+    /\breturn\s*(?:\(\s*)*(?:await\s+)?(?:([A-Za-z_$][\w$]*)|\{\s*\.\.\.\s*([A-Za-z_$][\w$]*))/g,
+  )].map((match) => match[1] || match[2]));
+  return new Set(calls.filter((call) => {
+    if (call.start <= owner.open || call.end >= owner.end) return false;
+    const before = code.slice(owner.open + 1, call.start);
+    if (/(?:\breturn|=>)\s*(?:\(\s*)*(?:await\s+)?$/.test(before)) return true;
+    const binding = /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:\(\s*)*(?:await\s+)?$/.exec(before);
+    return binding && returnedNames.has(binding[1]);
+  }));
+}
+
 function findCursorViolations(content) {
   const violations = [];
 
@@ -138,6 +158,9 @@ function findCursorViolations(content) {
   }
 
   const serviceCalls = findCalls(content, /\b\w+Service\.(getAll|getSavedQuery)\b/g);
+  const pageSources = new Map(cursorHooks.map((hook) => [
+    hook, returnedPageCalls(content, hook, serviceCalls),
+  ]));
   for (const call of serviceCalls) {
     const owner = cursorHooks.find((hook) => call.start > hook.open && call.end < hook.end);
     // Auxiliary lookups/totals outside a cursor hook do not inherit its paging
@@ -159,7 +182,14 @@ function findCursorViolations(content) {
     const end = findMatchingBrace(content, start);
     if (end < 0) continue;
     const options = content.slice(start + 1, end);
-    const hasAggregation = topLevelKeys(options).includes('apply');
+    const keys = topLevelKeys(options);
+    const hasAggregation = keys.includes('apply');
+    // `return { ...contactPage, data: merge(contactPage.data, counts.data) }`
+    // retains contactPage's cursor. A bounded counts/lookup read in the same
+    // loader must not receive that cursor. Keep checking unknown return flows.
+    const returnedCalls = pageSources.get(owner);
+    if (returnedCalls.size > 0 && !returnedCalls.has(call)
+      && (hasAggregation || keys.includes('top'))) continue;
     if (!hasAggregation && !/\bselect\s*:/.test(options)) {
       violations.push('Cursor-paginated Dataverse `getAll` calls must include `select` so heavy lists do not fetch every column.');
     }

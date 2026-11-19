@@ -271,6 +271,11 @@ function topLevelKeys(body) {
   let keyText = '';
   let lookForKey = true;
 
+  const recordKey = () => {
+    const key = keyText.trim();
+    if (lookForKey && /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(key)) keys.push(key);
+  };
+
   while (i < body.length) {
     const ch = body[i];
     const next = body[i + 1];
@@ -328,16 +333,14 @@ function topLevelKeys(body) {
       continue;
     }
     if (ch === ',') {
+      recordKey();
       lookForKey = true;
       keyText = '';
       i++;
       continue;
     }
     if (lookForKey && ch === ':') {
-      const segment = keyText.trim();
-      if (/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(segment)) {
-        keys.push(segment);
-      }
+      recordKey();
       lookForKey = false;
       i++;
       continue;
@@ -345,6 +348,7 @@ function topLevelKeys(body) {
     if (lookForKey) keyText += ch;
     i++;
   }
+  if (depth === 0) recordKey();
   return keys;
 }
 

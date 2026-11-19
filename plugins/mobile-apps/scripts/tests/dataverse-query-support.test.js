@@ -227,6 +227,58 @@ test('bounded auxiliary reads do not inherit a separate cursor query contract', 
   assert.match(findCursorViolations(invalidCursor).join('\n'), /deterministic `orderBy`/);
 });
 
+test('bounded reads inside a loader do not inherit the returned primary page cursor', () => {
+  for (const [hook, callback] of [
+    ['useCursorListData', 'fetchPage'],
+    ['useInfiniteQuery', 'queryFn'],
+  ]) {
+    for (const returnedPage of [
+      'return contactPage;',
+      'return { ...contactPage, data: mergeCounts(contactPage.data, counts.data) };',
+    ]) {
+      const source = `${hook}<ContactRow>({
+        ${callback}: async ({ pageSize, skipToken }) => {
+          const contactPage = await ContactsService.getAll<ContactRow>({
+            select: ['contactid'], orderBy: ['contactid asc'], maxPageSize: pageSize, skipToken,
+          });
+          const counts = await TasksService.getAll<CountRow>({
+            apply: groupedCountsFor(contactPage.data.map(row => row.contactid)),
+          });
+          const categories = await CategoriesService.getAll<CategoryRow>({
+            top: 20, select: ['categoryid', 'name'],
+          });
+          ${returnedPage}
+        },
+      });`;
+      assert.deepEqual(findCursorViolations(source), []);
+      const missingCursor = source.replace('maxPageSize: pageSize, skipToken,', '');
+      const issues = findCursorViolations(missingCursor).join('\n');
+      assert.match(issues, /must use SDK `maxPageSize`/);
+      assert.match(issues, /must carry the SDK cursor/);
+    }
+  }
+});
+
+test('an aggregate supplying the returned page still needs its own pagination', () => {
+  for (const result of [
+    'return TasksService.getAll<CountRow>({ apply });',
+    'const counts = await TasksService.getAll<CountRow>({ apply }); return counts;',
+  ]) {
+    const source = `useCursorListData<CountRow>({
+      fetchPage: async ({ pageSize, skipToken }) => {
+        const contacts = await ContactsService.getAll<ContactRow>({
+          select: ['contactid'], orderBy: ['contactid asc'], maxPageSize: pageSize, skipToken,
+        });
+        ${result}
+      },
+    });`;
+    const issues = findCursorViolations(source).join('\n');
+    assert.match(issues, /must use SDK `maxPageSize`/);
+    assert.match(issues, /must carry the SDK cursor/);
+    assert.doesNotMatch(issues, /include `select`|deterministic `orderBy`/);
+  }
+});
+
 test('separate query calls cannot supply a missing cursor or saved-view mode', () => {
   const source = `
     const first = useCursorListData<ContactRow>({
@@ -294,6 +346,23 @@ test('comments before aggregate keys or colons do not create ordinary-list requi
     ['filter', 'select']);
   const violations = findServerManagedCreatePayload("AccountsService.create({ /* comment */ ownerid: 'bad' })");
   assert.equal(violations[0].key, 'ownerid');
+});
+
+test('shorthand aggregate options are recognized before a comma and at the end of the body', () => {
+  for (const options of [
+    'apply, maxPageSize: pageSize, skipToken',
+    'maxPageSize: pageSize, skipToken, apply',
+    '/* query */ apply /* expression */, maxPageSize: pageSize, skipToken // cursor',
+  ]) {
+    assert.ok(topLevelKeys(options).includes('apply'));
+    assert.ok(topLevelKeys(options).includes('skipToken'));
+    assert.deepEqual(findCursorViolations(`useCursorListData<AggregateRow>({
+      fetchPage: ({ pageSize, skipToken }) => TasksService.getAll<AggregateRow>({ ${options}\n }),
+    });`), []);
+  }
+  assert.deepEqual(topLevelKeys('...options, nested: { apply }, select: ["apply"], apply'),
+    ['nested', 'select', 'apply']);
+  assert.equal(findServerManagedCreatePayload('AccountsService.create({ ownerid })')[0].key, 'ownerid');
 });
 
 test('importing the shared Dataverse parser does not register a second stdin hook', () => {
