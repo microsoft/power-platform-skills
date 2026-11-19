@@ -52,6 +52,28 @@ test('upgrade failures require actionable app-owned repairs without weakening va
   assert.match(updates, /Never patch npm packages via `node_modules`, `patch-package`/);
 });
 
+test('local workflows carry unverified compatibility without gating installation or startup', () => {
+  assert.match(create, /resolve-mobile-release\.js[^\n]*--local-development/);
+  assert.match(create, /Compatibility warnings do not block installation, preparation or trying the app/);
+  assert.match(create, /do not add a pre-start\s+repair gate/);
+  assert.match(lifecycle, /packageCompatibility: "unverified"/);
+  assert.match(lifecycle, /not a resolved release or evidence\s+of native support/);
+  assert.match(lifecycle, /If Dev Player actually fails,\s+invoke `\/debug-app`/);
+  assert.match(lifecycle, /Deployment still requires\s+strict project\/base validation/);
+  const shared = read('shared/shared-instructions.md');
+  const validation = shellBlocks(shared).find(block => block.includes('scripts/validate-mobile-files.js'));
+  assert.match(validation, /--local-development/);
+  assert.match(read('skills/edit-app/SKILL.md'), /resolve-mobile-release\.js[^\n]*--local-development/);
+  assert.match(read('skills/debug-app/SKILL.md'), /compare the actual Player runtime and installed\s+package versions/);
+  for (const file of [
+    'agents/native-app-planner.md', 'agents/screen-planner.md', 'agents/screen-builder.md',
+    'skills/create-mobile-app/references/requirements-discovery.md',
+  ]) assert.match(read(file), /local-development-only/, file);
+  for (const helper of ['add-camera', 'add-geolocation', 'add-pdf-report', 'add-pdf-viewer', 'add-pen-input']) {
+    assert.match(read(`skills/add-native/${helper}/SKILL.md`), /resolve-mobile-release\.js[^\n]*--local-development/, helper);
+  }
+});
+
 test('individual package failures allow approved repairs or safe skipping, not immediate abandonment', () => {
   const packageUpdates = updates.slice(updates.indexOf('For each approved JavaScript-only package update in Steps 3 and 4:'));
   assert.match(packageUpdates, /any approved app-code repair files \(including modes and absent-file state\)/);

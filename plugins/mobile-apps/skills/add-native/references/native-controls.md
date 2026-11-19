@@ -4,10 +4,10 @@ Read the [release lifecycle](../../../shared/references/mobile-release-lifecycle
 first. Resolve the existing app, not the newest plugin template:
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/resolve-mobile-release.js" --project-root '<working_dir>'
+node "${PLUGIN_ROOT}/scripts/resolve-mobile-release.js" --project-root '<working_dir>' --local-development
 ```
 
-Missing/unknown release records block native mutations. A package manifest,
+Local-development results follow the shared lifecycle policy. A package manifest,
 successful import, or successful TypeScript check does not prove that a player
 or wrapped base contains matching native code. Do not install the aggregate to
 fix older binaries. Upgrade only through a separately approved, exact verified

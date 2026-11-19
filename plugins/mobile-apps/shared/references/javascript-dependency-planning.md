@@ -23,7 +23,7 @@ evidence: a `react-native-*` package may still be pure JavaScript.
 Use the orchestrator's sanitized resolved context, or resolve it read-only:
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/resolve-mobile-release.js" --project-root '<working_dir>'
+node "${PLUGIN_ROOT}/scripts/resolve-mobile-release.js" --project-root '<working_dir>' --local-development
 ```
 
 Unknown/missing release records block native mutations, not pure source/UI
@@ -95,6 +95,7 @@ Then verify:
 	```bash
 	node "${PLUGIN_ROOT}/scripts/validate-mobile-files.js" \
 		--project-root '<working_dir>' \
+		--local-development \
 		--file package.json \
 		--approved-js-dependency "<package>@<exact-version>" \
 		[--approved-js-dependency "<another-package>@<exact-version>" ...]

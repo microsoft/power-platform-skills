@@ -35,12 +35,12 @@ If this fails, tell the user to run `/create-mobile-app` first and STOP.
 
 ```bash
 cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
-node "${PLUGIN_ROOT}/scripts/resolve-mobile-release.js" --project-root '<working_dir>'
+node "${PLUGIN_ROOT}/scripts/resolve-mobile-release.js" --project-root '<working_dir>' --local-development
 ```
 
 Read [release lifecycle](../../../shared/references/mobile-release-lifecycle.md)
-and [native controls](../references/native-controls.md). If resolution fails,
-STOP before writing wrappers. Do not install packages, run local native builds,
+and [native controls](../references/native-controls.md), including the shared
+local-development policy. Do not install packages, run local native builds,
 or edit native config. Check installed docs/types against the resolved native
 inventory; file URI support requires the PDF 0.2.9+ contract in the binary.
 

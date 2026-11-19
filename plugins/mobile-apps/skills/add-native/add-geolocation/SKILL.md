@@ -30,10 +30,10 @@ Do not substitute another library's `configureSync` / `HttpSyncContract` API.
 ```bash
 cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 test -f app.config.js && test -f power.config.json && test -f package.json && test -d src || { echo "BLOCKED: working_dir is not an initialized app" >&2; exit 1; }
-node "${PLUGIN_ROOT}/scripts/resolve-mobile-release.js" --project-root '<working_dir>'
+node "${PLUGIN_ROOT}/scripts/resolve-mobile-release.js" --project-root '<working_dir>' --local-development
 ```
 
-Unknown/missing records block native mutation. Do not install packages, edit
+Follow the lifecycle's local-development policy for unverified context. Do not install packages, edit
 native config, or run local native builds. Match the installed public README,
 exports, and types to the resolved inventory before generating any wrapper.
 Use `@microsoft/power-apps-native-controls/geolocation` only when that aggregate

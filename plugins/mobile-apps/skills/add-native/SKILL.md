@@ -31,7 +31,7 @@ adoption, legacy imports, permission boundaries, and location ownership.
 1. **Never run `npx expo install`, `npm install`, or `yarn add` for a native module.** Native support is fixed by the app-matched verified release and selected player/base, not the newest bundled template or the customer's manifest.
 2. **Never edit `app.config.js`** — plugins, `ios.infoPlist`, `android.permissions`, or anything else. Native config belongs to the verified fixed-capability base; arbitrary additions cannot be honored at rewrap time.
 3. **Never edit `package.json` `dependencies` for native modules.** Native means the package ships platform source/projects, a podspec, codegen, an Expo module/config plugin, or `react-native.config.js`; a package-name prefix alone is not proof. Pure-JavaScript dependencies are out of scope for `/add-native` and are installed from an approved `JavaScript Dependencies` plan by `/create-mobile-app` or `/edit-app`.
-4. **If release resolution fails, or package/version/native inventory disagree — STOP before native mutation.** A dependency being present is necessary, not sufficient. Do not install the controls aggregate or newer leaf to repair an older binary.
+4. **Do not claim Player/base support from package presence.** Follow the shared [local-development policy](../../shared/references/mobile-release-lifecycle.md#local-installation-and-startup-are-not-release-admission-gates) for approved wrappers against installed APIs; missing packages/APIs still block that capability, not trying the rest of the app. Do not install the controls aggregate or newer leaf to repair an older binary.
 5. **Keep inclusion, declarations, grants, and usage separate.** The base owns OS declarations. Dependency/config toggles do not remove unused default Android permissions; different declarations require another verified base. Optional permission wrapping is deferred.
 
 ## Routing — `/add-native` is the public entry point
@@ -58,7 +58,7 @@ Before adding any native control or wrapper, verify the project and run the
 package-contract resolver in Step 1.
 
 Use its sanitized tuple as the shared resolved context for helpers/planners/builders.
-Unknown/missing published contracts block native mutations, not permission to
+Local-development results follow the shared lifecycle policy, not permission to
 assume a runtime. No separate skills release list is required. Classify the intent, resolve
 the exact package and version from this app's inventory, confirm it is not
 runtime-banned, and verify input/output/storage constraints. The newest bundled
@@ -227,7 +227,7 @@ After the project gate succeeds, resolve its native contract:
 
 ```bash
 cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
-node "${PLUGIN_ROOT}/scripts/resolve-mobile-release.js" --project-root '<working_dir>'
+node "${PLUGIN_ROOT}/scripts/resolve-mobile-release.js" --project-root '<working_dir>' --local-development
 ```
 
 ### Step 2 — Resolve capability

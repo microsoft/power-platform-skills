@@ -151,6 +151,12 @@ function main(input) {
     fail('Diagnostic artifact mode is retired. Resolve the app against its published host and template packages.');
   }
   const explicit = toolInput.validation_mode === 'explicit-mobile-workflow';
+  if (explicit && toolInput.validation_scope === 'local-development') {
+    // Package policy still applies above, but a template-lock/native mismatch
+    // must not prevent npm installation or trying the app in Dev Player.
+    process.stderr.write('WARNING: Local development does not verify Dev Player/Wrap compatibility. Use /debug-app for observed native failures.\n');
+    return;
+  }
   if (explicit && toolInput.validation_scope === 'upgrade-only') {
     // The host CLI owns installation; upgrades rely on Expo/Doctor/TypeScript,
     // not this separate app-lock and native-inventory admission policy.

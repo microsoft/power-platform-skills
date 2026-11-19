@@ -259,7 +259,8 @@ test('source-only editing and JS planning stay available without a native compat
   const edit = read('skills/edit-app/SKILL.md');
   const js = read('shared/references/javascript-dependency-planning.md');
   const version = read('shared/version-check.md');
-  assert.match(edit, /block native mutations, not[\s\S]{0,60}pure source\/UI planning and editing/);
+  assert.match(edit, /source-only work can use installed contracts/);
+  assert.match(edit, /Do not force repair before local startup/);
   assert.match(edit, /exact verified release/);
   assert.match(edit, /Release context: <sanitized resolved tuple/);
   assert.match(edit, /Approve and apply/);

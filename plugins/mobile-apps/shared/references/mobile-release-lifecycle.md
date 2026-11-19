@@ -13,11 +13,38 @@ player or wrapped binary contains the same native runtime.
 node "${PLUGIN_ROOT}/scripts/resolve-mobile-release.js" --project-root '<working_dir>'
 ```
 
-Only exit 0 authorizes using the returned release as a native dependency
-baseline. Pass the sanitized result to planners/builders, not a copy of
+Only strict resolution with exit 0 authorizes using the returned release as a
+native dependency baseline. Pass the sanitized result to planners/builders, not a copy of
 `app.json`, auth settings, or connection strings. Never substitute the plugin's
 bundled `template/package.json`. An old app does not gain capabilities when its
 plugin is updated.
+
+### Local installation and startup are not release-admission gates
+
+For local creation, editing and startup preflight, use:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/resolve-mobile-release.js" --project-root '<working_dir>' --local-development
+```
+
+This mode reads recorded requirements only, with no registry/lock/inventory
+admission. It reports a warning, exit 0 and
+`validationScope: "local-development-only"` with
+`packageCompatibility: "unverified"`. This is not a resolved release or evidence
+of native support. Continue approved installation, preparation and local code
+generation against installed public APIs; preserve unverified status in all
+planner/builder/helper handoffs. Missing APIs require a scoped capability
+decision, not an assumed package installation or Player/base change.
+Do not force repair/upgrades before trying the app. If Dev Player actually fails,
+invoke `/debug-app` and compare installed packages with the actual Player runtime.
+
+Use `validate-mobile-files.js --local-development` for local changed-file checks.
+It retains forbidden-package, vendor-source and file-safety policies without
+requiring native admission. npm installation and TypeScript/bundle checks still
+apply; this mode grants no dependency/behavior-change approval.
+Deployment still requires
+strict project/base validation; local mode cannot select a release or deployment
+target. Omit the flag for strict diagnostics and existing debug/update repairs.
 
 The protected source is `app.json` → `expo.extra.powerappsNative`:
 `schemaVersion`, `templateVersion`, and per-platform `nativeRuntimeVersions`.
@@ -54,10 +81,20 @@ the helper never treats a missing hash as success.
 The published host's `compatibility/current.json` owns target template/runtime
 requirements, managed dependencies and migration references. A matching published
 template's protected metadata and packaged lock provide the immutable native
-inventory, including nested packages. The app's own lock is checked against that
-reference; it is not allowed to declare new native packages compatible with a
-fixed binary. Missing or malformed metadata, fingerprint disagreement, an
-unpublished/unfinalized target, and dependency drift remain blockers.
+inventory, including nested package versions. The release dependency gate is
+limited to the published first-party host, offline, assets, auth, common,
+controls, push-notifications and template packages under
+`@microsoft/power-apps-native-*`. It compares their identities and exact versions,
+not npm hoisting paths. Equivalent declaration ranges are allowed when the
+installed version satisfies both the app and host requirements.
+It does not compare third-party versions (including Expo, React Native and React)
+or JavaScript/tooling versions with the template lock. The app's own manifest,
+lock and installation must still agree; npm/Expo checks remain required.
+Package-owned offline integrity, peers and runtime requirements remain enforced.
+This narrow gate alone does not certify third-party native or Player compatibility.
+Missing or malformed metadata, fingerprint disagreement, an
+unpublished/unfinalized target, and incompatible first-party dependency drift remain
+blockers.
 
 Inspect a target without changing the app:
 

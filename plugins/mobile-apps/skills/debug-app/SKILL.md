@@ -1002,6 +1002,13 @@ cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1;
 node "${PLUGIN_ROOT}/scripts/resolve-mobile-release.js" --project-root '<working_dir>'
 ```
 
+This strict command is diagnostic evidence, not permission to stop diagnosis
+or prevent the app from being tried. If Dev Player reports a missing/incorrect
+native module or ABI mismatch, compare the actual Player runtime and installed
+package versions, including any extra native packages. Correlate a resolver
+failure with that observed symptom before proposing repair. Local workflows
+may intentionally arrive here with unverified compatibility warnings.
+
 Use only the sanitized tuple in diagnostic handoffs. The newest bundled
 template is not this app's runtime allowlist. Unknown/missing records block
 native mutations, not source-only diagnosis and fixes; mark native compatibility

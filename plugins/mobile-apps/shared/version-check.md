@@ -107,6 +107,8 @@ mismatched fingerprint blocks deployment even when the version label matches.
 ## Standard prereq snippet for skills
 
 Most skills only need the always-required tier. Copy this into Step 1.
+Local installation/startup uses advisory compatibility diagnostics; warnings
+must not prevent trying the app. Strict deployment checks omit this mode.
 
 Use shell/project-file checks directly:
 
@@ -119,7 +121,7 @@ node --version          # expect v22+
 
 # Project-local (only if inside a project)
 test -f power.config.json && echo "OK: code app project"
-node "${PLUGIN_ROOT}/scripts/resolve-mobile-release.js" --project-root '<working_dir>'
+node "${PLUGIN_ROOT}/scripts/resolve-mobile-release.js" --project-root '<working_dir>' --local-development
 ```
 
 **Do NOT call `xcodebuild`, `java -version`, or check for Android Studio in any skill.** Local native compile is the user's choice, not a plugin concern.

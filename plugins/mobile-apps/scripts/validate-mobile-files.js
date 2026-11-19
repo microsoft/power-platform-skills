@@ -15,12 +15,13 @@ const PLUGIN_ROOT = path.resolve(__dirname, '..');
 
 function usage() {
   return [
-    'Usage: node validate-mobile-files.js --project-root <path> (--all-source | --file <path> [--file <path> ...]) [--approved-js-dependency <name>@<exact-version> ...] [--upgrade-only]',
+    'Usage: node validate-mobile-files.js --project-root <path> (--all-source | --file <path> [--file <path> ...]) [--approved-js-dependency <name>@<exact-version> ...] [--upgrade-only | --local-development]',
     '',
     'Paths must be regular files. Relative paths resolve from --project-root.',
     '--all-source validates every .ts/.tsx file under app/ and src/, plus root .ts/.tsx files.',
     'Approved JavaScript dependencies must use exact semver versions from the reviewed app plan.',
     '--upgrade-only skips app-lock/native-inventory admission; the upgrade must pass Expo, Expo Doctor and TypeScript checks.',
+    '--local-development retains file/package policies without blocking installation/startup on native compatibility.',
   ].join('\n');
 }
 
@@ -43,6 +44,7 @@ function parseArgs(argv) {
     projectRoot: null,
     targets: [],
     upgradeOnly: false,
+    localDevelopment: false,
   };
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -57,6 +59,8 @@ function parseArgs(argv) {
       parsed.allSource = true;
     } else if (arg === '--upgrade-only') {
       parsed.upgradeOnly = true;
+    } else if (arg === '--local-development') {
+      parsed.localDevelopment = true;
     } else if (arg === '--diagnostic-artifacts') {
       parsed.errors.push('BLOCKED: --diagnostic-artifacts is retired. Use published host/template packages.');
       parsed.blocked = true;
@@ -76,6 +80,9 @@ function parseArgs(argv) {
     }
   }
 
+  if (parsed.upgradeOnly && parsed.localDevelopment) {
+    parsed.errors.push('Choose --upgrade-only or --local-development, not both.');
+  }
   return parsed;
 }
 
@@ -112,7 +119,7 @@ function collectSourceTargets(projectRoot) {
   return targets.sort();
 }
 
-function runValidator(validatorName, filePath, content, projectRoot, approvedJsDependencies, upgradeOnly) {
+function runValidator(validatorName, filePath, content, projectRoot, approvedJsDependencies, upgradeOnly, localDevelopment) {
   const validatorPath = path.join(PLUGIN_ROOT, 'hooks', validatorName);
   const payload = JSON.stringify({
     cwd: projectRoot,
@@ -124,6 +131,7 @@ function runValidator(validatorName, filePath, content, projectRoot, approvedJsD
       validation_mode: 'explicit-mobile-workflow',
       approved_js_dependencies: approvedJsDependencies,
       ...(upgradeOnly ? { validation_scope: 'upgrade-only' } : {}),
+      ...(localDevelopment ? { validation_scope: 'local-development' } : {}),
     },
   });
 
@@ -149,6 +157,7 @@ function main(argv) {
     projectRoot: projectRootArg,
     targets,
     upgradeOnly,
+    localDevelopment,
   } = parseArgs(argv);
   if (help) {
     process.stdout.write(`${usage()}\n`);
@@ -225,6 +234,7 @@ function main(argv) {
         projectRoot,
         approvedJsDependencies,
         upgradeOnly,
+        localDevelopment,
       );
       if (result.stdout) process.stdout.write(result.stdout);
       if (result.stderr) process.stderr.write(result.stderr);

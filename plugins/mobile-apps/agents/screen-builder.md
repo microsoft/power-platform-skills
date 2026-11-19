@@ -30,10 +30,10 @@ You will be invoked by `/create-mobile-app` Step 11 or `/edit-app` screen-rebuil
 - **App-matched release context.** Read
   [release lifecycle](../shared/references/mobile-release-lifecycle.md) and use
   the orchestrator's sanitized resolved context, not the newest bundled
-  template. A missing context is `NEEDS_CONTEXT`; unknown/missing release
-  records block new/changed native use. Existing pure source/UI work may
-  continue against installed APIs with native compatibility explicitly
-  unverified. Never install/upgrade a host, Expo package, controls aggregate,
+  template. A missing context is `NEEDS_CONTEXT`; an explicit
+  `local-development-only` result is valid context under the shared lifecycle
+  policy. Existing pure source/UI work may continue explicitly unverified.
+  Never install/upgrade a host, Expo package, controls aggregate,
   or leaf to make a screen compile, and never claim native validation from tsc.
   Preserve and forward the same context on any handoff.
   Release-matched installed APIs take precedence over illustrative samples in

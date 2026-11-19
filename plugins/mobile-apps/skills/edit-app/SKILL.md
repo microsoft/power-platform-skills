@@ -280,14 +280,13 @@ Resolve the existing app, not the newest bundled template:
 
 ```bash
 cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
-node "${PLUGIN_ROOT}/scripts/resolve-mobile-release.js" --project-root '<working_dir>'
+node "${PLUGIN_ROOT}/scripts/resolve-mobile-release.js" --project-root '<working_dir>' --local-development
 ```
 
-Keep its sanitized resolved context for every planner/builder handoff and
-native helper. Unknown/missing release records block native mutations, not
-existing pure source/UI planning and editing. For source-only work, inspect
-installed contracts and mark native compatibility unverified. Do not claim
-that preview or TypeScript validates a player/base.
+Keep the sanitized context, including unverified status, for every planner/builder
+handoff and native helper. Follow the shared lifecycle's local-development policy:
+source-only work can use installed contracts without claiming preview or
+TypeScript validates a player/base. Do not force repair before local startup.
 
 Native/host/Expo upgrades are a separate approved `/check-updates` migration to
 an exact verified release. Do not silently upgrade an existing app, install the

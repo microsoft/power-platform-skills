@@ -297,7 +297,8 @@ test('PDF viewer compares URI behavior and installed version, not just an export
   const versionGate = section(skill('add-pdf-viewer'), '### 2. Verify the app-matched release and import path');
   assert.match(versionGate, /resolve-mobile-release\.js/);
   assert.match(versionGate, /file URI support requires the PDF 0\.2\.9\+ contract/);
-  assert.match(versionGate, /If resolution fails,\s+STOP/);
+  assert.match(versionGate, /--local-development/);
+  assert.match(versionGate, /shared\s+local-development policy/);
   assert.match(versionGate, /exact leaf\/version is included/);
 });
 

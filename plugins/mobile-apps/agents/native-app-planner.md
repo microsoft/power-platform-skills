@@ -112,10 +112,10 @@ Read these references once before doing anything else:
 
 Do not assume scaffolding has completed or infer a runtime from plugin files.
 If the release context is missing, request it from the orchestrator or resolve
-read-only with `node "${PLUGIN_ROOT}/scripts/resolve-mobile-release.js" --project-root '<working_dir>'`.
-Unknown/missing records block native capability approval for implementation.
-Existing pure source/UI planning may continue explicitly unverified; do not
-turn a plan-only proposal into a native-readiness claim.
+read-only with `node "${PLUGIN_ROOT}/scripts/resolve-mobile-release.js" --project-root '<working_dir>' --local-development`.
+An explicit `local-development-only` result is valid context. Follow the
+shared lifecycle's local-development policy for installed APIs and unverified
+handoffs; do not turn local planning into a Player-readiness claim.
 
 From the planner prompt extract:
 - **Target platforms** — always iOS + Android. The foreground does not ask the user to choose a subset; retain platform-specific fallback behavior for both.
@@ -165,13 +165,13 @@ This restriction does not apply to verified pure-JavaScript dependencies.
 Do not infer native code from a package-name prefix.
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/resolve-mobile-release.js" --project-root '<working_dir>'
+node "${PLUGIN_ROOT}/scripts/resolve-mobile-release.js" --project-root '<working_dir>' --local-development
 ```
 
 Carry the sanitized resolved context unchanged to every architect, screen
-planner, revision, and downstream builder. Missing published compatibility
-metadata blocks native mutations; it is not evidence that every package is supported.
-Inspect `nativePackages` for canonical `node_modules`-relative package paths
+planner, revision, and downstream builder. Local-development results carry
+unverified status rather than a release inventory. For strict resolved context,
+inspect `nativePackages` for canonical `node_modules`-relative package paths
 and exact reviewed versions, including nested native dependencies. Inspect
 `managedDependencies` for published host dependency declarations. These are package
 metadata, not absolute project paths, raw manifests, or lockfile download URLs.

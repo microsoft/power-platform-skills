@@ -158,6 +158,33 @@ test('upgrade file validation skips lock and installed-inventory admission but r
   blocked(invoke(true), /Forbidden dependency/);
 });
 
+test('local changed-file validation permits preinstall/native drift but retains package policy', (t) => {
+  const fixture = createFixture(t);
+  addDependency(fixture.projectRoot, '@microsoft/power-apps-native-controls', '1.0.0');
+  const invoke = (...flags) => spawnSync(process.execPath, [
+    path.join(fixture.pluginRoot, 'scripts/validate-mobile-files.js'),
+    '--project-root', fixture.projectRoot, '--file', 'package.json', ...flags,
+  ], {
+    cwd: fixture.projectRoot, encoding: 'utf8',
+    env: { ...process.env, POWER_PLATFORM_SKILLS_TELEMETRY_MOBILE_APP_OPTOUT: '1' },
+  });
+  blocked(invoke(), /Native\/runtime dependency/);
+  const result = invoke('--local-development');
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stderr, /WARNING: Local development[\s\S]*\/debug-app/);
+  fs.unlinkSync(path.join(fixture.projectRoot, 'package-lock.json'));
+  fs.rmSync(path.join(fixture.projectRoot, 'node_modules'), { recursive: true });
+  assert.equal(invoke('--local-development').status, 0);
+  modifyJson(path.join(fixture.projectRoot, 'package.json'), (pkg) => { pkg.dependencies.axios = '1.0.0'; });
+  blocked(invoke('--local-development'), /Forbidden dependency/);
+  modifyJson(path.join(fixture.projectRoot, 'package.json'), (pkg) => {
+    delete pkg.dependencies.axios;
+    pkg.dependencies['expo-msal-intune'] = '1.0.0';
+  });
+  blocked(invoke('--local-development'), /Vendor-only dependency/);
+  assert.equal(invoke('--local-development', '--upgrade-only').status, 1);
+});
+
 test('old apps are admitted by their release, not by a newer default release', (t) => {
   const old = fixtureRelease();
   const newest = fixtureRelease(2);
@@ -223,9 +250,9 @@ test('a JS-only host remains runtime-sensitive and its installed version cannot 
   blocked(runValidator(fixture), /native inventory/);
 });
 
-test('nested native instances must match their exact reviewed path and version', (t) => {
+test('nested first-party instances must match a reviewed identity and version', (t) => {
   const release = fixtureRelease();
-  const nested = 'node_modules/expo/node_modules/ordinary-bridge';
+  const nested = 'node_modules/expo/node_modules/@microsoft/power-apps-native-common';
   release.nativePackages[nested] = '1.0.0';
   const fixture = createFixture(t, { release });
   assert.equal(runValidator(fixture).status, 0);
@@ -266,7 +293,7 @@ test('detects ordinary-name native modules in a JS dependency transitive closure
   addDependency(fixture.projectRoot, 'ordinary-bridge', '1.0.0', {
     section: null, installPath: 'node_modules/ordinary-ui/node_modules/ordinary-bridge', properties: { codegenConfig: {} },
   });
-  blocked(runValidator(fixture), /Unreviewed native package/);
+  blocked(runValidator(fixture), /Native\/runtime dependency/);
 });
 
 test('rejects malformed package, app, lock and installed JSON without leaking content', (t) => {
