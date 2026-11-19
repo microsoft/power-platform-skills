@@ -274,11 +274,41 @@ test('a manually updated host does not hide the older recorded template or requi
   assert.equal(result.target.templateVersion, 2);
 });
 
-test('native changes cannot be hidden in a patch or minor target', (t) => {
+test('native patch/minor transitions are supported through an explicit template migration', (t) => {
   const f = fixture(t);
   f.host('1.1.0', 2, 2, [migration('1.1.0')]);
   f.template('1.1.0', '1.1.0');
-  assert.throws(() => planPublishedUpdate(f.projectRoot, '1.1.0', f.options), /new host major/);
+  const result = planPublishedUpdate(f.projectRoot, '1.1.0', f.options);
+  assert.equal(result.kind, 'template-upgrade');
+  assert.equal(result.nativeChanged, true);
+  f.host('3.0.0', 2, 2, [migration('3.0.0')]);
+  assert.throws(() => planPublishedUpdate(f.projectRoot, '3.0.0', f.options), /2\.x\.x release first/);
+});
+
+test('0.5.1 and 1.0.3 apps select the final 1.0.4 native release without acquiring the intermediate host', async (t) => {
+  for (const [sourceHost, version] of [['0.5.1', 1], ['1.0.3', 2]]) {
+    await t.test(sourceHost, (t) => {
+      const f = fixture(t);
+      modifyJson(path.join(f.projectRoot, 'node_modules', HOST, 'package.json'), (pkg) => { pkg.version = sourceHost; });
+      modifyJson(path.join(f.projectRoot, 'app.json'), (app) => {
+        Object.assign(app.expo.extra.powerappsNative, {
+          templateVersion: version, nativeRuntimeVersions: { android: version, ios: version },
+        });
+      });
+      const first = migration('1.0.3', '^0.5.1');
+      const next = {
+        ...migration('1.0.4', '^1.0.3'), id: 'template-v3', fromTemplateVersion: 2, toTemplateVersion: 3,
+      };
+      f.host('1.0.4', 3, 3, [first, next]);
+      f.template('1.0.4', '1.0.4');
+      const result = planPublishedUpdate(f.projectRoot, '1.0.4', f.options);
+      assert.equal(result.kind, 'template-upgrade');
+      assert.equal(result.target.host.version, '1.0.4');
+      assert.equal(result.target.templateVersion, 3);
+      assert.equal(result.nativeChanged, true);
+      assert.equal(f.requests.includes(`${HOST}@1.0.3`), false);
+    });
+  }
 });
 
 test('unpublished or unfinalized targets fail before mutation without falling back', (t) => {

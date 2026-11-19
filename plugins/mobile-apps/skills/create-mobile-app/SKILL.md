@@ -39,7 +39,11 @@ and summary.
 
 ## Fresh-template working-directory mode
 
-Only after confirming new-app intent through the state routing below, read [mobile-release-lifecycle.md](../../shared/references/mobile-release-lifecycle.md). Discover published template versions through npm, select an exact stable version, and inspect it with `resolve-mobile-release.js --template-version "<exact-template-version>"`. Missing or incompatible published package metadata means `BLOCKED` before scaffolding or data-platform mutations. The helper checks the immutable template against its published host contract; there is no plugin-owned release list. npm channel names, the plugin's bundled snapshot, and a mutable Git branch are not compatibility evidence. Report Player availability separately; if its native runtime differs, offer an explicitly selected compatible template for the new app rather than promising the latest package can run in that Player.
+After confirming new-app intent, classify the directory using the state routing below before any registry request. Read [mobile-release-lifecycle.md](../../shared/references/mobile-release-lifecycle.md).
+
+**New/empty-directory acquisition only:** discover published template versions through npm, select an exact stable version, and inspect it with `resolve-mobile-release.js --template-version "<exact-template-version>"`. Missing or incompatible published package metadata means `BLOCKED` before scaffolding or data-platform mutations on this path. The helper checks the immutable template against its published host contract; there is no plugin-owned release list. npm channel names, the plugin's bundled snapshot, and a mutable Git branch are not compatibility evidence. Report Player availability separately; if its native runtime differs, offer an explicitly selected compatible template rather than promising the latest package can run in that Player.
+
+**Existing fresh starters, installed or awaiting installation:** skip npm template discovery and strict `--template-version` resolution. Use the shipped-lock installation and local diagnostic paths below; unavailable registry metadata does not block this routing.
 
 **Fresh template required for creation.** If the working directory is not a fresh
 template, STOP creation and follow the state-specific routing below. Do not send
@@ -2512,7 +2516,7 @@ If the plan says "None — this app uses only standard React Native components a
 
 **Telemetry checkpoint: `install_approved_javascript_dependencies`**
 
-Read and execute the Installation Contract in [`shared/references/javascript-dependency-planning.md`](${PLUGIN_ROOT}/shared/references/javascript-dependency-planning.md) for every approved row in `## Screens → ### JavaScript Dependencies`. If the subsection is absent or says `None.`, continue without changing dependencies.
+Read and execute the Installation Contract in [`shared/references/javascript-dependency-planning.md`](${PLUGIN_ROOT}/shared/references/javascript-dependency-planning.md) for new or changed approved rows in `## Screens → ### JavaScript Dependencies`; reuse unchanged existing rows. If the subsection is absent or says `None.`, continue without changing dependencies.
 
 Gate 4 approval is consent for exactly the packages and versions in the table. Install them into `<working_dir>` before any skeleton or builder imports them, validate `package.json` and the lockfile, and verify module resolution. Do not substitute another package/version, infer a package from a compiler error, or route a JS-only package through `/add-native`. If final inspection finds native code/config or incompatible runtime dependencies, remove only the newly added package and STOP with the exact failed criterion.
 

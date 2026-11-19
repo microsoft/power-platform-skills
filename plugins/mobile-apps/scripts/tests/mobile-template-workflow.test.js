@@ -25,10 +25,11 @@ test('native updates are evaluated independently of outdated-host discovery', ()
 
 test('rehearsal, full-chain approval, drift checks and recovery are separate gates', () => {
   const rehearsal = updates.indexOf('Test the upgrade in a copy of my app');
-  const perEdge = updates.indexOf('repeat dry-run and apply');
+  const transaction = updates.indexOf('clean full-chain plan');
   const approval = updates.indexOf('Apply the tested upgrade to my app');
   const apply = updates.indexOf('### Apply only the approved plan');
-  assert.ok(rehearsal >= 0 && rehearsal < perEdge && perEdge < approval && approval < apply);
+  assert.ok(rehearsal >= 0 && rehearsal < transaction && transaction < approval && approval < apply);
+  assert.doesNotMatch(updates, /repeat dry-run and apply until/);
   assert.match(updates, /nonzero preview is never automatically a clean plan/);
   assert.match(updates, /`--no-install` to simulate state advancement/);
   assert.match(updates, /under `<working_dir>`/);
@@ -72,6 +73,19 @@ test('local workflows carry unverified compatibility without gating installation
   for (const helper of ['add-camera', 'add-geolocation', 'add-pdf-report', 'add-pdf-viewer', 'add-pen-input']) {
     assert.match(read(`skills/add-native/${helper}/SKILL.md`), /resolve-mobile-release\.js[^\n]*--local-development/, helper);
   }
+});
+
+test('strict template discovery is limited to empty targets, not existing fresh starters', () => {
+  const acquisition = create.slice(create.indexOf('**New/empty-directory acquisition only:**'),
+    create.indexOf('**Existing fresh starters, installed or awaiting installation:**'));
+  assert.match(acquisition, /discover published template versions through npm/);
+  assert.match(acquisition, /resolve-mobile-release\.js --template-version/);
+  assert.match(acquisition, /`BLOCKED` before scaffolding/);
+  const existing = create.slice(create.indexOf('**Existing fresh starters, installed or awaiting installation:**'),
+    create.indexOf('**Fresh template required for creation.**'));
+  assert.match(existing, /skip npm template discovery and strict `--template-version` resolution/);
+  assert.match(existing, /shipped-lock installation and local diagnostic/);
+  assert.ok(create.indexOf('before any registry request') < create.indexOf('**New/empty-directory acquisition only:**'));
 });
 
 test('individual package failures allow approved repairs or safe skipping, not immediate abandonment', () => {

@@ -252,38 +252,61 @@ function detectsNative(directory, pkg) {
   return visit(directory);
 }
 
-function inspectInstalledPackages(projectRoot, lock) {
+function inspectInstalledPackages(projectRoot, lock, dependencyRoots) {
   const installed = new Map();
+  const scoped = dependencyRoots !== undefined;
+  const available = { has: (relativePath) => fs.existsSync(path.join(projectRoot, relativePath)) };
+  function visitPackage(relativePath) {
+    if (installed.has(relativePath)) return;
+    requireValue(safeInstallPath(relativePath), 'Unsupported installed package path.');
+    const absolutePath = path.join(projectRoot, relativePath);
+    if (scoped) {
+      // Scoped reads bypass visitModules, so check the containing scopes and
+      // node_modules directories too, without enumerating unrelated packages.
+      let directory = projectRoot;
+      for (const part of relativePath.split('/').slice(0, -1)) {
+        directory = path.join(directory, part);
+        requireValue(!fs.lstatSync(directory).isSymbolicLink(), 'Linked packages cannot be verified against the reviewed runtime.');
+      }
+    }
+    requireValue(!fs.lstatSync(absolutePath).isSymbolicLink(), 'Linked packages cannot be verified against the reviewed runtime.');
+    const pkg = readJson(path.join(absolutePath, 'package.json'), 'installed package manifest');
+    const name = relativePath.split('/node_modules/').pop().replace(/^node_modules\//, '');
+    requireValue(safePackageName(pkg.name) && exactVersion(pkg.version), 'Installed package identity or version is invalid.');
+    dependencySections(pkg);
+    const native = isRuntimePackage(name) || isRuntimePackage(pkg.name) || detectsNative(absolutePath, pkg);
+    const alias = pkg.name !== name;
+    const locked = lock?.packages?.[relativePath];
+    if (alias) {
+      // npm aliases retain the canonical package name, e.g.
+      // string-width-cjs -> string-width. Strict admission also binds the lock;
+      // scoped JS inspection classifies actual contents without consulting it.
+      requireValue(!native, 'Native/runtime npm aliases cannot be admitted by the reviewed inventory schema.');
+      if (!scoped) requireValue([2, 3].includes(lock?.lockfileVersion) && object(locked) && !locked.link
+        && locked.name === pkg.name && locked.version === pkg.version,
+      'Installed npm alias must match its canonical name and exact version in the app lock.');
+    }
+    requireValue(locked?.name === undefined || locked.name === pkg.name, 'Installed package canonical identity differs from the app lock.');
+    installed.set(relativePath, {
+      name, canonicalName: pkg.name, alias, version: pkg.version, pkg, native,
+    });
+    if (scoped) {
+      // A native node already answers the JS-only question. Do not inspect its
+      // subtree or unrelated nested packages; root React/RN peers are reusable.
+      if (native) return;
+      for (const [name, edge] of dependencyEdges(pkg)) {
+        const dependency = resolveInstalledDependency(available, relativePath, name);
+        requireValue(dependency || edge.optional, `Cannot inspect missing JavaScript dependency ${name}. Install the approved package before validation.`);
+        if (dependency) visitPackage(dependency);
+      }
+    } else {
+      visitModules(`${relativePath}/node_modules`);
+    }
+  }
   function visitModules(relativeDirectory) {
     const directory = path.join(projectRoot, relativeDirectory);
     if (!fs.existsSync(directory)) return;
     requireValue(!fs.lstatSync(directory).isSymbolicLink(), 'Linked node_modules cannot be verified against the reviewed runtime.');
-    function visitPackage(relativePath) {
-      requireValue(safeInstallPath(relativePath), 'Unsupported installed package path.');
-      const absolutePath = path.join(projectRoot, relativePath);
-      requireValue(!fs.lstatSync(absolutePath).isSymbolicLink(), 'Linked packages cannot be verified against the reviewed runtime.');
-      const pkg = readJson(path.join(absolutePath, 'package.json'), 'installed package manifest');
-      const name = relativePath.split('/node_modules/').pop().replace(/^node_modules\//, '');
-      requireValue(safePackageName(pkg.name) && exactVersion(pkg.version), 'Installed package identity or version is invalid.');
-      dependencySections(pkg);
-      const native = isRuntimePackage(name) || isRuntimePackage(pkg.name) || detectsNative(absolutePath, pkg);
-      const alias = pkg.name !== name;
-      const locked = lock?.packages?.[relativePath];
-      if (alias) {
-        // npm aliases retain the canonical package name in package.json and the
-        // v2/v3 lock entry, e.g. string-width-cjs -> string-width. The release
-        // inventory cannot bind a separate canonical native identity safely.
-        requireValue(!native, 'Native/runtime npm aliases cannot be admitted by the reviewed inventory schema.');
-        requireValue([2, 3].includes(lock?.lockfileVersion) && object(locked) && !locked.link
-          && locked.name === pkg.name && locked.version === pkg.version,
-        'Installed npm alias must match its canonical name and exact version in the app lock.');
-      }
-      requireValue(locked?.name === undefined || locked.name === pkg.name, 'Installed package canonical identity differs from the app lock.');
-      installed.set(relativePath, {
-        name, canonicalName: pkg.name, alias, version: pkg.version, pkg, native,
-      });
-      visitModules(`${relativePath}/node_modules`);
-    }
     for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
       if (entry.name.startsWith('.')) continue;
       if (entry.name.startsWith('@')) {
@@ -299,8 +322,12 @@ function inspectInstalledPackages(projectRoot, lock) {
   }
   try {
     const lockPath = path.join(projectRoot, 'package-lock.json');
-    if (lock === undefined && fs.existsSync(lockPath)) lock = readJson(lockPath, 'package-lock.json');
-    visitModules('node_modules');
+    if (!scoped && lock === undefined && fs.existsSync(lockPath)) lock = readJson(lockPath, 'package-lock.json');
+    if (scoped) {
+      for (const name of dependencyRoots) visitPackage(`node_modules/${name}`);
+    } else {
+      visitModules('node_modules');
+    }
     return installed;
   } catch (error) {
     if (error.code === 'MOBILE_RELEASE_BLOCKED') throw error;

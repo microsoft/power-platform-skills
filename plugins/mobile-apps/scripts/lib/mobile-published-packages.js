@@ -341,6 +341,8 @@ function planPublishedUpdate(projectRoot, hostVersion, options = {}) {
   const sourceRequirements = readSourceRequirements(projectRoot);
   requireValue(compareVersions(sourceRequirements.hostVersion, hostVersion) <= 0,
     'Selected published host would downgrade the app; choose a supported forward version.');
+  requireValue(semver.major(hostVersion) <= semver.major(sourceRequirements.hostVersion) + 1,
+    `Cannot skip host majors; upgrade to the latest supported ${semver.major(sourceRequirements.hostVersion) + 1}.x.x release first.`);
   const source = createSource({ ...options, cwd: projectRoot });
   const host = source.read(HOST, hostVersion);
   validateHost(host);
@@ -364,18 +366,9 @@ function planPublishedUpdate(projectRoot, hostVersion, options = {}) {
       }
     }
   }
-  const edges = [];
   for (let version = sourceRequirements.templateVersion; version < target.templateVersion; version += 1) {
     const matching = host.migrations.filter((migration) => migration.fromTemplateVersion === version);
     requireValue(matching.length === 1, 'The selected published host does not contain an unambiguous migration chain for this app.');
-    edges.push(matching[0]);
-  }
-  if (nativeChanged) {
-    const fromSpec = edges[0]?.packageTransitions?.dependencies?.[HOST]?.from;
-    const fromVersion = typeof fromSpec === 'string' ? fromSpec.replace(/^[~^]/, '') : sourceRequirements.hostVersion;
-    requireValue(exactVersion(fromVersion, true)
-      && BigInt(hostVersion.split('.')[0]) > BigInt(fromVersion.split('.')[0]),
-    'A native runtime transition requires a new host major; the published migration must identify the source host requirement.');
   }
   const hostInstallRequired = sourceRequirements.hostVersion !== hostVersion;
   return {
