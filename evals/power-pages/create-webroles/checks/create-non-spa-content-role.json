@@ -3,7 +3,8 @@
     {
       "path": "docs/non-spa-role-plan.md",
       "type": "text",
-      "requiredText": ["site/web-roles/content-editors.webrole.yml", "anonymoususersrole: false", "authenticatedusersrole: false", "f08e7b5d-2244-49e8-9835-92f3d9220b37", "Content Editors", "create-web-role.js"],
+      "requiredText": ["site/web-roles/content-editors.webrole.yml", "anonymoususersrole: false", "authenticatedusersrole: false", "Content Editors", "create-web-role.js"],
+      "forbiddenPatterns": ["\\b[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}\\b"],
       "minTextLength": 200
     }
   ],

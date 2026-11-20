@@ -14,7 +14,12 @@
     {
       "path": "site/index.html",
       "type": "text",
-      "requiredText": ["name=\"description\"", "rel=\"canonical\"", "property=\"og:title\"", "name=\"twitter:card\""]
+      "requiredPatterns": [
+        "name\\s*=\\s*[\"']description[\"']",
+        "rel\\s*=\\s*[\"']canonical[\"']",
+        "property\\s*=\\s*[\"']og:title[\"']",
+        "name\\s*=\\s*[\"']twitter:card[\"']"
+      ]
     }
   ],
   "unchanged": [

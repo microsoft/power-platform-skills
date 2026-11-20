@@ -281,6 +281,65 @@ test('contracts reject unknown fields, vacuous checks, invalid regexes, and trav
   ]) assert.throws(() => validateContract(contract));
 });
 
+test('SEO and planning contracts accept equivalent valid source forms', async t => {
+  const root = await workspace(t);
+  const cases = [
+    {
+      contractFile: 'evals/power-pages/add-seo/checks/astro-localized-seo.json',
+      outputPath: 'site/src/layouts/BaseLayout.astro',
+      content: 'Astro metadata is implemented using a supported locale helper.',
+      label: 'Astro source remains the quality rubric concern',
+    },
+    {
+      contractFile: 'evals/power-pages/add-seo/checks/react-catalog-seo.json',
+      outputPath: 'site/index.html',
+      content: `<meta name='description' content='Catalog'>
+<link rel='canonical' href='https://fabrikam.example/'>
+<meta property='og:title' content='Catalog'><meta name='twitter:card' content='summary'>`,
+      label: 'single-quoted HTML metadata',
+    },
+    {
+      contractFile: 'evals/power-pages/add-seo/checks/minimal-seo.json',
+      outputPath: 'site/index.html',
+      content: `<meta name='description' content='Catalog'>`,
+      label: 'single-quoted basic SEO metadata',
+    },
+    {
+      contractFile: 'evals/power-pages/integrate-webapi/checks/existing-contact-client-plan.json',
+      outputPath: 'docs/webapi-integration-plan.md',
+      content: `The existing client at src/shared/powerPagesApi.ts is reused for Contacts.
+Include anti-forgery handling and the contactid, firstname, and lastname fields.
+Site architects own permission design. Confirm the exact table and field access,
+the authenticated role, and the least-privilege permission scope with the site
+architects before changing configuration. No permission files are created until
+the reviewed plan is approved.`,
+      label: 'permission wording in either order',
+    },
+    {
+      contractFile: 'evals/power-pages/create-webroles/checks/create-non-spa-content-role.json',
+      outputPath: 'docs/non-spa-role-plan.md',
+      content: `Create Content Editors at site/web-roles/content-editors.webrole.yml.
+Set anonymoususersrole: false and authenticatedusersrole: false.
+After approval, invoke create-web-role.js with the project root and role name.
+The deterministic writer generates the role ID and writes its metadata in the
+PAC per-record format. Do not manually create files or modify the export.`,
+      label: 'non-SPA writer-generated UUID',
+    },
+  ];
+
+  const repoRoot = path.resolve(import.meta.dirname, '../../..');
+  for (const { contractFile, outputPath, content, label } of cases) {
+    const source = JSON.parse(await readFile(path.join(repoRoot, contractFile), 'utf8'));
+    const spec = source.files.find(file => file.path === outputPath);
+    assert.ok(spec, `missing ${outputPath} in ${contractFile}`);
+    const output = path.join(root, outputPath);
+    await mkdir(path.dirname(output), { recursive: true });
+    await writeFile(output, content);
+    const result = await gradeArtifacts({ contract: { files: [spec] }, workDir: root, suiteDir: root });
+    assert.equal(result.passed, true, `${label}: ${result.evidence}`);
+  }
+});
+
 test('embedded renderer data is parsed without executing code or splitting escaped semicolons', () => {
   const html = inspectHtml(document('<h1>Plan</h1><script>const ER_DIAGRAM = "erDiagram\\n A ||--o{ B : \\"a;b\\""; const ignored = globalThis.sideEffect();</script>'));
   assert.equal(html.diagrams[0], 'erDiagram\n A ||--o{ B : "a;b"');

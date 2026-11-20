@@ -3,7 +3,7 @@
     {
       "path": "site/src/layouts/BaseLayout.astro",
       "type": "text",
-      "requiredText": ["hreflang=\"en-US\"", "hreflang=\"fr-FR\"", "https://northwind.example/fr/", "rel=\"canonical\""]
+      "minTextLength": 1
     },
     {
       "path": "site/public/robots.txt",

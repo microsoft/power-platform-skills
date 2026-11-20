@@ -3,8 +3,8 @@
     {
       "path": "docs/webapi-integration-plan.md",
       "type": "text",
-      "requiredText": ["src/shared/powerPagesApi.ts", "Contacts", "anti-forgery", "contactid", "firstname", "lastname"],
-      "requiredPatterns": ["reuse|existing client", "permission.{0,60}architect"],
+      "requiredText": ["src/shared/powerPagesApi.ts", "Contacts", "anti-forgery", "contactid", "firstname", "lastname", "permission", "architect"],
+      "requiredPatterns": ["reuse|existing client"],
       "minTextLength": 250
     }
   ],

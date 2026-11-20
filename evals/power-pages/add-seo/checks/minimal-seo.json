@@ -13,7 +13,7 @@
     {
       "path": "site/index.html",
       "type": "text",
-      "requiredText": ["name=\"description\""],
+      "requiredPatterns": ["name\\s*=\\s*[\"']description[\"']"],
       "forbiddenText": ["og:title", "twitter:card", "rel=\"icon\""]
     }
   ],

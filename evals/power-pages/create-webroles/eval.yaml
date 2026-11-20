@@ -98,9 +98,10 @@ stimuli:
     prompt: |
       This is a downloaded non-SPA site opened directly at site/, with
       .portalconfig/ and website.yml and no powerpages.config.json. Add one
-      Content Editors role is requested under site/web-roles/ using UUID
-      f08e7b5d-2244-49e8-9835-92f3d9220b37. It is an ordinary role, so both
-      anonymoususersrole and authenticatedusersrole must be false.
+      Content Editors role under site/web-roles/. It is an ordinary role, so
+      both anonymoususersrole and authenticatedusersrole must be false. The
+      deterministic writer generates the role ID after approval; do not invent
+      or hardcode one in the plan.
       Write docs/non-spa-role-plan.md proposing the exact metadata path and
       four role fields, and the script invocation that would create it after
       approval. The deterministic writer is unavailable offline; do not write
@@ -124,7 +125,7 @@ stimuli:
           evidence: ['trajectory', 'repo']
     rubric:
       - "The proposed role uses the directly opened non-SPA metadata root and PAC per-record naming."
-      - "Both special-role flags are false, the supplied UUID is proposed, and metadata creation is deferred to the deterministic writer."
+      - "Both special-role flags are false, ID generation is deferred to the deterministic writer, and metadata creation requires approval."
       - "Do not claim deployment or live verification."
   - name: stationery-purchase-dormancy
     tags:
