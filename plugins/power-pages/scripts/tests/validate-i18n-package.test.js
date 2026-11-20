@@ -37,10 +37,17 @@ function sleep(ms) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
-function waitForFile(filePath, timeoutMs) {
+function waitForJsonFile(filePath, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
-  while (!fs.existsSync(filePath) && Date.now() < deadline) sleep(25);
-  return fs.existsSync(filePath);
+  while (Date.now() < deadline) {
+    try {
+      // The detached telemetry dispatcher can create the probe before its write completes.
+      return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    } catch {
+      sleep(25);
+    }
+  }
+  return null;
 }
 
 function writeProvisionedTelemetryConfig(configDir) {
@@ -200,8 +207,9 @@ test('CLI error telemetry uses a stable generic failure code', () => {
   );
 
   assert.equal(result.status, 1);
-  assert.ok(waitForFile(probePath, 5_000), 'error dispatcher should write probe');
-  const envelope = JSON.parse(JSON.parse(fs.readFileSync(probePath, 'utf8')).body);
+  const probe = waitForJsonFile(probePath, 5_000);
+  assert.ok(probe, 'error dispatcher should write a complete probe');
+  const envelope = JSON.parse(probe.body);
   const eventInfo = JSON.parse(envelope.data.eventInfo);
   assert.equal(envelope.data.eventName, 'localization_package_validation');
   assert.equal(eventInfo.validationStatus, 'error');
