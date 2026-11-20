@@ -11,13 +11,16 @@ import { evaluate, outcomeRecord, parseArgs } from '../run.mjs';
 import { loadSuites, repoRoot, trialGraders } from '../suites.mjs';
 import { DEFAULT_MODELS } from '../models.mjs';
 
-test('only the skills being improved have Vally suites; legacy-only skills remain unselected', async () => {
+test('only covered skills have Vally suites; legacy-only skills remain unselected', async () => {
   const suites = await loadSuites();
-  assert.deepEqual(suites.map(suite => suite.name), ['create-site', 'setup-auth']);
+  assert.deepEqual(suites.map(suite => suite.name), [
+    'add-localization', 'add-seo', 'create-site', 'create-webroles',
+    'integrate-webapi', 'migrate-bootstrap', 'setup-auth', 'setup-datamodel',
+  ]);
   assert.ok(suites.every(suite => suite.stimuli.length >= 4));
   assert.ok(suites.every(suite => !suite.stimuli.some(stimulus =>
     stimulus.environment?.files?.some(file => file.src.startsWith('checks/')))));
-  await assert.rejects(() => loadSuites({ skill: 'setup-datamodel' }), /No evaluation suite/);
+  await assert.rejects(() => loadSuites({ skill: 'deploy-site' }), /No evaluation suite/);
 });
 
 test('browser jobs use a Linux image supported by the pinned Playwright version', async t => {
@@ -58,7 +61,11 @@ test('manual workflow selects available suites and rejects skills without one', 
   const command = workflow.jobs.select.steps.find(step => step.id === 'select').run;
   const script = /node --input-type=module <<'JS'\n([\s\S]+)\nJS\s*$/.exec(command)?.[1];
   assert.ok(script, 'the matrix selector must be executable without model dependencies');
-  for (const [selected, expected] of [['all', ['create-site', 'setup-auth']], ['create-site', ['create-site']]]) {
+  const allSkills = [
+    'add-localization', 'add-seo', 'create-site', 'create-webroles',
+    'integrate-webapi', 'migrate-bootstrap', 'setup-auth', 'setup-datamodel',
+  ];
+  for (const [selected, expected] of [['all', allSkills], ['create-site', ['create-site']]]) {
     const output = path.join(root, selected);
     execFileSync(process.execPath, ['--input-type=module', '-'], {
       input: script, cwd: repoRoot,
@@ -71,7 +78,7 @@ test('manual workflow selects available suites and rejects skills without one', 
   }
   assert.throws(() => execFileSync(process.execPath, ['--input-type=module', '-'], {
     input: script, cwd: repoRoot, stdio: 'pipe',
-    env: { ...process.env, SELECTED_SKILL: 'setup-datamodel', GITHUB_OUTPUT: path.join(root, 'missing') },
+    env: { ...process.env, SELECTED_SKILL: 'deploy-site', GITHUB_OUTPUT: path.join(root, 'missing') },
   }), /Unknown Power Pages evaluation suite/);
 });
 

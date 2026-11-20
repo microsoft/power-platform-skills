@@ -1,0 +1,15 @@
+{
+  "files": [
+    {
+      "path": "docs/non-spa-role-plan.md",
+      "type": "text",
+      "requiredText": ["site/web-roles/content-editors.webrole.yml", "anonymoususersrole: false", "authenticatedusersrole: false", "f08e7b5d-2244-49e8-9835-92f3d9220b37", "Content Editors", "create-web-role.js"],
+      "minTextLength": 200
+    }
+  ],
+  "unchanged": [
+    {"path": "site/website.yml", "source": "fixtures/direct-export/website.yml"},
+    {"path": "site/.portalconfig/website.yml", "source": "fixtures/direct-export/portalconfig.yml"}
+  ],
+  "absent": ["site/powerpages.config.json", "site/web-roles"]
+}

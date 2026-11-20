@@ -1,0 +1,12 @@
+{
+  "files": [
+    {
+      "path": "docs/webapi-integration-plan.md",
+      "type": "text",
+      "requiredText": ["src/shared/powerPagesApi.ts", "Contacts", "anti-forgery", "contactid", "firstname", "lastname"],
+      "requiredPatterns": ["reuse|existing client", "permission.{0,60}architect"],
+      "minTextLength": 250
+    }
+  ],
+  "unchanged": [{"path": "src/shared/powerPagesApi.ts", "source": "fixtures/powerPagesApi.ts"}]
+}

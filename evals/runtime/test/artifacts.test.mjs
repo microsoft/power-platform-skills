@@ -220,7 +220,10 @@ test('purchase contracts require correct top-level numeric amounts', async t => 
   const root = await workspace(t);
   await mkdir(path.join(root, 'inputs'));
   await mkdir(path.join(root, 'results'));
-  for (const skill of ['create-site', 'setup-auth']) {
+  for (const skill of [
+    'add-localization', 'add-seo', 'create-site', 'create-webroles',
+    'integrate-webapi', 'migrate-bootstrap', 'setup-auth', 'setup-datamodel',
+  ]) {
     const suiteDir = path.resolve(import.meta.dirname, `../../power-pages/${skill}`);
     const contract = JSON.parse(await readFile(path.join(suiteDir, 'checks/stationery-purchase-dormancy.json'), 'utf8'));
     await writeFile(path.join(root, 'inputs/purchase.json'), await readFile(path.join(suiteDir, 'fixtures/purchase.json')));
@@ -235,6 +238,35 @@ test('purchase contracts require correct top-level numeric amounts', async t => 
       assert.equal(result.passed, expected, `${skill}: ${JSON.stringify(data)}: ${result.evidence}`);
     }
   }
+});
+
+test('community-role contract rejects changed existing roles and invalid new role flags', async t => {
+  const root = await workspace(t);
+  const suiteDir = path.resolve(import.meta.dirname, '../../power-pages/create-webroles');
+  const contract = JSON.parse(await readFile(path.join(suiteDir, 'checks/add-community-roles.json'), 'utf8'));
+  for (const input of contract.unchanged) {
+    const target = path.join(root, input.path);
+    await mkdir(path.dirname(target), { recursive: true });
+    await writeFile(target, await readFile(path.join(suiteDir, input.source)));
+  }
+  const roleDir = path.join(root, 'site/.powerpages-site/web-roles');
+  const contentEditors = [
+    'anonymoususersrole: false', 'authenticatedusersrole: false',
+    'id: 7ab524fd-6f2c-4bd0-9c70-12aecb2bf00b', 'name: Content Editors',
+  ].join('\n');
+  await writeFile(path.join(roleDir, 'content-editors.yml'), contentEditors);
+  await writeFile(path.join(roleDir, 'moderators.yml'), [
+    'anonymoususersrole: false', 'authenticatedusersrole: false',
+    'id: 4a8f3d9b-6859-4c48-bcd2-ff0b975e0510', 'name: Moderators',
+  ].join('\n'));
+  const grade = () => gradeArtifacts({ contract, workDir: root, suiteDir });
+  assert.equal((await grade()).passed, true);
+  await writeFile(path.join(roleDir, 'content-editors.yml'),
+    contentEditors.replace('authenticatedusersrole: false', 'authenticatedusersrole: true'));
+  assert.equal((await grade()).passed, false);
+  await writeFile(path.join(roleDir, 'content-editors.yml'), contentEditors);
+  await writeFile(path.join(roleDir, 'administrators.yml'), 'name: Changed\n');
+  assert.equal((await grade()).passed, false);
 });
 
 test('contracts reject unknown fields, vacuous checks, invalid regexes, and traversal', () => {

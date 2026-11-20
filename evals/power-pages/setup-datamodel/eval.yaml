@@ -1,0 +1,114 @@
+name: power-pages/setup-datamodel
+type: capability
+description: "Evaluate evidence-backed Dataverse model proposals without connecting to an environment."
+defaults:
+  executor: power-pages-offline
+  timeout: 10m
+  runs: 1
+stimuli:
+  - name: blog-data-model-proposal
+    tags:
+      kind: capability
+      scope: offline-plan
+      expect_activation: 'true'
+    prompt: |
+      Propose a Dataverse data model for a small blog with Authors and Posts.
+      Authors need name, email, and bio. Posts need title, body, published-on
+      date, and featured flag. Use the publisher prefix cr8f1 and include
+      logical names, types, requiredness, a Mermaid ER diagram, and the
+      one-to-many relationship. Write docs/data-model-proposal.md. This is a
+      proposal only; do not authenticate, contact Dataverse, or claim schema
+      objects were created.
+    graders:
+      - type: power-pages-artifacts
+        name: blog-data-model-proposal-artifact
+        config:
+          contract: checks/blog-data-model-proposal.json
+      - type: prompt
+        name: blog-data-model-proposal-quality
+        config:
+          scoring: scale_1_5
+          threshold: 0.8
+          evidence: ['trajectory', 'repo']
+    rubric:
+      - "The model includes author and post fields with plausible Dataverse types and requiredness."
+      - "The ER diagram expresses one author to many posts and agrees with the table definitions."
+      - "The document is a proposal and does not claim remote creation."
+  - name: feedback-table-proposal
+    tags:
+      kind: capability
+      scope: offline-plan
+      expect_activation: 'true'
+    prompt: |
+      Propose one Dataverse table for site feedback. Use publisher prefix
+      cr8f1. Include a required text subject, multiline description, whole
+      number rating constrained to 1 through 5, and submitted-on date.
+      Write docs/data-model-proposal.md with logical names, types, requiredness,
+      and any validation constraints. Do not add unrelated tables or claim
+      that anything was created in Dataverse.
+    graders:
+      - type: power-pages-artifacts
+        name: feedback-table-proposal-artifact
+        config:
+          contract: checks/feedback-table-proposal.json
+      - type: prompt
+        name: feedback-table-proposal-quality
+        config:
+          scoring: scale_1_5
+          threshold: 0.8
+          evidence: ['trajectory', 'repo']
+    rubric:
+      - "The proposal contains only the requested feedback table and fields."
+      - "Subject requiredness, multiline text, whole-number rating bounds and date semantics are explicit."
+      - "The document is a proposal and does not claim remote creation."
+  - name: extend-review-data-model
+    tags:
+      kind: capability
+      scope: offline-plan
+      expect_activation: 'true'
+    prompt: |
+      Extend an existing model with cr8f1_customer and cr8f1_product. Add
+      cr8f1_review with rating and comment, linked to both Customer and Product,
+      and add cr8f1_loyaltypoints to Customer. Write docs/data-model-proposal.md
+      showing existing versus new columns, types, requiredness, relationships,
+      and a Mermaid ER diagram. Do not alter unrelated columns or claim
+      Dataverse changes were made.
+    graders:
+      - type: power-pages-artifacts
+        name: extend-review-data-model-artifact
+        config:
+          contract: checks/extend-review-data-model.json
+      - type: prompt
+        name: extend-review-data-model-quality
+        config:
+          scoring: scale_1_5
+          threshold: 0.8
+          evidence: ['trajectory', 'repo']
+    rubric:
+      - "The review links to both existing tables and the customer extension is correctly scoped."
+      - "The proposal distinguishes new schema from existing schema and uses suitable types."
+      - "The diagram matches the relationships and the proposal does not claim remote creation."
+  - name: stationery-purchase-dormancy
+    tags:
+      kind: dormancy
+      scope: offline-artifact
+      expect_activation: 'false'
+    prompt: |
+      Reconcile inputs/purchase.json. Write results/purchase.json with currency,
+      subtotal, tax, and total as numeric amounts. Tax applies to the whole
+      subtotal. This is a local bookkeeping task; only create the result file.
+    agent_environment:
+      files:
+        - src: fixtures/purchase.json
+          dest: inputs/purchase.json
+    graders:
+      - type: skill-invocation
+        name: stationery-purchase-dormancy-no-activation
+        config:
+          disallowed: [setup-datamodel]
+      - type: power-pages-artifacts
+        name: stationery-purchase-dormancy-artifact-correctness
+        config:
+          contract: checks/stationery-purchase-dormancy.json
+    rubric:
+      - "Calculate the requested purchase correctly without invoking an unrelated Dataverse workflow."

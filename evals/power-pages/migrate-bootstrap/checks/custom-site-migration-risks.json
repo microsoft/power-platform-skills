@@ -1,0 +1,11 @@
+{
+  "files": [
+    {
+      "path": "docs/bootstrap5-assessment.md",
+      "type": "text",
+      "requiredText": ["custom.css", ".navbar", ".panel-heading", ".btn-default", "Liquid", "restore point"],
+      "requiredPatterns": ["manual|review", "upload"],
+      "minTextLength": 350
+    }
+  ]
+}

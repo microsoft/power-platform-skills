@@ -1,0 +1,143 @@
+name: power-pages/add-seo
+type: capability
+description: "Evaluate SEO assets for Power Pages code sites using local files only."
+defaults:
+  executor: power-pages-offline
+  timeout: 10m
+  runs: 1
+stimuli:
+  - name: react-catalog-seo
+    tags:
+      kind: capability
+      scope: offline-source
+      expect_activation: 'true'
+    prompt: |
+      Add SEO assets for a React Power Pages site at https://fabrikam.example.
+      Routes are /, /about, /catalog, /catalog/:id, /admin, and /account.
+      Exclude /admin and /account from crawling and the sitemap. Do not put the
+      dynamic /catalog/:id route in the sitemap. Create or update
+      site/public/robots.txt, site/public/sitemap.xml, and site/index.html with
+      accurate description, canonical, Open Graph, and Twitter Card metadata.
+      The existing site is a public product catalog titled Fabrikam Catalog;
+      describe its product browsing rather than inventing services or offers.
+      Use only local files. The owner has approved these local edits. Do not
+      browse, deploy, install packages, or commit.
+    agent_environment:
+      files:
+        - src: fixtures/react/powerpages.config.json
+          dest: site/powerpages.config.json
+        - src: fixtures/react/package.json
+          dest: site/package.json
+        - src: fixtures/react/index.html
+          dest: site/index.html
+    graders:
+      - type: power-pages-artifacts
+        name: react-catalog-seo-artifacts
+        config:
+          contract: checks/react-catalog-seo.json
+      - type: prompt
+        name: react-catalog-seo-quality
+        config:
+          scoring: scale_1_5
+          threshold: 0.8
+          evidence: ['trajectory', 'repo']
+    rubric:
+      - "Robots rules and sitemap use the supplied production URL and exclude private routes."
+      - "The sitemap contains stable routes only; metadata truthfully describes the site."
+      - "Inspect actual files and do not claim browser verification or deployment."
+  - name: astro-localized-seo
+    tags:
+      kind: capability
+      scope: offline-source
+      expect_activation: 'true'
+    prompt: |
+      Prepare SEO metadata for an Astro Power Pages site at https://northwind.example.
+      Its routes are /, /services, and /blog. Existing locales are en-US and fr-FR;
+      the French home route is /fr/. Add or update the Astro base layout at
+      site/src/layouts/BaseLayout.astro and create site/public/robots.txt and
+      site/public/sitemap.xml. Include accurate canonical and hreflang metadata
+      for the existing locales only. Do not create a root index.html or advertise
+      locales that are not listed. The owner approved local file edits only.
+      Do not browse, deploy, install packages, or commit.
+    agent_environment:
+      files:
+        - src: fixtures/astro/powerpages.config.json
+          dest: site/powerpages.config.json
+        - src: fixtures/astro/package.json
+          dest: site/package.json
+        - src: fixtures/astro/BaseLayout.astro
+          dest: site/src/layouts/BaseLayout.astro
+    graders:
+      - type: power-pages-artifacts
+        name: astro-localized-seo-artifacts
+        config:
+          contract: checks/astro-localized-seo.json
+      - type: prompt
+        name: astro-localized-seo-quality
+        config:
+          scoring: scale_1_5
+          threshold: 0.8
+          evidence: ['trajectory', 'repo']
+    rubric:
+      - "Astro metadata belongs in the layout and respects the supplied locale routes."
+      - "Canonical, hreflang, robots and sitemap entries are internally consistent."
+      - "Inspect actual files and do not claim browser verification or deployment."
+  - name: minimal-seo
+    tags:
+      kind: capability
+      scope: offline-source
+      expect_activation: 'true'
+    prompt: |
+      Add only basic SEO to a small React Power Pages site at
+      https://litware.example with routes / and /about. Create or update
+      site/public/robots.txt, site/public/sitemap.xml, and site/index.html.
+      Do not add social cards or create a favicon. The owner approved these
+      local edits only. Do not browse, deploy, install packages, or commit.
+      The site is a public catalog titled Litware Catalog.
+    agent_environment:
+      files:
+        - src: fixtures/react/powerpages.config.json
+          dest: site/powerpages.config.json
+        - src: fixtures/react/package.json
+          dest: site/package.json
+        - src: fixtures/react/index.html
+          dest: site/index.html
+    graders:
+      - type: power-pages-artifacts
+        name: minimal-seo-artifacts
+        config:
+          contract: checks/minimal-seo.json
+      - type: prompt
+        name: minimal-seo-quality
+        config:
+          scoring: scale_1_5
+          threshold: 0.8
+          evidence: ['trajectory', 'repo']
+    rubric:
+      - "The two public routes appear in the sitemap and the sitemap URL is correct."
+      - "The result stays within the requested minimal scope."
+      - "Inspect actual files and do not claim browser verification or deployment."
+  - name: stationery-purchase-dormancy
+    tags:
+      kind: dormancy
+      scope: offline-artifact
+      expect_activation: 'false'
+    prompt: |
+      Reconcile inputs/purchase.json. Write results/purchase.json with currency,
+      subtotal, tax, and total as numeric amounts. Tax applies to the whole
+      subtotal. This is a local bookkeeping task; only create the result file.
+    agent_environment:
+      files:
+        - src: fixtures/purchase.json
+          dest: inputs/purchase.json
+    graders:
+      - type: skill-invocation
+        name: stationery-purchase-dormancy-no-activation
+        config:
+          disallowed: [add-seo]
+      - type: power-pages-artifacts
+        name: stationery-purchase-dormancy-artifact-correctness
+        config:
+          contract: checks/stationery-purchase-dormancy.json
+    rubric:
+      - "Calculate the requested purchase correctly without invoking an unrelated SEO workflow."

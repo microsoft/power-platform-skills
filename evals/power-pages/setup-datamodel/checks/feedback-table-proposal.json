@@ -1,0 +1,11 @@
+{
+  "files": [
+    {
+      "path": "docs/data-model-proposal.md",
+      "type": "text",
+      "requiredText": ["cr8f1_feedback", "cr8f1_subject", "cr8f1_description", "cr8f1_rating", "cr8f1_submittedon", "1", "5"],
+      "requiredPatterns": ["required|business required", "multiline|multiple lines", "whole number|integer"],
+      "minTextLength": 250
+    }
+  ]
+}
