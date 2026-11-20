@@ -173,6 +173,34 @@ test('readConfigurationRow: absent only on 404 0x80040217; any other failure or 
   assert.equal((await B.readConfigurationRow({ get: async () => { throw new Error('reset'); } }, 'customApi', id)).state, 'unknown');
 });
 
+test('readDefaultConfigurationRow: the protected read keeps the implementation lookup; the default read leaves only it out', async () => {
+  const p = planned('customApi', 'contoso_Calc');
+  const { sdk } = await wireOf(p);
+  const id = p.plan.rows[0].id;
+  const asked = [];
+  const spy = (dv) => ({ get: async (q) => { asked.push(q); return dv.get(q); } });
+  assert.equal((await B.readConfigurationRow(spy(sdk.dataverse), 'customApi', id)).state, 'present');
+  assert.equal((await B.readDefaultConfigurationRow(spy(sdk.dataverse), 'customApi', id)).state, 'present');
+  const all = Object.keys(B.KINDS.customApi.columns);
+  assert.deepEqual(asked, [`/customapis(${id})?$select=customapiid,${all.join(',')}`, `/customapis(${id})?$select=customapiid,${all.filter((c) => c !== '_plugintypeid_value').join(',')}`]);
+  const real = (await sdk.dataverse.get(asked[0])).body;
+  const without = Object.fromEntries(Object.entries(real).filter(([k]) => k !== '_plugintypeid_value'));
+  assert.equal((await B.readConfigurationRow(reader([['/customapis(', { status: 200, body: without }]]), 'customApi', id)).state, 'unknown', 'the protected read still requires the lookup');
+  const def = await B.readDefaultConfigurationRow(reader([['/customapis(', { status: 200, body: without }]]), 'customApi', id);
+  assert.equal(def.state, 'present', 'the default read does not');
+  assert.equal(def.decoded.fields.uniqueName, 'contoso_Calc');
+  for (const [what, body] of [
+    ['a selected column left out', Object.fromEntries(Object.entries(without).filter(([k]) => k !== 'isprivate'))],
+    ['another row', { ...without, customapiid: OTHER }],
+    ['an option code this build does not know', { ...without, bindingtype: 9 }],
+  ]) assert.equal((await B.readDefaultConfigurationRow(reader([['/customapis(', { status: 200, body }]]), 'customApi', id)).state, 'unknown', what);
+  assert.equal((await B.readDefaultConfigurationRow(sdk.dataverse, 'customApi', OTHER)).state, 'absent');
+  // Every other kind selects the same columns either way.
+  for (const kind of Object.keys(B.KINDS).filter((k) => k !== 'customApi')) assert.deepEqual(B.DEFAULT_READ_COLUMNS[kind], Object.keys(B.KINDS[kind].columns), kind);
+  assert.deepEqual(B.decodeSelectedRow('customApi', without, B.DEFAULT_READ_COLUMNS.customApi).fields, def.decoded.fields);
+  assert.match(B.decodeSelectedRow('customApi', without, Object.keys(B.KINDS.customApi.columns)).unreadable, /left out a selected column/);
+});
+
 test('namesake queries follow every page: a namesake on a later page is a conflict; an unfollowable page is unknown', async () => {
   const p = planned('customApi', 'contoso_Calc');
   const api = p.plan.rows[0].id;
@@ -343,6 +371,33 @@ test('the classifier refuses anything but the plan: ids, parents, columns, value
   const connSwap = thrown(() => classify(withBody(crPost, (b) => { b.connectionid = 'another-connection'; })));
   assert.equal(connSwap && connSwap.code, B.PRIVATE_MISMATCH);
   assert.throws(() => B.createClassifier([{ token: 'a', planned: api }, { token: 'b', planned: planned('customApi', 'contoso_Calc') }]), /planned twice/);
+});
+
+// #847: the value a pending variable create still owes is sent as the real SDK sends it after the definition — the same
+// URL, body and headers, outside the solution — so the create classifier judges it as it judges the SDK's own request.
+test('postPlannedVariableValue sends the value row exactly as the SDK does, outside the solution, while the client stays scoped', async () => {
+  const ev = planned('environmentVariable', 'contoso_ApiBase');
+  const [, valuePost] = (await wireOf(ev)).sent;
+  const sent = [];
+  const sdk = await sdkOf(orgOf(), { screen(req) { if (req.method !== 'GET') sent.push({ ...req, headers: { ...req.headers } }); return null; } });
+  const header = (req) => Object.keys(req.headers).find((h) => h.toLowerCase() === 'mscrm.solutionuniquename');
+  await B.postPlannedVariableValue(sdk.dataverse, ev);
+  assert.equal(sent.length, 1);
+  const [req] = sent;
+  assert.equal(req.method, 'POST');
+  assert.equal(req.url, valuePost.url);
+  assert.deepEqual(JSON.parse(req.body), JSON.parse(valuePost.body));
+  assert.equal(JSON.parse(req.body).value, VALUE);
+  assert.equal(JSON.parse(req.body)['EnvironmentVariableDefinitionId@odata.bind'], `/environmentvariabledefinitions(${ev.plan.rows[0].id})`);
+  assert.equal(header(req), undefined, 'the value is sent outside the solution');
+  assert.ok(B.createClassifier([{ token: 'e', planned: ev }])(req), 'the classifier takes it as the planned value create');
+  await sdk.dataverse.post('/AddSolutionComponent', { ComponentId: ev.plan.rows[0].id, ComponentType: 380, SolutionUniqueName: SOL, AddRequiredComponents: false });
+  assert.ok(header(sent[1]), 'the original client keeps its solution');
+
+  await assert.rejects(B.postPlannedVariableValue({ post() {} }, ev), (e) => e.code === 'create-identity-unverified');
+  const definitionOnly = planned('environmentVariable', 'contoso_ApiBase', { bindings: A.readDeploymentBindings({}, spec()) });
+  await assert.rejects(B.postPlannedVariableValue(sdk.dataverse, definitionOnly), /plans no value create|has no value to send/);
+  assert.equal(sent.length, 2, 'neither refusal sends anything');
 });
 
 test('a bound Custom API edit as the real SDK sends it: the root PATCH on its own or in a change set, a child\'s labels on their own', async () => {

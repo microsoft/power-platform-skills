@@ -125,6 +125,25 @@ feature requests, first capture the lightweight entry choice below; do not run
 version/auth checks before the user chooses to proceed. Notifies the user if a
 tool version is below the supported minimum (Node 22+, npm 10+, Expo SDK 55+, etc.).
 
+Use the selected package contract's tooling requirements rather than assuming newer Expo/React Native versions work with an older binary.
+
+Native work also follows [mobile-release-lifecycle.md](./references/mobile-release-lifecycle.md).
+Resolve the app-version-matched inventory before adding native usage or changing
+dependencies, and verify the intended base before deployment. Never use the
+newest bundled template as an old app's native allowlist. This is an explicit
+workflow gate, not a telemetry/write hook. Source-only edits can continue when
+release evidence is unavailable without claiming native validation.
+Local installation/startup uses the release resolver's `--local-development`
+mode. Compatibility warnings do not block approved installation, preparation
+or trying the app; preserve the unverified status and use `/debug-app` if the
+Player actually fails. Strict deployment/base checks remain mandatory.
+
+Local diagnostic artifact selection is retired. Use the finalized published
+host/template contract and preserve app-owned offline configuration, normal
+approvals and telemetry checkpoints. Package inspection does not establish
+device execution or offline-sync success. Never send local paths, raw CLI
+output or package/native binaries to telemetry.
+
 ---
 
 ## Workflow Checkpoints
@@ -334,11 +353,14 @@ they do not require full app integration or authorize unrelated feature changes.
 Plugin-level hooks also run during unrelated plugin workflows, so every mutating mobile skill owns its validation:
 
 1. Track changed files by writer: the skill/subagents and preparation helpers versus trusted generators. Use a helper's returned `writtenFiles` when available; track removals separately, not as files to validate. CLI-owned output means output actually produced by `pa app init`, `pa app add data-source`, `pa app refresh data-source`, or `pa app remove data-source` through the resolved `$PA` command. It is excluded only when produced by that command and not modified afterward by the skill or its subagents. Newly generated does not mean manually written.
-2. Before returning success, pass each existing skill/helper-owned changed file explicitly:
+2. Before returning success, pass each existing skill/helper-owned changed file explicitly.
+   For local app generation/editing/startup, use `--local-development` as below;
+   deployment and release admission omit it:
 
    ```bash
    node "${PLUGIN_ROOT}/scripts/validate-mobile-files.js" \
      --project-root '<working_dir>' \
+     --local-development \
      --file '<changed-file-1>' \
      --file '<changed-file-2>'
    ```

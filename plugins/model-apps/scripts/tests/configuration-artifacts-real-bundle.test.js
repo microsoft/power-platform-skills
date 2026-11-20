@@ -14,6 +14,7 @@ const { createConfigOrg } = require('./helpers/fake-config-org.js');
 const { createStableCreatePort, readFromOrg } = require('./helpers/stable-create-port.js');
 const { configurationSendOnce, withConfigurationWrite, inConfigurationWrite } = require('../lib/configuration-transport.js');
 const { createConfigurationRuntime } = require('../lib/configuration-build.js');
+const { attachConfigurationCreateBridge } = require('../lib/configuration-create-writer.js');
 const C = require('../lib/configuration-artifacts.js');
 
 const SP = '/providers/Microsoft.PowerApps/apis/shared_sharepointonline';
@@ -56,7 +57,14 @@ async function harness({ lose, unversioned, retrying = false, port = {}, ...orgO
     const result = await C.applyConfiguration(plan, ctx);
     return { plan, result, writes: org.writes(mark), requests: org.requests.slice(mark) };
   };
-  return { org, sdk, creates, run };
+  return { org, sdk, httpClient, creates, run };
+}
+
+// The build's create bridge (lib/configuration-create-writer.js), as build-model-app.js makeSdk attaches it, with a durable
+// workspace of its own for the receipts: what a configuration runtime with no accepted create port writes new rows through.
+function bridged(h) {
+  attachConfigurationCreateBridge(h.sdk, { httpClient: h.httpClient, apiUrl: (p) => h.sdk.dataverse.apiUrl(p), sleep: async () => {} });
+  return { workspaceDir: makeTempDir('config-artifacts-ws-') };
 }
 
 const spec = () => ({
@@ -1082,10 +1090,11 @@ test('build runtime: a child whose record failed is not certified by its root\'s
 test('build runtime: the build\'s create port is used for configuration only when it protects every configuration kind and resolves', async () => {
   const s = { minimumPluginVersion: '2.21.0', solution: { uniqueName: 'ContosoSol', publisherPrefix: 'contoso' }, environmentVariables: [{ schemaName: 'contoso_Mode', type: 'string' }] };
   // A port of the build's own catalog (views, forms...) that protects none of these kinds: never handed a configuration write.
+  // The row is made through the build's default create writer instead.
   const h = await harness();
   let ran = 0;
   const foreign = { ...h.creates, protects: () => false, run: async (...a) => { ran += 1; return h.creates.run(...a); } };
-  const step = await createConfigurationRuntime({ spec: s, sdk: h.sdk, opts: { creates: foreign } }).apply('data-model');
+  const step = await createConfigurationRuntime({ spec: s, sdk: h.sdk, opts: { creates: foreign, ...bridged(h) }, appUniqueName: 'contoso_app' }).apply('data-model');
   assert.equal(step.halt, null, JSON.stringify(step.halt));
   assert.equal(ran, 0, 'a port that protects none of these kinds is not this step\'s port');
   assert.equal(h.org.rows('environmentvariabledefinitions').length, 1);
@@ -1093,7 +1102,7 @@ test('build runtime: the build\'s create port is used for configuration only whe
   const p = await harness();
   let partial = 0;
   const some = { ...p.creates, protects: (kind) => kind === 'environmentVariable', run: async (...a) => { partial += 1; return p.creates.run(...a); } };
-  await createConfigurationRuntime({ spec: s, sdk: p.sdk, opts: { creates: some } }).apply('data-model');
+  await createConfigurationRuntime({ spec: s, sdk: p.sdk, opts: { creates: some, ...bridged(p) }, appUniqueName: 'contoso_app' }).apply('data-model');
   assert.equal(partial, 0);
   // Every kind protected, with a resolver: it is this step's port, and the row is at its planned id.
   const k = await harness();
@@ -1104,8 +1113,7 @@ test('build runtime: the build\'s create port is used for configuration only whe
   assert.equal(k.org.rows('environmentvariabledefinitions')[0].environmentvariabledefinitionid, k.creates.idOf('environmentVariable', 'contoso_mode'));
 });
 
-test('build runtime: with no port, or the build\'s plain pass-through, configuration loads no stable-id module; every kind is created and a rerun writes nothing', async () => {
-  const { withoutStableCreateModules } = require('./helpers/no-stable-create-modules.js');
+test('build runtime: with no port, or the build\'s plain pass-through, every kind is created through the default create writer at derived ids, and a rerun writes nothing', async () => {
   const { createPassthroughCreates } = require('../lib/creates-passthrough.js');
   for (const creates of [undefined, createPassthroughCreates()]) {
     const label = creates ? 'pass-through' : 'no port';
@@ -1114,21 +1122,19 @@ test('build runtime: with no port, or the build\'s plain pass-through, configura
     delete s.solution.version;
     // A connection is left unbound: proving one needs the connection inventory, which is not what this test is about.
     const configurationBindings = C.readDeploymentBindings(settings('https://v1.contoso.com', undefined), s);
-    const step = () => createConfigurationRuntime({ spec: s, sdk: h.sdk, opts: { ...(creates ? { creates } : {}), configurationBindings } }).apply('data-model');
-    const { result, requested } = await withoutStableCreateModules(async () => {
-      const first = await step();
-      const mark = h.org.requests.length;
-      const again = await step();
-      return { first, again, rerunWrites: h.org.writes(mark) };
-    });
-    assert.deepEqual(requested, [], `${label}: no stable-id module is asked for`);
-    assert.equal(result.first.halt, null, `${label}: ${JSON.stringify(result.first.halt)}`);
-    assert.equal(result.again.halt, null, `${label}: ${JSON.stringify(result.again.halt)}`);
-    assert.deepEqual(result.rerunWrites, [], label);
+    const writer = bridged(h);
+    const step = () => createConfigurationRuntime({ spec: s, sdk: h.sdk, opts: { ...(creates ? { creates } : {}), configurationBindings, ...writer }, appUniqueName: 'contoso_app' }).apply('data-model');
+    const first = await step();
+    const mark = h.org.requests.length;
+    const again = await step();
+    assert.equal(first.halt, null, `${label}: ${JSON.stringify(first.halt)}`);
+    assert.equal(again.halt, null, `${label}: ${JSON.stringify(again.halt)}`);
+    assert.deepEqual(h.org.writes(mark), [], label);
     const counts = ['environmentvariabledefinitions', 'environmentvariablevalues', 'connectionreferences', 'customapis', 'customapirequestparameters', 'customapiresponseproperties', 'duplicaterules', 'duplicateruleconditions']
       .map((set) => h.org.rows(set).length);
     assert.deepEqual(counts, [3, 1, 1, 1, 2, 1, 1, 1], label);
-    // Fresh ids, not planned ones: the plain path never derives an id from the declaration.
+    // Derived ids (name-based, version 5), never the port's: the pass-through is not this step's create port.
+    assert.match(h.org.rows('customapis')[0].customapiid, /^[0-9a-f]{8}-[0-9a-f]{4}-5/, label);
     assert.notEqual(h.org.rows('customapis')[0].customapiid, h.creates.idOf('customApi', 'contoso_calc'), label);
     assert.deepEqual(h.org.unexpected, [], label);
   }

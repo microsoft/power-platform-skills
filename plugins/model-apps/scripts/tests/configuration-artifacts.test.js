@@ -817,3 +817,17 @@ test('the configuration kinds\' own stable port: every kind protected as a featu
   assert.equal(C.configurationAcceptsPort({ run: async () => ({}), protects: () => true }), false, 'no resolve');
   assert.equal(C.configurationAcceptsPort(null), false);
 });
+
+// #847: a variable whose value request alone was refused stays pending, so its halt line names what is pending, what to
+// correct and its exact retire approval, carrying only a validated Dataverse code and the attempt's own token.
+test('configurationHaltMessage: create-value-refused spells its recovery, with the code and token only when they validate', () => {
+  const token = '6A44791C-C580-4376-8266-0DBEA86C9D7B';
+  const line = C.configurationHaltMessage([{ kind: 'environmentVariable', key: 'contoso_Key', code: 'create-value-refused', serviceCode: '0x80072040', pendingAttemptToken: token }]);
+  assert.ok(line.startsWith('1 configuration item not completed: environmentVariable contoso_Key (create-value-refused) (the service refused the value request (0x80072040) before it started;'), line);
+  assert.ok(line.includes(`--apply --authorize 'retire:environmentVariable:contoso_key@${token.toLowerCase()}'`), line);
+  assert.ok(line.endsWith('restoring the declaration while its derived id is occupied stops with create-identity-conflict)'), line);
+  const hostile = C.configurationHaltMessage([{ kind: 'environmentVariable', key: 'contoso_Key', code: 'create-value-refused', serviceCode: `0x8007 ${VAULT_REF}`, pendingAttemptToken: `${token}' ; rm` }]);
+  assert.ok(!hostile.includes('contosovault') && !hostile.includes('rm') && !hostile.includes('retire:'), hostile);
+  assert.ok(hostile.includes('(the service refused the value request before it started;'), hostile);
+  assert.equal(C.configurationHaltMessage([{ kind: 'customApi', key: 'contoso_Calc', code: 'create-value-refused' }]), '1 configuration item not completed: customApi contoso_Calc (create-value-refused)');
+});

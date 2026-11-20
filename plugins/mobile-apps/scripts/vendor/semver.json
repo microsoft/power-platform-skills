@@ -1,0 +1,16 @@
+{
+  "name": "semver",
+  "version": "7.7.4",
+  "license": "ISC",
+  "source": "https://github.com/npm/node-semver",
+  "packageIntegrity": "sha1-KEZONgYOmR+noR0CedLT87V6foo=",
+  "bundle": {
+    "tool": "esbuild",
+    "version": "0.28.2",
+    "entry": "index.js",
+    "platform": "node",
+    "format": "cjs",
+    "target": "node20",
+    "minify": false
+  }
+}

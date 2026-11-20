@@ -239,8 +239,10 @@ command states alone; any other partial apply is refused before it reads.
 result: a second apply of the same app in that workspace stops at once with `build-locked`, before it
 reads or writes anything. Page generation between run 1 and run 2 holds no lease; run 2 takes a new one
 and rediscovers state. Inside run 2 the pages phase also holds the two pages locks
-(`app-pages.<hash>.lock` and the legacy `pages-<spelling>.lock`). Teardown, download, `/genpage` and
-`apps.js` take no build lease, and builds in different workspaces are not excluded.
+(`app-pages.<hash>.lock` and the legacy `pages-<spelling>.lock`). A teardown `--apply`, the `prepare`
+and `resolve` commands of `configuration-recovery.js` and a standalone page edit (`genpage.js add-to-app` /
+`remove-from-app`, the placing `genpage-upload.js`) hold the same lease, so none of them overlaps an apply
+of the app; download and `apps.js` take none, and builds in different workspaces are not excluded.
 
 **Three-authority page identity (pages phase):** generative-page management consults three
 authorities — all matching by id, never by display name:

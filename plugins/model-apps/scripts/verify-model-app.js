@@ -895,7 +895,9 @@ async function main() {
   // but the operator saw only "✗ view: Active Orders" and would chase a phantom deployment drift.
   // The run's last writes: these lines, then the result and the exit, with no turn of the event loop between them — made blocking (lib/output-redaction.js).
   makeWritesBlocking(process.stdout, process.stderr);
-  for (const c of r.checks) process.stderr.write(`  ${c.present ? '✓' : '✗'} ${c.kind}: ${c.name}${!c.present && c.detail ? ` — ${c.detail}` : ''}\n`);
+  // A passing check's `note` qualifies what it proves (a same-named declared view present only as a distinct row: #845); every
+  // other passing line prints as it always did.
+  for (const c of r.checks) process.stderr.write(`  ${c.present ? '✓' : '✗'} ${c.kind}: ${c.name}${!c.present && c.detail ? ` — ${c.detail}` : ''}${c.present && c.note ? ` — ${c.note}` : ''}\n`);
   // `--inspect-components` adds its own requested checks: one that did not pass fails the run like a missing artifact. Without the flag
   // `components` is undefined and every line and field below is what it was.
   const ok = r.ok && (!components || components.ok);

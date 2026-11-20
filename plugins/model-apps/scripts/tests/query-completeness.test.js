@@ -76,3 +76,38 @@ test('an answer with no report (plain array) is judged by count alone and says i
   assert.equal(exactOne([{ name: 'no id' }], 'roleid').outcome, 'incomplete', 'a row without an id cannot be told apart');
   assert.equal(requireComplete(plain, 'roleid').length, 1);
 });
+
+// #845: the rows of one name that two declared views share are read through the real bundle with every page followed, in one
+// paginated query: two rows on two pages are two distinct rows, and the request count is the lookup plus one GET a page.
+test('#845: verify reads every page of a name two declared views share, through the real bundle', async () => {
+  const { verifySpec } = require(path.join(__dirname, '..', 'lib', 'verify-spec.js'));
+  const view = (n) => ({ savedqueryid: `aaaaaaaa-0000-4000-8000-00000000000${n}`, returnedtypecode: 'contoso_item', name: 'Twin', layoutxml: '<grid><row><cell name="contoso_a"/></row></grid>' });
+  const page = (n) => `${ORIGIN}/api/data/v9.2/savedqueries?$skiptoken=p${n}`;
+  const run = async (pages) => {
+    const sent = [];
+    const request = async ({ url, method }) => {
+      const u = decodeURIComponent(url);
+      sent.push(`${method} ${u}`);
+      if (u.includes('EntityDefinitions')) return { statusCode: 200, headers: {}, body: JSON.stringify({ EntitySetName: 'savedqueries' }) };
+      const m = /\$skiptoken=p(\d)/.exec(u);
+      return { statusCode: 200, headers: {}, body: JSON.stringify(pages[m ? Number(m[1]) : 0]) };
+    };
+    const client = createAzHttpClient(ORIGIN, { getToken: () => 'x'.repeat(48), request, sleep: async () => {} });
+    const spec = { entities: [], appShell: { areas: [] }, views: ['a', 'b'].map((key) => ({ entity: 'contoso_item', name: 'Twin', key, reconcile: 'declared', columns: ['contoso_a'] })) };
+    const r = await withThrowawaySdk({ env: ORIGIN, httpClient: client, prefix: 'query-completeness-test-' }, async (make) => {
+      const sdk = make();
+      return verifySpec(spec, { findTable: async () => null, findColumns: async () => [], sitemapXml: async () => '', queryRecords: (set, q) => sdk.queryRecords(set, q) });
+    });
+    return { r, sent };
+  };
+  const { r, sent } = await run([{ value: [view(1)], '@odata.nextLink': page(1) }, { value: [view(2), view(1)] }]);
+  assert.equal(r.ok, true, JSON.stringify(r.missing));
+  assert.deepEqual(r.checks.filter((c) => c.kind === 'view').map((c) => c.note), ['a', 'b'].map((k) => `present only: a distinct row is available, but view key "${k}" is not attributed to a row`));
+  const gets = sent.filter((s) => s.includes('/savedqueries'));
+  assert.equal(gets.length, 2, JSON.stringify(sent));
+  assert.ok(gets[0].includes("$filter=returnedtypecode eq 'contoso_item' and name eq 'Twin'") && !/\$top=/.test(gets[0]), gets[0]);
+  // The same row answered on both pages is one row, so one name is not two views.
+  const once = await run([{ value: [view(1)], '@odata.nextLink': page(1) }, { value: [view(1)] }]);
+  assert.equal(once.r.ok, false);
+  assert.deepEqual(once.r.missing.map((m) => m.detail), ['only 1 distinct unclaimed row(s) named "Twin" on contoso_item were read for 2 declared view(s) (keys: "a", "b"); each declaration needs a row of its own']);
+});
