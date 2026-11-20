@@ -10,6 +10,9 @@ on:
             - "plugins/mobile-apps/**"
             - ".github/workflows/mobile-apps-script-tests.yml"
 
+permissions:
+    contents: read
+
 jobs:
     test-mobile-apps-scripts:
         name: test-mobile-apps-scripts (${{ matrix.os }}, node ${{ matrix.node }})
