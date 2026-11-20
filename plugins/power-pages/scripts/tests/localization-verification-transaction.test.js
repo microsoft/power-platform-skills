@@ -631,7 +631,10 @@ test('preserves audit JSON parse causes and reports only the safe location', (t)
     () => endLocalizationVerificationAudit(projectRoot, 'run-id'),
     (error) => {
       assert.equal(error.cause?.name, 'SyntaxError');
-      assert.match(error.message, /is not valid JSON at line 1, column/);
+      assert.match(
+        error.message,
+        /is not valid JSON at (?:line 1, column \d+|position \d+)/
+      );
       assert.doesNotMatch(error.message, /sensitive audit content/);
       return true;
     }

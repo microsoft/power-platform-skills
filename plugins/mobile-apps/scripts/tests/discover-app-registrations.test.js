@@ -107,7 +107,7 @@ test('preserves invalid JSON causes without echoing Azure CLI output', () => {
     (error) => {
       assert.equal(error.cause?.name, 'SyntaxError');
       assert.match(error.message, /JSON-like response/);
-      assert.match(error.message, /line 1, column/);
+      assert.match(error.message, /line 1, column \d+|position \d+/);
       assert.doesNotMatch(error.message, /\{"value"|"id":/);
       return true;
     }

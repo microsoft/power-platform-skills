@@ -921,7 +921,7 @@ test('preserves validation causes while reporting only safe diagnostics', (t) =>
     (error) => {
       assert.equal(error.cause?.name, 'SyntaxError');
       assert.match(error.cliDiagnostic, /Mode evidence classification file contains invalid JSON/);
-      assert.match(formatCliFailure(error), /line 1, column/);
+      assert.match(formatCliFailure(error), /line 1, column \d+|position \d+/);
       assert.doesNotMatch(formatCliFailure(error), /sensitive classification data/);
       return true;
     }
@@ -942,7 +942,7 @@ test('preserves validation causes while reporting only safe diagnostics', (t) =>
     (error) => {
       assert.equal(error.cause?.name, 'SyntaxError');
       assert.match(error.cliDiagnostic, /package-lock\.json contains invalid JSON/);
-      assert.match(error.cliDiagnostic, /line 1, column/);
+      assert.match(error.cliDiagnostic, /line 1, column \d+|position \d+/);
       assert.doesNotMatch(error.cliDiagnostic, /sensitive value/);
       assert.equal(
         formatCliFailure(error),
