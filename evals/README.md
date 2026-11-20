@@ -137,10 +137,15 @@ The dashboard reports observed outcomes and explicit evidence categories.
 
 ## Publish evidence
 
-Each matrix job uploads only its sanitized `summary.json`.
+Each matrix job uploads two artifacts.
+`power-pages-evals-<skill>--<model>` holds only the sanitized `summary.json`, the sole input to the dashboard.
 It contains case identifiers, verdicts, token counts, model IDs, reasoning efforts, source hashes and workflow provenance.
-Raw trajectories, generated artifacts, grader explanations, screenshots and errors remain local and are not uploaded from this public repository.
-For human calibration, run in a controlled environment and inspect local evidence; the public workflow artifact is deliberately insufficient for that review.
+`power-pages-eval-evidence-<skill>--<model>` holds the whole run folder: trajectories, generated files, screenshots, errors and every grader's explanation.
+It is kept for 30 days so any score can be traced to its reasons.
+The job also writes the judge's reasons for every failed check to the run's summary page.
+Trials only see public fixtures and the public plugin, and their tools cannot read the environment.
+Even so, the job skips the evidence upload if the run's token or any GitHub token shape appears in it (`node evals/runtime/evidence.mjs check <dir>`).
+Run `node evals/runtime/evidence.mjs report <dir>` on a downloaded or local run folder to list the failed checks and their reasons.
 
 Agent usage records input, output and cache counters reported by the Copilot SDK.
 Missing counters remain unknown.
@@ -153,7 +158,7 @@ After an evaluation completes, the existing showcase workflow fetches retained s
 It validates the schema and matches the commit, workflow URL, skill and model to each matrix artifact before building the site's `/evaluations/` page.
 Only summaries are copied into the build; artifact content is never executed.
 The existing repo-stats report remains in the same Pages deployment.
-Evaluation artifacts are retained for up to 90 days.
+Summary artifacts are retained for up to 90 days.
 The model workflow is manually dispatched; PR validation does not call models, and no nightly evaluation is scheduled.
 
 The dashboard selects the latest whole suite per skill, agent model, judge model and both reasoning efforts.
