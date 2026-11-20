@@ -1,0 +1,127 @@
+name: power-pages/integrate-webapi
+type: capability
+description: "Evaluate Web API integration plans using supplied metadata and permission evidence only."
+defaults:
+  executor: power-pages-offline
+  timeout: 10m
+  runs: 1
+stimuli:
+  - name: reviews-webapi-plan
+    tags:
+      kind: capability
+      scope: offline-plan
+      expect_activation: 'true'
+    prompt: |
+      Write docs/webapi-integration-plan.md for a React site with Products,
+      Categories, and Reviews. Entity sets are cr8f1_products,
+      cr8f1_categories, and cr8f1_reviews. Reviews has lookup columns
+      _cr8f1_product_value and _cr8f1_category_value. The approved access is
+      read-only for all three tables. Approved fields are cr8f1_productid and
+      cr8f1_name for Products; cr8f1_categoryid and cr8f1_name for Categories;
+      and cr8f1_reviewid, cr8f1_rating, _cr8f1_product_value, and
+      _cr8f1_category_value for Reviews. Specify proposed source integration points,
+      selected fields, relationship reads, Web API settings/permissions to
+      verify, and deployment prerequisites. Do not broaden permissions,
+      connect to Dataverse, or claim the API was tested.
+    graders:
+      - type: power-pages-artifacts
+        name: reviews-webapi-plan-artifact
+        config:
+          contract: checks/reviews-webapi-plan.json
+      - type: prompt
+        name: reviews-webapi-plan-quality
+        config:
+          scoring: scale_1_5
+          threshold: 0.8
+          evidence: ['trajectory', 'repo']
+    rubric:
+      - "The plan uses supplied entity sets, lookup read names and read-only access."
+      - "It covers least-privilege permissions, exact field settings, and deployment before live use."
+      - "It distinguishes a proposal from a successful API call."
+  - name: events-registration-webapi-plan
+    tags:
+      kind: capability
+      scope: offline-plan
+      expect_activation: 'true'
+    prompt: |
+      Write docs/webapi-integration-plan.md for a Vue site with Events and
+      Registrations. Supplied permission evidence grants authenticated users
+      read on Events and read/create on Registrations; the Registration table
+      has a lookup to Event. Identify the allowed operations, required
+      lookup/relationship handling, metadata needed before selecting exact
+      fields and navigation property names for an allowlist, and the
+      distinction between client UI and server-enforced table permissions.
+      Do not add permissions, use the network, or claim deployment.
+    graders:
+      - type: power-pages-artifacts
+        name: events-registration-webapi-plan-artifact
+        config:
+          contract: checks/events-registration-webapi-plan.json
+      - type: prompt
+        name: events-registration-webapi-plan-quality
+        config:
+          scoring: scale_1_5
+          threshold: 0.8
+          evidence: ['trajectory', 'repo']
+    rubric:
+      - "The plan preserves the distinct Events read and Registrations read/create grants."
+      - "It describes lookup handling and recognizes that UI checks do not enforce server authorization."
+      - "It does not claim permissions were deployed or calls tested."
+  - name: existing-contact-client-plan
+    tags:
+      kind: capability
+      scope: offline-plan
+      expect_activation: 'true'
+    prompt: |
+      Write docs/webapi-integration-plan.md for integrating read-only access
+      to the Contacts table in an existing React app. src/shared/powerPagesApi.ts
+      already exists and permission design is handled by the site architects.
+      Approved fields are contactid, firstname, and lastname on entity set
+      contacts; no other Contact fields or write operations are approved.
+      Explain how to inspect and reuse the existing client rather than create
+      a duplicate, keep the query to the approved Contact fields, and verify
+      anti-forgery token handling. Do not invent permission grants, contact
+      Dataverse, or claim the integration was tested.
+    agent_environment:
+      files:
+        - src: fixtures/powerPagesApi.ts
+          dest: src/shared/powerPagesApi.ts
+    graders:
+      - type: power-pages-artifacts
+        name: existing-contact-client-plan-artifact
+        config:
+          contract: checks/existing-contact-client-plan.json
+      - type: prompt
+        name: existing-contact-client-plan-quality
+        config:
+          scoring: scale_1_5
+          threshold: 0.8
+          evidence: ['trajectory', 'repo']
+    rubric:
+      - "The plan reuses the existing client and leaves permission design to the architects."
+      - "It limits data to approved Contact fields and treats anti-forgery handling as required."
+      - "It distinguishes a plan from a tested integration."
+  - name: stationery-purchase-dormancy
+    tags:
+      kind: dormancy
+      scope: offline-artifact
+      expect_activation: 'false'
+    prompt: |
+      Reconcile inputs/purchase.json. Write results/purchase.json with currency,
+      subtotal, tax, and total as numeric amounts. Tax applies to the whole
+      subtotal. This is a local bookkeeping task; only create the result file.
+    agent_environment:
+      files:
+        - src: fixtures/purchase.json
+          dest: inputs/purchase.json
+    graders:
+      - type: skill-invocation
+        name: stationery-purchase-dormancy-no-activation
+        config:
+          disallowed: [integrate-webapi]
+      - type: power-pages-artifacts
+        name: stationery-purchase-dormancy-artifact-correctness
+        config:
+          contract: checks/stationery-purchase-dormancy.json
+    rubric:
+      - "Calculate the requested purchase correctly without invoking an unrelated Web API workflow."

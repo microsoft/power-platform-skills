@@ -1,0 +1,153 @@
+name: power-pages/create-webroles
+type: capability
+description: "Evaluate local web-role metadata creation without deploying a site."
+defaults:
+  executor: power-pages-offline
+  timeout: 10m
+  runs: 1
+stimuli:
+  - name: create-standard-roles
+    tags:
+      kind: capability
+      scope: offline-source
+      expect_activation: 'true'
+    prompt: |
+      The first deployment is complete and no roles exist yet. Create the
+      standard roles in site/.powerpages-site/web-roles/: Administrators,
+      Authenticated Users, and Anonymous Users. The following distinct UUIDv4
+      IDs were generated for this offline task; use them exactly once:
+      Administrators 9b1d6fc0-f913-4a75-96bf-56d1bb3f4c10;
+      Authenticated Users 1a764d8e-276f-42ec-a0b9-7dd93ef26710;
+      Anonymous Users 4d92e2b1-6a85-4fc7-8b10-d4c1280a6e31.
+      Keep the two special-role flags unique. The owner approved local file
+      creation only; do not deploy, authenticate, or commit.
+      The supplied IDs are synthetic UUID-helper outputs: no generator execution
+      is required or available in this offline task.
+    agent_environment:
+      files:
+        - src: fixtures/spa/powerpages.config.json
+          dest: site/powerpages.config.json
+        - src: fixtures/spa/website.yml
+          dest: site/.powerpages-site/website.yml
+    graders:
+      - type: power-pages-artifacts
+        name: create-standard-roles-artifacts
+        config:
+          contract: checks/create-standard-roles.json
+      - type: prompt
+        name: create-standard-roles-quality
+        config:
+          scoring: scale_1_5
+          threshold: 0.8
+          evidence: ['trajectory', 'repo']
+    rubric:
+      - "All three role files use the supplied IDs and valid role flags."
+      - "Only Authenticated Users and Anonymous Users receive their respective special flags."
+      - "Do not claim deployment or live verification."
+  - name: add-community-roles
+    tags:
+      kind: capability
+      scope: offline-source
+      expect_activation: 'true'
+    prompt: |
+      Add Content Editors and Moderators to
+      site/.powerpages-site/web-roles/. Administrators,
+      Authenticated Users, and Anonymous Users already exist with IDs
+      09f1f0be-e4db-42f3-987d-202a0e9fb017,
+      09f1f0be-e4db-42f3-987d-202a0e9fb018, and
+      09f1f0be-e4db-42f3-987d-202a0e9fb019 respectively. Their flags are
+      already assigned correctly. Preserve them and create only the two new
+      roles using these generated IDs: Content Editors
+      7ab524fd-6f2c-4bd0-9c70-12aecb2bf00b; Moderators
+      4a8f3d9b-6859-4c48-bcd2-ff0b975e0510. Do not duplicate special-role
+      flags. The owner approved local files only; do not deploy.
+      The supplied IDs are synthetic UUID-helper outputs: no generator execution
+      is required or available in this offline task.
+    agent_environment:
+      files:
+        - src: fixtures/spa/powerpages.config.json
+          dest: site/powerpages.config.json
+        - src: fixtures/spa/website.yml
+          dest: site/.powerpages-site/website.yml
+        - src: fixtures/existing-roles/administrators.yml
+          dest: site/.powerpages-site/web-roles/administrators.yml
+        - src: fixtures/existing-roles/authenticated-users.yml
+          dest: site/.powerpages-site/web-roles/authenticated-users.yml
+        - src: fixtures/existing-roles/anonymous-users.yml
+          dest: site/.powerpages-site/web-roles/anonymous-users.yml
+    graders:
+      - type: power-pages-artifacts
+        name: add-community-roles-artifacts
+        config:
+          contract: checks/add-community-roles.json
+      - type: prompt
+        name: add-community-roles-quality
+        config:
+          scoring: scale_1_5
+          threshold: 0.8
+          evidence: ['trajectory', 'repo']
+    rubric:
+      - "Only the requested new roles are created and neither receives a special-role flag."
+      - "Existing role files remain unchanged and IDs are not reused."
+      - "Do not claim deployment or live verification."
+  - name: create-non-spa-content-role
+    tags:
+      kind: capability
+      scope: offline-plan
+      expect_activation: 'true'
+    prompt: |
+      This is a downloaded non-SPA site opened directly at site/, with
+      .portalconfig/ and website.yml and no powerpages.config.json. Add one
+      Content Editors role under site/web-roles/. It is an ordinary role, so
+      both anonymoususersrole and authenticatedusersrole must be false. The
+      deterministic writer generates the role ID after approval; do not invent
+      or hardcode one in the plan.
+      Write docs/non-spa-role-plan.md proposing the exact metadata path and
+      four role fields, and the script invocation that would create it after
+      approval. The deterministic writer is unavailable offline; do not write
+      role metadata manually, modify the export, or deploy.
+    agent_environment:
+      files:
+        - src: fixtures/direct-export/website.yml
+          dest: site/website.yml
+        - src: fixtures/direct-export/portalconfig.yml
+          dest: site/.portalconfig/website.yml
+    graders:
+      - type: power-pages-artifacts
+        name: create-non-spa-content-role-artifact
+        config:
+          contract: checks/create-non-spa-content-role.json
+      - type: prompt
+        name: create-non-spa-content-role-quality
+        config:
+          scoring: scale_1_5
+          threshold: 0.8
+          evidence: ['trajectory', 'repo']
+    rubric:
+      - "The proposed role uses the directly opened non-SPA metadata root and PAC per-record naming."
+      - "Both special-role flags are false, ID generation is deferred to the deterministic writer, and metadata creation requires approval."
+      - "Do not claim deployment or live verification."
+  - name: stationery-purchase-dormancy
+    tags:
+      kind: dormancy
+      scope: offline-artifact
+      expect_activation: 'false'
+    prompt: |
+      Reconcile inputs/purchase.json. Write results/purchase.json with currency,
+      subtotal, tax, and total as numeric amounts. Tax applies to the whole
+      subtotal. This is a local bookkeeping task; only create the result file.
+    agent_environment:
+      files:
+        - src: fixtures/purchase.json
+          dest: inputs/purchase.json
+    graders:
+      - type: skill-invocation
+        name: stationery-purchase-dormancy-no-activation
+        config:
+          disallowed: [create-webroles]
+      - type: power-pages-artifacts
+        name: stationery-purchase-dormancy-artifact-correctness
+        config:
+          contract: checks/stationery-purchase-dormancy.json
+    rubric:
+      - "Calculate the requested purchase correctly without invoking an unrelated role workflow."

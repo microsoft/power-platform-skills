@@ -1,0 +1,112 @@
+name: power-pages/migrate-bootstrap
+type: capability
+description: "Evaluate bounded Bootstrap migration assessment using supplied local site evidence only."
+defaults:
+  executor: power-pages-offline
+  timeout: 10m
+  runs: 1
+stimuli:
+  - name: bootstrap3-class-assessment
+    tags:
+      kind: capability
+      scope: offline-plan
+      expect_activation: 'true'
+    prompt: |
+      Review this local Bootstrap 3 evidence from a classic Power Pages site:
+      templates use data-toggle="dropdown", .panel, .badge-info, and
+      .glyphicon.glyphicon-search. Write docs/bootstrap5-assessment.md with
+      the likely Bootstrap 5 equivalents and verification steps. Do not run
+      the PAC migration engine, change site files, authenticate, upload, or
+      claim the site has migrated.
+    graders:
+      - type: power-pages-artifacts
+        name: bootstrap3-class-assessment-artifact
+        config:
+          contract: checks/bootstrap3-class-assessment.json
+      - type: prompt
+        name: bootstrap3-class-assessment-quality
+        config:
+          scoring: scale_1_5
+          threshold: 0.8
+          evidence: ['trajectory', 'repo']
+    rubric:
+      - "The assessment identifies Bootstrap 3 patterns and plausible Bootstrap 5 replacements without assuming automatic conversion."
+      - "It includes local verification and explicitly leaves engine execution and upload unperformed."
+  - name: custom-site-migration-risks
+    tags:
+      kind: capability
+      scope: offline-plan
+      expect_activation: 'true'
+    prompt: |
+      Assess a classic site containing custom.css overrides for .navbar,
+      .panel-heading, and .btn-default, plus Liquid templates with embedded
+      markup. Write docs/bootstrap5-assessment.md describing why custom CSS
+      and Liquid require review after the automated Bootstrap 3-to-5 engine,
+      how to preserve the source copy, and a safe local review sequence.
+      No engine, network, upload, or deployment is authorized.
+    graders:
+      - type: power-pages-artifacts
+        name: custom-site-migration-risks-artifact
+        config:
+          contract: checks/custom-site-migration-risks.json
+      - type: prompt
+        name: custom-site-migration-risks-quality
+        config:
+          scoring: scale_1_5
+          threshold: 0.8
+          evidence: ['trajectory', 'repo']
+    rubric:
+      - "The plan distinguishes automated transformations from flagged custom CSS and Liquid work."
+      - "It preserves a restore point and separates local review from any upload."
+      - "It does not represent a proposed sequence as completed migration."
+  - name: residual-v3-pattern-review
+    tags:
+      kind: capability
+      scope: offline-plan
+      expect_activation: 'true'
+    prompt: |
+      A supplied V5-copy review found data-toggle="tab", .input-group-addon,
+      and a glyphicon in local HTML, while bootstrap.min.css is Bootstrap 5.
+      Write docs/bootstrap5-assessment.md listing these as residual findings,
+      prioritize manual fixes, and state what evidence is still required before
+      any upload or runtime-flag claim. Do not alter source files or claim that
+      the migration completed successfully.
+    graders:
+      - type: power-pages-artifacts
+        name: residual-v3-pattern-review-artifact
+        config:
+          contract: checks/residual-v3-pattern-review.json
+      - type: prompt
+        name: residual-v3-pattern-review-quality
+        config:
+          scoring: scale_1_5
+          threshold: 0.8
+          evidence: ['trajectory', 'repo']
+    rubric:
+      - "The V5 stylesheet does not erase the significance of residual Bootstrap 3 markup."
+      - "The report prioritizes the supplied residuals and preserves the upload and runtime verification boundary."
+      - "It does not claim the site is migrated or live."
+  - name: stationery-purchase-dormancy
+    tags:
+      kind: dormancy
+      scope: offline-artifact
+      expect_activation: 'false'
+    prompt: |
+      Reconcile inputs/purchase.json. Write results/purchase.json with currency,
+      subtotal, tax, and total as numeric amounts. Tax applies to the whole
+      subtotal. This is a local bookkeeping task; only create the result file.
+    agent_environment:
+      files:
+        - src: fixtures/purchase.json
+          dest: inputs/purchase.json
+    graders:
+      - type: skill-invocation
+        name: stationery-purchase-dormancy-no-activation
+        config:
+          disallowed: [migrate-bootstrap]
+      - type: power-pages-artifacts
+        name: stationery-purchase-dormancy-artifact-correctness
+        config:
+          contract: checks/stationery-purchase-dormancy.json
+    rubric:
+      - "Calculate the requested purchase correctly without invoking an unrelated migration workflow."

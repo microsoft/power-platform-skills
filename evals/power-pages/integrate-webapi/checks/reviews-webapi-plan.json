@@ -1,0 +1,11 @@
+{
+  "files": [
+    {
+      "path": "docs/webapi-integration-plan.md",
+      "type": "text",
+      "requiredText": ["cr8f1_products", "cr8f1_categories", "cr8f1_reviews", "_cr8f1_product_value", "_cr8f1_category_value", "read-only"],
+      "requiredPatterns": ["permissions|table permission", "field|allowlist", "deploy"],
+      "minTextLength": 350
+    }
+  ]
+}

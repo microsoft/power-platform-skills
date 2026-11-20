@@ -1,9 +1,24 @@
 # Skill evaluations
 
-Power Pages has offline [Vally](https://www.npmjs.com/package/@microsoft/vally) suites for `setup-auth` and `create-site`.
+Power Pages has offline [Vally](https://www.npmjs.com/package/@microsoft/vally) suites for `setup-auth`, `create-site`, `add-seo`, `add-localization`, `create-webroles`, `setup-datamodel`, `migrate-bootstrap`, and `integrate-webapi`.
 Add suites as individual skills are improved rather than requiring coverage for every skill at once.
 Other skills and plugins appear in the [evaluation dashboard](https://microsoft.github.io/power-platform-skills/evaluations/) as untested until they have their own measured evidence.
 Existing `evals.json` files for other skills are preserved but are not run or counted as measured evidence by this runtime.
+
+The six additional suites each contain three capability cases and one unrelated dormancy case.
+Their coverage is deliberately bounded:
+
+| Skill | Offline coverage |
+|---|---|
+| `add-seo` | React and Astro SEO file edits, route exclusions, localized metadata, and minimal scope |
+| `add-localization` | React, Vue, and Arabic/RTL implementation plans, not completed localization |
+| `create-webroles` | SPA role files with supplied synthetic UUIDs, existing-role preservation, and a non-SPA writer handoff plan |
+| `setup-datamodel` | Blog, feedback, and existing-model extension proposals, not Dataverse schema creation |
+| `migrate-bootstrap` | Bootstrap 3 markup, custom CSS/Liquid risks, and residual migration assessment |
+| `integrate-webapi` | Read-only and registration integration plans, permission boundaries, and existing-client reuse |
+
+These are authored cases, not calibrated evidence or published measurements.
+Package manifests in fixtures identify the framework; the runtime does not install their dependencies.
 
 The design follows [Agent Skills evaluation guidance](https://agentskills.io/skill-creation/evaluating-skills): realistic tasks, isolated trials, a no-skill baseline, checks against actual output, and human review before trusting automated grades.
 [dotnet/skills](https://github.com/dotnet/skills) provides another public example of Vally-based evaluation.
@@ -102,6 +117,10 @@ Vally's text-only rubric grader receives actual artifact evidence for domain cor
 It does not see screenshots or provide a visual-design judgment.
 Every required grader must pass; a high prose score cannot compensate for a missing artifact or incorrect ER relationship.
 Errors remain distinct from measured failures.
+The `scale_1_5` rubric maps raw scores 1 through 5 to 0, 0.25, 0.5, 0.75, and 1.
+The current 0.8 threshold therefore requires a raw 5/5 from each quality grader; raw 4/5 is a failure.
+Dashboard fractions such as 2/5 count passed capability trials, not stars or an average quality rating.
+Different judge pairings can apply different standards, so compare those fractions only with the judge and repeat count visible.
 
 ## Calibrate before publishing claims
 
@@ -118,10 +137,15 @@ The dashboard reports observed outcomes and explicit evidence categories.
 
 ## Publish evidence
 
-Each matrix job uploads only its sanitized `summary.json`.
+Each matrix job uploads two artifacts.
+`power-pages-evals-<skill>--<model>` holds only the sanitized `summary.json`, the sole input to the dashboard.
 It contains case identifiers, verdicts, token counts, model IDs, reasoning efforts, source hashes and workflow provenance.
-Raw trajectories, generated artifacts, grader explanations, screenshots and errors remain local and are not uploaded from this public repository.
-For human calibration, run in a controlled environment and inspect local evidence; the public workflow artifact is deliberately insufficient for that review.
+`power-pages-eval-evidence-<skill>--<model>` holds the whole run folder: trajectories, generated files, screenshots, errors and every grader's explanation.
+It is kept for 30 days so any score can be traced to its reasons.
+The job also writes the judge's reasons for every failed check to the run's summary page.
+Trials only see public fixtures and the public plugin, and their tools cannot read the environment.
+Even so, the job skips the evidence upload if the run's token or any GitHub token shape appears in it (`node evals/runtime/evidence.mjs check <dir>`).
+Run `node evals/runtime/evidence.mjs report <dir>` on a downloaded or local run folder to list the failed checks and their reasons.
 
 Agent usage records input, output and cache counters reported by the Copilot SDK.
 Missing counters remain unknown.
@@ -134,7 +158,7 @@ After an evaluation completes, the existing showcase workflow fetches retained s
 It validates the schema and matches the commit, workflow URL, skill and model to each matrix artifact before building the site's `/evaluations/` page.
 Only summaries are copied into the build; artifact content is never executed.
 The existing repo-stats report remains in the same Pages deployment.
-Evaluation artifacts are retained for up to 90 days.
+Summary artifacts are retained for up to 90 days.
 The model workflow is manually dispatched; PR validation does not call models, and no nightly evaluation is scheduled.
 
 The dashboard selects the latest whole suite per skill, agent model, judge model and both reasoning efforts.

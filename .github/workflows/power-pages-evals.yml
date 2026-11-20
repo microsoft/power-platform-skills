@@ -123,8 +123,32 @@ jobs:
                   REASONING_EFFORT: ${{ matrix.reasoningEffort }}
                   JUDGE_REASONING_EFFORT: ${{ matrix.judgeReasoningEffort }}
               run: node evals/runtime/run.mjs run --skill "$SKILL" --runs "$RUNS" --model "$MODEL" --judge-model "$JUDGE_MODEL" --reasoning-effort "$REASONING_EFFORT" --judge-reasoning-effort "$JUDGE_REASONING_EFFORT" --out evals/reports/action
-            # Raw trajectories, generated artifacts and screenshots are local-only.
-            # A public repository's Actions artifacts must contain scalar summaries.
+            # Trials see only public fixtures and the public plugin, and their tools
+            # cannot read the environment. Still refuse to upload if the run token
+            # or any GitHub token shape appears anywhere in the evidence.
+            - name: check evidence for credentials
+              id: credential-check
+              if: ${{ always() }}
+              env:
+                  GITHUB_TOKEN: ${{ github.token }}
+              run: node evals/runtime/evidence.mjs check evals/reports/action
+            # Only publish judge explanations after checking the entire evidence
+            # tree, including error text, for credentials.
+            - name: explain failed checks
+              if: ${{ always() && steps.credential-check.outcome == 'success' }}
+              run: node evals/runtime/evidence.mjs report evals/reports/action >> "$GITHUB_STEP_SUMMARY"
+            # Trajectories, grader reasons, generated files and screenshots. The
+            # dashboard never reads this artifact; it fetches only power-pages-evals-*.
+            - name: upload grading evidence
+              if: ${{ always() && steps.credential-check.outcome == 'success' }}
+              uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+              with:
+                  name: power-pages-eval-evidence-${{ matrix.skill }}--${{ matrix.model }}
+                  path: evals/reports/action
+                  include-hidden-files: true
+                  if-no-files-found: warn
+                  retention-days: 30
+            # The public dashboard consumes only this scalar summary.
             - name: upload sanitized evidence
               if: ${{ always() }}
               uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

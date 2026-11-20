@@ -1,0 +1,11 @@
+{
+  "files": [
+    {
+      "path": "docs/bootstrap5-assessment.md",
+      "type": "text",
+      "requiredText": ["data-toggle=\"tab\"", ".input-group-addon", "glyphicon", "bootstrap.min.css", "Bootstrap 5"],
+      "requiredPatterns": ["runtime flag|pac-log.txt", "upload"],
+      "minTextLength": 300
+    }
+  ]
+}
