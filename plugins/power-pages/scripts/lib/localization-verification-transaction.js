@@ -693,11 +693,17 @@ function abandonLocalizationVerificationAudit(projectRoot, expectedRunId) {
 function readAuditLease(projectRoot) {
   const auditPath = path.join(projectRoot, TRANSACTION_AUDIT_FILE);
   if (!fs.existsSync(auditPath)) return null;
+  const contents = fs.readFileSync(auditPath, 'utf8');
   let lease;
   try {
-    lease = JSON.parse(fs.readFileSync(auditPath, 'utf8'));
-  } catch {
-    throw new Error(`${TRANSACTION_AUDIT_FILE} is not valid JSON.`);
+    lease = JSON.parse(contents);
+  } catch (error) {
+    const location = getJsonParseLocation(error);
+    throw new Error(
+      `${TRANSACTION_AUDIT_FILE} is not valid JSON` +
+      `${location ? ` at ${location}` : ''}.`,
+      { cause: error }
+    );
   }
   if (!lease || typeof lease !== 'object' || Array.isArray(lease) ||
       typeof lease.runId !== 'string' ||
@@ -706,6 +712,20 @@ function readAuditLease(projectRoot) {
     throw new Error(`${TRANSACTION_AUDIT_FILE} is invalid.`);
   }
   return lease;
+}
+
+function getJsonParseLocation(error) {
+  const message = error && typeof error.message === 'string'
+    ? error.message
+    : '';
+  const lineAndColumn = message.match(
+    /\b(?:in|after) JSON at position \d+ \(line (\d+) column (\d+)\)$/i
+  );
+  if (lineAndColumn) {
+    return `line ${lineAndColumn[1]}, column ${lineAndColumn[2]}`;
+  }
+  const position = message.match(/\b(?:in|after) JSON at position (\d+)$/i);
+  return position ? `position ${position[1]}` : null;
 }
 
 function readCurrentTransaction(projectRoot, expectedRunId = null) {

@@ -35,7 +35,12 @@ const provisioned = {
 
 function tempProject(context) {
   const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'mobile-lifecycle-'));
-  context.after(() => fs.rmSync(projectRoot, { recursive: true, force: true }));
+  context.after(() => fs.rmSync(projectRoot, {
+    recursive: true,
+    force: true,
+    maxRetries: 5,
+    retryDelay: 20,
+  }));
   return projectRoot;
 }
 
