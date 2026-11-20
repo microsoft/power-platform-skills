@@ -9,7 +9,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { closeBrowser } from './browser-checks.mjs';
 import { OfflineExecutor } from './offline-executor.mjs';
-import { validateModelPair } from './models.mjs';
+import { agentTimeoutMs, validateModelPair } from './models.mjs';
 import { createRegistry, loadSuites, pluginRoot, repoRoot, trialGraders } from './suites.mjs';
 
 const require = createRequire(import.meta.url);
@@ -186,7 +186,7 @@ export async function evaluate(options, dependencies = {}) {
                 stimulus, stimulusName: stimulus.name, prompt: stimulus.prompt,
                 skills: variant === 'skilled' ? [suite.skill] : [],
                 workDir: scratch, workspace: path.join(scratch, id),
-                executor, model: options.model, reasoningEffort: options.reasoningEffort, timeout: 600_000,
+                executor, model: options.model, reasoningEffort: options.reasoningEffort, timeout: agentTimeoutMs(options.reasoningEffort),
                 environment: stimulus.environment, baseDir: suite.suiteDir,
               });
               if (variant === 'baseline' && result.trajectory.events.some(event => event.type === 'skill_activation')) {

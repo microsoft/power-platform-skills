@@ -281,6 +281,34 @@ test('judge startup failure persists the intended sample as incomplete evidence'
   assert.equal(require('../../../site/lib/evaluations.js').validateSummary(summary), summary);
 });
 
+test('agent turn budget scales with reasoning effort', async t => {
+  const root = await mkdtemp(path.join(tmpdir(), 'pp-agent-timeout-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const [suite] = await loadSuites({ skill: 'setup-auth' });
+  const timeouts = {};
+  for (const reasoningEffort of ['medium', 'high', 'max']) {
+    const executor = {
+      name: 'test-offline', shutdown: async () => {},
+      execute: async (stimulus, options) => {
+        timeouts[reasoningEffort] = options.timeout;
+        return {
+          id: 'test', stimulus, workDir: options.workDir, output: '', events: [], endReason: 'completed',
+          metrics: computeMetrics([]),
+          metadata: { model: options.model, skillsLoaded: [], executor: 'test-offline', sessionID: 'test' },
+        };
+      },
+    };
+    await evaluate({
+      skill: 'setup-auth', case: suite.stimuli[0].name, runs: 1, reasoningEffort,
+      model: 'test-model', judgeModel: 'test-judge', out: path.join(root, reasoningEffort),
+    }, {
+      executor, judge: { shutdown: async () => {} },
+      gradeTrajectory: async () => { throw new Error('test grading skipped'); },
+    });
+  }
+  assert.deepEqual(timeouts, { medium: 600_000, high: 1_200_000, max: 1_800_000 });
+});
+
 test('a grading exception preserves the completed agent usage in the error summary', async t => {
   const root = await mkdtemp(path.join(tmpdir(), 'pp-grade-failure-'));
   t.after(() => rm(root, { recursive: true, force: true }));
