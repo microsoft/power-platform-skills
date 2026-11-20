@@ -33,7 +33,7 @@
 //     "results": [
 //       { "uniqueName": "...", "solutionId": "...", "created": true|false },
 //       { "uniqueName": "...", "skipped": true, "reason": "futureBuffer" },
-//       { "uniqueName": "...", "error": "..." }
+//       { "uniqueName": "...", "error": "...", "diagnostics": { ... } }
 //     ]
 //   }
 //
@@ -46,6 +46,10 @@ const fs = require('fs');
 const helpers = require('./validation-helpers');
 const { getAuthToken } = helpers;
 const { createSolution } = require('./create-solution');
+
+const MAX_DIAGNOSTIC_TEXT_LENGTH = 300;
+const MAX_RESPONSE_BODY_BYTES = 4096;
+const MAX_ERROR_CAUSE_DEPTH = 3;
 
 function parseArgs(argv) {
   const args = argv.slice(2);
@@ -67,6 +71,97 @@ function parseArgs(argv) {
 function isAuthFailure(err) {
   const msg = err && err.message ? String(err.message) : '';
   return /Authentication failed/i.test(msg) || /Unexpected response \(401\)/.test(msg);
+}
+
+function sanitizeDiagnosticText(value) {
+  if (typeof value !== 'string') return null;
+  const sanitized = value
+    .replace(/Bearer\s+\S+/gi, 'Bearer [REDACTED]')
+    .replace(
+      /\b(access[_-]?token|refresh[_-]?token|client[_-]?secret|authorization|password)\s*[:=]\s*([^\s&,]+)/gi,
+      (match, key, value) => value.toLowerCase() === 'bearer'
+        ? `${key}${match.includes(':') ? ':' : '='} ${value}`
+        : `${key}=[REDACTED]`
+    )
+    .replace(/https?:\/\/[^\s"'<>]+/gi, '[URL]')
+    .replace(/[\r\n\t]+/g, ' ')
+    .slice(0, MAX_DIAGNOSTIC_TEXT_LENGTH);
+  return sanitized || null;
+}
+
+function safeDiagnosticCode(value) {
+  return typeof value === 'string' && /^[A-Za-z0-9._-]{1,100}$/.test(value)
+    ? value
+    : null;
+}
+
+function getResponseErrorDetails(message) {
+  // `createSolution` formats HTTP failures as `Unexpected response (401): <body>`.
+  // OAuth uses `{ error, error_description }`; Dataverse uses
+  // `{ error: { code, message } }`. Only those fields are surfaced, not raw bodies.
+  const match = /^Unexpected response \((\d{3})\):\s*([\s\S]*)$/.exec(message);
+  if (!match) return null;
+
+  const details = { statusCode: Number(match[1]) };
+  const body = match[2];
+  if (Buffer.byteLength(body, 'utf8') > MAX_RESPONSE_BODY_BYTES) return details;
+
+  let payload;
+  try {
+    payload = JSON.parse(body);
+  } catch (error) {
+    if (!(error instanceof SyntaxError)) throw error;
+    return details;
+  }
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    return details;
+  }
+
+  const responseError = payload.error;
+  const responseCode = typeof responseError === 'string'
+    ? responseError
+    : responseError && typeof responseError === 'object'
+      ? responseError.code
+      : payload.code;
+  const responseMessage = payload.error_description ||
+    (responseError && typeof responseError === 'object' && responseError.message) ||
+    payload.message;
+  const safeCode = safeDiagnosticCode(responseCode);
+  const safeMessage = sanitizeDiagnosticText(responseMessage);
+  if (safeCode) details.responseCode = safeCode;
+  if (safeMessage) details.responseMessage = safeMessage;
+  return details;
+}
+
+function getSafeErrorDetails(error, causeDepth = 0) {
+  const message = error && typeof error.message === 'string'
+    ? error.message
+    : typeof error === 'string'
+      ? error
+      : '';
+  const details = getResponseErrorDetails(message) || {
+    message: sanitizeDiagnosticText(message) || 'Unspecified error',
+  };
+  const code = safeDiagnosticCode(error && error.code);
+  if (code) details.code = code;
+  if (Number.isInteger(error && error.statusCode) &&
+      error.statusCode >= 100 && error.statusCode <= 599) {
+    details.statusCode = error.statusCode;
+  }
+  if (error && error.cause != null && causeDepth < MAX_ERROR_CAUSE_DEPTH) {
+    details.cause = getSafeErrorDetails(error.cause, causeDepth + 1);
+  }
+  return details;
+}
+
+function formatSafeErrorSummary(details) {
+  if (Number.isInteger(details.statusCode)) {
+    const responseDetails = [details.responseCode, details.responseMessage]
+      .filter(Boolean)
+      .join(': ');
+    return `HTTP ${details.statusCode}${responseDetails ? ` (${responseDetails})` : ''}`;
+  }
+  return details.message || details.code || 'Unspecified error';
 }
 
 async function createSolutionsBatch({
@@ -141,7 +236,14 @@ async function createSolutionsBatch({
         try {
           await refreshPromise;
         } catch (refreshErr) {
-          results[idx] = { uniqueName: spec.uniqueName, error: refreshErr.message };
+          const originalError = getSafeErrorDetails(err);
+          const refreshError = getSafeErrorDetails(refreshErr);
+          results[idx] = {
+            uniqueName: spec.uniqueName,
+            error: `Token refresh failed after ${formatSafeErrorSummary(originalError)}: ` +
+              formatSafeErrorSummary(refreshError),
+            diagnostics: { originalError, refreshError },
+          };
           failed += 1;
           return;
         }
@@ -160,9 +262,13 @@ async function createSolutionsBatch({
           success += 1;
           return;
         } catch (retryErr) {
+          const originalError = getSafeErrorDetails(err);
+          const retryError = getSafeErrorDetails(retryErr);
           results[idx] = {
             uniqueName: spec.uniqueName,
-            error: `Retry after token refresh failed: ${retryErr.message || String(retryErr)}`,
+            error: `Retry after token refresh failed: ${formatSafeErrorSummary(retryError)}; ` +
+              `original request: ${formatSafeErrorSummary(originalError)}`,
+            diagnostics: { originalError, retryError },
           };
           failed += 1;
           return;
