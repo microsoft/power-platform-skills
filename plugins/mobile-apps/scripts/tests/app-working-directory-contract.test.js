@@ -109,14 +109,32 @@ function fixture(t) {
     fs.mkdirSync(installed, { recursive: true });
     fs.writeFileSync(path.join(installed, 'package.json'), JSON.stringify({ version: '0.2.9' }));
   }
+  // Root-binding tests do not query npm. The actual package-source/inventory
+  // behavior is tested separately; this probe checks argv, cwd and refusal.
+  fs.writeFileSync(path.join(directory, 'fixture-release-resolver.cjs'), `
+    const fs = require('node:fs');
+    const path = require('node:path');
+    const root = process.argv[process.argv.indexOf('--project-root') + 1];
+    if (!root || fs.realpathSync.native(root) !== fs.realpathSync.native(process.cwd())) {
+      console.error('BLOCKED: package contract inspected the wrong app root');
+      process.exit(1);
+    }
+    const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
+    if (!Object.keys(pkg.dependencies || {}).length) {
+      console.error('MISSING: installed package contract');
+      process.exit(1);
+    }
+  `);
   return { directory, owner, caller };
 }
 
 function run(block, owner, caller) {
   const command = block
+    .replaceAll('"${PLUGIN_ROOT}/scripts/resolve-mobile-release.js"', '"$FIXTURE_RELEASE_RESOLVER"')
     .replaceAll('<working_dir>', shellLiteralContents(owner))
     .replaceAll('<approved-artifact-keys-json>', '["scanner"]')
-    .replaceAll('<expo-module-name>', 'expo-secure-store');
+    .replaceAll('<expo-module-name>', 'expo-secure-store')
+    .replaceAll('<resolved-package-name>', 'expo-secure-store');
   // Use the current Node executable; mutation tests supply local CLI probes.
   const result = spawnSync(bash, ['-s'], {
     input: `node() { "$REAL_NODE" "$@"; }\nPA="npx --no-install pa"\nPA_KIND=pa\n${command}`,
@@ -125,6 +143,7 @@ function run(block, owner, caller) {
       ...process.env,
       REAL_NODE: process.execPath.replaceAll('\\', '/'),
       PLUGIN_ROOT: pluginRoot.replaceAll('\\', '/'),
+      FIXTURE_RELEASE_RESOLVER: path.join(path.dirname(caller), 'fixture-release-resolver.cjs').replaceAll('\\', '/'),
       POWER_PLATFORM_SKILLS_TELEMETRY_MOBILE_APP_OPTOUT: '1',
     },
     encoding: 'utf8',
@@ -739,7 +758,8 @@ for (const file of files) {
   test(`${name} executes project and package gates against the owner, not the launch directory`, (t) => {
     const { owner, caller } = fixture(t);
     const projectGate = blocks[0];
-    const packageGate = blocks.find((block) => block.includes("require('./package.json')"));
+    const packageGate = blocks.find((block) => block.includes("require('./package.json')"))
+      || blocks.find((block) => block.includes('scripts/resolve-mobile-release.js'));
     assert.ok(packageGate);
     for (const gate of new Set([projectGate, packageGate])) {
       const result = run(gate, owner, caller);

@@ -1,0 +1,11 @@
+{
+  "files": [
+    {
+      "path": "docs/data-model-proposal.md",
+      "type": "text",
+      "requiredText": ["cr8f1_customer", "cr8f1_product", "cr8f1_review", "cr8f1_rating", "cr8f1_comment", "cr8f1_loyaltypoints"],
+      "requiredPatterns": ["customer.{0,80}review|review.{0,80}customer", "product.{0,80}review|review.{0,80}product", "erDiagram"],
+      "minTextLength": 350
+    }
+  ]
+}

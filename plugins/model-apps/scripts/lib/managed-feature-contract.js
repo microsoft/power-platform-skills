@@ -84,6 +84,53 @@ function captionDifferencesNote(reads, names) {
   }
 }
 
+// One stop's view of the other forms of its table that hold a cell with the same id as a stopped form
+// (lib/form-caption-sharing.js). It is asked only AFTER a stop is decided and its block installed, and what it answers is
+// display-only: a non-enumerable note on the error (never its message, code or data) and a second barrier label. The module
+// is loaded only when a stopped group is a form, and anything it throws — or a missing module — adds nothing. `note` is the
+// last note it observed, so a later throw of the same stop shows it with no second read. One context per presentation, never
+// across a send: what it read before a publish is another moment from what a read after it shows.
+function captionSharingContext(client, scope) {
+  let ctx;
+  return {
+    async observe(entries, presentation) {
+      if (!Array.isArray(entries) || !entries.some((o) => o && o.family === 'form')) return null;
+      try {
+        if (ctx === undefined) ctx = require('./form-caption-sharing.js').createFormCaptionSharingContext({ client, scope });
+        return await ctx.observe(entries, presentation);
+      } catch {
+        return null;
+      }
+    },
+    get note() {
+      try { return ctx ? ctx.note : null; } catch { return null; }
+    },
+  };
+}
+
+// Observe `entries` for the stop being thrown, then attach the note to `error` (when there is one) and add the barrier label.
+// The scope's block is already installed by the caller, so a read here that fails or hangs on its own timeout never lets a
+// send through, and the stop keeps its message, code and data.
+async function explainCaptionSharing(ctx, gate, scope, entries, presentation, error) {
+  if (!ctx) return error;
+  try {
+    const seen = await ctx.observe(entries, presentation);
+    if (seen && typeof seen.note === 'string' && seen.note) {
+      if (error) attachCaptionSharing(error, seen.note);
+      if (typeof seen.label === 'string' && seen.label) gate.blockScope(scope, seen.label);
+    }
+  } catch {
+    // A diagnostic never changes the stop it explains.
+  }
+  return error;
+}
+
+function attachCaptionSharing(error, text) {
+  if (typeof text !== 'string' || !text) return error;
+  try { require('./form-caption-sharing.js').attachFormCaptionSharing(error, text); } catch { /* the stop stays as it is */ }
+  return error;
+}
+
 function codedError(code, message, extra) {
   return Object.assign(new Error(message), { code }, extra || {});
 }
@@ -485,14 +532,15 @@ async function runManagedFeature(args) {
     // read that was already true before the send never does. A settled dispatch is therefore known to have ended, so
     // the change may go ahead in this run. A carry-only dispatch over layers that were already live has no witness and
     // stays unconfirmed in every run, until the maker accepts the risk (store.acceptUncertainPublication).
+    const sharing = args.client ? captionSharingContext(args.client, pub.scope) : null;
     if (args.client) {
-      await confirmUncertainPublication({ store, barrier, scope: pub.scope, client: args.client, readers: args.readers || LAYER_READERS });
+      await confirmUncertainPublication({ store, barrier, scope: pub.scope, client: args.client, readers: args.readers || LAYER_READERS, captionContext: sharing });
       const now = store.readGroup(family, key).committed;
       if (!now || now.generation !== committed.generation) throw codedError(CODES.conflict, `${label} was committed again while its earlier publish was being confirmed`);
       if (!(now.publication && UNCERTAIN_PUBLICATION.has(now.publication.state))) return now;
     }
     const remedy = publicationRemedy(pub.scope, pub.dispatchToken);
-    throw codedError(PUBLICATION_UNCONFIRMED, `${label} has a publish that may have been sent and is not proved ended; no change is made over it; ${args.client ? '' : 'a run that passes the Dataverse client confirms it read-only first; '}${remedy}`, blockedPublication(pub.scope, pub.dispatchToken));
+    throw attachCaptionSharing(codedError(PUBLICATION_UNCONFIRMED, `${label} has a publish that may have been sent and is not proved ended; no change is made over it; ${args.client ? '' : 'a run that passes the Dataverse client confirms it read-only first; '}${remedy}`, blockedPublication(pub.scope, pub.dispatchToken)), sharing && sharing.note);
   }
 
   // Adoption consent, before membership exposes the root and before the commit binds it: a group not yet committed
@@ -964,7 +1012,7 @@ function coverageOf(store, scope) {
  * Answers { confirmed: [{ family, key }], unconfirmed: [{ family, key, code }] }. publishManagedScope calls it first
  * whenever the scope holds an uncertain publication; a feature may also call it directly.
  */
-async function confirmUncertainPublication({ store, barrier, scope, client, readers = LAYER_READERS } = {}) {
+async function confirmUncertainPublication({ store, barrier, scope, client, readers = LAYER_READERS, captionContext } = {}) {
   if (!store || typeof store.snapshot !== 'function' || typeof store.confirmPublished !== 'function' || !client || typeof client.get !== 'function' || !readers || typeof readers !== 'object') {
     throw codedError(CODES.notSettled, 'confirmUncertainPublication needs the store, a Dataverse client to read the published layers with, and the layer readers');
   }
@@ -988,6 +1036,9 @@ async function confirmUncertainPublication({ store, barrier, scope, client, read
   const corrupt = coverageOf(store, scope).corrupt;
   const confirmed = [];
   const unconfirmed = [];
+  // The reads of the dispatches that stay unconfirmed because a published layer is not the shipped one, for the
+  // caption-sharing observation made once every block below is installed.
+  const stopped = [];
   for (const [token, list] of dispatches) {
     let code = null;
     let apart = false;
@@ -1012,6 +1063,7 @@ async function confirmUncertainPublication({ store, barrier, scope, client, read
         code = PUBLICATION_UNCONFIRMED;
         apart = read.savedSha256 === shipped;
         if (apart && read.captionDifferences !== undefined) apartReads.push({ family: o.family, key: o.key, captionDifferences: read.captionDifferences });
+        if (typeof read.savedSha256 === 'string') stopped.push({ family: o.family, key: o.key, group: o.group, savedSha256: read.savedSha256, publishedSha256: read.publishedSha256 });
         break;
       }
       proofs.push({ family: o.family, key: o.key, publishedSha256: read.publishedSha256, generation: o.group.generation });
@@ -1033,6 +1085,9 @@ async function confirmUncertainPublication({ store, barrier, scope, client, read
     const note = apart ? captionDifferencesNote(apartReads, (l) => l.map((g) => `managed ${g.family} "${g.key}"`).join(', ')) : '';
     gate.blockScope(scope, `${list.map((g) => `managed ${g.family} "${g.key}"`).join(', ')} (its publish may have been sent and a fresh read did not prove it ended${found}${remedy}${note})`);
   }
+  // After every block is in place: the observation is display-only (a second label, and the caller's context keeps the note
+  // for the stop it throws), so it cannot change what was confirmed, what stays blocked, or the answer below.
+  if (stopped.length) await explainCaptionSharing(captionContext || captionSharingContext(client, scope), gate, scope, stopped, 'unconfirmed', null);
   return { confirmed, unconfirmed };
 }
 
@@ -1172,14 +1227,17 @@ async function publishManagedScope({ store, barrier, scope, groups, client, read
   // it confirms is answered with this call's own confirmations. One it cannot prove leaves the scope blocked, and the
   // checks below still refuse to send over it.
   const uncertainHere = store.snapshot().units().some((u) => !u.invalid && u.group && u.group.publication && UNCERTAIN_PUBLICATION.has(u.group.publication.state) && scopeId(u.group.publication.scope) === want);
-  const readConfirmed = uncertainHere ? (await confirmUncertainPublication({ store, barrier: gate, scope, client, readers })).confirmed : [];
+  // The caption-sharing observation of every stop made BEFORE a send (below): one table listing at most, and its note
+  // rides on whichever of those stops is thrown. A stop after the send observes afresh.
+  const sharing = captionSharingContext(client, scope);
+  const readConfirmed = uncertainHere ? (await confirmUncertainPublication({ store, barrier: gate, scope, client, readers, captionContext: sharing })).confirmed : [];
   const owed = [];
   for (const { family, key } of groups || []) {
     const { committed, pending } = store.readGroup(family, key);
     if (pending) throw codedError(CODES.pending, `the managed ${family} "${key}" has a pending attempt`);
     const pub = committed && committed.publication;
     if (!pub || pub.state === 'not-needed' || pub.state === 'confirmed') continue;
-    if (pub.state !== 'owed' || pub.dispatchToken !== null) throw codedError(PUBLICATION_UNCONFIRMED, `the publish of managed ${family} "${key}" may have been sent and is not confirmed; it is not sent again`, blockedPublication(pub.scope, pub.dispatchToken));
+    if (pub.state !== 'owed' || pub.dispatchToken !== null) throw attachCaptionSharing(codedError(PUBLICATION_UNCONFIRMED, `the publish of managed ${family} "${key}" may have been sent and is not confirmed; it is not sent again`, blockedPublication(pub.scope, pub.dispatchToken)), sharing.note);
     if (scopeId(pub.scope) !== want) throw codedError(CODES.notSettled, `the managed ${family} "${key}" is published in another scope`);
     owed.push({ family, key });
   }
@@ -1202,7 +1260,7 @@ async function publishManagedScope({ store, barrier, scope, groups, client, read
       return tokens.length === 1 ? blockedPublication(pubs[0].scope, tokens[0]) : {};
     };
     gate.blockScope(scope, `${names(cover.uncertain)} (its publish or workflow effect may have been sent and is not confirmed)`);
-    throw codedError(PUBLICATION_UNCONFIRMED, `${names(cover.uncertain)} shares the publish of this scope and may have been sent unconfirmed; nothing was published`, blockedOn());
+    throw attachCaptionSharing(codedError(PUBLICATION_UNCONFIRMED, `${names(cover.uncertain)} shares the publish of this scope and may have been sent unconfirmed; nothing was published`, blockedOn()), sharing.note);
   }
   // A change is being made on the scope (its attempt holds it on the barrier, or will when this run reaches it).
   if (cover.pending.length) return { sent: false, withheld: true, confirmed: readConfirmed };
@@ -1259,7 +1317,10 @@ async function publishManagedScope({ store, barrier, scope, groups, client, read
     const remedy = unpublished
       ? 'In the maker, publish that change if it should be kept, or undo it there and save, then run the build again'
       : 'Run the build again: it reads the saved layer afresh and names any change it would overwrite';
-    throw codedError(CODES.completion, `${names(drifted)} has a saved change this build did not make${unpublished ? ' and that is not published' : ''} (its saved layer is not the one its managed group proved), so the publish of its ${want.replace(':', ' ')} was not sent: it would put that change live. ${remedy}`);
+    const stop = codedError(CODES.completion, `${names(drifted)} has a saved change this build did not make${unpublished ? ' and that is not published' : ''} (its saved layer is not the one its managed group proved), so the publish of its ${want.replace(':', ' ')} was not sent: it would put that change live. ${remedy}`);
+    // The scope is blocked and the stop is built: only now are the other forms of the table that share a drifted form's
+    // cell observed, for a note beside this message (the publish-or-undo advice above may not be enough for them).
+    throw await explainCaptionSharing(sharing, gate, scope, drifted, 'drift', stop);
   }
   if (!gate.allowScope(scope, path)) return { sent: false, withheld: true, confirmed: confirmedSoFar() };
 
@@ -1381,7 +1442,9 @@ async function publishManagedScope({ store, barrier, scope, groups, client, read
         return o.savedSha256 === (sent ? sent.savedSha256 : o.group.publication.desiredSha256);
       });
       const message = `the publish was sent and the published layer does not show what it shipped${stillSaved ? `: ${names(unshown)} ${LAYERS_READ_APART}` : ''}`;
-      throw codedError(PUBLICATION_UNCONFIRMED, stillSaved ? message + captionDifferencesNote(unshown, names) : message, journaled());
+      const stop = codedError(PUBLICATION_UNCONFIRMED, stillSaved ? message + captionDifferencesNote(unshown, names) : message, journaled());
+      // Recorded unconfirmed and blocked above; the observation is made after the send, so it reads afresh (a new context).
+      throw await explainCaptionSharing(captionSharingContext(client, scope), gate, scope, unshown, 'unconfirmed', stop);
     }
     // One atomic write settles the whole send, so no run can see some of it confirmed and not the rest. `answered`:
     // this invocation dispatched the publish and it answered success, which a later run can never claim.

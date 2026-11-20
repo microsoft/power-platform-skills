@@ -597,12 +597,15 @@ function tagged(kind, key, code, outcome, report) {
 // - our own failures (tagged above) carry their bucket;
 // - the port's typed stops carry lower-case codes (create-identity-conflict: a row of that name sits at another
 //   id; create-identity-unverified: the derived id could not be read; create-outcome-unknown;
-//   create-completion-required) and pass through unchanged, so a caller can name them;
+//   create-completion-required; create-value-refused) and pass through unchanged, so a caller can name them;
 // - the port's create-refused stop (`nothingCreated`: the service refused every request unstarted and the port released
 //   the attempt, #847) is refused even after execute was entered: the store itself proves nothing it sent can land;
 // - any other failure after execute was entered is unknown: what was sent is not known.
 const PORT_CODE = /^create-[a-z0-9-]{2,60}$/;
-const UNKNOWN_PORT_CODES = new Set(['create-identity-unverified', 'create-outcome-unknown', 'create-completion-required']);
+// create-value-refused (#847): an environment variable's definition was sent and its value request was refused before it
+// started; the attempt stays pending (unfinished, never released), so it is routed as unknown like the others.
+const VALUE_REFUSED_CODE = 'create-value-refused';
+const UNKNOWN_PORT_CODES = new Set(['create-identity-unverified', 'create-outcome-unknown', 'create-completion-required', VALUE_REFUSED_CODE]);
 function portCode(error) {
   return error && typeof error.code === 'string' && PORT_CODE.test(error.code) ? error.code : null;
 }
@@ -611,7 +614,7 @@ function routeFailure(error, sent) {
   if (error && error[TAGGED]) return error.report || { bucket: error.outcome === 'nothing' ? 'refused' : 'unknown', code: error.code };
   const code = portCode(error);
   if (code && error.nothingCreated === true && !UNKNOWN_PORT_CODES.has(code)) return { bucket: 'refused', code, ...serviceCodeOf(error) };
-  if (code) return { bucket: sent || UNKNOWN_PORT_CODES.has(code) ? 'unknown' : 'refused', code };
+  if (code) return { bucket: sent || UNKNOWN_PORT_CODES.has(code) ? 'unknown' : 'refused', code, ...valueRefusedOf(error) };
   if (sent) return { bucket: 'unknown', code: 'create-outcome-unknown' };
   return { bucket: 'refused', code: codeOf(error) === 'UNEXPECTED_ERROR' ? 'CREATE_REFUSED' : codeOf(error) };
 }
@@ -619,6 +622,12 @@ function routeFailure(error, sent) {
 // The Dataverse error code a refused request was answered with (`0x80072040`), carried to the halt line; anything else
 // is dropped, so a message or a value can never ride along.
 const serviceCodeOf = (error) => (error && typeof error.serviceCode === 'string' && /^0x[0-9a-f]{8}$/i.test(error.serviceCode) ? { serviceCode: error.serviceCode } : {});
+// The only diagnostics a create-value-refused stop carries past the port (#847): the validated service code and the
+// attempt token the protected port took from its own attempt (a canonical GUID, never parsed from service text), which
+// the halt line spells into the exact retire approval. Any other code, or any other property, carries nothing.
+const valueRefusedOf = (error) => (error && error.code === VALUE_REFUSED_CODE
+  ? { ...serviceCodeOf(error), ...(typeof error.pendingAttemptToken === 'string' && GUID.test(error.pendingAttemptToken) ? { pendingAttemptToken: lower(error.pendingAttemptToken) } : {}) }
+  : {});
 
 const portOf = (ctx) => (ctx.creates && typeof ctx.creates.run === 'function' ? ctx.creates : null);
 
@@ -741,7 +750,7 @@ async function locate(ctx, kind, key, identity) {
     } catch (error) {
       // A read of the identity's id that failed proves nothing either way: never absence. A typed stop of the
       // resolver keeps its code (a conflict is refused, the rest stay unknown) and the id it names.
-      throw identityStop(portCode(error) || 'create-identity-unverified', stoppedId(error));
+      throw Object.assign(identityStop(portCode(error) || 'create-identity-unverified', stoppedId(error)), valueRefusedOf(error));
     }
     if (resolved && resolved.state === 'present' && typeof resolved.id === 'string' && resolved.id) {
       if (exactPort) await refuseLocalDraft(ctx.sdk, kind, resolved.id);
@@ -782,7 +791,7 @@ async function planOne(ctx, kindPlan, entry, plan) {
     if (code && !UNKNOWN_PORT_CODES.has(code)) return refuse(code);
     // The id the stop names, and the safe handle a maker inspects it by (the same shape a lost create reports).
     const id = code ? stoppedId(error) : null;
-    const line = { kind, key, code: code || codeOf(error), ...(id ? { id } : {}) };
+    const line = { kind, key, code: code || codeOf(error), ...(id ? { id } : {}), ...valueRefusedOf(error) };
     if (id) Object.defineProperty(line, 'handle', { value: identityHandle(kind, key, kindPlan.identity(entry), { id }), enumerable: false });
     plan.unknown.push(line);
     return null;
@@ -1820,10 +1829,12 @@ const INVENTORY = Symbol('configuration-artifacts.inventory');
 
 // The create port a caller without one gets: the plain pass-through (lib/creates-passthrough.js). It allocates a
 // fresh id per create, and the declared name is the identity, so a later run finds an earlier run's row by that name.
-// This is deliberate: the configuration kinds use the plain create path and never load a stable-id module, so a
-// whole-build retry after a lost create answer can create a second row (the build's known limit for every create).
-// Only a caller that injects the stable-id functions itself (configurationContext `fence`) gets the configuration
-// kinds' own stable port, built when the configuration is planned (planDefaultPort). Ordinary creation always works.
+// It serves only a caller without ctx.createUnits — the standalone helpers (create-connection-reference.js and the
+// like) — and there a retry after a lost create answer can still create a second row.
+// The default build never reaches it: its new rows go through ctx.createUnits (applyCreateUnit), at stable ids, sent
+// once, and a build without that capability is refused rather than sent here (compileCreateUnits). Only a caller that
+// injects the stable-id functions itself (configurationContext `fence`) gets the configuration kinds' own stable port,
+// built when the configuration is planned (planDefaultPort). Ordinary creation always works.
 function defaultCreates(ctx) {
   if (!ctx[DEFAULT_PORT]) {
     // A stable port is built from the spec's intents, so it exists only after a plan: an apply that reaches here
@@ -1899,7 +1910,7 @@ async function applyCreate(op, ctx, result, known) {
     const lost = routed.bucket === 'unknown' && error && error[TAGGED];
     pushFinding(result, routed.bucket, {
       kind, key, id: routed.bucket === 'unknown' && given ? given.id : undefined,
-      code: lost ? 'create-outcome-unknown' : routed.code, cause: lost ? routed.code : undefined, serviceCode: routed.serviceCode,
+      code: lost ? 'create-outcome-unknown' : routed.code, cause: lost ? routed.code : undefined, serviceCode: routed.serviceCode, pendingAttemptToken: routed.pendingAttemptToken,
     }, routed.bucket === 'unknown' ? handle : null);
     return;
   }
@@ -1918,6 +1929,115 @@ async function applyCreate(op, ctx, result, known) {
     // `matched` is the platform's row at the derived id, not this run's create: it is never recorded as created.
     origin: answer.outcome === 'created' ? 'created' : null,
     publishError: pushed.publish && pushed.publish.kind !== 'verified' ? pushed.publish.error : null,
+  });
+}
+
+// ---------------------------------------------------------------------------------------------
+// The default build's new rows (ctx.createUnits): closed singleton creates at stable ids, through a durable receipt
+// (lib/configuration-create-writer.js over lib/configuration-create-plan.js and lib/configuration-create-state.js).
+// The modules are required lazily: the plan module requires this one, and a caller without ctx.createUnits (the
+// standalone helpers, the protected path) never loads them.
+
+// The halt that stopped a step, kept on its result non-enumerable (never printed or serialized with it): the step's
+// stop code is the halt's own (runConfigurationStep), and its message says what was and was not dispatched.
+const CREATE_HALT = Symbol('configuration-artifacts.create-halt');
+const createHaltOf = (result) => (result && Object.prototype.hasOwnProperty.call(result, CREATE_HALT) ? result[CREATE_HALT] : null);
+function attachCreateHalt(result, error) {
+  if (!createHaltOf(result)) Object.defineProperty(result, CREATE_HALT, { value: error, enumerable: false });
+}
+// compileCreateUnits' answer when the step stops before its first write.
+const STEP_REFUSED = Symbol('configuration-artifacts.step-refused');
+
+const createTagOf = (kind) => {
+  const { CONFIGURATION_CREATE_KIND_TABLE: table } = require('./configuration-create-plan.js');
+  return Object.keys(table).find((tag) => table[tag].root && table[tag].bindingKind === kind) || null;
+};
+
+// A create the step refuses before anything of it is sent: its line, and the halt the step stops with.
+function refuseCreateUnit(result, op, code, reason) {
+  const S = require('./configuration-create-state.js');
+  const { normalizeGuid } = require('./reconcile-common.js');
+  const error = S.configurationCreateHalt(code, { rootKind: createTagOf(op.kind), rootId: normalizeGuid(op.id) || undefined, reason, transition: 'prepare', dispatched: false });
+  pushFinding(result, 'refused', { kind: op.kind, key: op.key, id: op.id, code, reason });
+  attachCreateHalt(result, error);
+}
+
+// Classify every operation of the plan and compile every new row into its closed unit, before the step writes anything:
+// a mixed edit, a shape the compiler refuses, an existing root whose graph cannot be read, or a build without the durable
+// workspace stops the WHOLE step here, so no item is half applied around it. Answers Map(op -> compiled) or STEP_REFUSED.
+async function compileCreateUnits(plan, ctx, result, known) {
+  const P = require('./configuration-create-plan.js');
+  const caps = ctx.createUnits;
+  const routed = [];
+  for (const op of plan.operations || []) {
+    if (op.action === 'refuse') continue;
+    const route = P.classifyConfigurationMutation(op);
+    if (route.route === 'existing') continue;
+    if (route.route === 'refused') { refuseCreateUnit(result, op, route.code, route.reason); return STEP_REFUSED; }
+    if (!caps.available) { refuseCreateUnit(result, op, P.CODES.shapeRefused, caps.reason || 'this build has no durable configuration create state'); return STEP_REFUSED; }
+    routed.push({ op, route });
+  }
+  // A data-source variable's parent: the id this step already knows (the plan's read), else the build's binding.
+  const boundIdOf = (kind, portKey) => known.get(knownKey(kind, portKey)) || (typeof ctx.boundIdOf === 'function' ? ctx.boundIdOf(kind, portKey) : undefined);
+  const units = new Map();
+  for (const { op, route } of routed) {
+    let baseline;
+    if (route.route === 'additions') {
+      baseline = await P.captureConfigurationBaseline(caps.dataverse, { kind: route.kind, rootId: route.rootId });
+      if (!baseline.ok) { refuseCreateUnit(result, op, baseline.code, baseline.reason); return STEP_REFUSED; }
+    }
+    let compiled;
+    try {
+      compiled = P.compileConfigurationCreateUnit(caps.spec, {
+        kind: route.kind, key: op.key, bindings: bindingsOf(ctx), solution: ctx.solutionUniqueName, boundIdOf,
+        ...(baseline ? { baseline, additions: route.additions } : {}),
+      });
+    } catch {
+      // The id derivation throws for a declaration it cannot name (no identity, an undeclared parent): not sendable.
+      compiled = { ok: false, code: P.CODES.shapeRefused, reason: 'the declaration cannot be compiled into closed rows' };
+    }
+    if (!compiled.ok) { refuseCreateUnit(result, op, compiled.code, compiled.reason); return STEP_REFUSED; }
+    units.set(op, compiled);
+  }
+  return units;
+}
+
+// Send one compiled unit through the writer, then read it back and settle it exactly as a create or an edit is settled.
+// The writer proves the unit's own rows and their membership itself (`membership.unit`) before a new rule's one
+// publication; every stop it raises is that item's line and halts the step.
+async function applyCreateUnit(op, ctx, result, known, compiled, membership) {
+  const { kind, key } = op;
+  if (op.action === 'create' && op.detail.parentKey && !known.get(knownKey('environmentVariable', op.detail.parentKey))) {
+    pushFinding(result, 'refused', { kind, key, code: 'ENVIRONMENT_VARIABLE_PARENT_UNAVAILABLE' });
+    return;
+  }
+  const unit = compiled.unit;
+  const planned = {};
+  for (const row of unit.rows) if (row.role === 'create' && row.id !== unit.root.id) planned[row.key] = row.id;
+  const handle = handleOf(op, { id: unit.root.id, childIds: planned });
+  let done;
+  try {
+    done = await ctx.createUnits.writer.executeCreateUnit(compiled, { membership: (items) => membership.unit(items, unit.root.id) });
+  } catch (error) {
+    if (!error || error.name !== 'ConfigurationCreateHalt') throw error;
+    pushFinding(result, error.dispatched === false ? 'refused' : 'unknown', { kind, key, id: unit.root.id, code: error.code }, handle);
+    attachCreateHalt(result, error);
+    return;
+  }
+  const { rootId, childIds } = done;
+  handle.ids = { id: rootId, childIds: { ...childIds } };
+  known.set(knownKey(kind, key), rootId);
+  if (op.action === 'create') {
+    const back = await readBack(op, ctx, known, rootId, childIds);
+    settle(op, ctx, result, { id: rootId, back, action: 'create', childIds, unsettled: false, handle, wroteDefinition: true, origin: 'created', publishError: null });
+    return;
+  }
+  const back = await readBack(op, ctx, known, rootId, { ...(op.detail.childIds || {}), ...childIds });
+  settle(op, ctx, result, {
+    id: rootId, back, action: 'update', fields: [...op.fields], childIds, unsettled: false, handle,
+    wroteDefinition: op.detail.changes.some((change) => change.pointer !== '/currentValue'),
+    origin: op.origin === 'adopted' || Object.keys(childIds).length ? op.origin : null,
+    publishError: null,
   });
 }
 
@@ -2052,7 +2172,7 @@ async function applyUpdate(op, ctx, result, known) {
     const routed = routeFailure(error, false);
     // A write (not a create) whose answer was lost: what it changed is not known.
     const lost = routed.bucket === 'unknown' && error && error[TAGGED] && !error.report;
-    pushFinding(result, routed.bucket, { kind, key, id, code: lost ? 'CONFIGURATION_WRITE_UNKNOWN' : routed.code, cause: lost ? routed.code : undefined, serviceCode: routed.serviceCode }, routed.bucket === 'unknown' ? handle : null);
+    pushFinding(result, routed.bucket, { kind, key, id, code: lost ? 'CONFIGURATION_WRITE_UNKNOWN' : routed.code, cause: lost ? routed.code : undefined, serviceCode: routed.serviceCode, pendingAttemptToken: routed.pendingAttemptToken }, routed.bucket === 'unknown' ? handle : null);
     return;
   }
   if (stop) { pushFinding(result, stop.bucket, { kind, key, id, code: stop.code }, handle); return; }
@@ -2145,29 +2265,31 @@ function membershipOf(ctx) {
     return types.get(kind);
   };
   const applies = (op) => active && (has(MEMBERSHIP_TABLES, op.kind) || has(CHILD_MEMBERSHIP_TABLES, op.kind)) && !!op.id;
-  return {
-    async ensure(op) {
-      if (!applies(op)) return null;
-      const { createSolutionMembership, ensureSolutionComponent } = require('./solution-membership.js');
-      const { withConfigurationWrite } = require('./configuration-transport.js');
-      let componentType;
-      try {
-        componentType = await typeOf(op.kind);
-      } catch (error) {
-        return { bucket: 'unknown', code: codeOf(error) };
-      }
-      const classic = has(CLASSIC_MEMBERSHIP_TYPES, op.kind) ? CLASSIC_MEMBERSHIP_TYPES[op.kind] : null;
-      if (!memberships.has(op.kind)) {
-        memberships.set(op.kind, createSolutionMembership({ read: ctx.sdk, solutionUniqueName: ctx.solutionUniqueName, componentTypes: classic ? [componentType, classic] : [componentType] }));
-      }
-      try {
-        if (classic && await memberships.get(op.kind).has(op.id, classic)) return null;
-        await withConfigurationWrite(() => ensureSolutionComponent(ctx.sdk, memberships.get(op.kind), { componentId: op.id, componentType, solutionUniqueName: ctx.solutionUniqueName }));
-      } catch (error) {
-        return outcomeOf(error, true) === 'nothing' ? { bucket: 'refused', code: codeOf(error) } : { bucket: 'unknown', code: 'SOLUTION_MEMBERSHIP_UNKNOWN' };
-      }
-      return null;
-    },
+  // `cache` holds one membership read per kind: the step's own (`memberships`), or a fresh one (`unit`).
+  const ensureIn = async (cache, op) => {
+    if (!applies(op)) return null;
+    const { createSolutionMembership, ensureSolutionComponent } = require('./solution-membership.js');
+    const { withConfigurationWrite } = require('./configuration-transport.js');
+    let componentType;
+    try {
+      componentType = await typeOf(op.kind);
+    } catch (error) {
+      return { bucket: 'unknown', code: codeOf(error) };
+    }
+    const classic = has(CLASSIC_MEMBERSHIP_TYPES, op.kind) ? CLASSIC_MEMBERSHIP_TYPES[op.kind] : null;
+    if (!cache.has(op.kind)) {
+      cache.set(op.kind, createSolutionMembership({ read: ctx.sdk, solutionUniqueName: ctx.solutionUniqueName, componentTypes: classic ? [componentType, classic] : [componentType] }));
+    }
+    try {
+      if (classic && await cache.get(op.kind).has(op.id, classic)) return null;
+      await withConfigurationWrite(() => ensureSolutionComponent(ctx.sdk, cache.get(op.kind), { componentId: op.id, componentType, solutionUniqueName: ctx.solutionUniqueName }));
+    } catch (error) {
+      return outcomeOf(error, true) === 'nothing' ? { bucket: 'refused', code: codeOf(error) } : { bucket: 'unknown', code: 'SOLUTION_MEMBERSHIP_UNKNOWN' };
+    }
+    return null;
+  };
+  const api = {
+    ensure: (op) => ensureIn(memberships, op),
     // The kinds among `kinds` whose component type cannot be read: none when the build joins no solution. It shares
     // typeOf's memo, so a type read here is not read again by ensure or prove, and a failed read is not retried.
     async unreadable(kinds) {
@@ -2200,7 +2322,22 @@ function membershipOf(ctx) {
       const holds = (type, item) => held.members.has(`${type}:${bare(item.id)}`) || (!!classicOf(item) && held.members.has(`${classicOf(item)}:${bare(item.id)}`));
       return typed.filter(({ item, type }) => !held || !type || !holds(type, item)).map(({ item }) => item);
     },
+    // One create unit's rows, after its creates and before a new rule's publication (configuration-create-writer.js):
+    // each new or preserved child is added only when a read taken NOW does not hold it (zero or one add; the step's own
+    // per-kind read may predate this unit's creates), the root is never added (its create carried the solution
+    // header, or the step's ensure already ran for an existing root), and then every row is proven by a fresh read.
+    // Answers the items not proven members.
+    async unit(items, rootId) {
+      const fresh = new Map();
+      const failed = [];
+      for (const item of items) {
+        if (ref(item.id) === ref(rootId)) continue;
+        if (await ensureIn(fresh, item)) failed.push(item);
+      }
+      return [...failed, ...await api.prove(items.filter((item) => !failed.includes(item)))];
+    },
   };
+  return api;
 }
 
 // Apply a plan from any of the plan functions (or several concatenated). Operations run in plan order, which is
@@ -2224,6 +2361,11 @@ async function applyConfiguration(plan, ctx) {
   if ((plan.operations || []).some((op) => op.kind === 'connectionReference')) {
     Object.defineProperty(result, INVENTORY, { value: await inventory(), enumerable: false });
   }
+  // The default build's new rows (ctx.createUnits, set by configuration-build.js): the WHOLE plan is classified and every
+  // unit compiled before the first write of this step, so a mixed edit, a refused shape or a missing capability stops the
+  // step with nothing written for any item.
+  const units = ctx.createUnits ? await compileCreateUnits(plan, ctx, result, known) : null;
+  if (units === STEP_REFUSED) return result;
   let stopped = false;
   for (const op of plan.operations || []) {
     const { kind, key } = op;
@@ -2301,9 +2443,12 @@ async function applyConfiguration(plan, ctx) {
     }
     if (blocked === undefined) blocked = await preconditionsHold(op, ctx, preconditionCache);
     if (blocked) { pushFinding(result, 'refused', { kind, key, id: op.id, code: blocked }); continue; }
-    if (op.action === 'create') await applyCreate(op, ctx, result, known);
+    const compiled = units ? units.get(op) : undefined;
+    if (compiled) await applyCreateUnit(op, ctx, result, known, compiled, membership);
+    else if (units && op.action === 'create') refuseCreateUnit(result, op, 'configuration-create-shape-refused', 'the create was not compiled');
+    else if (op.action === 'create') await applyCreate(op, ctx, result, known);
     else if (op.action === 'update') await applyUpdate(op, ctx, result, known);
-    if (result.unknown.length > unknownBefore) stopped = true;
+    if (result.unknown.length > unknownBefore || createHaltOf(result)) stopped = true;
   }
   // Membership proof: one fresh read of the solution for every root this run saved or found unchanged, and for each
   // child those rows hold. A child not proven a member is added first (after every write of the run, so only when no
@@ -2531,7 +2676,10 @@ function configurationContext({ sdk, creates, managed, bindings, solutionUniqueN
 const configurationDestructive = (plan) => [...new Set(((plan && plan.operations) || []).filter((op) => op.destructive).flatMap((op) => op.authorize || []))];
 
 // A halt item: kind, key and fixed code, plus the tokens a refusal needs consent for (DESTRUCTIVE_CHANGE_UNAUTHORIZED's `authorize`).
-const haltItem = ({ kind, key, code, authorize, serviceCode }) => ({ kind, key, code, ...(Array.isArray(authorize) && authorize.length ? { authorize: authorize.slice() } : {}), ...serviceCodeOf({ serviceCode }) });
+const haltItem = ({ kind, key, code, authorize, serviceCode, pendingAttemptToken }) => ({
+  kind, key, code, ...(Array.isArray(authorize) && authorize.length ? { authorize: authorize.slice() } : {}), ...serviceCodeOf({ serviceCode }),
+  ...(code === VALUE_REFUSED_CODE ? valueRefusedOf({ code, pendingAttemptToken }) : {}),
+});
 
 // The configuration halt's text. A refusal that needs consent ends with the exact flags that give it, e.g.
 //   environmentVariable contoso_Mode (DESTRUCTIVE_CHANGE_UNAUTHORIZED) (approve with --authorize environmentVariable:contoso_mode:defaultValue)
@@ -2571,9 +2719,41 @@ const REFUSED_FIX = {
 };
 const refusedHint = (p) => `the service refused it${p.serviceCode ? ` (${p.serviceCode})` : ''}: nothing was created or changed and nothing is left pending; `
   + `${REFUSED_FIX[p.kind] || 'correct its definition in the App Spec'}, then build again, or remove it from the App Spec`;
-function configurationHaltMessage(items) {
-  const hint = (p) => (p[SAVED_UNPUBLISHED] && p.kind === 'duplicateRule' ? ` (${UNPUBLISHED_RULE_HINT})` : p.code === 'create-refused' ? ` (${refusedHint(p)})` : '');
-  const line = (p) => `${p.kind} ${p.key} (${p.code})${p.authorize && p.authorize.length ? ` (approve with ${authorizeFlags(p.authorize)})` : ''}${hint(p)}`;
+// A protected variable whose definition was sent and whose value request the service refused before it started
+// (create-value-refused, #847): the attempt stays pending, so the line says what is pending, what to correct and how only
+// the missing value is sent; with the attempt's own token it also spells the exact retire approval:
+//   environmentVariable contoso_Key (create-value-refused) (the service refused the value request (0x80072040) before it started; ...)
+// `p` is a halt item: kind, key, and the validated serviceCode / pendingAttemptToken only (valueRefusedOf); a code or a
+// token that does not validate is left out, never replaced by server text.
+function valueRefusedHint(p) {
+  const code = typeof p.serviceCode === 'string' && /^0x[0-9a-f]{8}$/i.test(p.serviceCode) ? ` (${p.serviceCode})` : '';
+  const token = typeof p.pendingAttemptToken === 'string' && GUID.test(p.pendingAttemptToken) ? lower(p.pendingAttemptToken) : null;
+  const retire = token
+    ? ' To stop tracking this attempt instead, remove the variable from the App Spec and its entry from deployment settings, then run the build with --apply '
+      + `${authorizeFlags([`retire:${p.kind}:${portKeyOf(p.kind, p.key)}@${token}`])}. No row is deleted by retirement; restoring the declaration while its derived id is occupied stops with create-identity-conflict`
+    : '';
+  return `the service refused the value request${code} before it started; the variable is still pending and its definition may remain at the original id. `
+    + 'This build does not recreate or delete the definition. Correct its value in the deployment settings (for a secret, use a Key Vault secret reference this environment can read), '
+    + 'keep its App Spec definition unchanged, and build again. After fresh checks and any required ownership approval, only the missing value can be sent.'
+    + retire;
+}
+// `extraHint(item)` is optional and supplied only by the build's configuration runtime (configuration-build.js), which
+// derives it from its own trusted state, never from a failure's text: a nonempty string is appended in parentheses after
+// the line's existing text. It is advice only, so an answer that is not a string, or a throw, leaves the line as it was.
+// Without it the message is byte-identical to before.
+function configurationHaltMessage(items, extraHint) {
+  const hint = (p) => (p[SAVED_UNPUBLISHED] && p.kind === 'duplicateRule' ? ` (${UNPUBLISHED_RULE_HINT})` : p.code === 'create-refused' ? ` (${refusedHint(p)})`
+    : p.code === VALUE_REFUSED_CODE && p.kind === 'environmentVariable' ? ` (${valueRefusedHint(p)})` : '');
+  const extra = (p) => {
+    if (typeof extraHint !== 'function') return '';
+    try {
+      const text = extraHint(p);
+      return typeof text === 'string' && text ? ` (${text})` : '';
+    } catch {
+      return '';
+    }
+  };
+  const line = (p) => `${p.kind} ${p.key} (${p.code})${p.authorize && p.authorize.length ? ` (approve with ${authorizeFlags(p.authorize)})` : ''}${hint(p)}${extra(p)}`;
   return `${items.length} configuration item${items.length === 1 ? '' : 's'} not completed: ${items.map(line).join(', ')}`;
 }
 
@@ -2597,12 +2777,15 @@ async function runConfigurationStep(spec, ctx, phase) {
   for (const b of blocking) {
     if ((b.code === 'ENVIRONMENT_VARIABLE_VALUE_MISSING' || requested(b)) && !problems.some((p) => p.kind === b.kind && lower(p.key) === lower(b.key))) problems.push({ kind: b.kind, key: b.key, code: b.code });
   }
+  const created = createHaltOf(outcome);
   const halt = problems.length
     ? {
       phase,
-      code: 'configuration-incomplete',
+      // A default-build create stop keeps its own code (configuration-create-*) and its text, which says whether a
+      // create was dispatched and what to do next; the lines the step left follow it.
+      code: created ? created.code : 'configuration-incomplete',
       retry: 'never',
-      message: configurationHaltMessage(problems),
+      message: created ? `${created.message} (${configurationHaltMessage(problems)})` : configurationHaltMessage(problems),
       items: problems,
     }
     : null;
@@ -3306,11 +3489,14 @@ module.exports = {
   configurationContext,
   configurationDestructive,
   configurationHaltMessage,
+  valueRefusedHint,
   configurationAuthorizationKeys,
   // The `--authorize` flags spelled as one shell argument each (commandArgOrPlaceholder): the protected preflight's
   // overwrite approval names a duplicate rule's key, which may hold white space or quotes.
   authorizeFlags,
   runConfigurationStep,
+  // The default build's create stop a step result carries (applyConfiguration with ctx.createUnits), or null.
+  configurationCreateHaltOf: createHaltOf,
   configurationBlocking,
   configurationPlanItems,
   configurationIntentOf,

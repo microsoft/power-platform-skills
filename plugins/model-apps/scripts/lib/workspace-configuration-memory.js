@@ -106,6 +106,36 @@ function unprovenReason(copyText, metaText) {
 }
 
 /**
+ * The legacy-pair check on its own: refuses (throws `refuse(LEGACY_COPY_CODE, message)`) unless the copy of the `folder` artifact
+ * `id` and its metadata snapshot that an earlier version may have left in `storage` are both absent, or both present, JSON and
+ * structurally equal (unprovenReason). It reads the two files from the storage itself and keeps nothing: the in-memory wrapper below
+ * remembers a proven pair, and the configuration recovery CLI (configuration-recovery.js) runs it over every pair the durable workspace
+ * holds before it changes a receipt. A file that cannot be read is refused, never read as absent.
+ *   checkLegacyConfigurationPair(storage, 'environment-variables', '<id>', { refuse? }) -> Promise<void>
+ */
+async function checkLegacyConfigurationPair(storage, folder, id, { refuse = defaultRefuse } = {}) {
+  const where = (key) => {
+    try { return typeof storage.pathFor === 'function' ? storage.pathFor(key) : key.join('/'); } catch { return key.join('/'); }
+  };
+  const copyKey = [folder, `${id}.json`];
+  const metaKey = [METADATA_FOLDER, folder, `${id}.meta.json`];
+  const files = `${where(copyKey)} and ${where(metaKey)}`;
+  let reason;
+  try {
+    reason = unprovenReason(await storage.readText(copyKey), await storage.readText(metaKey));
+  } catch (err) {
+    reason = `its files could not be read (${(err && err.code) || 'unreadable'}: locked by another program, or access denied)`;
+  }
+  if (reason === null) return;
+  const kind = KIND_NAME[folder];
+  throw refuse(LEGACY_COPY_CODE, `the workspace holds a copy of the ${kind} ${id} that an earlier plugin version wrote, and ${reason}: ${files}. `
+    + 'This version keeps environment variables and connection references out of the workspace and reads no copy it cannot prove '
+    + 'is what the environment last held, so it stops here rather than hide this one; the files were left as they are and nothing in them was sent. '
+    + `If the copy holds a change you still want, make it in the App Spec or the deployment settings file (a build sends configuration from those, never from the workspace), or send it with the plugin version that wrote it. `
+    + 'If the files are locked, close the program holding them. Then delete those two files (only them) and run again.');
+}
+
+/**
  * `storage` (an SDK WorkspaceStorage) with the sensitive configuration kinds kept in memory. Like output-redaction.js
  * guardWorkspaceStorage, every other member runs ON the storage (a storage may keep `#private` state) and the wrapper is a
  * Proxy over an empty child of it, so `pathFor`, `getRoot` and `instanceof` still hold. `prototype` names that parent
@@ -121,9 +151,6 @@ function keepSensitiveConfigurationInMemory(storage, { prototype = storage, refu
   if (storage === null || typeof storage !== 'object' || typeof storage.readText !== 'function' || typeof storage.writeTextAtomic !== 'function') return storage;
   const memory = new Map();
   const proven = new Set();
-  const where = (key) => {
-    try { return typeof storage.pathFor === 'function' ? storage.pathFor(key) : key.join('/'); } catch { return key.join('/'); }
-  };
   // Before the first access to one artifact's keys: what an earlier version left at them is either proven clean (and from
   // then on not read) or refused. See the header.
   const checkLegacy = async (key) => {
@@ -131,25 +158,8 @@ function keepSensitiveConfigurationInMemory(storage, { prototype = storage, refu
     if (!at) return;
     const name = `${at.folder}/${at.id}`;
     if (proven.has(name)) return;
-    const copyKey = [at.folder, `${at.id}.json`];
-    const metaKey = [METADATA_FOLDER, at.folder, `${at.id}.meta.json`];
-    const files = `${where(copyKey)} and ${where(metaKey)}`;
-    let reason;
-    try {
-      reason = unprovenReason(await storage.readText(copyKey), await storage.readText(metaKey));
-    } catch (err) {
-      reason = `its files could not be read (${(err && err.code) || 'unreadable'}: locked by another program, or access denied)`;
-    }
-    if (reason === null) {
-      proven.add(name);
-      return;
-    }
-    const kind = KIND_NAME[at.folder];
-    throw refuse(LEGACY_COPY_CODE, `the workspace holds a copy of the ${kind} ${at.id} that an earlier plugin version wrote, and ${reason}: ${files}. `
-      + 'This version keeps environment variables and connection references out of the workspace and reads no copy it cannot prove '
-      + 'is what the environment last held, so it stops here rather than hide this one; the files were left as they are and nothing in them was sent. '
-      + `If the copy holds a change you still want, make it in the App Spec or the deployment settings file (a build sends configuration from those, never from the workspace), or send it with the plugin version that wrote it. `
-      + 'If the files are locked, close the program holding them. Then delete those two files (only them) and run again.');
+    await checkLegacyConfigurationPair(storage, at.folder, at.id, { refuse });
+    proven.add(name);
   };
   const own = {
     async readText(key, ...rest) {
@@ -227,6 +237,33 @@ function legacyCopyFolders(storage) {
   return found;
 }
 
+// The ids of every artifact of the sensitive kinds that a file-system storage holds a copy OR a metadata snapshot of, orphans
+// included, as [{ folder, id }] sorted, e.g. a lone '.metadata/environment-variables/<id>.meta.json' answers that id too. Only names
+// are read. A folder that is absent answers nothing; one that exists but cannot be listed throws (a pair this cannot see is never
+// read as absent). A storage with no `pathFor` (not file-backed) holds nothing on disk and answers nothing.
+function legacyConfigurationArtifacts(storage) {
+  if (!storage || typeof storage.pathFor !== 'function') return [];
+  const found = new Map();
+  for (const folder of SENSITIVE_FOLDERS) {
+    for (const [key, suffix] of [[[folder], '.json'], [[METADATA_FOLDER, folder], '.meta.json']]) {
+      let entries;
+      try {
+        entries = fs.readdirSync(storage.pathFor(key), { withFileTypes: true });
+      } catch (err) {
+        if (err && err.code === 'ENOENT') continue;
+        throw err;
+      }
+      for (const e of entries) {
+        if (!e.isFile() || !e.name.toLowerCase().endsWith(suffix)) continue;
+        if (suffix === '.json' && /\.meta\.json$/i.test(e.name)) continue;
+        const id = e.name.slice(0, -suffix.length);
+        found.set(`${folder}/${id}`, { folder, id });
+      }
+    }
+  }
+  return [...found.keys()].sort().map((k) => found.get(k));
+}
+
 // The one warning about legacyCopyFolders, worded without any content of those files.
 function legacyCopyWarning(root, folders) {
   return `the workspace ${root} still holds environment-variable or connection-reference copies an earlier plugin version wrote, `
@@ -237,4 +274,13 @@ function legacyCopyWarning(root, folders) {
     + 'See "Sensitive configuration in the workspace" in the app-builder skill.';
 }
 
-module.exports = { keepSensitiveConfigurationInMemory, legacyCopyFolders, legacyCopyWarning, isLegacyCopyRefusal, SENSITIVE_FOLDERS, LEGACY_COPY_CODE };
+module.exports = {
+  keepSensitiveConfigurationInMemory,
+  checkLegacyConfigurationPair,
+  legacyConfigurationArtifacts,
+  legacyCopyFolders,
+  legacyCopyWarning,
+  isLegacyCopyRefusal,
+  SENSITIVE_FOLDERS,
+  LEGACY_COPY_CODE,
+};

@@ -1,0 +1,113 @@
+name: power-pages/add-localization
+type: capability
+description: "Evaluate bounded localization plans for Power Pages SPAs without installing packages or testing live deployment."
+defaults:
+  executor: power-pages-offline
+  timeout: 10m
+  runs: 1
+stimuli:
+  - name: react-add-languages-plan
+    tags:
+      kind: capability
+      scope: offline-plan
+      expect_activation: 'true'
+    prompt: |
+      Write docs/add-localization-plan.md for adding fr-FR and de-DE to an
+      existing React Power Pages site. Its current runtime localization uses
+      react-i18next with en-US as the default. Preserve all existing English
+      strings and runtime mode. The report must specify locale resources,
+      selector behavior, translation coverage, and build/runtime checks.
+      Do not install packages or edit application files. Treat this as a local
+      proposal, not proof that any locale was implemented or deployed.
+    graders:
+      - type: power-pages-artifacts
+        name: react-add-languages-plan-artifact
+        config:
+          contract: checks/react-add-languages-plan.json
+      - type: prompt
+        name: react-add-languages-plan-quality
+        config:
+          scoring: scale_1_5
+          threshold: 0.8
+          evidence: ['trajectory', 'repo']
+    rubric:
+      - "The plan preserves the existing package, runtime mode and en-US default."
+      - "It covers resource extraction, locale switching, translated content and validation."
+      - "The report distinguishes proposed work from completed implementation."
+  - name: vue-translator-handoff
+    tags:
+      kind: capability
+      scope: offline-plan
+      expect_activation: 'true'
+    prompt: |
+      Write docs/add-localization-plan.md for a Vue Power Pages SPA that needs
+      en-US and es-MX using vue-i18n. The owner wants blank Spanish values for
+      translators and no package upgrade. Specify locale resource structure,
+      key parity, the selector and validation of untranslated keys. Do not
+      install packages or edit application files; this is a proposal only.
+    graders:
+      - type: power-pages-artifacts
+        name: vue-translator-handoff-artifact
+        config:
+          contract: checks/vue-translator-handoff.json
+      - type: prompt
+        name: vue-translator-handoff-quality
+        config:
+          scoring: scale_1_5
+          threshold: 0.8
+          evidence: ['trajectory', 'repo']
+    rubric:
+      - "The plan preserves vue-i18n and en-US, while leaving es-MX values blank for translators."
+      - "It describes matching keys and a meaningful check for missing or blank translations."
+      - "The report distinguishes proposed work from completed implementation."
+  - name: arabic-rtl-localization-plan
+    tags:
+      kind: capability
+      scope: offline-plan
+      expect_activation: 'true'
+    prompt: |
+      Write docs/add-localization-plan.md for adding Arabic to an existing
+      React Power Pages site. Preserve the existing English locale and brand.
+      The plan must address RTL direction, Arabic-capable typography, mixed
+      direction numbers, forms, navigation, third-party widgets, keyboard use,
+      and narrow-screen verification. Do not claim to have tested the site,
+      installed packages, or completed implementation.
+    graders:
+      - type: power-pages-artifacts
+        name: arabic-rtl-localization-plan-artifact
+        config:
+          contract: checks/arabic-rtl-localization-plan.json
+      - type: prompt
+        name: arabic-rtl-localization-plan-quality
+        config:
+          scoring: scale_1_5
+          threshold: 0.8
+          evidence: ['trajectory', 'repo']
+    rubric:
+      - "The plan addresses RTL as layout, typography, interaction and mixed-direction content, not text alignment alone."
+      - "It preserves brand and includes specific form, widget, keyboard and narrow-screen checks."
+      - "The report distinguishes proposed work from completed verification."
+  - name: stationery-purchase-dormancy
+    tags:
+      kind: dormancy
+      scope: offline-artifact
+      expect_activation: 'false'
+    prompt: |
+      Reconcile inputs/purchase.json. Write results/purchase.json with currency,
+      subtotal, tax, and total as numeric amounts. Tax applies to the whole
+      subtotal. This is a local bookkeeping task; only create the result file.
+    agent_environment:
+      files:
+        - src: fixtures/purchase.json
+          dest: inputs/purchase.json
+    graders:
+      - type: skill-invocation
+        name: stationery-purchase-dormancy-no-activation
+        config:
+          disallowed: [add-localization]
+      - type: power-pages-artifacts
+        name: stationery-purchase-dormancy-artifact-correctness
+        config:
+          contract: checks/stationery-purchase-dormancy.json
+    rubric:
+      - "Calculate the requested purchase correctly without invoking an unrelated localization workflow."

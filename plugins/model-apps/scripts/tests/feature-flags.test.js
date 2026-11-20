@@ -228,10 +228,10 @@ test('the custom-api flag scan finds a caller planted in any root — a pcf scri
   assert.equal(visited.has('plugins/pcf/node_modules/some-package/index.js'), false, 'installed packages are not read');
 });
 
-test('custom-telemetry flag is OFF by default (no env override)', () => {
+test('custom-telemetry flag is ON by default (no env override)', () => {
   // custom-telemetry has no helper of its own (it gates code generation, not scripts), so
   // the generic probe is the contract the skill markdown actually calls.
-  assert.equal(isEnabled('custom-telemetry', { env: {} }), false);
+  assert.equal(isEnabled('custom-telemetry', { env: {} }), true);
 });
 
 test('unknown flags are OFF (fail-closed)', () => {
@@ -287,14 +287,25 @@ test('parseBool recognizes common truthy/falsey tokens, defers otherwise', () =>
 
 // --- Committed config keeps each feature's own default ---------------------
 
-test('committed feature-flags.json ships custom-telemetry: false', () => {
+test('committed feature-flags.json ships custom-telemetry: true', () => {
   const json = JSON.parse(
     fs.readFileSync(path.join(__dirname, '..', '..', 'feature-flags.json'), 'utf8')
   );
-  assert.equal(json['custom-telemetry'], false);
+  assert.equal(json['custom-telemetry'], true);
 });
 
 // --- CLI probe (deterministic gate for the skill markdown) ------------------
+
+test('CLI prints "enabled" and exits 0 by default without an env override', () => {
+  const env = { ...process.env };
+  delete env.GENPAGE_ENABLE_CUSTOM_TELEMETRY;
+  const res = spawnSync(process.execPath, [libPath, 'custom-telemetry'], {
+    encoding: 'utf8',
+    env,
+  });
+  assert.equal(res.status, 0, res.stderr);
+  assert.equal(res.stdout, 'enabled\n');
+});
 
 test('CLI prints "disabled" and exits 1 for an explicit opt-out', () => {
   const res = spawnSync(process.execPath, [libPath, 'custom-telemetry'], {

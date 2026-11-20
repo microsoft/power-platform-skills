@@ -1,0 +1,19 @@
+{
+  "files": [
+    {
+      "path": "site/.powerpages-site/web-roles/administrators.yml",
+      "type": "yaml",
+      "requiredText": ["anonymoususersrole: false", "authenticatedusersrole: false", "9b1d6fc0-f913-4a75-96bf-56d1bb3f4c10", "name: Administrators"]
+    },
+    {
+      "path": "site/.powerpages-site/web-roles/authenticated-users.yml",
+      "type": "yaml",
+      "requiredText": ["anonymoususersrole: false", "authenticatedusersrole: true", "1a764d8e-276f-42ec-a0b9-7dd93ef26710"]
+    },
+    {
+      "path": "site/.powerpages-site/web-roles/anonymous-users.yml",
+      "type": "yaml",
+      "requiredText": ["anonymoususersrole: true", "authenticatedusersrole: false", "4d92e2b1-6a85-4fc7-8b10-d4c1280a6e31"]
+    }
+  ]
+}

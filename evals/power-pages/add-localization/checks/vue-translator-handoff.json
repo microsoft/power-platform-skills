@@ -1,0 +1,11 @@
+{
+  "files": [
+    {
+      "path": "docs/add-localization-plan.md",
+      "type": "text",
+      "requiredText": ["Vue", "vue-i18n", "en-US", "es-MX", "blank"],
+      "requiredPatterns": ["key parity|matching keys", "missing|untranslated"],
+      "minTextLength": 300
+    }
+  ]
+}

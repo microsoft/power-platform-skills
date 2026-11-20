@@ -220,7 +220,10 @@ test('purchase contracts require correct top-level numeric amounts', async t => 
   const root = await workspace(t);
   await mkdir(path.join(root, 'inputs'));
   await mkdir(path.join(root, 'results'));
-  for (const skill of ['create-site', 'setup-auth']) {
+  for (const skill of [
+    'add-localization', 'add-seo', 'create-site', 'create-webroles',
+    'integrate-webapi', 'migrate-bootstrap', 'setup-auth', 'setup-datamodel',
+  ]) {
     const suiteDir = path.resolve(import.meta.dirname, `../../power-pages/${skill}`);
     const contract = JSON.parse(await readFile(path.join(suiteDir, 'checks/stationery-purchase-dormancy.json'), 'utf8'));
     await writeFile(path.join(root, 'inputs/purchase.json'), await readFile(path.join(suiteDir, 'fixtures/purchase.json')));
@@ -237,6 +240,35 @@ test('purchase contracts require correct top-level numeric amounts', async t => 
   }
 });
 
+test('community-role contract rejects changed existing roles and invalid new role flags', async t => {
+  const root = await workspace(t);
+  const suiteDir = path.resolve(import.meta.dirname, '../../power-pages/create-webroles');
+  const contract = JSON.parse(await readFile(path.join(suiteDir, 'checks/add-community-roles.json'), 'utf8'));
+  for (const input of contract.unchanged) {
+    const target = path.join(root, input.path);
+    await mkdir(path.dirname(target), { recursive: true });
+    await writeFile(target, await readFile(path.join(suiteDir, input.source)));
+  }
+  const roleDir = path.join(root, 'site/.powerpages-site/web-roles');
+  const contentEditors = [
+    'anonymoususersrole: false', 'authenticatedusersrole: false',
+    'id: 7ab524fd-6f2c-4bd0-9c70-12aecb2bf00b', 'name: Content Editors',
+  ].join('\n');
+  await writeFile(path.join(roleDir, 'content-editors.yml'), contentEditors);
+  await writeFile(path.join(roleDir, 'moderators.yml'), [
+    'anonymoususersrole: false', 'authenticatedusersrole: false',
+    'id: 4a8f3d9b-6859-4c48-bcd2-ff0b975e0510', 'name: Moderators',
+  ].join('\n'));
+  const grade = () => gradeArtifacts({ contract, workDir: root, suiteDir });
+  assert.equal((await grade()).passed, true);
+  await writeFile(path.join(roleDir, 'content-editors.yml'),
+    contentEditors.replace('authenticatedusersrole: false', 'authenticatedusersrole: true'));
+  assert.equal((await grade()).passed, false);
+  await writeFile(path.join(roleDir, 'content-editors.yml'), contentEditors);
+  await writeFile(path.join(roleDir, 'administrators.yml'), 'name: Changed\n');
+  assert.equal((await grade()).passed, false);
+});
+
 test('contracts reject unknown fields, vacuous checks, invalid regexes, and traversal', () => {
   for (const contract of [
     {}, { output: {} }, { file: [] },
@@ -247,6 +279,65 @@ test('contracts reject unknown fields, vacuous checks, invalid regexes, and trav
     { files: [{ path: 'plan.json', type: 'json', responsive: false, requiredKeys: ['plan'] }] },
     { files: [{ path: 'x', type: 'html', diagram: { entities: [{ name: 'A' }], relationships: [{ from: 'A', to: 'B', cardinality: 'many' }] } }] },
   ]) assert.throws(() => validateContract(contract));
+});
+
+test('SEO and planning contracts accept equivalent valid source forms', async t => {
+  const root = await workspace(t);
+  const cases = [
+    {
+      contractFile: 'evals/power-pages/add-seo/checks/astro-localized-seo.json',
+      outputPath: 'site/src/layouts/BaseLayout.astro',
+      content: 'Astro metadata is implemented using a supported locale helper.',
+      label: 'Astro source remains the quality rubric concern',
+    },
+    {
+      contractFile: 'evals/power-pages/add-seo/checks/react-catalog-seo.json',
+      outputPath: 'site/index.html',
+      content: `<meta name='description' content='Catalog'>
+<link rel='canonical' href='https://fabrikam.example/'>
+<meta property='og:title' content='Catalog'><meta name='twitter:card' content='summary'>`,
+      label: 'single-quoted HTML metadata',
+    },
+    {
+      contractFile: 'evals/power-pages/add-seo/checks/minimal-seo.json',
+      outputPath: 'site/index.html',
+      content: `<meta name='description' content='Catalog'>`,
+      label: 'single-quoted basic SEO metadata',
+    },
+    {
+      contractFile: 'evals/power-pages/integrate-webapi/checks/existing-contact-client-plan.json',
+      outputPath: 'docs/webapi-integration-plan.md',
+      content: `The existing client at src/shared/powerPagesApi.ts is reused for Contacts.
+Include anti-forgery handling and the contactid, firstname, and lastname fields.
+Site architects own permission design. Confirm the exact table and field access,
+the authenticated role, and the least-privilege permission scope with the site
+architects before changing configuration. No permission files are created until
+the reviewed plan is approved.`,
+      label: 'permission wording in either order',
+    },
+    {
+      contractFile: 'evals/power-pages/create-webroles/checks/create-non-spa-content-role.json',
+      outputPath: 'docs/non-spa-role-plan.md',
+      content: `Create Content Editors at site/web-roles/content-editors.webrole.yml.
+Set anonymoususersrole: false and authenticatedusersrole: false.
+After approval, invoke create-web-role.js with the project root and role name.
+The deterministic writer generates the role ID and writes its metadata in the
+PAC per-record format. Do not manually create files or modify the export.`,
+      label: 'non-SPA writer-generated UUID',
+    },
+  ];
+
+  const repoRoot = path.resolve(import.meta.dirname, '../../..');
+  for (const { contractFile, outputPath, content, label } of cases) {
+    const source = JSON.parse(await readFile(path.join(repoRoot, contractFile), 'utf8'));
+    const spec = source.files.find(file => file.path === outputPath);
+    assert.ok(spec, `missing ${outputPath} in ${contractFile}`);
+    const output = path.join(root, outputPath);
+    await mkdir(path.dirname(output), { recursive: true });
+    await writeFile(output, content);
+    const result = await gradeArtifacts({ contract: { files: [spec] }, workDir: root, suiteDir: root });
+    assert.equal(result.passed, true, `${label}: ${result.evidence}`);
+  }
 });
 
 test('embedded renderer data is parsed without executing code or splitting escaped semicolons', () => {

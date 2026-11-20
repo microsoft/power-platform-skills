@@ -237,6 +237,43 @@ test('findProjectRoot recognizes a direct PAC declarative-site root', (t) => {
   assert.equal(resolvePowerPagesSiteRoot(root), path.resolve(root));
 });
 
+test('required metadata roots reject arbitrary paths and accept direct or managed downloads with website.yml', (t) => {
+  const fs = require('fs');
+  const os = require('os');
+  const { requirePowerPagesSiteRoot } = require(helpersPath);
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'required-site-root-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  for (const input of [null, undefined, true, {}, '', ' ']) {
+    assert.throws(() => requirePowerPagesSiteRoot(input), /site path containing website\.yml is required/);
+  }
+  assert.throws(() => requirePowerPagesSiteRoot(root), /Expected a downloaded Power Pages site/);
+  assert.throws(() => requirePowerPagesSiteRoot(path.join(root, 'missing')), /Expected a downloaded Power Pages site/);
+  fs.mkdirSync(path.join(root, '.powerpages-site'));
+  assert.throws(() => requirePowerPagesSiteRoot(root), /Expected a downloaded Power Pages site/);
+  fs.mkdirSync(path.join(root, 'website.yml'));
+  assert.throws(() => requirePowerPagesSiteRoot(root), /Expected a downloaded Power Pages site/);
+  fs.rmdirSync(path.join(root, 'website.yml'));
+  fs.writeFileSync(path.join(root, 'website.yml'), 'adx_name: Direct');
+  assert.equal(requirePowerPagesSiteRoot(root), root);
+  assert.throws(() => requirePowerPagesSiteRoot(path.join(root, 'website.yml')), /Expected a downloaded Power Pages site/);
+  const nested = path.join(root, '.powerpages-site');
+  fs.writeFileSync(path.join(nested, 'website.yml'), 'adx_name: Managed');
+  assert.equal(requirePowerPagesSiteRoot(root), nested);
+  assert.equal(requirePowerPagesSiteRoot(nested), nested);
+});
+
+test('required metadata root validation surfaces inspection errors instead of treating them as empty sites', (t) => {
+  const fs = require('fs');
+  const os = require('os');
+  const { requirePowerPagesSiteRoot } = require(helpersPath);
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'required-site-permission-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  t.mock.method(fs, 'statSync', () => {
+    throw Object.assign(new Error('permission denied'), { code: 'EACCES' });
+  });
+  assert.throws(() => requirePowerPagesSiteRoot(root), /Could not inspect Power Pages site marker.*permission denied/);
+});
+
 test('findProjectRoot: still recognizes powerpages.config.json (SPA sites)', (t) => {
   const fs = require('fs');
   const os = require('os');

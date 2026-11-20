@@ -1,0 +1,11 @@
+{
+  "files": [
+    {
+      "path": "docs/webapi-integration-plan.md",
+      "type": "text",
+      "requiredText": ["Events", "Registrations", "read", "create", "lookup", "server"],
+      "requiredPatterns": ["permission|authorization", "not.{0,40}ui|ui.{0,40}not"],
+      "minTextLength": 300
+    }
+  ]
+}

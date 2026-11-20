@@ -1,0 +1,11 @@
+{
+  "files": [
+    {
+      "path": "docs/data-model-proposal.md",
+      "type": "text",
+      "requiredText": ["cr8f1_author", "cr8f1_post", "cr8f1_name", "cr8f1_email", "cr8f1_bio", "cr8f1_title", "cr8f1_body"],
+      "requiredPatterns": ["one.to.many|1\\s*:\\s*n", "erDiagram"],
+      "minTextLength": 350
+    }
+  ]
+}

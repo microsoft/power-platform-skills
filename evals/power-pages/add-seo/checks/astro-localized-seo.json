@@ -1,0 +1,25 @@
+{
+  "files": [
+    {
+      "path": "site/src/layouts/BaseLayout.astro",
+      "type": "text",
+      "minTextLength": 1
+    },
+    {
+      "path": "site/public/robots.txt",
+      "type": "text",
+      "requiredText": ["User-agent: *", "https://northwind.example/sitemap.xml"]
+    },
+    {
+      "path": "site/public/sitemap.xml",
+      "type": "text",
+      "requiredText": ["https://northwind.example/", "https://northwind.example/fr/", "https://northwind.example/services"],
+      "forbiddenText": ["hreflang=\"de-DE\""]
+    }
+  ],
+  "unchanged": [
+    {"path": "site/powerpages.config.json", "source": "fixtures/astro/powerpages.config.json"},
+    {"path": "site/package.json", "source": "fixtures/astro/package.json"}
+  ],
+  "absent": ["index.html", "site/index.html"]
+}

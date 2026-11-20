@@ -115,7 +115,7 @@ test('the page builder emits a button-only call from the reference, only for the
 
 test('AGENTS.md lists the flags left — dataverse-operations OFF with its owner, plan section, gated script and deploy phase — and says Custom API support has none', () => {
   const agents = squash(read('AGENTS.md'));
-  has(agents, /The remaining flags are `custom-telemetry` \(\*\*OFF\*\*\) and `dataverse-operations` \(\*\*OFF\*\*\)\./);
+  has(agents, /The remaining flags are `custom-telemetry` \(\*\*ON\*\*\) and `dataverse-operations` \(\*\*OFF\*\*\)\./);
   has(agents, /neither does Custom API support: `custom-api` shipped ON in 2\.18\.0 and 2\.19\.0 with its platform dependencies live in every region, so it was removed — Custom API discovery, authoring and upload are always available, and `GENPAGE_ENABLE_CUSTOM_API` is ignored\./);
   has(agents, /\| \| `custom-telemetry` \| `dataverse-operations` \|/);
   assert.ok(!/\| `custom-api` \|/.test(agents), 'the flag table has no custom-api column');

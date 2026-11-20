@@ -20,6 +20,12 @@ const { needlesOf, noteToken, TOKEN_MARKER } = require('./output-redaction.js');
 // Symbol.for, so a module that reads it need not load this client, and the copy of this file in another plugin agrees with it.
 const HTTP_SEND_HISTORY = Symbol.for('power-platform-skills.http-send-history');
 
+// The key under which a failure's body carries the wait its answer's `Retry-After` asked (`{ askedMs, notBefore }`: the whole ask, not capped as this client caps its own waits,
+// and the moment on this client's clock before which nothing should be sent). Recorded on the body for the same reason as the history above: the SDK keeps that body as the
+// `cause` of the error it raises and drops the headers, so without it the ask is lost on the way to the build. The build reads it for a publish the customization lock refused
+// (lib/retry-policy.js, publishLockRefusalOf), and waits for it before its next run. Not enumerable, so the body prints, serializes and compares as it did.
+const HTTP_RETRY_AFTER = Symbol.for('power-platform-skills.http-retry-after');
+
 // The most distinct ambiguous writes one client remembers (see `ambiguousSends`). A build sends a few hundred writes at most, so this is far above any real use; it
 // exists only so the ledger's memory has a hard bound, not to be reached.
 const MAX_AMBIGUOUS_SENDS = 1000;
@@ -859,6 +865,12 @@ function createAzHttpClient(orgUrl, deps = {}) {
         if (history && answer.body && typeof answer.body === 'object' && !Buffer.isBuffer(answer.body)) {
           Object.defineProperty(answer.body, HTTP_SEND_HISTORY, { value: history, enumerable: false });
         }
+        // A Retry-After the answer gave, uncapped (the build bounds what it waits by its own budget): only for a body that is an object, the one the SDK keeps.
+        const at = now();
+        const askedMs = retryAfterMs(res.headers, at, Infinity);
+        if (askedMs > 0 && answer.body && typeof answer.body === 'object' && !Buffer.isBuffer(answer.body)) {
+          Object.defineProperty(answer.body, HTTP_RETRY_AFTER, { value: Object.freeze({ askedMs, notBefore: at + askedMs }), enumerable: false });
+        }
         return answer;
       }
       return {
@@ -1021,4 +1033,4 @@ function createAzHttpClient(orgUrl, deps = {}) {
   };
 }
 
-module.exports = { createAzHttpClient, HTTP_SEND_HISTORY, MAX_AMBIGUOUS_SENDS, SQL_DEADLOCK_VICTIM, DEADLOCK_RESENDS, isSqlDeadlockVictim, isBatchDeadlockVictim, isBatchThrottled, completeBatchStatus, batchRetryAfterMs, isConditionalDeleteBatch, isColumnCreateBatch, isTransientTransportFailure, TRANSIENT_TRANSPORT_CODES, SERVICE_PROTECTION_CODES, isServiceProtectionRefusal, retryAfterMs, throttleBackoffMs, RETRY_AFTER_CAP_MS, scrub, scrubAnswer, scrubBearer, MIN_SCRUBBED_TOKEN_LENGTH };
+module.exports = { createAzHttpClient, HTTP_SEND_HISTORY, HTTP_RETRY_AFTER, isPublishRequest, MAX_AMBIGUOUS_SENDS, SQL_DEADLOCK_VICTIM, DEADLOCK_RESENDS, isSqlDeadlockVictim, isBatchDeadlockVictim, isBatchThrottled, completeBatchStatus, batchRetryAfterMs, isConditionalDeleteBatch, isColumnCreateBatch, isTransientTransportFailure, TRANSIENT_TRANSPORT_CODES, SERVICE_PROTECTION_CODES, isServiceProtectionRefusal, retryAfterMs, throttleBackoffMs, RETRY_AFTER_CAP_MS, scrub, scrubAnswer, scrubBearer, MIN_SCRUBBED_TOKEN_LENGTH };

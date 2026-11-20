@@ -1,0 +1,11 @@
+{
+  "files": [
+    {
+      "path": "docs/bootstrap5-assessment.md",
+      "type": "text",
+      "requiredText": ["Bootstrap 3", "Bootstrap 5", "data-toggle", "data-bs-toggle", "panel", "card", "glyphicon"],
+      "requiredPatterns": ["review|verify|test", "not.{0,30}(migrat|run)|has not been migrated"],
+      "minTextLength": 300
+    }
+  ]
+}

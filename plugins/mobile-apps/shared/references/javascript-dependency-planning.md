@@ -15,7 +15,23 @@ A package is native-bound when it or a runtime dependency ships any of these:
 - `app.plugin.js`, `app.plugin.ts`, or equivalent Expo config plugin
 - `react-native.config.js`
 
-Those packages must already be supported by the template/runtime. A package name is not evidence: a `react-native-*` package may still be pure JavaScript.
+Those packages must already be included at matching versions in the app's
+[verified release context](mobile-release-lifecycle.md). The newest bundled
+template is not the runtime allowlist for an older app. A package name is not
+evidence: a `react-native-*` package may still be pure JavaScript.
+
+Use the orchestrator's sanitized resolved context, or resolve it read-only:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/resolve-mobile-release.js" --project-root '<working_dir>' --local-development
+```
+
+Unknown/missing release records block native mutations, not pure source/UI
+planning and editing. For pure-JavaScript work, inspect the existing project's
+installed versions and contracts; record native compatibility as unverified,
+and do not claim that a successful type-check validates a player or base.
+Never install the controls aggregate, a native leaf, or a newer host to repair
+an older binary; those changes belong to an approved verified-release migration.
 
 ## When To Select A Library
 
@@ -59,11 +75,14 @@ The exact version and rationale are part of the screen-plan approval. Approval a
 
 ### Calendar example
 
-A full month/week/agenda scheduling surface triggers candidate selection. Evaluate `react-native-calendars` first because it supplies established calendar and agenda primitives and is pure JavaScript; `1.1314.0` is the known-good version for the current template baseline. Confirm current metadata and compatibility before writing the row. A lightweight horizontal date strip plus `FlatList` does not require a new package.
+A full month/week/agenda scheduling surface triggers candidate selection. Evaluate `react-native-calendars` first because it supplies established calendar and agenda primitives and is pure JavaScript. Select an exact version compatible with the existing app's React/React Native/Expo and Node versions, not a version assumed from the newest template. Confirm current metadata and compatibility before writing the row. A lightweight horizontal date strip plus `FlatList` does not require a new package.
 
 ## Installation Contract
 
-Only `/create-mobile-app` or `/edit-app` installs approved rows, before screen builders run:
+Only `/create-mobile-app` or `/edit-app` installs new or changed approved rows,
+before screen builders run. First save `package.json` to an invocation-specific
+snapshot inside the project's temporary directory; keep its path for validation.
+Do not reinstall or reapprove unchanged existing rows.
 
 ```bash
 npm install --save-exact <package>@<exact-version>
@@ -74,21 +93,29 @@ Then verify:
 - `package.json` records the exact version in `dependencies`
 - the lockfile is updated when the project uses one
 - `require.resolve('<package>', { paths: [process.cwd()] })` succeeds
-- the changed-file dependency validator passes with one exact approval argument for every row currently in `### JavaScript Dependencies`:
+- the changed-file dependency validator passes using that pre-install snapshot
+  and one exact approval argument for each added/changed JavaScript dependency:
 
 	```bash
 	node "${PLUGIN_ROOT}/scripts/validate-mobile-files.js" \
 		--project-root '<working_dir>' \
+		--local-development \
+		--before-package-json '<pre-install-snapshot-path>' \
 		--file package.json \
 		--approved-js-dependency "<package>@<exact-version>" \
 		[--approved-js-dependency "<another-package>@<exact-version>" ...]
 	```
 
-	The approval arguments are deterministic exceptions for package names that the baseline conservatively classifies as native-like. They do not classify package contents and cannot override packages known to require native runtime support.
+	The snapshot identifies additions/changes without consulting the lockfile. Check only those packages' approved versions and relevant installed dependency closures, not all of `node_modules`. Ordinary local checks without a dependency delta do not reapprove existing libraries. Existing unchanged root React/RN peers are not new native code; approvals cannot override native contents or native runtime dependencies.
 - `npx --no-install tsc --noEmit` passes after the consuming code is built
 
 If installed contents reveal native code/config or an incompatible runtime dependency, remove only the newly added package, report the block, and do not let builders import it. Pure-JavaScript additions do not need `/add-native`, `app.config.js`, CocoaPods, Gradle, a native rebuild, or a rewrap-base update.
+Remove only this invocation's pre-install snapshot after validation or verified recovery.
 
 ## Builder Contract
 
 Builders may directly import only packages listed in the approved table and present at the exact version in `package.json`. Builders never select packages, edit manifests, or run installs. A missing approved package is an orchestrator block; an unplanned package is a planning-context error.
+
+Forward the same resolved release context (or explicit unresolved/source-only
+status) to planners and builders. Approval of a JS-only dependency is not
+approval to alter native inventory, OS declarations, or the selected base.

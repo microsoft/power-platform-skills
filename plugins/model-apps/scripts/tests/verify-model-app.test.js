@@ -2310,3 +2310,178 @@ test('verify CLI --inspect-components on a spec with no commands inspects nothin
   assert.strictEqual(emitted.payload.components.ok, true);
   assert.match(emitted.payload.components.note, /declares no command controls/);
 });
+// --- #845: what the CLI says and exits with for same-named declared views proven only as distinct rows --------------------------------
+// A passing check with a `note` prints it after the line, so `present only` is never read as an attributed row; the verdict is the
+// one the shared result helper exits with (lib/dataverse-auth.js emitResult: 0 when ok, 1 otherwise), run in a child of its own.
+const TWIN_ROWS = [
+  { savedqueryid: 'aaaaaaaa-0000-4000-8000-000000000001', returnedtypecode: 'new_ticket', name: 'Twin', layoutxml: '<grid><row><cell name="new_name"/></row></grid>' },
+  { savedqueryid: 'aaaaaaaa-0000-4000-8000-000000000002', returnedtypecode: 'new_ticket', name: 'Twin', layoutxml: '<grid><row><cell name="new_name"/></row></grid>' },
+];
+async function verifyTwins(rows) {
+  const specObject = {
+    ...appSpec(),
+    minimumPluginVersion: '2.21.0',
+    views: ['a', 'b'].map((key) => ({ entity: 'new_ticket', name: 'Twin', key, reconcile: 'declared', columns: ['new_name'] })),
+  };
+  const nameReads = [];
+  const harness = loadVerifyCli({
+    parseResult: { positional: [], flags: { env: 'https://contoso.crm.dynamics.com', spec: '@app-spec.json', workspace: 'D:\\Projects\\_temp\\verify-twins' } },
+    realGates: true,
+    specObject,
+    sdkFactory: () => ({
+      initWorkspace: async () => {},
+      findTables: async () => [{ logicalName: 'new_ticket' }],
+      findColumns: async () => [{ logicalName: 'new_name' }],
+      queryRecords: async (set, q) => {
+        if (set === 'appmodule') return [{ appmoduleid: '11111111-2222-3333-4444-555555555555' }];
+        if (set !== 'savedquery' || !/name eq 'Twin'/.test(q.filter)) return [];
+        nameReads.push(q);
+        return Object.defineProperty(rows.slice(), 'hasMore', { value: false, enumerable: false });
+      },
+      fetchEntityMetadata: async () => ({ Relationships: [] }),
+      resolveArtifact: async () => [],
+      retrieveSetting: async () => null,
+    }),
+  });
+  await harness.main();
+  const emitted = harness.events.find((e) => e.type === 'emitResult');
+  const child = spawnSync(process.execPath, ['-e', 'require(process.argv[1]).emitResult(JSON.parse(process.argv[2]), JSON.parse(process.argv[3]))',
+    path.join(__dirname, '..', 'lib', 'dataverse-auth.js'), JSON.stringify(emitted.ok), JSON.stringify(emitted.payload)], { encoding: 'utf8' });
+  return { emitted, stderr: harness.stderr.join(''), nameReads, exit: child.status };
+}
+
+test('verify CLI: two same-named declared views on distinct rows pass, each line saying it is present only, and exit 0', async () => {
+  const { emitted, stderr, nameReads, exit } = await verifyTwins(TWIN_ROWS);
+  assert.strictEqual(emitted.ok, true, JSON.stringify(emitted.payload));
+  assert.strictEqual(exit, 0);
+  for (const key of ['a', 'b']) {
+    assert.ok(stderr.includes(`  ✓ view: new_ticket.Twin — present only: a distinct row is available, but view key "${key}" is not attributed to a row\n`), stderr);
+  }
+  assert.deepStrictEqual(nameReads.map((q) => q.paginate), [true], 'the name is read once, every page');
+  // A passing check without a note prints as it always did.
+  const others = stderr.split('\n').filter((l) => l.startsWith('  ✓ ') && !l.startsWith('  ✓ view: '));
+  assert.ok(others.length > 0 && others.every((l) => !l.includes(' — ')), stderr);
+});
+
+test('verify CLI: two same-named declared views on one row fail, naming both keys, and exit 1', async () => {
+  const { emitted, stderr, exit } = await verifyTwins(TWIN_ROWS.slice(0, 1));
+  assert.strictEqual(emitted.ok, false);
+  assert.strictEqual(exit, 1);
+  const text = 'only 1 distinct unclaimed row(s) named "Twin" on new_ticket were read for 2 declared view(s) (keys: "a", "b"); each declaration needs a row of its own';
+  assert.ok(stderr.includes(`  ✗ view: new_ticket.Twin — ${text}\n`), stderr);
+  assert.ok(!stderr.includes('present only'), stderr);
+});
+
+// The same CLI over a reader that answers each savedquery read by its filter, as the service does: by the row's id, or by its table and
+// name. The verdict is again the exit code of the shared result helper, in a child of its own.
+const { createStableCreates } = require('../lib/creates-stable-build.js');
+const { createPassthroughCreates } = require('../lib/creates-passthrough.js');
+const TICKET_CODE = column({ schemaName: 'new_code', displayName: 'Code', type: 'Text' });
+const ticketView = (name, key, columns = ['new_name']) => ({ entity: 'new_ticket', name, ...(key === undefined ? {} : { key }), reconcile: 'declared', activeOnly: false, columns });
+const ticketRow = (savedqueryid, name, columns = ['new_name']) => ({
+  savedqueryid, returnedtypecode: 'new_ticket', name,
+  layoutxml: `<grid><row>${columns.map((c) => `<cell name="${c}"/>`).join('')}</row></grid>`,
+  fetchxml: `<fetch><entity name="new_ticket">${columns.map((c) => `<attribute name="${c}"/>`).join('')}</entity></fetch>`,
+});
+const ticketSpec = (views, { stable = false } = {}) => ({
+  ...appSpec({ columns: [TICKET_CODE] }), minimumPluginVersion: '2.21.0', views, ...(stable ? { createIdentity: 'stable-v1' } : {}),
+});
+// The id a build creates a view at, from a spec of that view alone (a build of a whole spec whose keys derive one id refuses it first).
+const stableIdOf = (spec, v) => createStableCreates({ spec: { ...spec, views: [v] }, sdk: null, store: null, basePort: createPassthroughCreates() })
+  .identityFor('view', v.key || `${v.entity}/${v.name}`).id;
+async function verifyViewsCli(specObject, rows) {
+  const reads = [];
+  const harness = loadVerifyCli({
+    parseResult: { positional: [], flags: { env: 'https://contoso.crm.dynamics.com', spec: '@app-spec.json', workspace: 'D:\\Projects\\_temp\\verify-views' } },
+    realGates: true,
+    specObject,
+    sdkFactory: () => ({
+      initWorkspace: async () => {},
+      findTables: async () => [{ logicalName: 'new_ticket' }],
+      findColumns: async () => [{ logicalName: 'new_name' }, { logicalName: 'new_code' }],
+      queryRecords: async (set, q) => {
+        if (set === 'appmodule') return [{ appmoduleid: '11111111-2222-3333-4444-555555555555' }];
+        if (set !== 'savedquery') return [];
+        reads.push(q.filter);
+        const byId = /^savedqueryid eq ([0-9a-f-]{36})$/.exec(q.filter);
+        const byName = /^returnedtypecode eq '([^']*)' and name eq '([^']*)'$/.exec(q.filter);
+        const found = byId ? rows.filter((r) => r.savedqueryid === byId[1])
+          : byName ? rows.filter((r) => r.returnedtypecode === byName[1] && r.name === byName[2]) : [];
+        return Object.defineProperty(q.paginate ? found : found.slice(0, q.top || 50), 'hasMore', { value: false, enumerable: false });
+      },
+      fetchEntityMetadata: async () => ({ Relationships: [] }),
+      resolveArtifact: async () => [],
+      retrieveSetting: async () => null,
+    }),
+  });
+  await harness.main();
+  const emitted = harness.events.find((e) => e.type === 'emitResult');
+  const child = spawnSync(process.execPath, ['-e', 'require(process.argv[1]).emitResult(JSON.parse(process.argv[2]), JSON.parse(process.argv[3]))',
+    path.join(__dirname, '..', 'lib', 'dataverse-auth.js'), JSON.stringify(emitted.ok), JSON.stringify(emitted.payload)], { encoding: 'utf8' });
+  return { emitted, stderr: harness.stderr.join(''), reads, exit: child.status };
+}
+const R1 = 'aaaaaaaa-0000-4000-8000-000000000001';
+const R2 = 'aaaaaaaa-0000-4000-8000-000000000002';
+
+for (const implicit of [false, true]) {
+  test(`verify CLI: ${implicit ? 'an implicit and an explicit' : 'two explicit'} same-named view key(s) fail when one row alone holds what both declare, and pass when the rows can be shared out`, async () => {
+    const first = implicit ? undefined : 'a';
+    const both = ['new_name', 'new_code'];
+    const gap = await verifyViewsCli(ticketSpec([ticketView('Twin', first, both), ticketView('Twin', 'b', both)]), [ticketRow(R1, 'Twin', both), ticketRow(R2, 'Twin')]);
+    assert.strictEqual(gap.emitted.ok, false, gap.stderr);
+    assert.strictEqual(gap.exit, 1);
+    const keys = implicit ? '"new_ticket/Twin", "b"' : '"a", "b"';
+    assert.ok(gap.stderr.includes(`  ✗ view-content: new_ticket.Twin — only 1 distinct unclaimed row(s) can satisfy the 2 declarations with keys ${keys}; no one-to-one content assignment exists\n`), gap.stderr);
+    // The richer row is listed first and is the only one the second declaration fits: a first-come pick fails what a sharing-out passes.
+    const feasible = await verifyViewsCli(ticketSpec([ticketView('Twin', first), ticketView('Twin', 'b', both)]), [ticketRow(R1, 'Twin', both), ticketRow(R2, 'Twin')]);
+    assert.strictEqual(feasible.emitted.ok, true, feasible.stderr);
+    assert.strictEqual(feasible.exit, 0);
+  });
+}
+
+for (const implicit of [false, true]) for (const reverse of [false, true]) {
+  test(`verify CLI: a pin written as another form of a sibling's stable id is an identity conflict, nothing is read, and it exits 1 (${implicit ? 'implicit' : 'explicit'} key${reverse ? ', reversed' : ''})`, async () => {
+    const views = [ticketView('Twin', implicit ? undefined : 'a'), ticketView('Twin', 'b')];
+    const spec = ticketSpec(views, { stable: true });
+    const id = stableIdOf(spec, views[0]);
+    views[1].viewId = ` {${id.toUpperCase()}} `;
+    if (reverse) views.reverse();
+    const own = `"${implicit ? 'new_ticket/Twin' : 'a'}" (stable id)`;
+    const keys = reverse ? `"b" (viewId), ${own}` : `${own}, "b" (viewId)`;
+    const { emitted, stderr, reads, exit } = await verifyViewsCli(spec, [ticketRow(id, 'Twin')]);
+    assert.strictEqual(emitted.ok, false, stderr);
+    assert.strictEqual(exit, 1);
+    assert.ok(stderr.includes(`  ✗ view: new_ticket.Twin — identity conflict: savedquery ${id} is claimed by view keys ${keys}; each declaration needs a row of its own\n`), stderr);
+    assert.deepStrictEqual(reads, []);
+  });
+}
+
+for (const reverse of [false, true]) {
+  test(`verify CLI: two name groups of one pass never share a row, by a stable id both derive or by a row renamed from one to the other, and exit 1${reverse ? ' (reversed)' : ''}`, async () => {
+    // The implicit key of the first Twin is "new_ticket/Twin"; an Other keyed "twin" derives the same id: four declarations, three rows.
+    const shared = [ticketView('Twin'), ticketView('Twin', 'second-twin'), ticketView('Other', 'twin'), ticketView('Other', 'second-other')];
+    const spec = ticketSpec(shared, { stable: true });
+    const ids = shared.map((v) => stableIdOf(spec, v));
+    assert.strictEqual(ids[0], ids[2]);
+    if (reverse) shared.reverse();
+    const crossed = await verifyViewsCli(spec, [ticketRow(ids[0], 'Other'), ticketRow(ids[1], 'Twin'), ticketRow(ids[3], 'Other')]);
+    assert.strictEqual(crossed.emitted.ok, false, crossed.stderr);
+    assert.strictEqual(crossed.exit, 1);
+    const keys = reverse ? '"twin" (stable id), "new_ticket/Twin" (stable id)' : '"new_ticket/Twin" (stable id), "twin" (stable id)';
+    const conflict = `identity conflict: savedquery ${ids[0]} is claimed by view keys ${keys}; each declaration needs a row of its own`;
+    assert.ok(crossed.stderr.includes(`  ✗ view: new_ticket.Twin — ${conflict}\n`) && crossed.stderr.includes(`  ✗ view: new_ticket.Other — ${conflict}\n`), crossed.stderr);
+    assert.deepStrictEqual(crossed.reads, []);
+
+    // first-twin's own row renamed "Other" stays first-twin's: the two Other views have one spare row between them.
+    const keyed = [ticketView('Twin', 'first-twin'), ticketView('Twin', 'second-twin'), ticketView('Other', 'first-other'), ticketView('Other', 'second-other')];
+    const keyedSpec = ticketSpec(keyed, { stable: true });
+    const own = keyed.map((v) => stableIdOf(keyedSpec, v));
+    if (reverse) keyed.reverse();
+    const renamed = await verifyViewsCli(keyedSpec, [ticketRow(own[0], 'Other'), ticketRow(own[1], 'Twin'), ticketRow('ffffffff-1111-4111-8111-111111111111', 'Other')]);
+    assert.strictEqual(renamed.emitted.ok, false, renamed.stderr);
+    assert.strictEqual(renamed.exit, 1);
+    const otherKeys = reverse ? '"second-other", "first-other"' : '"first-other", "second-other"';
+    assert.ok(renamed.stderr.includes(`  ✗ view: new_ticket.Other — only 1 distinct unclaimed row(s) named "Other" on new_ticket were read for 2 declared view(s) (keys: ${otherKeys}); each declaration needs a row of its own\n`), renamed.stderr);
+    assert.strictEqual(renamed.stderr.split('\n').filter((l) => l.startsWith('  ✓ view: new_ticket.Twin')).length, 2, renamed.stderr);
+  });
+}
