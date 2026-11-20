@@ -935,6 +935,14 @@ done
 
 Replace or create the `## Generated Services (snapshot at <ISO timestamp>)` section in `native-app-plan.md` immediately after `## Screens`. If there are no services, write an empty table and a note. Screen-builders must treat this table as authoritative.
 
+For a new Dataverse query in the approved edit, include the per-service report
+from `check-dataverse-query-support.js --project-root '<working_dir>'` and gate
+the required features as specified in `shared/references/data-performance.md`.
+Do not reinterpret this as a migration: preserve unrelated existing queries,
+computed columns, and refresh owners. A stale service or SDK is a prerequisite
+to report through the manual guidance in `data-performance.md`, not permission
+to invoke updates/refreshes, hand-edit generated files, or rewrite the whole app.
+
 Mark still-present services in the approved removal set as retiring: builders
 must not introduce or retain dependencies on them. Refresh this snapshot again
 after Step 6.5 so it describes the actual remaining output.
@@ -1023,6 +1031,13 @@ Shared scaffold algorithm:
 
 - If `src/components/index.tsx`, `src/hooks/index.ts`, `src/utils/index.ts`, or `src/tokens/index.ts` is missing, copy the missing file from `shared/samples/src/`. Never overwrite an existing shared file.
 - If affected screens share an entity card/row, choice map, cursor hook, detail hook, or save helper, create or update a focused app-specific shared file before spawning builders.
+- For an approved saved-view read, follow the App-helper capability check in
+  `data-performance.md` and the report's `cursorHelper.status`. SDK/services
+  can be current while an existing shared hook still only forwards skipToken.
+  Preserve that hook and its consumers; generate a focused nextLink-capable
+  app-specific hook, or use the documented direct `useInfiniteQuery` fallback
+  in the affected screen. Record the choice in its Data spec and type-check the
+  skeleton before delegation. Do not replace shared scaffold to enable the feature.
 - For brand-new screens, write a typed skeleton at the `target_file` using the relevant `/create-mobile-app` Step 10.8b template. The skeleton must compile with `return null` before screen-builder runs.
 - For existing screens, never replace the whole file with a skeleton. Patch imports/hooks only when the approved edit changes the data/native surface, then ask the builder to preserve existing behavior.
 

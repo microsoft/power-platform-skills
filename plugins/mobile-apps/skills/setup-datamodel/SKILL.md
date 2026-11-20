@@ -298,8 +298,10 @@ do not send partial create-only fast-path flags. Wait for it to return before
 Phase 6.
 
 **Cross-entity reads from the screen plan** — the approved
-`### Cross-entity Reads` subsection contains formatted lookups, bounded chained
-fetches, or `external-projection-required` blockers. `/add-dataverse` never
+`### Cross-entity Reads` subsection contains formatted lookups, capability-gated
+expansions, bounded chained fetches, or `external-projection-required` blockers.
+Aggregate and saved-view reads follow the same `data-performance.md` contract.
+`/add-dataverse` verifies generated query support and navigation metadata; it never
 synthesizes calculated/formula definitions through code. A user-supplied,
 maker-created computed column is validated as an existing dependency during
 reconciliation before it can be reused.

@@ -306,7 +306,7 @@ test('planner permissions allow required planning artifacts only in their owning
 
 test('post-specs cross-entity audit reads the canonical plan and belongs to Gate 2', () => {
   const audit = section(architect, '## Step 6a — Cross-entity Read Audit',
-    '2. **Per entry, branch on');
+    '3. **Per related entry, branch on');
   assert.match(audit, /mode: cross-entity-audit[\s\S]*native-app-plan\.md/);
   assert.match(audit, /graph-only scratch[\s\S]*not a substitute/);
   assert.doesNotMatch(architect, /addendum to Gate 1|Gate 1 view/);

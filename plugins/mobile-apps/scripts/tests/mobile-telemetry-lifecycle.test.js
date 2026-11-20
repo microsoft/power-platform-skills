@@ -384,7 +384,6 @@ test('command runner bounds a hung telemetry emitter even when it ignores SIGTER
     'process.exit(7);',
     '',
   ].join('\n'));
-  const startedAt = Date.now();
   const result = spawnSync('bash', [
     path.join(wrapperRoot, 'run-with-telemetry.sh'),
     '--execute',
@@ -406,18 +405,26 @@ test('command runner bounds a hung telemetry emitter even when it ignores SIGTER
     },
     timeout: 10_000,
   });
-  if (result.error && fs.existsSync(pidFile)) {
-    // If the wrapper regresses, its timeout kills only Bash, not the emitter.
+  let emitterStillRunning = false;
+  if (fs.existsSync(pidFile)) {
     const pid = Number(fs.readFileSync(pidFile, 'utf8'));
+    assert.ok(Number.isSafeInteger(pid) && pid > 0, 'emitter PID must identify one process');
     try {
+      process.kill(pid, 0);
+      emitterStillRunning = true;
+      // The subprocess deadline kills Bash only; clean up a regressed emitter
+      // before asserting so the failing test cannot leave an orphan.
       process.kill(pid, 'SIGKILL');
     } catch (error) {
       if (error.code !== 'ESRCH') throw error;
     }
   }
+  // The existing 10s subprocess deadline includes Git Bash/Node startup.
+  // A second 3s wall-clock assertion measures busy Windows workers, not the watchdog.
+  assert.ifError(result.error);
   assert.equal(result.status, 7, result.stderr);
   assert.equal(fs.readFileSync(marker, 'utf8'), 'x');
-  assert.ok(Date.now() - startedAt < 3000, 'telemetry hang must stay bounded');
+  assert.equal(emitterStillRunning, false, 'watchdog must terminate its telemetry emitter');
 });
 
 test('tracked checkpoints preserve allowlisted static classifications', (context) => {

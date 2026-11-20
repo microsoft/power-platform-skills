@@ -95,12 +95,12 @@ function extractContent(toolName, toolInput) {
 }
 
 /**
- * Walk forward from `startIdx` (which points at the `{` opening an object
- * literal) and return the index of the matching `}`. Tracks nested braces,
+ * Walk forward from an opening delimiter and return its matching index. Tracks nesting,
  * single/double/back-tick string literals, and line/block comments. Returns
  * -1 if unbalanced.
  */
-function findMatchingBrace(content, startIdx) {
+function findMatchingDelimiter(content, startIdx, opening, closing) {
+  if (content[startIdx] !== opening) return -1;
   let depth = 0;
   let i = startIdx;
   let inString = null; // '"' | "'" | '`' | null
@@ -151,15 +151,20 @@ function findMatchingBrace(content, startIdx) {
       i++;
       continue;
     }
-    if (ch === '{') {
+    if (ch === opening) {
       depth++;
-    } else if (ch === '}') {
+    } else if (ch === closing && !(closing === '>' && content[i - 1] === '=')) {
+      // Function types inside generics contain `=>`, which does not close `<...>`.
       depth--;
       if (depth === 0) return i;
     }
     i++;
   }
   return -1;
+}
+
+function findMatchingBrace(content, startIdx) {
+  return findMatchingDelimiter(content, startIdx, '{', '}');
 }
 
 /**
@@ -260,12 +265,34 @@ function topLevelKeys(body) {
   const keys = [];
   let depth = 0;
   let inString = null;
+  let inLineComment = false;
+  let inBlockComment = false;
   let i = 0;
-  let pendingKeyStart = 0;
+  let keyText = '';
   let lookForKey = true;
+
+  const recordKey = () => {
+    const key = keyText.trim();
+    if (lookForKey && /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(key)) keys.push(key);
+  };
 
   while (i < body.length) {
     const ch = body[i];
+    const next = body[i + 1];
+    if (inLineComment) {
+      if (ch === '\n') inLineComment = false;
+      i++;
+      continue;
+    }
+    if (inBlockComment) {
+      if (ch === '*' && next === '/') {
+        inBlockComment = false;
+        i += 2;
+      } else {
+        i++;
+      }
+      continue;
+    }
     if (inString) {
       if (ch === '\\') {
         i += 2;
@@ -275,8 +302,18 @@ function topLevelKeys(body) {
       i++;
       continue;
     }
+    if (ch === '/' && (next === '/' || next === '*')) {
+      // Comments can contain punctuation and appear before a key or its colon:
+      // `{ /* aggregate */ apply /* expression */: 'aggregate($count as total)' }`.
+      if (depth === 0 && lookForKey) keyText += ' ';
+      inLineComment = next === '/';
+      inBlockComment = next === '*';
+      i += 2;
+      continue;
+    }
     if (ch === '"' || ch === "'" || ch === '`') {
       inString = ch;
+      if (depth === 0) lookForKey = false;
       i++;
       continue;
     }
@@ -296,23 +333,22 @@ function topLevelKeys(body) {
       continue;
     }
     if (ch === ',') {
+      recordKey();
       lookForKey = true;
-      pendingKeyStart = i + 1;
+      keyText = '';
       i++;
       continue;
     }
     if (lookForKey && ch === ':') {
-      // Identifier just before `:` — slice from pendingKeyStart.
-      const segment = body.slice(pendingKeyStart, i).trim();
-      if (/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(segment)) {
-        keys.push(segment);
-      }
+      recordKey();
       lookForKey = false;
       i++;
       continue;
     }
+    if (lookForKey) keyText += ch;
     i++;
   }
+  if (depth === 0) recordKey();
   return keys;
 }
 
@@ -379,48 +415,43 @@ function buildBlockMessage(filePath, selectViolations, payloadViolations) {
   return lines.join('\n');
 }
 
-let inputData = '';
-process.stdin.on('data', (chunk) => {
-  inputData += chunk;
-});
-process.stdin.on('end', () => {
-  let input;
-  try {
-    input = JSON.parse(inputData || '{}');
-  } catch {
-    process.exit(0);
-  }
+if (require.main === module) {
+  let inputData = '';
+  process.stdin.on('data', (chunk) => {
+    inputData += chunk;
+  });
+  process.stdin.on('end', () => {
+    let input;
+    try {
+      input = JSON.parse(inputData || '{}');
+    } catch {
+      process.exit(0);
+    }
 
-  const toolName = input.tool_name || input.toolName;
-  const toolInput = input.tool_input || input.toolInput || {};
+    const toolName = input.tool_name || input.toolName;
+    const toolInput = input.tool_input || input.toolInput || {};
 
-  if (!isWriteTool(toolName)) {
-    process.exit(0);
-  }
+    if (!isWriteTool(toolName)) process.exit(0);
 
-  const filePath = toolInput.file_path || toolInput.filePath;
-  if (!isWatchedFile(filePath)) {
-    process.exit(0);
-  }
+    const filePath = toolInput.file_path || toolInput.filePath;
+    if (!isWatchedFile(filePath)) process.exit(0);
 
-  const content = extractContent(toolName, toolInput);
-  if (!content) {
-    process.exit(0);
-  }
+    const content = extractContent(toolName, toolInput);
+    if (!content) process.exit(0);
 
-  const selectViolations = findForbiddenSelectColumns(content);
-  const payloadViolations = findServerManagedCreatePayload(content);
+    const selectViolations = findForbiddenSelectColumns(content);
+    const payloadViolations = findServerManagedCreatePayload(content);
+    if (selectViolations.length === 0 && payloadViolations.length === 0) process.exit(0);
 
-  if (selectViolations.length === 0 && payloadViolations.length === 0) {
-    process.exit(0);
-  }
-
-  process.stderr.write(buildBlockMessage(filePath, selectViolations, payloadViolations) + '\n');
-  process.exit(2);
-});
+    process.stderr.write(buildBlockMessage(filePath, selectViolations, payloadViolations) + '\n');
+    process.exit(2);
+  });
+}
 
 // Exported for tests / cross-module reuse.
 module.exports = {
+  findMatchingDelimiter,
+  findMatchingBrace,
   findForbiddenSelectColumns,
   findServerManagedCreatePayload,
   topLevelKeys,

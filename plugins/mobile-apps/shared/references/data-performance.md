@@ -14,6 +14,79 @@ Apply these patterns whenever a List screen queries a Dataverse table that can g
 
 The `screen-planner` flags this in the per-screen spec as `pagination: cursor` or `pagination: none`.
 
+## Query availability
+
+Power Apps SDK `1.6.0` and CLI `1.4.1` are the first verified query pair.
+Newer compatible SDKs and query-ready generated services support
+`expand` on `get`/`getAll`, `apply` on `getAll`,
+generic result projections, and `getSavedQuery` with complete-link pagination.
+New-app creation still selects an exact published template through
+[mobile-release-lifecycle.md](mobile-release-lifecycle.md). Query requirements
+do not replace its native release contract or independently override its pins;
+the bundled template is only a legacy test fixture.
+FetchXML execution, SQL, typed parameter aliases, and personal `userQuery`
+APIs are not part of this contract. Do not invent service methods for them.
+
+Before planning new queries, inspect the installed packages, not just manifest
+ranges. After generating services, and again before shipping a new query, run:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/check-dataverse-query-support.js" \
+  --project-root '<working_dir>'
+```
+
+The report separates SDK support from each retained service's generated
+options/methods. For a required query, add `--table '<logical-name>' --require
+expand` (or `apply`, `saved-query`, or a comma-separated set). Only gate the
+services/features actually used. Missing services, stale generated options,
+and failed type-checks are blockers, not permission to hand-edit generated code.
+Include the verified features alongside the Generated Services snapshot.
+Recheck after dependency, binding, environment, or generated-code changes.
+This is a query-API check, not a native-release admission gate. Follow the
+[local-development policy](mobile-release-lifecycle.md#local-installation-and-startup-are-not-release-admission-gates):
+unverified native compatibility must not block local preparation or startup.
+An unavailable query API affects only the requested query feature, not
+unrelated existing reads or source edits.
+
+### Existing apps: manual prerequisites
+
+**Existing apps are not migrated.** Keep their current queries, calculated
+columns, refresh owners, and data. Query discovery is read-only and never
+installs packages, starts `/check-updates`, refreshes sources, or rewrites
+customer code.
+
+| Observed state | Message / action |
+|---|---|
+| SDK predates `1.6.0` or is missing | Explain the required SDK capability and stop only the unavailable new feature. The customer updates compatible packages through their approved package/release workflow. Existing supported reads continue unchanged. |
+| SDK is new enough; generated methods/options are stale | Ask the customer to refresh the affected retained binding with a query-capable CLI, then regenerate schemas and type-check. Do not run refresh automatically. |
+| SDK and actual generated contract support the requested feature | Use the approved query in new app/feature code. Do not convert unrelated existing reads. |
+
+Resolve the exact, unambiguous registration using
+[Refresh a retained source](data-source-removal.md#refresh-a-retained-source)
+and the local CLI using [cli-binary.md](../cli-binary.md). Show the customer
+the resolved equivalent of:
+
+```bash
+$PA app refresh data-source --name '<registered-name>' --non-interactive
+npm run generate-schemas
+npx --no-install tsc --noEmit
+```
+
+Refresh bindings sequentially. A null `bindingName` requires resolving the
+stored schema's real name, never an array index or guessed display label.
+This is manual guidance, not an instruction for the agent to execute these
+commands. If the user later explicitly invokes `/check-updates`, preserve that
+workflow's package-owned compatibility, coordinated release, and approval rules.
+An SDK update or service refresh alone does not migrate application queries.
+
+This is the **online Dataverse** contract. The native online bridge forwards
+SDK-built queries; native offline execution is owned by a different runtime.
+Do not assume expand, apply, saved queries, or SDK mocks work offline. For a
+screen required offline, verify that runtime's exact query support and related
+table/column/profile coverage, or retain an approved supported read path.
+Never silently fall back to an online request, unfiltered rows, or fake values.
+Do not apply these Dataverse-only features to connector services.
+
 ---
 
 ## Dataverse Pagination: `maxPageSize` + `skipToken`
@@ -74,7 +147,95 @@ Wire the returned state into `FlatList`:
 />
 ```
 
-`useCursorListData` accepts page results shaped as an SDK `IOperationResult<T[]>` (`{ data, skipToken }`) and also tolerates `{ value }`, `{ items }`, `nextLink`, `nextSkipToken`, `skiptoken`, or `@odata.nextLink` for compatibility. An array result is treated as a single bounded page, so it is not enough for an unbounded production list unless the service also returns a cursor.
+`useCursorListData` accepts SDK `IOperationResult<T[]>` and checks `success:
+false` even when `error` is absent. Its default `cursorMode: 'skipToken'`
+preserves ordinary OData callers. An array result is one bounded page, not
+production pagination. Mock data is only used when fetching is explicitly
+disabled; a failed or empty real response never becomes mock success.
+Include environment, table, filters, ordering, selected/expanded fields, and
+query identity in `queryKey`; changing any of them must restart pagination.
+Pull-to-refresh restarts from page one.
+
+### Saved system views
+
+Use the generated `getSavedQuery<TResult>(savedQueryId, { maxPageSize,
+nextLink })` for an approved **system view** belonging to that table in the
+selected environment. Verify its ID, expected columns/aliases, and access.
+A GUID's syntax does not prove that the correct view exists. Saved queries
+omit null-valued properties, so model optional fields explicitly and fail if
+a required identity/display column is absent.
+
+**App-helper capability check (before choosing the recipe):** SDK/service
+support does not upgrade the app's copied hooks. The capability report's
+`cursorHelper.status` is `matches-bundled` only for an LF-normalized copy of
+the current tested sample; `missing` and `requires-review` do not establish
+complete-link support. Resolve the actual imported helper (including its
+barrel/alias), then verify all three behaviors: it accepts `cursorMode:
+'nextLink'`, passes `pageParam` as `nextLink` to `fetchPage`, and returns the
+complete response link as the next page parameter without token extraction.
+A type declaration or SDK upgrade alone is insufficient.
+
+Use the shared-hook example below only after that check. For an older or
+unverified helper, the orchestrator must use the direct `useInfiniteQuery`
+fallback below in the approved screen, or create one focused app-specific
+saved-view hook for its affected consumers before spawning builders. Preserve
+the existing shared hook, exports, and unrelated consumers; do not overwrite
+the scaffold, add casts to accept `cursorMode`, or send links as `skipToken`.
+This is implementation of the approved saved-view feature, not an app migration.
+
+```typescript
+type ActiveContactRow = { contactid: string; fullname?: string };
+
+const contacts = useCursorListData<ActiveContactRow>({
+  queryKey: ['contacts', environmentId, savedQueryId],
+  cursorMode: 'nextLink',
+  fetchPage: ({ pageSize, nextLink }) => ContactsService.getSavedQuery<ActiveContactRow>(
+    savedQueryId,
+    { maxPageSize: pageSize, ...(nextLink ? { nextLink } : {}) },
+  ),
+});
+```
+
+#### Existing-app saved-view fallback
+
+This uses the installed React Query API directly and does not depend on the
+app's existing `useCursorListData`. Reuse the approved row type, generated
+service, environment, and view ID:
+
+```typescript
+import { useInfiniteQuery } from '@tanstack/react-query';
+
+const contacts = useInfiniteQuery({
+  queryKey: ['contacts', environmentId, savedQueryId],
+  initialPageParam: undefined as string | undefined,
+  queryFn: async ({ pageParam }) => {
+    const result = await ContactsService.getSavedQuery<ActiveContactRow>(savedQueryId, {
+      maxPageSize: 50,
+      ...(pageParam ? { nextLink: pageParam } : {}),
+    });
+    if (!result.success) throw result.error ?? new Error('Could not load contacts');
+    return result;
+  },
+  getNextPageParam: (page) => page.nextLink ?? undefined,
+});
+const items = contacts.data?.pages.flatMap((page) => page.data) ?? [];
+```
+
+Render `contacts.error` explicitly. Wire `fetchNextPage` only when
+`hasNextPage && !isFetchingNextPage`, and use `refetch` for refresh. Record the
+selected helper/import or direct-query path in the Data spec and compile the
+new skeleton with the existing helpers unchanged.
+
+Pass the complete returned link unchanged to the same service/view. Do not
+extract its skip token, decode/re-encode it, append options, or log/persist
+it in telemetry or plans. The SDK rejects a different environment/table;
+only reuse links from the current query chain. Generic `getAll` still uses
+`skipToken`: its public options do not accept `nextLink`.
+
+The saved-query options do not accept arbitrary `filter`, `orderBy`, `select`,
+`expand`, or `apply`. The view owns selection and ordering. If search/sort is
+required, plan a supported OData query instead; do not filter just loaded rows.
+The SDK mock executor rejects saved queries rather than returning all records.
 
 ---
 
@@ -100,7 +261,8 @@ const result = await Cr123_jobvisitService.getAll({
 
 ## `orderBy` and `select`
 
-Always specify both on large lists:
+Always specify both on ordinary large OData lists (saved views own them, and
+aggregate projections use the contract below):
 
 ```typescript
 maxPageSize: 50,
@@ -126,19 +288,20 @@ Whenever a UI field on a screen displays data sourced from an entity OTHER than 
 
 ### Supported read paths
 
-The Power Apps SDK's `IGetAllOptions` / `IGetOptions` interfaces have **no `expand` field**. Passing `$expand` is silently dropped at runtime — the related fields come back `undefined`, the screen renders `—`, and the user thinks the data is missing. So the standard OData answer ("just expand the lookup") doesn't work.
-
-Use one of these supported paths:
+For new queries on a supported SDK and generated service, use these paths:
 
 - **Formatted lookup annotation** — when the UI needs only the primary display
   name of a direct lookup already present on the fetched record, use
   `lookupName(record, '<lookupLogicalName>')` / `formattedValue(...)`. This
   adds no schema mutation and no additional request.
-- **Chained fetch** — call a second `Service.get(...)` once in a detail load, or
+- **Expand** — use `expand: ['<navigation>($select=<columns>)']` on the primary
+  service, with a nullable, app-owned generic result projection. Prefer this
+  for arbitrary related scalar fields, including hot lists; create no column.
+- **Chained fetch** — for a legacy/unsupported query path, call a second
+  `Service.get(...)` once in a detail load, or
   `Service.getAll(...)` for a bounded related collection.
-- **External projection required** — for a hot list/dashboard field that is not
-  the direct lookup display name. Omit the field until the user creates a
-  supported server-owned projection outside this workflow.
+- **External projection required** — report a blocked field when no supported
+  read path can meet its requirements. Never quietly omit an approved field.
 
 Dataverse exposes formula metadata, but Microsoft does not support defining
 calculated, rollup, or formula expressions through code. Never synthesize
@@ -149,17 +312,61 @@ workflow XAML or formula serialization.
 | Screen archetype | Relationship | Action |
 |---|---|---|
 | **List** (`top ≥ 5`), **Tab-root**, **Dashboard** | Direct N:1 lookup primary display name | Use the formatted lookup annotation. |
-| **List** (`top ≥ 5`), **Tab-root**, **Dashboard** | Any other related field | Mark `external-projection-required` and omit it. Do NOT scaffold N+1 reads or synthesize a formula definition. |
-| **Detail** (single record, cold path) | 1:1 (N:1 lookup chain) | Scaffold a chained fetch in the screen's load step. One extra round trip is fine for a single record. |
-| **List**, **Tab-root**, **Dashboard** | 1:many or M:N per-row field/aggregate | Mark `external-projection-required`; never fetch once per row. |
-| **Detail/Form/Modal** | 1:many | Scaffold a bounded chained `*Service.getAll(...)` with `_<parentid>_value eq '${id}'` filter. |
-| **Detail/Form/Modal** | M:N | Mark `external-projection-required` unless the plan names a generated intersect-table service and its exact bounded query contract. Never apply an N:1 lookup filter to an M:N table. |
+| Any | Arbitrary related scalar / multi-hop N:1 | Prefer narrow single-valued `expand`; verify every navigation hop. Without support, detail may chain; a hot list requires an existing projection or blocks. |
+| **Detail/Form/Modal** | 1:many or M:N | Bounded collection expand when legal and complete; otherwise a verified bounded child/intersect service query. |
+| **List**, **Tab-root**, **Dashboard** | Per-row collection/aggregate | Prefer one bounded grouped `apply` query joined by parent ID when supported; otherwise an existing owned projection. Never fetch once per row. |
 
 Verification: every UI field must have a primary `select`, formatted lookup, or
-bounded chained fetch. Otherwise return
+verified expanded/aggregate result, existing projection, or bounded chained fetch. Otherwise return
 `BLOCKED: <field> on <screen> requires an external projection`.
 
-### Pattern A: Formatted lookup annotation
+### Pattern A: Typed expansion
+
+Use the exact navigation names from relationship metadata, not lookup logical
+names, relationship schema names, or guessed entity-set names. The normalized
+snapshot carries `navigationProperty` for N:1/1:N and
+`entity1NavigationProperty` / `entity2NavigationProperty` for M:N. Legacy
+snapshots without them require bounded foreground metadata discovery.
+New relationships require a post-provisioning metadata read before queries
+are finalized. Polymorphic customer/owner lookups need target-specific
+navigation properties and nullable branches.
+
+```typescript
+type ContactWithAccount = Pick<Contacts, 'contactid' | 'fullname'> & {
+  parentcustomerid_account?: Pick<Accounts, 'accountid' | 'name' | 'telephone1'> | null;
+};
+
+const result = await ContactsService.getAll<ContactWithAccount>({
+  select: ['contactid', 'fullname', '_parentcustomerid_value'],
+  expand: ['parentcustomerid_account($select=accountid,name,telephone1)'],
+  maxPageSize: 50,
+  orderBy: ['fullname asc', 'contactid asc'],
+});
+if (!result.success) throw result.error ?? new Error('Could not load contacts');
+```
+
+Import actual generated model names; the example is not permission to invent
+one. A generic projection does not add fields at runtime. Select all required
+fields, retain lookup IDs, use optional/null guards, and keep projection types
+outside `src/generated/`. Expanded objects never belong in create/update
+payloads. Related-record writes must invalidate consuming query caches.
+
+Dataverse allows up to 15 expand options and restricts nested collection
+options. In particular, do not combine nested collection expand with unsupported
+`$top`/`$orderby`, or use `$skip`, `$count`, `$search`, or `$levels` inside
+expand. Verify the specific shape against
+[Microsoft Learn](https://learn.microsoft.com/power-apps/developer/data-platform/webapi/query/join-tables).
+Only use bounded collection expansions; large child arrays can be worse than
+separate paged queries.
+
+Root pagination does not finish child collections. A child
+`<navigation>@odata.nextLink` may address a navigation route, which is not the
+root-table URL accepted by saved-query continuation. Do not send it to
+`getSavedQuery`, bypass the service with HTTP, or count truncated child rows.
+Use a supported child-service cursor query; block unsupported M:N continuation
+or label a deliberately bounded preview explicitly.
+
+### Pattern B: Formatted lookup annotation
 
 For the primary display value of a direct lookup, select the lookup ID and read
 the formatted annotation already returned by Dataverse:
@@ -174,7 +381,7 @@ import { lookupName } from '@/utils';
 <Text>{lookupName(record, 'cr3e9_flightid') ?? '—'}</Text>
 ```
 
-### Pattern B: Chained fetch
+### Pattern C: Bounded legacy/detail fetch
 
 A chained fetch is a second `Service.get(...)` (for 1:1) or
 `Service.getAll(...)` (for 1:many) inside the screen's load step. Use only on
@@ -187,12 +394,14 @@ contract; otherwise they are blocked as `external-projection-required`.
 ```typescript
 // app/(app)/inspections/[id]/index.tsx — Detail screen
 const inspResult = await Cr3e9_inspectionsService.get(id);
+if (!inspResult.success) throw inspResult.error ?? new Error('Could not load inspection');
 const flightId = inspResult.data?._cr3e9_flightid_value;
 const flightResult = flightId
   ? await Cr3e9_flightsService.get(flightId, {
       select: ['cr3e9_flightnumber', '_cr3e9_gateid_value', '_cr3e9_aircraftid_value'],
     })
   : null;
+if (flightResult && !flightResult.success) throw flightResult.error ?? new Error('Could not load flight');
 
 // In JSX
 import { lookupName } from '@/utils';
@@ -207,13 +416,54 @@ import { lookupName } from '@/utils';
 const defectsResult = await Cr3e9_defectsService.getAll({
   filter: `_cr3e9_inspectionid_value eq '${id}'`,
   select: ['cr3e9_defectid', 'cr3e9_severity', 'cr3e9_summary'],
-  orderBy: ['cr3e9_severity desc'],
+  orderBy: ['cr3e9_severity desc', 'cr3e9_defectid asc'],
+  maxPageSize: 50,
 });
+if (!defectsResult.success) throw defectsResult.error ?? new Error('Could not load defects');
 ```
 
+For an unbounded detail collection, continue using the shared cursor hook;
+one `getAll` call is not a guarantee of completeness.
+
 **Hard rule — NEVER chain inside a list `map()` / `FlatList renderItem`.**
-That is the N+1 trap. Use the direct lookup annotation or omit the field until
-an external projection exists.
+That is the N+1 trap. Use a supported expansion, grouped query, or existing
+projection; otherwise block the field rather than displaying incomplete data.
+
+### Aggregations with apply
+
+Use `getAll<AggregateRow>({ apply: ... })`, not a computed column created only
+for a dashboard and not a sum/count of the loaded client page:
+
+```typescript
+const result = await AccountsService.getAll<{ total: number }>({
+  apply: 'aggregate($count as total)',
+});
+if (!result.success) throw result.error ?? new Error('Could not load account total');
+```
+
+Use exact approved aliases and result types; preserve null/empty semantics.
+For per-parent totals, query the child table with a bounded parent filter,
+group by the verified parent lookup, and merge by ID once per page/load.
+Do not run an aggregate for each row or interpret `IOperationResult.count`
+as an arbitrary business aggregate. A missing total is not automatically zero.
+
+Dataverse supports only a subset of apply: the source limit is 50,000 records,
+datetime grouping and ordering by aggregate values are unsupported. Surface
+those failures; do not silently substitute partial client-side totals.
+See [aggregate data](https://learn.microsoft.com/power-apps/developer/data-platform/webapi/query/aggregate-data).
+
+### Column fidelity
+
+| Column category | Required handling |
+|---|---|
+| Text, numbers, decimal, currency, GUID | Preserve generated raw types, precision, nullability, and formatting. |
+| Date/time, date-only, timezone-independent | Apply metadata-aware formatting; never blanket-convert related dates to UTC. |
+| Boolean, Choice, state/status | Keep raw values and option maps; use `formattedValue` on the actual related row. Do not write labels. |
+| Multi-select Choice | Generated root normalization does not recursively normalize expanded rows. At the app-owned result boundary, reuse the SDK's `deserializeMultiSelectPicklistFields` for the metadata-proven related fields; test the wire and normalized shapes. |
+| Lookup, owner/customer | Preserve `_<lookup>_value` IDs; use target-specific navigation properties and nullable projections, not virtual `*name` fields. |
+| Formula/calculated/rollup | Reuse validated existing read-only columns. Expand does not replace arithmetic, conditions, rollup freshness, or offline dependencies. |
+| File/Image | Preserve host pickers and generated upload/download methods. Expand is not binary transfer; never place bytes or expanded objects in scalar write payloads. |
+| Secured/missing fields | Respect permissions. Distinguish an operation failure from a valid null/omitted value; never fabricate a column or privileged fallback. |
 
 ### Limits
 
@@ -226,16 +476,20 @@ an external projection exists.
 
 ### How the screen-builder applies this
 
-The screen-builder walks every cross-entity field and selects a formatted
-lookup, scaffolds one bounded chained fetch, or returns `BLOCKED` for an
-external projection.
+The screen-builder follows the approved resolution and verifies the relevant
+service capability before scaffolding. It never silently changes an existing
+app's query strategy because a newer SDK has been installed.
 
 ### How the data-model-architect proposes this
 
-The screen-planner emits a `related_entity_fields` block with cardinality,
-archetype, and one of `formatted-lookup`, `chained-fetch`, or
-`external-projection-required`. The data-model architect audits that every
-field has a supported read path; it does not synthesize formula metadata.
+The screen-planner emits `related_entity_fields` with cardinality, archetype,
+and `recommends: formatted-lookup | expand | apply | saved-query | chained-fetch |
+external-projection-required`. Expand entries carry the exact navigation path,
+selected fields, and execution target. Aggregate/saved-view contracts belong
+in the screen's Data field; related entries use `apply` or `saved-query` to name
+that verified result source. Saved views need an explicit unique row identity,
+especially when joins can repeat parent records. The architect audits metadata and capabilities;
+it never synthesizes formula definitions.
 
 ---
 
@@ -245,13 +499,14 @@ field has a supported read path; it does not synthesize formula metadata.
 |---|---|---|
 | Limit page size | `maxPageSize` | `maxPageSize: 50` |
 | Next page | `skipToken` | from `IOperationResult.skipToken` |
+| Saved system view | `getSavedQuery<TResult>` | `maxPageSize` + unchanged `nextLink`; hook `cursorMode: 'nextLink'` |
+| Aggregate/group | `apply` on `getAll<TResult>` | `aggregate($count as total)` |
 | Filter server-side | `filter` | `contains(name, 'foo')` |
 | Sort | `orderBy` | `['createdon desc', 'cr123_id asc']` |
 | Reduce payload | `select` | `['id', 'name', 'status']` |
 | Direct lookup display (list / hot) | formatted lookup annotation | `lookupName(record, 'cr3e9_gateid')` |
-| Other cross-entity field (list / hot) | external projection required | omit until supplied |
-| Cross-entity field (detail / cold) | chained `Service.get` | `Cr3e9_flightsService.get(flightId)` after primary fetch |
-| expand/join fields | NOT SUPPORTED in current generated options | use formatted lookup or bounded chained fetch |
+| Other cross-entity scalar | `expand` on `get` / `getAll` | exact metadata navigation + nested `$select` |
+| Legacy detail fallback | chained `Service.get` | bounded load outside row rendering |
 
 ---
 
