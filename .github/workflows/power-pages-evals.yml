@@ -1,7 +1,10 @@
 name: power-pages-evals
 
-# Paid measurements are opt-in, not a nondeterministic pull-request gate.
-# Native Actions auth: https://docs.github.com/copilot/how-tos/copilot-cli/use-copilot-cli-in-actions
+# BRANCH-ONLY EXPERIMENT: do not merge. Runs one job per case, model and effort
+# with a personal fine-grained PAT (Account > Copilot Requests) stored as
+# PP_EVAL_COPILOT_TOKEN. The dashboard never reads these runs: it accepts only
+# main-branch runs, and these artifacts use a separate pp-eval-experiment- prefix.
+# PAT auth: https://docs.github.com/en/copilot/how-tos/copilot-cli/set-up-copilot-cli/install-copilot-cli#authenticating-with-a-personal-access-token
 on:
     workflow_dispatch:
         inputs:
@@ -16,16 +19,16 @@ on:
                 type: choice
                 options: ["1", "3", "5"]
             models:
-                description: "Comma-separated model IDs; blank uses Opus 4.8, Sonnet 5.5, GPT-6 Sol and GPT-6.1 Sol"
-                default: ""
+                description: "Comma-separated model IDs checked against the token's live catalog"
+                default: "claude-opus-5.5,claude-opus-4.8,claude-sonnet-5.5,gpt-6.1-astra,gpt-6.1-sol"
                 type: string
             reasoning_effort:
-                description: "Agent reasoning effort; must be supported by every selected model"
+                description: "Agent reasoning effort; max resolves to each model's highest supported effort"
                 default: medium
                 type: choice
                 options: [medium, low, high, xhigh, max, none]
             judge_model:
-                description: "Optional judge override; blank pairs Opus 4.8 with GPT-6.1 Sol and the other models with Opus 4.8"
+                description: "Optional judge override; blank uses GPT-6.1 Sol, and Opus 5.5 to judge GPT-6.1 Sol"
                 default: ""
                 type: string
             judge_reasoning_effort:
@@ -39,10 +42,11 @@ permissions:
 
 jobs:
     select:
-        # Only reviewed default-branch code can receive inference rights or feed
-        # the public dashboard. No fork PR or arbitrary dispatch ref is eligible.
-        if: github.ref == 'refs/heads/main'
-        runs-on: ubuntu-latest
+        # The PAT is a personal repository secret, and this experiment has no
+        # admin-created protected environment. Run only on the experiment branch
+        # when its owner dispatches it. The PAT should grant only Copilot Requests.
+        if: github.ref == 'refs/heads/users/priyanshu92/power-pages-evaluations' && github.actor == 'priyanshu92' && github.triggering_actor == 'priyanshu92'
+        runs-on: ubuntu-24.04
         outputs:
             matrix: ${{ steps.select.outputs.matrix }}
         steps:
@@ -52,46 +56,31 @@ jobs:
             - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
               with:
                   node-version: 22
+            - name: install pinned evaluation dependencies
+              run: npm ci --prefix evals/runtime --registry=https://packagefeedproxy.microsoft.io/npm/ --ignore-scripts --no-audit --no-fund
             - id: select
               env:
+                  EVAL_TOKEN: ${{ secrets.PP_EVAL_COPILOT_TOKEN }}
                   SELECTED_SKILL: ${{ inputs.skill }}
                   MODELS: ${{ inputs.models }}
                   JUDGE_MODEL: ${{ inputs.judge_model }}
                   REASONING_EFFORT: ${{ inputs.reasoning_effort }}
                   JUDGE_REASONING_EFFORT: ${{ inputs.judge_reasoning_effort }}
-              run: |
-                  node --input-type=module <<'JS'
-                  import fs from 'node:fs';
-                  import evidence from './scripts/lib/eval-evidence.js';
-                  import { evaluationMatrix } from './evals/runtime/models.mjs';
-                  const { listSuiteNames } = evidence;
-                  const skills = listSuiteNames('evals/power-pages');
-                  if (!skills.length) throw new Error('No Power Pages evaluation suites available');
-                  const selected = process.env.SELECTED_SKILL;
-                  if (selected !== 'all' && !skills.includes(selected)) throw new Error('Unknown Power Pages evaluation suite');
-                  const matrix = evaluationMatrix({
-                    skills: selected === 'all' ? skills : [selected],
-                    models: process.env.MODELS, judgeModel: process.env.JUDGE_MODEL,
-                    reasoningEffort: process.env.REASONING_EFFORT || 'medium',
-                    judgeReasoningEffort: process.env.JUDGE_REASONING_EFFORT || 'medium',
-                  });
-                  fs.appendFileSync(process.env.GITHUB_OUTPUT, `matrix=${JSON.stringify(matrix)}\n`);
-                  JS
+              run: node evals/runtime/experiment-matrix.mjs
 
     evaluate:
         needs: select
+        if: github.ref == 'refs/heads/users/priyanshu92/power-pages-evaluations' && github.actor == 'priyanshu92' && github.triggering_actor == 'priyanshu92'
+        name: ${{ matrix.skill }}/${{ matrix.case }} ${{ matrix.model }} ${{ matrix.reasoningEffort }}
         strategy:
             fail-fast: false
-            max-parallel: 2
             matrix:
                 include: ${{ fromJSON(needs.select.outputs.matrix) }}
         # Playwright 1.58.2 cannot install Chromium on Ubuntu 26.04.
-        # Revisit this pin when upgrading Playwright's supported runners.
         runs-on: ubuntu-24.04
-        timeout-minutes: 360
+        timeout-minutes: 120
         permissions:
             contents: read
-            copilot-requests: write
         env:
             POWER_PLATFORM_SKILLS_TELEMETRY_POWER_PAGES_OPTOUT: "1"
         steps:
@@ -108,52 +97,34 @@ jobs:
             - name: configure Linux Chromium sandbox
               if: runner.os == 'Linux'
               run: bash evals/runtime/setup-linux-chromium-sandbox.sh
-            - name: validate selected suite
-              env:
-                  SKILL: ${{ matrix.skill }}
-              run: node evals/runtime/run.mjs validate --skill "$SKILL"
             - name: measure paired offline trials
               env:
-                  # Scoped to inference, never package installation or agent tools.
-                  GITHUB_TOKEN: ${{ github.token }}
+                  # Scoped to inference only, never package installation or agent tools.
+                  GITHUB_TOKEN: ${{ secrets.PP_EVAL_COPILOT_TOKEN }}
                   SKILL: ${{ matrix.skill }}
+                  CASE: ${{ matrix.case }}
                   RUNS: ${{ inputs.runs }}
                   MODEL: ${{ matrix.model }}
                   JUDGE_MODEL: ${{ matrix.judgeModel }}
                   REASONING_EFFORT: ${{ matrix.reasoningEffort }}
                   JUDGE_REASONING_EFFORT: ${{ matrix.judgeReasoningEffort }}
-              run: node evals/runtime/run.mjs run --skill "$SKILL" --runs "$RUNS" --model "$MODEL" --judge-model "$JUDGE_MODEL" --reasoning-effort "$REASONING_EFFORT" --judge-reasoning-effort "$JUDGE_REASONING_EFFORT" --out evals/reports/action
-            # Trials see only public fixtures and the public plugin, and their tools
-            # cannot read the environment. Still refuse to upload if the run token
-            # or any GitHub token shape appears anywhere in the evidence.
+              run: node evals/runtime/run.mjs run --skill "$SKILL" --case "$CASE" --runs "$RUNS" --model "$MODEL" --judge-model "$JUDGE_MODEL" --reasoning-effort "$REASONING_EFFORT" --judge-reasoning-effort "$JUDGE_REASONING_EFFORT" --out evals/reports/action
+            # Refuse to upload if the PAT or any GitHub token shape appears in evidence.
             - name: check evidence for credentials
               id: credential-check
               if: ${{ always() }}
               env:
-                  GITHUB_TOKEN: ${{ github.token }}
+                  GITHUB_TOKEN: ${{ secrets.PP_EVAL_COPILOT_TOKEN }}
               run: node evals/runtime/evidence.mjs check evals/reports/action
-            # Only publish judge explanations after checking the entire evidence
-            # tree, including error text, for credentials.
             - name: explain failed checks
               if: ${{ always() && steps.credential-check.outcome == 'success' }}
               run: node evals/runtime/evidence.mjs report evals/reports/action >> "$GITHUB_STEP_SUMMARY"
-            # Trajectories, grader reasons, generated files and screenshots. The
-            # dashboard never reads this artifact; it fetches only power-pages-evals-*.
             - name: upload grading evidence
               if: ${{ always() && steps.credential-check.outcome == 'success' }}
               uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
               with:
-                  name: power-pages-eval-evidence-${{ matrix.skill }}--${{ matrix.model }}
+                  name: pp-eval-experiment-${{ matrix.skill }}--${{ matrix.case }}--${{ matrix.model }}--${{ matrix.reasoningEffort }}
                   path: evals/reports/action
                   include-hidden-files: true
                   if-no-files-found: warn
                   retention-days: 30
-            # The public dashboard consumes only this scalar summary.
-            - name: upload sanitized evidence
-              if: ${{ always() }}
-              uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-              with:
-                  name: power-pages-evals-${{ matrix.skill }}--${{ matrix.model }}
-                  path: evals/reports/action/summary.json
-                  if-no-files-found: warn
-                  retention-days: 90

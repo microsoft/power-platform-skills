@@ -9,7 +9,7 @@ import { createRequire } from 'node:module';
 import { parse as parseYaml } from 'yaml';
 import { evaluate, outcomeRecord, parseArgs } from '../run.mjs';
 import { loadSuites, repoRoot, trialGraders } from '../suites.mjs';
-import { DEFAULT_MODELS } from '../models.mjs';
+import { buildMatrix, selectCases } from '../experiment-matrix.mjs';
 
 test('only covered skills have Vally suites; legacy-only skills remain unselected', async () => {
   const suites = await loadSuites();
@@ -65,32 +65,63 @@ test('grader summaries and evidence archives are gated by credential checks', as
   assert.equal(evidence.with['include-hidden-files'], true);
 });
 
-test('manual workflow selects available suites and rejects skills without one', async t => {
-  const root = await mkdtemp(path.join(tmpdir(), 'pp-selection-test-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
-  const workflow = parseYaml(await readFile(path.join(repoRoot, '.github/workflows/power-pages-evals.yml'), 'utf8'));
-  const command = workflow.jobs.select.steps.find(step => step.id === 'select').run;
-  const script = /node --input-type=module <<'JS'\n([\s\S]+)\nJS\s*$/.exec(command)?.[1];
-  assert.ok(script, 'the matrix selector must be executable without model dependencies');
-  const allSkills = [
-    'add-localization', 'add-seo', 'create-site', 'create-webroles',
-    'integrate-webapi', 'migrate-bootstrap', 'setup-auth', 'setup-datamodel',
+test('experiment selects every case and rejects skills without a suite', async () => {
+  const all = await selectCases('all');
+  const suites = await loadSuites();
+  assert.deepEqual(all, suites.flatMap(suite =>
+    suite.stimuli.map(stimulus => ({ skill: suite.name, name: stimulus.name }))));
+  assert.equal(all.length, 35);
+  assert.deepEqual(await selectCases('create-site'), all.filter(item => item.skill === 'create-site'));
+  await assert.rejects(() => selectCases('deploy-site'), /No evaluation suite/);
+  await assert.rejects(() => selectCases(''), /Select a Power Pages evaluation suite/);
+});
+
+test('experiment runs requested available model and effort combinations with distinct judges', async () => {
+  const skills = await selectCases('all');
+  const models = ['claude-opus-5.5', 'claude-opus-4.8', 'claude-sonnet-5.5', 'gpt-6.1-astra', 'gpt-6.1-sol'];
+  const entry = (id, efforts) => ({
+    id, policy: { state: 'enabled' }, capabilities: { supports: { reasoningEffort: true } },
+    supportedReasoningEfforts: efforts,
+  });
+  const catalog = [
+    entry('claude-opus-5.5', ['medium', 'max']),
+    entry('claude-sonnet-5.5', ['medium', 'xhigh']),
+    entry('gpt-6.1-sol', ['medium', 'max']),
   ];
-  for (const [selected, expected] of [['all', allSkills], ['create-site', ['create-site']]]) {
-    const output = path.join(root, selected);
-    execFileSync(process.execPath, ['--input-type=module', '-'], {
-      input: script, cwd: repoRoot,
-      env: { ...process.env, SELECTED_SKILL: selected, GITHUB_OUTPUT: output, MODELS: '', JUDGE_MODEL: '', REASONING_EFFORT: '', JUDGE_REASONING_EFFORT: '' },
+  for (const effort of ['medium', 'max']) {
+    const matrix = buildMatrix({
+      skills, models, catalog, effort, judgeModel: '', judgeEffort: 'medium', fallbackJudge: 'claude-opus-5.5',
     });
-    const matrix = JSON.parse((await readFile(output, 'utf8')).trim().slice('matrix='.length));
-    assert.deepEqual([...new Set(matrix.map(item => item.skill))], expected);
-    assert.deepEqual([...new Set(matrix.map(item => item.model))], DEFAULT_MODELS);
-    assert.equal(matrix.length, expected.length * DEFAULT_MODELS.length);
+    assert.deepEqual(matrix.unavailable, ['claude-opus-4.8', 'gpt-6.1-astra']);
+    assert.equal(matrix.include.length, skills.length * catalog.length);
+    for (const { id } of catalog) {
+      assert.deepEqual(matrix.include.filter(item => item.model === id)
+        .map(item => ({ skill: item.skill, name: item.case })), skills);
+    }
+    for (const item of matrix.include) {
+      assert.notEqual(item.model, item.judgeModel);
+      assert.equal(item.judgeModel, item.model === 'gpt-6.1-sol' ? 'claude-opus-5.5' : 'gpt-6.1-sol');
+      assert.equal(item.reasoningEffort, effort === 'max' && item.model === 'claude-sonnet-5.5' ? 'xhigh' : effort);
+      assert.equal(item.judgeReasoningEffort, 'medium');
+    }
   }
-  assert.throws(() => execFileSync(process.execPath, ['--input-type=module', '-'], {
-    input: script, cwd: repoRoot, stdio: 'pipe',
-    env: { ...process.env, SELECTED_SKILL: 'deploy-site', GITHUB_OUTPUT: path.join(root, 'missing') },
-  }), /Unknown Power Pages evaluation suite/);
+  const maxJudge = buildMatrix({
+    skills: skills.slice(0, 1), models: ['gpt-6.1-sol'], catalog,
+    effort: 'max', judgeModel: 'claude-sonnet-5.5', judgeEffort: 'max', fallbackJudge: 'claude-opus-5.5',
+  });
+  assert.equal(maxJudge.include[0].judgeReasoningEffort, 'xhigh');
+});
+
+test('experiment workflow dispatches per-case jobs with guarded evidence', async () => {
+  const workflow = parseYaml(await readFile(path.join(repoRoot, '.github/workflows/power-pages-evals.yml'), 'utf8'));
+  const select = workflow.jobs.select;
+  const evaluate = workflow.jobs.evaluate;
+  assert.equal(select.steps.find(step => step.id === 'select').run, 'node evals/runtime/experiment-matrix.mjs');
+  assert.match(select.if, /github\.actor == 'priyanshu92'/);
+  assert.equal(evaluate.if, select.if);
+  assert.equal(evaluate.strategy['max-parallel'], undefined);
+  assert.match(evaluate.steps.find(step => step.name === 'measure paired offline trials').run, /--case "\$CASE"/);
+  assert.match(evaluate.steps.find(step => step.name === 'upload grading evidence').with.name, /^pp-eval-experiment-/);
 });
 
 test('CLI rejects ambiguous models, missing paired settings, and invalid run counts', () => {
