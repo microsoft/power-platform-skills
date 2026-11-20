@@ -128,7 +128,12 @@ test('executor stops the SDK and registers home cleanup even after a failed agen
   await assert.rejects(() => executor.execute({ name: 'failure', prompt: 'Prepare a local plan' }, {
     workDir: root, skills: [], model: 'test-model', timeout: 500,
     registerCleanup: callback => cleanup.push(callback),
-  }), /test agent failure/);
+  }), error => {
+    assert.match(error.message, /test agent failure/);
+    assert.equal(error.partialTrajectory.endReason, 'error');
+    assert.ok(Array.isArray(error.partialTrajectory.events));
+    return true;
+  });
   assert.equal(captured.mode, 'empty');
   assert.equal(captured.gitHubToken, 'test-native-token');
   assert.equal(captured.env.GITHUB_TOKEN, undefined);

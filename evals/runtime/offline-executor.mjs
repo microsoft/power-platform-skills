@@ -286,24 +286,35 @@ export class OfflineExecutor {
         },
       });
       await assertOfflineCatalog(session, options.skills ?? []);
-      const response = await session.sendAndWait({ prompt: stimulus.prompt }, options.timeout);
-      adapter.stampConversationTurns();
-      const completedAt = new Date();
-      return {
-        id: randomUUID(), stimulus, events: adapter.events,
-        output: response?.data?.content ?? '', workDir: options.workDir,
-        endReason: 'completed',
-        metadata: {
-          model: adapter.model ?? options.model, executor: this.name,
-          skillsLoaded: adapter.skillsLoaded, sessionID: session.sessionId,
-          startedAt, completedAt,
-        },
-        metrics: {
-          ...computeMetrics(adapter.events),
-          reportedTokenUsage: reportedTokenUsage(usageEvents),
-          wallTimeMs: completedAt.getTime() - startedAt.getTime(),
-        },
+      const trajectory = (endReason, output) => {
+        adapter.stampConversationTurns();
+        const completedAt = new Date();
+        return {
+          id: randomUUID(), stimulus, events: adapter.events,
+          output, workDir: options.workDir, endReason,
+          metadata: {
+            model: adapter.model ?? options.model, executor: this.name,
+            skillsLoaded: adapter.skillsLoaded, sessionID: session.sessionId,
+            startedAt, completedAt,
+          },
+          metrics: {
+            ...computeMetrics(adapter.events),
+            reportedTokenUsage: reportedTokenUsage(usageEvents),
+            wallTimeMs: completedAt.getTime() - startedAt.getTime(),
+          },
+        };
       };
+      let response;
+      try {
+        response = await session.sendAndWait({ prompt: stimulus.prompt }, options.timeout);
+      } catch (error) {
+        // A timed-out turn otherwise leaves only the SDK stack, so evidence cannot
+        // show whether the agent was still working or waiting on a stalled model
+        // response. Attach the events seen so far; the trial is still an error.
+        error.partialTrajectory = trajectory('error', '');
+        throw error;
+      }
+      return trajectory('completed', response?.data?.content ?? '');
     } finally {
       try { await session?.disconnect(); }
       finally {

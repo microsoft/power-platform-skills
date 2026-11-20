@@ -338,3 +338,40 @@ test('a grading exception preserves the completed agent usage in the error summa
     assert.equal(result.judgeUsage.calls, 0);
   }
 });
+
+test('an agent timeout keeps its partial trajectory and usage as private evidence', async t => {
+  const root = await mkdtemp(path.join(tmpdir(), 'pp-agent-timeout-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const [suite] = await loadSuites({ skill: 'setup-auth' });
+  const events = [{ type: 'tool_call', toolName: 'eval_render' }];
+  const executor = {
+    name: 'test-offline', shutdown: async () => {},
+    execute: async () => {
+      const error = new Error('Timeout after 1800000ms waiting for session.idle');
+      error.partialTrajectory = {
+        events, endReason: 'error',
+        metrics: { wallTimeMs: 1_800_000, reportedTokenUsage: {
+          inputTokens: 40, outputTokens: 2, cacheReadTokens: null, cacheWriteTokens: null,
+        } },
+      };
+      throw error;
+    },
+  };
+  const out = path.join(root, 'run');
+  const { summary } = await evaluate({
+    skill: 'setup-auth', case: suite.stimuli[0].name, runs: 1,
+    model: 'test-model', judgeModel: 'test-judge', out,
+  }, {
+    executor, judge: { shutdown: async () => {} },
+    gradeTrajectory: async () => { throw new Error('grading must not run'); },
+  });
+  for (const result of summary.suites[0].results) {
+    assert.equal(result.status, 'error');
+    assert.equal(result.error, 'execution-error');
+    assert.equal(result.tokens, 42);
+    assert.equal(result.durationMs, 1_800_000);
+    const evidence = path.join(out, 'private', 'setup-auth', result.name, `${result.variant}-0`);
+    const saved = JSON.parse(await readFile(path.join(evidence, 'partial-trajectory.json'), 'utf8'));
+    assert.deepEqual(saved.events, events);
+  }
+});

@@ -78,6 +78,13 @@ export function outcomeRecord({ stimulus, variant, trial, trajectory, grade, err
   };
 }
 
+// The offline executor attaches the events seen before a turn timeout. Keeping
+// them is the only way to tell a slow agent from a stalled model response.
+export function errorTrajectory(error) {
+  const partial = error?.partialTrajectory;
+  return partial && Array.isArray(partial.events) ? partial : null;
+}
+
 function trackJudge(judge) {
   const usage = { calls: 0, reportedCalls: 0, inputTokens: 0, outputTokens: 0 };
   return {
@@ -212,9 +219,14 @@ export async function evaluate(options, dependencies = {}) {
               await cp(result.workDir, path.join(evidenceDir, 'workspace'), { recursive: true, dereference: false });
             } catch (error) {
               record = outcomeRecord({
-                stimulus, variant, trial, trajectory: result?.trajectory, error, judgeUsage: trackedJudge.snapshot(),
+                stimulus, variant, trial, trajectory: result?.trajectory ?? errorTrajectory(error), error,
+                judgeUsage: trackedJudge.snapshot(),
               });
               await writeFile(path.join(evidenceDir, 'error.txt'), error.stack ?? String(error));
+              const partial = errorTrajectory(error);
+              if (partial) {
+                await writeFile(path.join(evidenceDir, 'partial-trajectory.json'), JSON.stringify(partial, null, 2));
+              }
               console.error(`${id}: execution/grading error; see private evidence`);
             } finally {
               await result?.cleanup();
