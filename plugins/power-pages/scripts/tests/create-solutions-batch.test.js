@@ -381,10 +381,7 @@ test('createSolutionsBatch surfaces failure when the post-refresh retry also fai
   assert.match(result.results[0].error, /HTTP 500.*server_error/);
   assert.equal(result.results[0].diagnostics.originalError.statusCode, 401);
   assert.equal(result.results[0].diagnostics.originalError.responseCode, 'invalid_token');
-  assert.equal(
-    result.results[0].diagnostics.originalError.responseMessage,
-    'token audience mismatch; Authorization: Bearer [REDACTED] [URL]'
-  );
+  assert.equal(result.results[0].diagnostics.originalError.responseMessage, undefined);
   assert.equal(result.results[0].diagnostics.retryError.statusCode, 500);
   assert.equal(result.results[0].diagnostics.retryError.responseCode, 'server_error');
   assert.doesNotMatch(JSON.stringify(result.results[0]), /response-secret|https:\/\/contoso\.example/);
@@ -402,8 +399,7 @@ test('createSolutionsBatch preserves refresh error code and cause after a 401', 
 
   const cause = Object.assign(
     new Error(
-      'refresh transport failed; Bearer refresh-secret ' +
-      'https://contoso.example/refresh?access_token=refresh-secret ' + 'x'.repeat(500)
+      'refresh transport failed; ' + 'x'.repeat(500)
     ),
     { code: 'ECONNRESET' }
   );
@@ -428,6 +424,44 @@ test('createSolutionsBatch preserves refresh error code and cause after a 401', 
   assert.match(diagnostic.cause.message, /refresh transport failed/);
   assert.doesNotMatch(JSON.stringify(diagnostic), /refresh-secret|https:\/\/contoso\.example/);
   assert.ok(diagnostic.cause.message.length <= 300);
+});
+
+test('createSolutionsBatch omits error messages containing quoted credentials', async (t) => {
+  const orig = helpers.makeRequest;
+  let createCalls = 0;
+  helpers.makeRequest = async ({ method, url }) => {
+    if (method === 'POST' && url.endsWith('/api/data/v9.2/solutions')) {
+      createCalls += 1;
+      if (createCalls === 1) {
+        return {
+          statusCode: 401,
+          body: JSON.stringify({
+            error: 'invalid_token',
+            error_description:
+              '{\\"client_secret\\":\\"sentinel-secret\\"}; Authorization: Basic basic-secret',
+          }),
+          headers: {},
+        };
+      }
+      return { statusCode: 500, body: '{"error":"server_error"}', headers: {} };
+    }
+    return { statusCode: 500, body: '{}', headers: {} };
+  };
+  t.after(() => { helpers.makeRequest = orig; });
+
+  const result = await createSolutionsBatch({
+    envUrl: 'https://x.crm.dynamics.com',
+    publisherId: 'pub-001',
+    token: 'stale',
+    refreshToken: () => 'fresh',
+    specs: [
+      { uniqueName: 'Site_Bad', friendlyName: 'Site — Bad', version: '1.0.0.0' },
+    ],
+  });
+
+  assert.equal(result.failed, 1);
+  assert.equal(result.results[0].diagnostics.originalError.responseMessage, undefined);
+  assert.doesNotMatch(JSON.stringify(result.results[0]), /sentinel-secret|basic-secret/);
 });
 
 // --- parallelism check ------------------------------------------------------

@@ -75,14 +75,15 @@ function isAuthFailure(err) {
 
 function sanitizeDiagnosticText(value) {
   if (typeof value !== 'string') return null;
+  // Error text is loosely structured; omit messages with credential markers rather
+  // than risk leaking values in quoted, escaped, or otherwise unrecognized forms.
+  const containsCredentialMarker =
+    /\b(?:access[_-]?token|refresh[_-]?token|client[_-]?secret|authorization|password)\b|\b(?:bearer|basic)\s+\S+/i
+      .test(value);
+  if (containsCredentialMarker) {
+    return null;
+  }
   const sanitized = value
-    .replace(/Bearer\s+\S+/gi, 'Bearer [REDACTED]')
-    .replace(
-      /\b(access[_-]?token|refresh[_-]?token|client[_-]?secret|authorization|password)\s*[:=]\s*([^\s&,]+)/gi,
-      (match, key, value) => value.toLowerCase() === 'bearer'
-        ? `${key}${match.includes(':') ? ':' : '='} ${value}`
-        : `${key}=[REDACTED]`
-    )
     .replace(/https?:\/\/[^\s"'<>]+/gi, '[URL]')
     .replace(/[\r\n\t]+/g, ' ')
     .slice(0, MAX_DIAGNOSTIC_TEXT_LENGTH);
