@@ -120,7 +120,7 @@ Required sections:
 - `## Project` (for app name + description)
 - `## Screens` → `### Screen Map` (so we know what to render)
 
-If `## Screens` is missing the plan hasn't reached Gate 4 yet. STOP with: `BLOCKED: native-app-plan.md has no ## Screens section. Run /create-mobile-app at least through Gate 4 first.`
+If `## Screens` is missing the plan hasn't passed the screen graph gate (Gate 3 in the data-model-first order) yet. STOP with: `BLOCKED: native-app-plan.md has no ## Screens section. Run /create-mobile-app at least through the screen graph gate first.`
 
 **Pick the representative screen** to render in the 3-up. Heuristic, in order:
 
@@ -434,7 +434,7 @@ The caller uses these dimensions to write `brand/design-system.md` at Sub-step 3
 
 > Design direction picked: <Inspection|SaaS|Product|Hybrid>. Block written to `<working_dir>/native-app-plan.md` § Design Direction. Preview kept at `<working_dir>/_design_vibe.html` for reference.
 
-If invoked from `/create-mobile-app` Gate 4, the orchestrator continues with screen-builder fan-out using the new direction.
+If invoked from `/create-mobile-app` Step 9 (screens first), the orchestrator applies the resulting tokens to the running app, so the live preview restyles; screens are not rebuilt. In the data-model-first order the orchestrator continues with screen-builder fan-out using the new direction.
 
 ---
 
@@ -446,14 +446,14 @@ This skill's only side-effect on shared state is **one block** written into `nat
 - `agents/screen-builder.md` — if `## Design Direction` exists, read `list_style`, `motion`, `tone`, `primary_action_shape` and apply them when choosing row/component patterns from the user's screen spec. Samples remain code/API references only. Otherwise use today's defaults.
 
 If this skill folder is removed:
-1. The orchestrator's Gate 4 falls back to its existing single-preview flow (no `## Design Direction` block ever gets written)
+1. The orchestrator keeps the template's default theme in the screens-first order, and the data-model-first order falls back to its existing single-preview flow (no `## Design Direction` block ever gets written)
 2. screen-planner and screen-builder's `if (block exists)` conditions evaluate false → behave exactly as today
 3. No other file change required
 
 ## Notes
 
 - **Read-only with respect to source code.** This skill writes only `_design_vibe.html`, the `## Design Direction` block in `native-app-plan.md`, and one line in `memory-bank.md`. It never touches TSX, configs, or generated services.
-- **Reuses existing infrastructure.** The phone-frame template comes from `shared/references/tamagui-html-mapping.md`; the browser-open chain is the same as `/preview-screens` and `native-app-planner` Gate 4. No new dependencies.
+- **Reuses existing infrastructure.** The phone-frame template comes from `shared/references/tamagui-html-mapping.md`; the browser-open chain is the same as `/preview-screens`. No new dependencies.
 - **Re-runnable.** Each run overwrites `_design_vibe.html` and replaces the `## Design Direction` block. Memory bank entries accumulate so the design history is preserved.
 
 ## References

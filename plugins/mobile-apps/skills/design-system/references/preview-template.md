@@ -135,14 +135,25 @@ Deterministic HTML template for `brand/design-system.html`. **Zero LLM cost** â€
 
     /* Phone frame */
     .phone-frame-container { display: flex; justify-content: center; padding: 32px 0; }
+    /* An iPhone 18 Pro: a 402 x 874 point screen with a 62-point status bar around the Dynamic
+       Island and a 34-point home indicator strip, the same phone the build plan draws. */
     .phone-frame {
-      width: 375px; height: 812px; border-radius: 40px; overflow: hidden;
-      border: 8px solid #1a1a1a; background: var(--bg);
-      box-shadow: 0 20px 60px rgba(0,0,0,0.15);
+      position: relative; box-sizing: content-box;
+      width: 402px; height: 874px; border-radius: 74px; overflow: hidden;
+      border: 12px solid #050506; background: var(--bg);
+      box-shadow: 0 0 0 4px #7d8087, 0 20px 60px rgba(0,0,0,0.15);
+    }
+    .phone-frame::after {
+      content: ""; position: absolute; bottom: 8px; left: 50%; margin-left: -67px;
+      width: 134px; height: 5px; border-radius: 2.5px; background: var(--text);
     }
     .phone-frame .status-bar-mock {
-      height: 44px; display: flex; align-items: center; justify-content: center;
-      font-size: 14px; font-weight: 600;
+      position: relative; height: 62px; display: flex; align-items: center;
+      padding: 0 0 0 62px; font-size: 17px; font-weight: 600;
+    }
+    .phone-frame .status-bar-mock::after {
+      content: ""; position: absolute; top: 11px; left: 50%; margin-left: -41px;
+      width: 82px; height: 37px; border-radius: 18.5px; background: #000;
     }
     .phone-content { padding: 0 16px; }
 

@@ -19,6 +19,7 @@ const {
   validateManifest,
 } = require('../build-dataverse-operation-manifest');
 const { operationFingerprint } = require('../dataverse-request');
+const { createSkillDataModelFirst, createSkillWorkflow } = require('./helpers/create-skill');
 const { loadDetailedEntity } = require('../create-dataverse-snapshot');
 
 const NOW = '2026-08-19T00:00:00.000Z';
@@ -1786,37 +1787,39 @@ test('supplied fast-path failures fail closed while absent handoffs retain Step 
     /structured schema[\s\S]*regenerate the complete aliases[\s\S]*service-required names/,
   );
   assert.match(skill, /--approval-receipt <working_dir>\/\.tmp\/mobile-plan-status\.json/);
-  const createSkill = fs.readFileSync(path.join(
-    __dirname,
-    '../../skills/create-mobile-app/SKILL.md',
-  ), 'utf8');
-  assert.match(
-    createSkill,
-    /foreground planning snapshot[\s\S]*never authorizes a write/,
-  );
-  assert.match(createSkill, /--reconcile-exact/);
-  assert.match(
-    createSkill,
-    /one fresh bounded reconciliation[\s\S]*ordinary typed columns[\s\S]*relationships[\s\S]*alternate keys/,
-  );
-  assert.match(createSkill, /--bind-plan "\$SCHEMA_CONTRACT"/);
-  assert.match(createSkill, /--approval-receipt "\$APPROVAL_RECEIPT"/);
-  assert.match(
-    createSkill,
-    /receipt is missing, STOP as `BLOCKED`[\s\S]*must not synthesize it/,
-  );
-  const planner = fs.readFileSync(path.join(
-    __dirname,
-    '../../agents/native-app-planner.md',
-  ), 'utf8');
-  assert.match(
-    planner,
-    /Approved:[\s\S]*mobile-plan-status\.json[\s\S]*dataModel.*approval record/,
-  );
-  assert.match(
-    planner,
-    /Do not call the manifest builder to create or restamp this receipt/,
-  );
+  // Each build order owns its planner; both must hand the receipt through unchanged.
+  for (const [createSkill, plannerFile] of [
+    [createSkillWorkflow(), 'architecture-planner.md'],
+    [createSkillDataModelFirst(), 'native-app-planner.md'],
+  ]) {
+    assert.match(
+      createSkill,
+      /foreground planning snapshot[\s\S]*never authorizes a write/,
+    );
+    assert.match(createSkill, /--reconcile-exact/);
+    assert.match(
+      createSkill,
+      /one fresh bounded reconciliation[\s\S]*ordinary typed columns[\s\S]*relationships[\s\S]*alternate keys/,
+    );
+    assert.match(createSkill, /--bind-plan "\$SCHEMA_CONTRACT"/);
+    assert.match(createSkill, /--approval-receipt "\$APPROVAL_RECEIPT"/);
+    assert.match(
+      createSkill,
+      /receipt is missing, STOP as `BLOCKED`[\s\S]*must not synthesize it/,
+    );
+    const planner = fs.readFileSync(path.join(
+      __dirname,
+      `../../agents/${plannerFile}`,
+    ), 'utf8');
+    assert.match(
+      planner,
+      /Approved:[\s\S]*mobile-plan-status\.json[\s\S]*dataModel.*approval record/,
+    );
+    assert.match(
+      planner,
+      /Do not call the manifest builder to create or restamp this receipt/,
+    );
+  }
 });
 
 test('publish checkpoint retries PublishXml after schema writes become idempotent', () => {

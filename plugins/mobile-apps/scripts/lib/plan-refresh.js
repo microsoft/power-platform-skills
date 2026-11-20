@@ -39,23 +39,171 @@ function watchPlan(options) {
     message.textContent = 'Auto-refresh off: run finished or stopped.';
     return;
   }
-  if (options.waiting) {
-    message.textContent = 'Auto-refresh paused while waiting for input. Reload the browser after answering.';
-    return;
+
+  var PAUSED_WAITING = 'Auto-refresh paused while waiting for input. Reload the browser after answering.';
+  var PAUSED_UNCHANGED = 'Auto-refresh paused: no new progress. Reload the browser to check or resume.';
+  // About five minutes on the build plan and a minute on the edit plan; only the status line uses it.
+  var LONG_IDLE_CHECKS = 30;
+
+  // Version mode. A file:// page cannot fetch, so it cannot ask whether its own file changed, but
+  // it can load a classic script. Each render writes options.versionFile beside the page:
+  //   window.__planVersion && window.__planVersion("<16 hex>");
+  // and the page loads it on every tick, reloading only when the version differs. A check changes
+  // nothing on screen, so it runs for as long as the page is open: through input gates, where the
+  // page must show the next step once the user answers in the terminal, and through long steps.
+  // Stopping after a run of unchanged checks left the page stale for good once a step took longer
+  // than that, so the long-idle count only changes the status line.
+  // If the file cannot load (a browser that blocks file scripts), the page falls back to the timed
+  // refresh below, which does reload on every tick and so keeps its pause at input gates and its
+  // unchanged-reload budget.
+  var versioned = Boolean(options.versionFile);
+  var stale = !versioned;
+  var stopped = false;
+  var unchangedChecks = 0;
+  // Set once the reader is seen outside this window: another app (the terminal), another tab, or a
+  // hidden page. A reload cannot interrupt a reader who was elsewhere, so the quiet window and the
+  // page's busy signal do not hold it back. It clears when the reader comes back (returned()), or
+  // on the next interaction with the page.
+  var away = false;
+  // Captured now: currentScript is only set while this script first runs, not in later callbacks.
+  var nonce = (document.currentScript && document.currentScript.nonce) || '';
+
+  function stop(text) {
+    stopped = true;
+    message.textContent = text;
   }
-  if (count >= MAX_UNCHANGED_RELOADS) {
-    message.textContent = 'Auto-refresh paused: no new progress. Reload the browser to check or resume.';
-    return;
+
+  function readerElsewhere() {
+    return document.hidden || (typeof document.hasFocus === 'function' && !document.hasFocus());
   }
-  message.textContent = 'Auto-refresh on while progress changes.';
-  ['scroll', 'keydown', 'pointerdown'].forEach(function (event) {
-    window.addEventListener(event, function () { lastInteraction = Date.now(); }, { passive: true });
-  });
-  setInterval(function () {
-    if (Date.now() - lastInteraction < QUIET_MS) return;
-    if (document.hidden) return;
+
+  function touch() {
+    lastInteraction = Date.now();
+    away = false;
+  }
+  // The page reports interactions these listeners cannot see, such as the reader leaving the live
+  // preview frame, whose own events go to that cross-origin frame's document.
+  window.planRefreshTouch = touch;
+
+  function readerBusy() {
+    if (Date.now() - lastInteraction < QUIET_MS) return true;
+    // A page can report that the reader is busy in a way these listeners cannot see. The build
+    // plan does so while the pointer is over the live preview.
+    return typeof window.planRefreshBusy === 'function' && Boolean(window.planRefreshBusy());
+  }
+
+  function tryReload() {
+    if (stopped || !stale || document.hidden) return;
+    if (readerElsewhere()) away = true;
+    if (!away && readerBusy()) return;
     refresh();
+  }
+
+  function fallBack() {
+    versioned = false;
+    stale = true;
+    if (options.waiting) stop(PAUSED_WAITING);
+    else if (count >= MAX_UNCHANGED_RELOADS) stop(PAUSED_UNCHANGED);
+    else message.textContent = 'Auto-refresh on while progress changes.';
+  }
+
+  // `done` runs once the probe has loaded or failed. A classic script runs before its `load`
+  // event, so by then any change it reported has already been handled.
+  function checkVersion(done) {
+    var probe = document.createElement('script');
+    // The nonce lets the probe past this page's CSP, which admits only nonced scripts.
+    if (nonce) probe.setAttribute('nonce', nonce);
+    probe.addEventListener('load', function () {
+      probe.remove();
+      if (done) done();
+    });
+    probe.addEventListener('error', function () {
+      probe.remove();
+      if (versioned) fallBack();
+      if (done) done();
+    });
+    // A fresh URL each time, so a cached copy of the version is never read.
+    probe.src = options.versionFile + '?t=' + Date.now();
+    (document.head || document.body).appendChild(probe);
+  }
+
+  if (versioned) {
+    window.__planVersion = function (version) {
+      if (!versioned || stale) return;
+      if (version !== options.version) {
+        stale = true;
+        // Reload now rather than on the next tick: the change is already on disk.
+        tryReload();
+        return;
+      }
+      unchangedChecks += 1;
+      if (unchangedChecks === LONG_IDLE_CHECKS && !options.waiting) {
+        message.textContent = 'No new progress for a while. Still checking: this page updates when the run continues.';
+      }
+    };
+    message.textContent = options.waiting
+      ? 'Waiting for your input. This page updates when the run continues.'
+      : 'Auto-refresh on: this page updates when the plan changes.';
+    // Ask at once: the plan may have moved on between this render and this page loading.
+    checkVersion();
+  } else {
+    fallBack();
+  }
+  if (stopped) return;
+
+  // `wheel` and `touchmove`, not `scroll`: the page restores the reader's scroll position after
+  // every reload, and that programmatic scroll would count as reading and hold off the next update.
+  ['wheel', 'touchmove', 'keydown', 'pointerdown'].forEach(function (event) {
+    window.addEventListener(event, touch, { passive: true });
+  });
+  // Coming back to the page is when the reader wants it current: check at once instead of on the
+  // next tick, and reload straight away if the plan moved on while they were elsewhere. Only after
+  // that pending update does `away` clear. A reader can come back straight into the live preview
+  // frame, whose clicks and keys go to that cross-origin frame's document and never reach these
+  // listeners; if `away` stayed set, the next change would skip the busy checks and reload the
+  // preview while they use it, losing what they had typed.
+  function returned() {
+    if (document.hidden || readerElsewhere()) return;
+    var settle = function () { away = false; };
+    if (versioned && !stale) checkVersion(settle);
+    else {
+      tryReload();
+      settle();
+    }
+  }
+  document.addEventListener('visibilitychange', returned);
+  window.addEventListener('focus', returned);
+
+  setInterval(function () {
+    if (stopped) return;
+    if (readerElsewhere()) away = true;
+    else if (away) {
+      // Back without a focus or visibility event, as when focus returns straight into the frame.
+      returned();
+      return;
+    }
+    if (versioned && !stale) {
+      checkVersion();
+      return;
+    }
+    tryReload();
   }, RELOAD_MS);
+}
+
+/**
+ * The script the page loads to learn the newest version, e.g.
+ *   window.__planVersion && window.__planVersion("9f2c41d07ab35e60");
+ * Written after the page itself, so a reader that sees the new version reloads into the new page.
+ * A file:// page may load a classic script but not fetch, which is why this is JavaScript.
+ */
+function versionScript(version, pageName) {
+  return `// Written on every render. ${pageName} loads it to see if it is stale.\n`
+    + `window.__planVersion && window.__planVersion(${JSON.stringify(version)});\n`;
+}
+
+/** A short stable fingerprint of what a page shows, for the version file. */
+function progressVersion(progress) {
+  return crypto.createHash('sha256').update(JSON.stringify(progress)).digest('hex').slice(0, 16);
 }
 
 function planRefreshScript(progress, options) {
@@ -65,4 +213,4 @@ function planRefreshScript(progress, options) {
   return `(${watchPlan.toString()})(${JSON.stringify({ ...options, progress: marker })});`;
 }
 
-module.exports = { planRefreshScript };
+module.exports = { planRefreshScript, progressVersion, versionScript };

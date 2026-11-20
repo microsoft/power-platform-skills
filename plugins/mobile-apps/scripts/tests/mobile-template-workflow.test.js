@@ -7,11 +7,17 @@ const path = require('node:path');
 const test = require('node:test');
 const { spawnSync } = require('node:child_process');
 const { shellBlocks } = require('./helpers/markdown-shell-blocks');
+const { createSkillEntry } = require('./helpers/create-skill');
 
 const root = path.resolve(__dirname, '../..');
 const read = (file) => fs.readFileSync(path.join(root, file), 'utf8');
 const updates = read('skills/check-updates/SKILL.md');
-const create = read('skills/create-mobile-app/SKILL.md');
+// The router with the branches it includes (template acquisition, creation continuation).
+const create = createSkillEntry();
+// Each build order explains template preparation in its own flow: data model first in its Step 5,
+// screens first in the reference its Step 3.2 points to.
+const preparation = ['data-model-first.md', 'template-preparation.md']
+  .map((file) => [file, read(`skills/create-mobile-app/references/${file}`)]);
 const lifecycle = read('shared/references/mobile-release-lifecycle.md');
 
 test('native updates are evaluated independently of outdated-host discovery', () => {
@@ -152,8 +158,11 @@ test('creation resolves immutable published package metadata before planning or 
   assert.match(create, /Separately approve dependency installation/);
   assert.match(create, /Never run acquisition over a non-empty directory/);
   assert.match(create, /Pass its sanitized compatibility context to every planner\/builder/);
-  assert.match(create, /`app\.json` byte-for-byte/);
-  assert.match(create, /project-rooted aliases/);
+  for (const [file, source] of preparation) {
+    assert.match(source, /`app\.json` byte-for-byte/, file);
+    assert.match(source, /project-rooted aliases/, file);
+    assert.doesNotMatch(source, /Assume the upstream template ships it/, file);
+  }
   assert.doesNotMatch(create, /npx degit|template#main/);
   assert.match(lifecycle, /no plugin-owned release catalogue/);
   assert.match(lifecycle, /host's `compatibility\/current\.json` owns/);

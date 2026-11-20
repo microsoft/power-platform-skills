@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
+const { createSkillDataModelFirst, createSkillWorkflow } = require('./helpers/create-skill');
 
 const pluginRoot = path.resolve(__dirname, '../..');
 const read = (file) => fs.readFileSync(path.join(pluginRoot, file), 'utf8').replace(/\r\n?/g, '\n');
@@ -11,7 +12,7 @@ const skill = (name) => read(`skills/${name}/SKILL.md`);
 const setup = skill('setup-datamodel');
 const seed = skill('add-sample-data');
 const edit = skill('edit-app');
-const create = skill('create-mobile-app');
+const create = createSkillWorkflow();
 
 for (const [eolName, eol] of [['LF', '\n'], ['CRLF', '\r\n']]) {
   test(`every seed Dataverse command forwards the resolved tenant (${eolName})`, () => {
@@ -332,15 +333,17 @@ test('edit passes a seed allowlist and excludes the approved retirement set', ()
 });
 
 test('creation supplies a bounded sample-data handoff too', () => {
-  const seeding = section(create, '### Step 8.5', '### Offline profile');
-  assert.match(seeding, /excluding standard system tables by default/);
-  assert.match(seeding, /If the initial approval\ndid not cover the exact seed set/);
-  assert.match(seeding, /empty or declined scope skips seeding without cloud writes/);
-  assert.match(seeding, /orchestrator: create-mobile-app/);
-  assert.match(seeding, /working_dir: <working_dir>/);
-  assert.match(seeding, /--tables "<approved-seed-table-logical-names>"/);
-  assert.match(seeding, /before per-table discovery/);
-  assert.doesNotMatch(seeding, /not optional/);
+  for (const [flow, step] of [[create, '### Step 12.5'], [createSkillDataModelFirst(), '### Step 8.5']]) {
+    const seeding = section(flow, step, '### Offline profile');
+    assert.match(seeding, /excluding standard system tables by default/);
+    assert.match(seeding, /If the initial approval\ndid not cover the exact seed set/);
+    assert.match(seeding, /empty or declined scope skips seeding without cloud writes/);
+    assert.match(seeding, /orchestrator: create-mobile-app/);
+    assert.match(seeding, /working_dir: <working_dir>/);
+    assert.match(seeding, /--tables "<approved-seed-table-logical-names>"/);
+    assert.match(seeding, /before per-table discovery/);
+    assert.doesNotMatch(seeding, /not optional/);
+  }
 });
 
 test('manual post-Dataverse seeding does not replay the project inventory or auto-approve', () => {

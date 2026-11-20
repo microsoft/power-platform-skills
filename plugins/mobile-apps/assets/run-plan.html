@@ -18,10 +18,16 @@
     `style=` attributes, and Mermaid injects stylesheets. Inline CSS cannot execute.
   - `img-src data:` only - the brand mark and the QR are both inlined, so no image is ever
     fetched, and an injected `<img src=...>` cannot call out.
-  - No `connect-src`, `frame-src` or `object-src`: the plan never talks to the network.
-    The phone uses an inline `srcdoc` document, not a fetched frame.
+  - No `connect-src` or `object-src`: the plan itself never talks to the network. The mockup
+    carousel uses an inline `srcdoc` document, not a fetched frame.
+  - `frame-src` is the one exception, and it is loopback-only: the live stage frames the app
+    served on loopback by the dev server the skill started (`npm run dev`), for example
+    `http://localhost:8082`. Only `http://localhost:*` and `http://127.0.0.1:*` are named, so an
+    injected frame cannot load remote content. `app-docs.js` (normalizePreviewUrl) refuses any
+    other URL before it reaches this page, and the page checks it again before drawing the frame.
+    https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Content-Security-Policy/frame-src
 -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-__ATTR_CSP_NONCE__'; style-src 'unsafe-inline'; img-src data:; font-src data:; base-uri 'none'; form-action 'none'"/>
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-__ATTR_CSP_NONCE__'; style-src 'unsafe-inline'; img-src data:; font-src data:; frame-src http://localhost:* http://127.0.0.1:*; base-uri 'none'; form-action 'none'"/>
 <title>__PLAN_TITLE__ - __APP_NAME__</title>
 <!--
   Mermaid is pinned to an exact version and checked against a hash of its bytes.
@@ -81,10 +87,9 @@ body{font-family:var(--sans);background:var(--bg);color:var(--text);font-size:14
    stage adds the link and store row, so a budget sized for the building stage pushes the label
    under the topbar and the store row behind the footer on a 720px-tall window. Below 360px the
    phone stops shrinking and the rail scrolls, because a smaller phone cannot show the QR copy. */
-.device{flex:0 1 620px;min-height:360px;max-height:620px;width:auto;max-width:calc(100vw - 44px);aspect-ratio:300/620;border-radius:40px;background:#1f1f1f;border:9px solid #2e2e2e;box-shadow:var(--shadow-4),0 18px 46px rgba(0,0,0,0.22);position:relative;overflow:hidden;}
-.device-notch{position:absolute;top:0;left:50%;transform:translateX(-50%);width:118px;height:22px;background:#2e2e2e;border-radius:0 0 14px 14px;z-index:5;}
-.device-screen{position:absolute;inset:0;background:#faf9f8;overflow:hidden;container-type:size;}
-.device-screen iframe{border:0;}
+/* The phone: an iPhone 18 Pro shell from scripts/lib/phone-shell.js, shared with the edit page.
+   Its sizes are the screen's; the bezel sits outside them. */
+__RAW_PHONE_SHELL_CSS__
 /* Stage 1 - building */
 .bld{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:22px;background:#faf9f8;padding:0 28px;text-align:center;}
 .bld-orbit{position:relative;width:132px;height:132px;display:grid;place-items:center;}
@@ -104,29 +109,35 @@ body{font-family:var(--sans);background:var(--bg);color:var(--text);font-size:14
 @keyframes railFade{to{opacity:1;}}
 /* Stage 2 - carousel */
 .car{position:absolute;inset:0;background:#fff;}
-.car-frame{position:absolute;inset:0;overflow:hidden;contain:layout paint;}
-/* A 375 x 812 viewport is scaled, not reflowed into the smaller rail. Its sandboxed document
-   keeps mockup selectors, media queries, and fixed tab bars independent of the plan.
+/* The mockup is drawn into the phone's app area (.device-app) as a scaled, sandboxed document, so
+   its selectors, media queries, and fixed tab bars stay independent of the plan.
    https://developer.mozilla.org/en-US/docs/Web/HTML/Element/iframe#sandbox */
-.car-frame iframe{position:absolute;width:375px;height:812px;transform-origin:top left;}
 .car-nav{width:300px;display:flex;align-items:center;justify-content:space-between;gap:8px;}
 .car-btn{width:30px;height:30px;border-radius:50%;border:1px solid var(--border);background:var(--surface);color:var(--text-bright);font-size:15px;cursor:pointer;display:grid;place-items:center;box-shadow:var(--shadow-4);}
 .car-btn:disabled{opacity:.35;cursor:default;}
 .car-dots{display:flex;gap:5px;}
 .car-dot{width:6px;height:6px;border-radius:50%;background:var(--border-light);}
 .car-dot.on{background:var(--accent);}
+/* Live stage - the running app from the local Expo web server, in the same app area as the
+   mockups. A browser reports zero safe-area insets, so the app would draw its header under the
+   Dynamic Island and its tab bar under the home indicator; the app area keeps it between them, as
+   the phone's own insets would. The strips around it take the app's likely background: the app
+   follows the browser's colour scheme (useColorScheme), and so does this. */
+.live{position:absolute;inset:0;background:#fff;}
+@media (prefers-color-scheme:dark){.live{background:#000;}}
 .rail-caption{font-size:12px;color:var(--text-dim);text-align:center;min-height:32px;padding:0 10px;}
 /* Stage 3 - QR */
 /* On a short window the phone shrinks (see .device), so the QR screen must fit a smaller frame:
-   the code gives up height first, the content clears the notch, and the copy tightens when the
-   phone is short. Without this the code slides under the notch and the Metro URL is cut off. */
-.qr{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:safe center;gap:16px;background:#fff;padding:30px 22px 18px;text-align:center;}
+   the code gives up height first, the content clears the status bar and home indicator, and the
+   copy tightens when the phone is short. Without this the code slides under the Dynamic Island
+   and the Metro URL is cut off. */
+.qr{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:safe center;gap:16px;background:#fff;padding:calc(var(--device-status-bar) + 8px) 22px calc(var(--device-home-bar) + 8px);text-align:center;}
 .qr img{flex:0 1 196px;min-height:84px;max-height:196px;width:auto;max-width:100%;aspect-ratio:1/1;object-fit:contain;}
 .qr-title{font-size:16px;font-weight:700;color:#201f1e;}
 .qr-sub{font-size:12.5px;color:#605e5c;line-height:1.55;}
 .qr-url{font-family:var(--mono);font-size:11px;color:#0078d4;word-break:break-all;}
-@container (max-height:520px){.qr{gap:8px;padding:28px 12px 14px;}.qr-title{font-size:14px;}.qr-sub{font-size:11px;line-height:1.4;}.qr-url{font-size:10px;}}
-@media(max-width:1180px){.shell{flex-direction:column;}.rail{width:100%;position:static;height:auto;border-left:none;border-top:1px solid var(--border);}.device{flex:none;height:auto;width:min(300px,calc(100vw - 44px));}}
+@container (max-height:520px){.qr{gap:8px;padding:calc(var(--device-status-bar) + 4px) 12px calc(var(--device-home-bar) + 4px);}.qr-title{font-size:14px;}.qr-sub{font-size:11px;line-height:1.4;}.qr-url{font-size:10px;}}
+@media(max-width:1180px){.shell{flex-direction:column;}.rail{width:100%;position:static;height:auto;border-left:none;border-top:1px solid var(--border);}.device{flex:none;height:auto;min-height:0;max-height:none;width:min(286px,calc(100vw - 72px));}}
 .sidebar{width:240px;background:var(--surface);border-right:1px solid var(--border);padding:20px 0;flex-shrink:0;}
 .nav-group-label{font-size:10px;font-weight:700;color:var(--text-dim);text-transform:uppercase;letter-spacing:1.2px;padding:16px 22px 6px;}
 .nav-btn{display:flex;align-items:center;gap:10px;width:100%;padding:11px 22px;background:none;border:none;border-left:2px solid transparent;color:var(--text-dim);font-size:13px;font-weight:500;cursor:pointer;font-family:var(--sans);text-align:left;transition:all 0.15s;}
@@ -211,6 +222,9 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
   border-radius:999px;font-size:13.5px;max-width:min(380px,calc(100vw - 48px));
   box-shadow:0 6px 20px rgba(0,0,0,.12);background-color:#fff8f2;}
 .input-banner[hidden]{display:none;}
+/* While the phone rail is a side column, keep the banner over the plan instead of the phone: the
+   preview gate raises it exactly when the user needs to use the live app. */
+@media(min-width:1181px){.input-banner{right:454px;}}
 .input-banner-icon{font-size:11px;flex-shrink:0;animation:bannerPulse 1.6s ease-in-out infinite;}
 .input-banner-text{line-height:1.35;flex:1;min-width:0;}
 .input-banner-text b{display:block;font-weight:650;}
@@ -235,6 +249,18 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
 .rail-link{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;color:var(--accent);
   text-decoration:none;padding:6px 12px;border-radius:999px;border:1px solid transparent;}
 .rail-link:hover{border-color:var(--accent-border);background:var(--accent-bg);}
+/* The QR under the live phone: compact and horizontal, so the phone above it gives up as little
+   height as possible on a short window. */
+.rail-qr{display:flex;align-items:center;gap:12px;width:300px;max-width:100%;padding:10px 12px;
+  border:1px solid var(--border);border-radius:var(--radius);background:var(--surface);text-align:left;}
+.rail-qr img{width:76px;height:76px;flex-shrink:0;image-rendering:pixelated;display:block;}
+.rail-qr-full{flex-shrink:0;}
+.rail-qr-copy{min-width:0;}
+.rail-qr-title{font-size:12.5px;font-weight:650;color:var(--text-bright);}
+.rail-qr-sub{font-size:11.5px;color:var(--text-dim);line-height:1.4;margin-top:2px;}
+.rail-qr-stores{font-size:11.5px;margin-top:4px;color:var(--text-dim);}
+.rail-qr-stores a{color:var(--accent);text-decoration:none;}
+.rail-qr-stores a:hover{text-decoration:underline;}
 .plan-doc{display:inline-flex;align-items:center;gap:8px;margin-bottom:14px;padding:8px 14px;
   background:var(--surface);border:1px solid var(--border);border-radius:999px;
   font-size:13px;color:var(--accent);text-decoration:none;box-shadow:var(--shadow-4);}
@@ -407,7 +433,7 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
 
     <div class="section" id="tab-datamodel">
       <h2>Data model</h2>
-      <div class="section-desc">Tables approved at Gate 2, and how each one was sourced.</div>
+      <div class="section-desc">Tables approved at the data model gate, and how each one was sourced.</div>
 
       <div id="approval-datamodel"></div>
       <div class="stats-grid">
@@ -449,7 +475,7 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
 
     <div class="section" id="tab-screens">
       <h2>Screens</h2>
-      <div class="section-desc">The screen graph approved at Gate 3 and the per-screen specs from Gate 4.</div>
+      <div class="section-desc">The screen graph approved at the screen graph gate, and the per-screen specs built from it.</div>
       <div id="approval-screens"></div>
       <div id="screensPlanDoc"></div>
       <div id="graphContainer"></div>
@@ -502,10 +528,7 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
 
 <aside class="rail">
   <div class="rail-title" id="railTitle">Your app</div>
-  <div class="device">
-    <div class="device-notch"></div>
-    <div class="device-screen" id="deviceScreen"></div>
-  </div>
+  __RAW_PHONE_SHELL__
   <div id="railControls" hidden></div>
   <div class="rail-caption" id="railCaption"></div>
   <div class="rail-note" id="railNote" hidden></div>
@@ -529,6 +552,10 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
   // Code-owned, substituted at render time; never plan data.
   var brandIcon = document.getElementById('brandLogo').getAttribute('src') || '';
   var capabilities = __JSON_CAPABILITIES__;
+  // The phone's app area in points, between its status bar and home indicator (phone-shell.js).
+  var APP_AREA = __JSON_PHONE_APP_AREA__;
+  // The user's display name; JSON-encoded at render time and only ever used as text.
+  var appName = __JSON_APP_NAME__;
 
   var STATUS_CLASS = {
     done: 'is-done', active: 'is-active', failed: 'is-failed',
@@ -765,20 +792,68 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
     if (!container) return;
     container.textContent = '';
 
-    function add(href, label) {
+    function add(href, label, rel) {
       if (!href) return;
       var link = el('a', 'rail-link', label);
       link.setAttribute('href', href);
       link.setAttribute('target', '_blank');
-      link.setAttribute('rel', 'noopener');
+      link.setAttribute('rel', rel || 'noopener');
       container.appendChild(link);
     }
 
+    // The phone draws the live app at phone width; a tab gives it the whole window and the
+    // browser's dev tools. noreferrer as well as noopener: it is a different origin from this
+    // page, and the plan's own path is nothing the app needs to see.
+    var live = phone.stage === 'live' && isLoopbackPreview(phone.previewUrl);
+    if (live) {
+      add(phone.previewUrl, 'Open the live preview in a browser tab \u2197', 'noopener noreferrer');
+    }
+    // From the preview gate the dev server that feeds the phone frame also serves the app to a
+    // real phone, so the code is offered while the browser preview is still showing. It sits
+    // under the frame, small, because the frame is what the user is reviewing; Step 14 moves the
+    // code into the frame once the app needs a signed-in host. Only an inlined PNG is drawn: the
+    // page's CSP admits data: images and nothing else.
+    var liveQr = live && isQrImage(phone.qrImage);
+    if (liveQr) {
+      var card = el('div', 'rail-qr');
+      var code = document.createElement('img');
+      code.src = phone.qrImage;
+      code.alt = 'Metro QR code';
+      // The code is the full-size link here, so the rail needs no separate link row: on a short
+      // window that row would land behind the footer.
+      if (phone.qrHref) {
+        var full = el('a', 'rail-qr-full');
+        full.setAttribute('href', phone.qrHref);
+        full.setAttribute('target', '_blank');
+        full.setAttribute('rel', 'noopener');
+        full.setAttribute('title', 'Open QR code full size');
+        full.appendChild(code);
+        card.appendChild(full);
+      } else {
+        card.appendChild(code);
+      }
+      var copy = el('div', 'rail-qr-copy');
+      copy.appendChild(el('div', 'rail-qr-title', 'Try it on your phone'));
+      copy.appendChild(el('div', 'rail-qr-sub',
+        'Scan with Power Apps Mobile Preview, on the same network as this machine.'));
+      var get = el('div', 'rail-qr-stores');
+      STORE_LINKS.forEach(function (store, index) {
+        if (index) get.appendChild(document.createTextNode(' \u00b7 '));
+        var link = el('a', null, store.name);
+        link.setAttribute('href', store.href);
+        link.setAttribute('target', '_blank');
+        link.setAttribute('rel', 'noopener noreferrer');
+        get.appendChild(link);
+      });
+      copy.appendChild(get);
+      card.appendChild(copy);
+      container.appendChild(card);
+    }
     add(phone.previewHref || summary.screenPreviewHref, 'Open screens full size \u2197');
     // The QR is already drawn in the phone; this is for scanning it larger, and it links the
     // PNG rather than the inlined data URI because browsers block top-level navigation to a
     // data: URL. It drops away once `.expo/` is cleaned, leaving the inlined copy.
-    add(phone.qrHref, 'Open QR code full size \u2197');
+    if (!liveQr) add(phone.qrHref, 'Open QR code full size \u2197');
 
     // The QR stage is the end of the run, and a code is useless without the app that reads it.
     // Only shown here: offering a store download while the app is still being generated would
@@ -884,7 +959,7 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
       selected.removeAttribute('hidden');
       selected.style.setProperty('display', 'flex', 'important');
       // Preserve ancestor classes and inline tokens, but leave out the gallery's tabs, labels,
-      // notch and home indicator: the plan already supplies its own phone shell.
+      // status bar and home indicator: the plan already supplies its own phone shell.
       for (var ancestor = entry.parentElement; ancestor && ancestor !== source.body; ancestor = ancestor.parentElement) {
         var wrapper = ancestor.cloneNode(false);
         wrapper.appendChild(selected);
@@ -894,8 +969,10 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
       root.appendChild(head);
       root.appendChild(body);
       var reset = document.createElement('style');
-      reset.textContent = 'html,body{width:100%;height:100%;margin:0!important;padding:0!important;min-height:0!important;overflow:hidden;}'
-        + '.phone{width:100%!important;height:100%!important;margin:0!important;padding:0!important;border:0!important;border-radius:0!important;box-shadow:none!important;}'
+      // The gallery's page and phone backgrounds are dark. Scaled into the phone, the frame's last
+      // partial pixel row samples them and draws a grey rule under the screen, so they go too.
+      reset.textContent = 'html,body{width:100%;height:100%;margin:0!important;padding:0!important;min-height:0!important;overflow:hidden;background:transparent!important;}'
+        + '.phone{width:100%!important;height:100%!important;margin:0!important;padding:0!important;border:0!important;border-radius:0!important;box-shadow:none!important;background:transparent!important;}'
         + '.screen-wrap{border-radius:0!important;}';
       head.appendChild(reset);
       var tab = tabs.find(function (button) { return button.getAttribute('data-screen') === entry.id; });
@@ -915,10 +992,58 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
     return '<!DOCTYPE html>' + source.documentElement.outerHTML;
   }
 
+  /**
+   * Re-check the live-preview URL before it becomes a frame `src`.
+   *
+   * `app-docs.js` already refuses anything but the local Expo web server, and the CSP `frame-src`
+   * names only the two loopback hosts. This is the third line, so a plan state edited by hand or
+   * written by a future bug still cannot frame something else. A prefix test is not enough:
+   * `http://localhost:8082@example.com/` starts with `http://localhost:`, but everything before
+   * the `@` is userinfo and its host is example.com. So the port must be followed by `/` or the
+   * end of the string, which leaves no room for userinfo, and a query or fragment is refused as
+   * normalizePreviewUrl refuses them.
+   * https://url.spec.whatwg.org/#concept-basic-url-parser
+   */
+  function isLoopbackPreview(url) {
+    return typeof url === 'string'
+      && /^http:\/\/(?:localhost|127\.0\.0\.1):\d{1,5}(?:\/[^\s?#\\]*)?$/.test(url);
+  }
+
+  function isQrImage(value) {
+    return typeof value === 'string' && value.indexOf('data:image/png;base64,') === 0;
+  }
+
+  /**
+   * Scale the phone's app area into the device screen instead of reflowing it into the narrower
+   * rail. The carousel and the live preview both use it, so a mockup and the running app are laid
+   * out at the same phone width. Mockups are drawn for exactly the app area, so they keep that
+   * size and are letterboxed if the box ever differs. `fillHeight` gives the running app whatever
+   * height fills the box, as a real phone of another size would.
+   */
+  function fitViewport(box, viewport, fillHeight) {
+    var fit = function () {
+      var height = fillHeight ? box.clientHeight * APP_AREA.width / box.clientWidth : APP_AREA.height;
+      var scale = Math.min(box.clientWidth / APP_AREA.width, box.clientHeight / height);
+      viewport.style.height = height + 'px';
+      viewport.style.transform = 'scale(' + scale + ')';
+      viewport.style.left = (box.clientWidth - APP_AREA.width * scale) / 2 + 'px';
+      viewport.style.top = (box.clientHeight - height * scale) / 2 + 'px';
+    };
+    fit();
+    window.addEventListener('resize', fit);
+    if (typeof ResizeObserver !== 'undefined') new ResizeObserver(fit).observe(box);
+  }
+
+  // The live preview's frame, once drawn. The reload guard at the bottom of the page watches it.
+  var liveFrame = null;
+
   function renderPhone() {
     if (phone.stage === 'screens' && phone.previewHtml) phone.screens = previewScreens(phone.previewHtml);
     railPreviewLink();
     var screen = document.getElementById('deviceScreen');
+    var showsLive = phone.stage === 'live' && isLoopbackPreview(phone.previewUrl);
+    // The status bar's ink: dark on every light stage, and the running app's own scheme when live.
+    document.getElementById('device').setAttribute('data-tone', showsLive ? 'system' : 'light');
     var title = document.getElementById('railTitle');
     var caption = document.getElementById('railCaption');
     var controls = document.getElementById('railControls');
@@ -949,11 +1074,37 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
       return;
     }
 
+    // An unchecked URL falls through to the building animation rather than drawing a frame.
+    if (showsLive) {
+      title.textContent = 'Live preview';
+      var live = el('div', 'live');
+      var liveBox = el('div', 'device-app');
+      liveFrame = document.createElement('iframe');
+      // allow-scripts: this is the real app, and it is nothing without its JavaScript.
+      // allow-same-origin: normally unsafe beside allow-scripts, because a same-origin frame can
+      // remove its own sandbox. Here the frame is cross-origin to this file:// page, so it keeps
+      // its own http://localhost origin and still cannot reach the plan. Without it the frame
+      // gets an opaque origin and loses localStorage, IndexedDB and cookies, which Expo web and
+      // its sign-in rely on.
+      // allow-forms and allow-popups: the app's forms submit, and sign-in may open a window.
+      // https://developer.mozilla.org/en-US/docs/Web/HTML/Element/iframe#sandbox
+      liveFrame.setAttribute('sandbox', 'allow-scripts allow-same-origin allow-forms allow-popups');
+      liveFrame.setAttribute('referrerpolicy', 'no-referrer');
+      liveFrame.setAttribute('title', 'Live preview of ' + appName);
+      liveFrame.setAttribute('src', phone.previewUrl);
+      liveBox.appendChild(liveFrame);
+      live.appendChild(liveBox);
+      screen.appendChild(live);
+      fitViewport(liveBox, liveFrame, true);
+      caption.textContent = 'Sample data. Edits hot-reload here.';
+      return;
+    }
+
     if (phone.stage === 'screens' && phone.screens && phone.screens.length) {
       title.textContent = 'Your screens';
       var index = 0;
       var car = el('div', 'car');
-      var frame = el('div', 'car-frame');
+      var frame = el('div', 'device-app');
       var viewport = document.createElement('iframe');
       viewport.setAttribute('sandbox', '');
       viewport.setAttribute('referrerpolicy', 'no-referrer');
@@ -969,16 +1120,7 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
       screen.appendChild(car);
       controls.appendChild(nav);
       controls.hidden = false;
-
-      var fit = function () {
-        var scale = Math.min(frame.clientWidth / 375, frame.clientHeight / 812);
-        viewport.style.transform = 'scale(' + scale + ')';
-        viewport.style.left = (frame.clientWidth - 375 * scale) / 2 + 'px';
-        viewport.style.top = (frame.clientHeight - 812 * scale) / 2 + 'px';
-      };
-      fit();
-      window.addEventListener('resize', fit);
-      if (typeof ResizeObserver !== 'undefined') new ResizeObserver(fit).observe(frame);
+      fitViewport(frame, viewport);
 
       var show = function (i) {
         index = Math.max(0, Math.min(phone.screens.length - 1, i));
@@ -1031,7 +1173,16 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
     });
     bld.appendChild(caps);
     screen.appendChild(bld);
-    caption.textContent = 'Your screens appear here once the design is locked.';
+    // A recorded preview address on the `building` stage means the preview has already run and
+    // the app is now connecting real data with no QR code to show yet (the dev server found no
+    // LAN address, so the phone app waits for the dev server step). The browser frame has no
+    // signed-in Power Apps host, so the wired app would only show errors there, and nothing frames
+    // or links it; the caption says what comes next instead. Plans from older runs, which stopped the
+    // server at Step 14, land here as well. A `live` stage whose address failed the page check lands here too,
+    // and keeps the default caption.
+    caption.textContent = phone.stage === 'building' && phone.previewUrl
+      ? 'Connecting real data. The QR code to open the app on your phone appears here next.'
+      : 'A live preview of your app appears here once its screens are built.';
   }
 
   /**
@@ -1539,7 +1690,7 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
     var items = screens.list || [];
     renderMermaid('graphContainer',
       items.length ? buildScreenGraph(items, screens.navigation) : '',
-      'The screen graph will appear here after Gate 3.');
+      'The screen graph will appear here after the screen graph gate.');
 
     var container = document.getElementById('screensContainer');
     container.textContent = '';
@@ -1694,8 +1845,9 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
   }
 
   function renderTrust() {
-    // The trust report is drafted at Gate 1 and finalised at Step 10, but no gate puts it to the
-    // user, so the default wording would send them to the terminal for a prompt that never comes.
+    // The trust report is drafted at the architecture gate and finalised once the capabilities
+    // are wired (Step 13), but no gate puts it to the user, so the default wording would send
+    // them to the terminal for a prompt that never comes.
     approvalBanner('approval-trust', 'trust',
       'Draft - written from the approved plan, and finalised once the capabilities are wired');
     var trust = sections.trust || {};
@@ -1869,6 +2021,30 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
     });
   });
 
+  // The live preview is a cross-origin frame, so the clicks, keys and scrolls a reader makes
+  // inside it go to that frame's document and never reach the refresh controller's listeners.
+  // Without this, someone trying out their app would have it reset under them by the next
+  // reload. Pointer entry is the one signal that crosses the frame boundary, so the page is busy
+  // while the pointer is over the frame, and leaving counts as an interaction, so a reload still
+  // waits the quiet window after the reader is done. Keyboard focus does not count: it stays in the
+  // frame after the reader goes to the terminal to answer, and counting it held off every update
+  // until the browser was reloaded by hand.
+  var pointerInPreview = false;
+  function touched() {
+    if (typeof window.planRefreshTouch === 'function') window.planRefreshTouch();
+  }
+  if (liveFrame) {
+    liveFrame.addEventListener('pointerenter', function () {
+      pointerInPreview = true;
+      touched();
+    });
+    liveFrame.addEventListener('pointerleave', function () {
+      pointerInPreview = false;
+      touched();
+    });
+  }
+  window.planRefreshBusy = function () { return pointerInPreview; };
+
   window.addEventListener('beforeunload', function () {
     try { sessionStorage.setItem(STORE_SCROLL, String(window.scrollY)); } catch (e) { /* ignore */ }
   });
@@ -1879,7 +2055,6 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
     var savedScroll = Number(sessionStorage.getItem(STORE_SCROLL) || 0);
     if (savedScroll > 0) window.scrollTo(0, savedScroll);
   } catch (e) { /* sessionStorage unavailable; first-tab default is fine */ }
-
 })();
 </script>
 <script nonce="__ATTR_CSP_NONCE__" id="planRefreshScript">__RAW_AUTO_REFRESH__</script>

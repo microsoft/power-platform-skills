@@ -210,10 +210,13 @@ Use this as the outer shell for the generated `preview.html`. Replace `{{APP_NAM
   }
   .dark-toggle:hover { border-color: #888; color: #fff; }
 
-  /* Phone frame */
-  .phone { width: 375px; height: 812px; margin: 0 auto; background: #000; border-radius: 44px; padding: 14px; box-shadow: 0 20px 60px rgba(0,0,0,0.5); }
-  .screen-wrap { width: 100%; height: 100%; background: var(--background); border-radius: 34px; overflow: hidden; display: flex; flex-direction: column; }
-  .notch { width: 120px; height: 28px; background: #000; border-radius: 0 0 16px 16px; margin: 0 auto; flex-shrink: 0; }
+  /* Phone frame: an iPhone 18 Pro, a 402 x 874 point screen. The build plan draws the same phone
+     (scripts/lib/phone-shell.js) and shows each .screen in its 402 x 778 app area, between the
+     62-point status bar and the 34-point home indicator, so screens are laid out for that area. */
+  .phone { width: 402px; height: 874px; margin: 0 auto; box-sizing: content-box; background: #050506; border: 12px solid #050506; border-radius: 74px; box-shadow: 0 0 0 1.5px #1c1d20, 0 0 0 4px #7d8087, 0 0 0 5px #3c3e43, 0 20px 60px rgba(0,0,0,0.5); }
+  .screen-wrap { width: 100%; height: 100%; background: var(--background); border-radius: 62px; overflow: hidden; display: flex; flex-direction: column; }
+  .status-bar { display: block; width: 100%; height: 62px; flex-shrink: 0; color: var(--color12); fill: currentColor; font: 600 17px var(--font); }
+  .status-bar .island { fill: #000; }
   .screen-area { flex: 1; overflow-y: auto; }
   .screen-area::-webkit-scrollbar { display: none; }
 
@@ -222,8 +225,8 @@ Use this as the outer shell for the generated `preview.html`. Replace `{{APP_NAM
   .screen.active { display: flex; flex-direction: column; }
 
   /* Home indicator */
-  .home-ind { height: 28px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
-  .home-ind div { width: 120px; height: 4px; background: var(--color4); border-radius: 2px; }
+  .home-ind { height: 34px; display: flex; align-items: flex-end; justify-content: center; padding-bottom: 8px; flex-shrink: 0; }
+  .home-ind div { width: 134px; height: 5px; background: var(--color12); border-radius: 2.5px; }
 
   /* Shared component styles */
   hr { border: none; border-top: 1px solid var(--border-color); margin: 8px 0; }
@@ -246,7 +249,7 @@ Use this as the outer shell for the generated `preview.html`. Replace `{{APP_NAM
 
   <div class="phone">
     <div class="screen-wrap">
-      <div class="notch"></div>
+      <svg class="status-bar" viewBox="0 0 402 62" aria-hidden="true" focusable="false"><text x="81" y="35.5" text-anchor="middle">9:41</text><rect class="island" x="160" y="11" width="82" height="37" rx="18.5"/><rect x="286" y="30.5" width="3" height="4.5" rx="0.9"/><rect x="290.8" y="28.4" width="3" height="6.6" rx="0.9"/><rect x="295.6" y="26.2" width="3" height="8.8" rx="0.9"/><rect x="300.4" y="24" width="3" height="11" rx="0.9"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M309.8 28.4a9.8 9.8 0 0 1 13.8 0M312.6 31.2a5.8 5.8 0 0 1 8.2 0"/><circle cx="316.7" cy="34" r="1.5"/><rect x="330.5" y="24" width="24" height="11.5" rx="3.6" fill="none" stroke="currentColor" stroke-opacity="0.4"/><rect x="332.5" y="26" width="20" height="7.5" rx="2"/><path d="M356 28.2v3.4a1.9 1.9 0 0 0 0-3.4z" fill-opacity="0.45"/></svg>
       <div class="screen-area">
         {{SCREENS}}
       </div>

@@ -1,10 +1,10 @@
 # Requirements Discovery Reference
 
-Use this only for Step 2b.1 of `/create-mobile-app` when prompt richness selects the `walk-through` path.
+Use this only for the `features` question in `/create-mobile-app`'s setup question (`SKILL.md` Step 0, before the build-order choice), asked when the prompt scores 2 or less.
 
 ## Infer Options From The Brief
 
-Scan the user's description and wizard answers for these signals, then confirm inferred items with one `AskUserQuestion`.
+Scan the user's description for these signals, then offer the inferred items as the `features` question.
 
 | Signal in description | Infer |
 |---|---|
@@ -14,7 +14,7 @@ Scan the user's description and wizard answers for these signals, then confirm i
 | "generate PDF", "export report", "print report", "evidence packet", "certificate PDF" | PDF-report capability; retention target is resolved at the architecture gate |
 | "view PDF", "open PDF", "preview PDF" | Native PDF viewer capability for HTTPS URLs or local `file://` URIs with viewer 0.2.9+ |
 | "signature", "sign", "sign off", "approval", "pen", "ink", "draw" | Pen-input capability; storage target is resolved at the architecture gate |
-| "track location", "background location", "GPS tracking", "follow route", "breadcrumb", "field worker location" | Geolocation capability from the verified release; confirm background declarations and storage at Gate 1 |
+| "track location", "background location", "GPS tracking", "follow route", "breadcrumb", "field worker location" | Geolocation capability from the verified release; confirm background declarations and storage at the architecture gate |
 | "current location", "where am I", "tag with coordinates", "one-shot location" | One-shot location via the verified controls or Expo location API; no tracking/data-source requirement |
 | "share", "send to", "export" | Sharing capability |
 | "secure", "credentials", "token", "PIN" | Secure-store capability |
@@ -37,14 +37,14 @@ PDF/pen rules:
 - Retained generated PDFs use a Dataverse File column or child
   Evidence/Attachment table only when Dataverse is approved; otherwise use an
   approved connector-owned or on-device/share-only target.
-- Signature/ink capture must record the Gate 1-approved target in
+- Signature/ink capture must record the target approved at the architecture gate in
   `native-app-plan.md`: Dataverse Image/File/child row, connector-owned storage,
   or on-device/share-only.
 - Background/continuous location tracking uses the `geolocation` capability (`@microsoft/power-apps-native-bglocation`, MSAL-only) and requires an existing Dataverse target table (default entity set `msdyn_locationrecords`, or a custom `tableName` whose `fieldMap` columns exist). `/add-native geolocation` must verify that table; if it is missing, do not allow the control to be used. The missing control table is not created through `/add-dataverse`; use the geolocation-control table provisioning/setup mechanism, then re-run `/add-native geolocation`. Use one-shot `location` (`expo-location`) for a single foreground coordinate read; do not conflate the two.
 
 ## Ask Shape
 
-Ask exactly one structured question. Inferred items are `recommended: true`; plausible extras are unselected. Keep 2-6 options total and allow freeform input.
+The `features` question rides in the single setup `AskUserQuestion`, beside the name, environment, and look questions. Inferred items are `recommended: true`; plausible extras are unselected. Keep 2-6 options total and allow freeform input.
 
 ```json
 {
@@ -67,6 +67,5 @@ Ask exactly one structured question. Inferred items are `recommended: true`; pla
 Rules:
 - Use the `header` field as a stable answer key, such as `features`.
 - Never include `[x]` or `[ ]` checkbox markdown in the `question` field; it produces invalid tool parameters.
-- Ask no unrelated questions in this call.
 
-After the answer, summarize the confirmed requirements brief in 4-8 bullets covering what users can do, tracked data, and integrations. Confirm once with `Look right? (yes / adjust)`, then store the result as `<requirements_brief>`.
+After the answer, `SKILL.md` writes the requirements brief from the selected features and the description, and opens the build-order question with it. Choosing an order confirms the brief, and a typed answer changes it, so nothing asks to confirm the brief separately.

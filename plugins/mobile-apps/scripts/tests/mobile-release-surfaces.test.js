@@ -11,7 +11,8 @@ const pluginRoot = path.resolve(__dirname, '../..');
 const read = (file) => fs.readFileSync(path.join(pluginRoot, file), 'utf8');
 const entrySkills = ['add-native', 'deploy', 'edit-app', 'debug-app', 'report-issue'];
 const nativeHelpers = ['add-camera', 'add-geolocation', 'add-pdf-report', 'add-pdf-viewer', 'add-pen-input'];
-const agents = ['native-app-planner', 'screen-planner', 'screen-builder', 'data-model-architect', 'offline-profile-architect'];
+// architecture-planner is the screens-first fork of native-app-planner, so it carries the same contract.
+const agents = ['native-app-planner', 'architecture-planner', 'screen-planner', 'screen-builder', 'data-model-architect', 'offline-profile-architect'];
 const resolver = 'node "${PLUGIN_ROOT}/scripts/resolve-mobile-release.js" --project-root \'<working_dir>\'';
 
 function codeBlock(source, marker) {
@@ -87,8 +88,10 @@ test('screen planning follows the foreground npm scaffold owner instead of a ret
   assert.match(scaffold, /DEFERRED_CONCERNS\[\]/);
   assert.doesNotMatch(scaffold, /Step 2d background pipeline|clone\s*\u2192|cp -R|after JOIN/);
 
-  const creation = read('skills/create-mobile-app/SKILL.md');
+  // Step 2d is in the data-model-first flow; screens first has no planning-time scaffold step.
+  const creation = read('skills/create-mobile-app/references/data-model-first.md');
   const mode = creation.slice(creation.indexOf('### Step 2d'), creation.indexOf('### Step 3'));
+  assert.ok(mode.length > 0, 'data-model-first Step 2d');
   assert.match(mode, /fresh-template gate/);
   assert.match(mode, /separately approved shipped-lock `npm ci`/);
   assert.doesNotMatch(mode, /`npm install`/);

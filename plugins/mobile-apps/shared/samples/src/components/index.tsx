@@ -489,12 +489,16 @@ export function ScreenHeader({
   rightAction?: React.ReactNode;
   children?: React.ReactNode;
 }) {
+  // Top padding of its own: a browser reports a zero safe-area inset, so in the web preview the
+  // title would otherwise touch the top edge. On a device it adds a little air below the inset.
   return (
-    <YStack px="$5" pb="$3" gap="$2" borderBottomWidth={1} borderBottomColor="$borderColor">
+    <YStack px="$5" pt="$3" pb="$3" gap="$2" borderBottomWidth={1} borderBottomColor="$borderColor">
       <XStack items="center" justify="space-between" gap="$3">
         <YStack flex={1} gap="$1">
           <XStack items="center" gap="$2" flexWrap="wrap">
-            <Text fontSize={28} fontWeight="700" letterSpacing={0}>{title}</Text>
+            {/* An explicit line height: a long title wraps beside the right action, and without one
+                the two lines overlap on web, where Tamagui keeps the default token's smaller height. */}
+            <Text fontSize={28} lineHeight={34} fontWeight="700" letterSpacing={0}>{title}</Text>
             {status}
           </XStack>
           {subtitle && (

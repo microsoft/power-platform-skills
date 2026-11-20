@@ -13,15 +13,18 @@
  * at `lib/render-template.js`; the one behavioural change is that this document is
  * re-rendered in place on every update rather than written once.
  *
- * State lives in `docs/.run-plan.json`; the rendered page is `docs/create-app-plan.html`.
+ * State lives in `docs/.run-plan.json`; the rendered page is `docs/create-app-plan.html`, and
+ * `docs/create-app-plan.version.js` beside it tells an open page whether it is stale.
  * The JSON is the source of truth so a re-render never has to parse HTML back.
  *
  * Commands:
- *   init  --working-dir <d> --json-file <path>   ({"appName", "dataPlatform"}; the skill's route)
+ *   init  --working-dir <d> --json-file <path>   ({"appName", "dataPlatform", "buildOrder"}; the skill's route)
  *   init  --working-dir <d> --app-name <n> [--data-platform dataverse|connector-only]
+ *         [--build-order screens-first|data-model-first]
  *   step  --working-dir <d> --id <phase-id> --status <pending|active|done|skipped|failed> [--note <t>]
  *   set   --working-dir <d> --section <name> --json <obj> | --json-file <path> [--state proposed|approved]
- *   phone --working-dir <d> --stage building|screens|qr [--preview-file <html> | --screens-file <json>] [--qr-image <png>] [--qr-url <url>]
+ *   phone --working-dir <d> --stage building|live|screens|qr [--preview-url <http://localhost:port>]
+ *         [--preview-file <html> | --screens-file <json>] [--qr-image <png>] [--qr-url <url>]
  *   progress --working-dir <d> --json-file <path>
  *   sync --working-dir <d> --json-file <path>
  *   temp  --working-dir <d>
@@ -30,14 +33,15 @@
 
 'use strict';
 
-const fs = require('node:fs');
 const crypto = require('node:crypto');
+const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 
 const { publishAtomic, renderTemplate } = require('./lib/render-template');
-const { planRefreshScript } = require('./lib/plan-refresh');
+const { planRefreshScript, progressVersion, versionScript } = require('./lib/plan-refresh');
+const { APP_AREA, phoneShellCss, phoneShellMarkup } = require('./lib/phone-shell');
 
 /**
  * The plan's state file is read by one process and rewritten by another as the run advances, so
@@ -61,6 +65,9 @@ function writeJsonAtomic(filePath, value) {
 const DOCS_DIR = 'docs';
 const STATE_FILE = '.run-plan.json';
 const OUTPUT_FILE = 'create-app-plan.html';
+// Beside the page: the open plan loads it to learn whether it is stale (see `render`).
+const VERSION_FILE = 'create-app-plan.version.js';
+const EDIT_VERSION_FILE = 'edit-app-progress.version.js';
 const TEMPLATE_PATH = path.join(__dirname, '..', 'assets', 'run-plan.html');
 
 const STATUSES = new Set(['pending', 'active', 'done', 'skipped', 'failed']);
@@ -72,14 +79,17 @@ const EDIT_PROGRESS_STATUSES = new Set(['active', 'waiting', 'done', 'failed']);
  * the decision, so the finished document explains not just what was built but what the user
  * chose and what environment it landed in.
  *
- *   environment   Step 1/4   resolved env, tenant, publisher prefix
- *   requirements  Step 2/2b  app identity, platforms, aesthetic, confirmed feature brief
- *   architecture  Gate 1     data platform, device capabilities, connectors - each with a reason
- *   offline       Gate 2     whether offline sync is on, which tables, and why
- *   dataModel     Gate 2     tables with reuse/extend/create intent + Mermaid ER source
- *   screens       Gates 3-4  navigation pattern, screen graph source, per-screen specs
- *   design        Step 6.75  direction, typography, palette
- *   auth          Step 7     whether an app registration was supplied or deferred
+ *   environment   Steps 1/3                     resolved env, tenant, publisher prefix
+ *   requirements  Steps 2/2b                    app identity, platforms, aesthetic, confirmed brief
+ *   screens       screen graph gate (Step 4)    navigation pattern, screen graph source, per-screen specs
+ *   design        Step 9                        direction, typography, palette
+ *   architecture  architecture gate (Step 10)   data platform, device capabilities, connectors - each
+ *                                               with a reason
+ *   dataModel     data model gate (Step 10)     tables with reuse/extend/create intent + Mermaid ER source
+ *   offline       data model gate (Step 10)     whether offline sync is on, which tables, and why
+ *   auth          Step 11                       whether an app registration was supplied or deferred
+ *   trust         architecture gate, Step 13    drafted from the approved architecture, finalised once
+ *                                               the capabilities are wired
  */
 const SECTIONS = new Set([
   'environment', 'requirements', 'architecture', 'dataModel', 'screens', 'design', 'auth',
@@ -87,27 +97,75 @@ const SECTIONS = new Set([
 ]);
 
 /**
- * User-facing phases, not the skill's ~30 internal step numbers. A plan the user reads should
+ * User-facing phases, not the skill's internal step numbers. A plan the user reads should
  * describe what is happening to their app, so several skill steps collapse into one row here.
- * `skillSteps` records the mapping so a maintainer can trace a phase back to the SKILL.md.
+ * `skillSteps` records the mapping so a maintainer, and a continued run, can trace a phase back
+ * to its step in the build order's flow file.
+ *
+ * /create-mobile-app offers two build orders (its SKILL.md Step 0), and each runs the same
+ * phases in a different order, so each has its own list:
+ *
+ *   screens-first     The screens are scaffolded and built against sample data straight after
+ *                     the screen graph gate, so the user can try the app in a live web preview
+ *                     before the design, architecture and data model are settled. Everything
+ *                     those later gates decide is then wired in, and the last step before the
+ *                     device swaps the sample data for the real services.
+ *                     Steps are in references/screens-first.md and references/make-it-real.md.
+ *   data-model-first  Planning is approved before anything is scaffolded: the gates decide the
+ *                     data platform, capabilities and screen set that Steps 5-6 then
+ *                     materialize, and the screens are built last, on real services.
+ *                     Steps are in references/data-model-first.md.
+ *
+ * Each list is the order the user sees, so it has to match the order its flow runs. If the two
+ * drift, a phase reads as complete while phases above it are still pending.
  */
-const PHASES = [
-  { id: 'requirements', title: 'Understand what to build', detail: 'Confirm the feature brief', skillSteps: '2, 2b, 2c' },
-  // Planning is approved before anything is scaffolded: the gates decide the data platform,
-  // capabilities and screen set that Steps 5-6 then materialize. This list is the order the
-  // user sees, so it has to match the order the skill runs, or a phase reads as complete
-  // while phases above it are still pending.
-  { id: 'architecture', title: 'Approve the architecture', detail: 'Device capabilities, connectors, and data platform', skillSteps: '3 / Gate 1' },
-  { id: 'data-model', title: 'Design the data model', detail: 'Tables, columns, and relationships', skillSteps: '3 / Gate 2', dataverseOnly: true },
-  { id: 'screen-plan', title: 'Plan the screens', detail: 'Screen graph, navigation, and per-screen specs', skillSteps: '3 / Gates 3-4' },
-  { id: 'scaffold', title: 'Bring the app online', detail: 'Prepare the template and initialize the Power Apps project', skillSteps: '5, 6' },
-  { id: 'design', title: 'Lock the design system', detail: 'Brand tokens, typography, and colour', skillSteps: '6.75, 9b' },
-  { id: 'auth', title: 'Connect sign-in', detail: 'Entra ID app registration and MSAL config', skillSteps: '7' },
-  { id: 'dataverse', title: 'Build the data model', detail: 'Create tables in Dataverse and generate services', skillSteps: '8, 8.5', dataverseOnly: true },
-  { id: 'capabilities', title: 'Wire capabilities', detail: 'Device features and connectors', skillSteps: '9, 10' },
-  { id: 'screens', title: 'Build the screens', detail: 'Navigation, shared code, and each screen', skillSteps: '10b, 10.8, 11' },
-  { id: 'run', title: 'Run it on a device', detail: 'Start Metro and scan the QR code to open the app on your phone', skillSteps: '12, 13' },
-];
+const PHASES_BY_BUILD_ORDER = {
+  'screens-first': [
+    { id: 'requirements', title: 'Understand what to build', detail: 'One setup question and the confirmed brief', skillSteps: '0, 2' },
+    { id: 'scaffold', title: 'Bring the app online', detail: 'Prepare the template and initialize the Power Apps project', skillSteps: '3' },
+    { id: 'screen-plan', title: 'Plan the screens', detail: 'Screens, navigation, and the data each one shows', skillSteps: '4 / screen graph gate' },
+    { id: 'screens', title: 'Build the screens', detail: 'Navigation, sample data, and every screen in parallel', skillSteps: '5, 6, 7' },
+    // Before the preview gate: Power Apps Mobile Preview will not run the app without a client ID.
+    { id: 'auth', title: 'Connect sign-in', detail: 'The Entra ID app registration your phone signs in with', skillSteps: '8, 11' },
+    { id: 'preview', title: 'Try the running app', detail: 'Live preview in the phone on this page and on your phone, with sample data - confirm it or ask for changes', skillSteps: '8 / preview gate' },
+    { id: 'design', title: 'Lock the design system', detail: 'Brand tokens, typography, and colour', skillSteps: '9' },
+    { id: 'architecture', title: 'Approve the architecture', detail: 'Device capabilities, connectors, and data platform', skillSteps: '10 / architecture gate' },
+    { id: 'data-model', title: 'Design the data model', detail: 'Tables, columns, and relationships', skillSteps: '10 / data model gate', dataverseOnly: true },
+    { id: 'dataverse', title: 'Build the data model', detail: 'Create tables in Dataverse and generate services', skillSteps: '12', dataverseOnly: true },
+    { id: 'capabilities', title: 'Wire capabilities', detail: 'Device features and connectors', skillSteps: '13' },
+    { id: 'wiring', title: 'Connect real data', detail: 'Swap the sample data for Dataverse, connectors, and device features', skillSteps: '14' },
+    { id: 'run', title: 'Run it on a device', detail: 'Final checks, then start Metro and scan the QR code', skillSteps: '15, 16, 17' },
+  ],
+  'data-model-first': [
+    { id: 'requirements', title: 'Understand what to build', detail: 'The setup question, the confirmed brief, and a rough plan preview', skillSteps: '0, 2, 2b, 2c' },
+    { id: 'architecture', title: 'Approve the architecture', detail: 'Device capabilities, connectors, and data platform', skillSteps: '3 / Gate 1' },
+    { id: 'data-model', title: 'Design the data model', detail: 'Tables, columns, and relationships', skillSteps: '3 / Gate 2', dataverseOnly: true },
+    { id: 'screen-plan', title: 'Plan the screens', detail: 'Screen graph, navigation, and per-screen specs', skillSteps: '3 / Gates 3-4' },
+    { id: 'scaffold', title: 'Bring the app online', detail: 'Prepare the template and initialize the Power Apps project', skillSteps: '5, 6' },
+    { id: 'design', title: 'Lock the design system', detail: 'Brand tokens, typography, and colour', skillSteps: '6.75, 9b' },
+    { id: 'auth', title: 'Connect sign-in', detail: 'Entra ID app registration and MSAL config', skillSteps: '7' },
+    { id: 'dataverse', title: 'Build the data model', detail: 'Create tables in Dataverse and generate services', skillSteps: '8, 8.5', dataverseOnly: true },
+    { id: 'capabilities', title: 'Wire capabilities', detail: 'Device features and connectors', skillSteps: '9, 10' },
+    { id: 'screens', title: 'Build the screens', detail: 'Navigation, shared code, and each screen', skillSteps: '10b, 10.8, 11' },
+    { id: 'run', title: 'Run it on a device', detail: 'Start Metro and scan the QR code to open the app on your phone', skillSteps: '12, 13' },
+  ],
+};
+
+const BUILD_ORDERS = Object.keys(PHASES_BY_BUILD_ORDER);
+
+// Every plan written before build orders existed came from the data-model-first flow, and its
+// `.run-plan.json` has no `buildOrder`. Reading a missing order as that one keeps those plans
+// (and `/edit-app`'s inferred plans, which are all `done`) resolving their own phase ids.
+const DEFAULT_BUILD_ORDER = 'data-model-first';
+
+function phasesFor(buildOrder) {
+  const order = buildOrder || DEFAULT_BUILD_ORDER;
+  const phases = PHASES_BY_BUILD_ORDER[order];
+  if (!phases) {
+    throw new Error(`Unknown build order '${order}'. Known: ${BUILD_ORDERS.join(', ')}`);
+  }
+  return phases;
+}
 
 function docsDir(projectRoot) {
   return path.join(path.resolve(projectRoot), DOCS_DIR);
@@ -167,42 +225,110 @@ function loadState(projectRoot) {
   return readJson(statePath(projectRoot));
 }
 
-function initState(projectRoot, { appName, dataPlatform }) {
+function initState(projectRoot, { appName, dataPlatform, buildOrder }) {
   const existing = loadState(projectRoot);
-  // A resumed run must not lose the progress already recorded.
+  // A resumed run must not lose the progress already recorded, and it keeps the build order it
+  // started with: the phases already done belong to that order.
   if (existing) return existing;
 
+  const phases = phasesFor(buildOrder);
   return {
     appName: appName || 'Your app',
     dataPlatform: dataPlatform || 'unknown',
+    buildOrder: buildOrder || DEFAULT_BUILD_ORDER,
     startedAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
     sections: {},
     phone: { stage: 'building', screens: [] },
-    phases: PHASES.map((phase) => ({ ...phase, status: 'pending', note: '' })),
+    phases: phases.map((phase) => ({ ...phase, status: 'pending', note: '' })),
   };
 }
 
 const SECTION_STATES = new Set(['proposed', 'approved']);
 
-const PHONE_STAGES = new Set(['building', 'screens', 'qr']);
+const PHONE_STAGES = new Set(['building', 'live', 'screens', 'qr']);
+
+// The only hosts the live preview may name. They are the same two the page's CSP `frame-src`
+// admits, and the two lists must stay in step: a host accepted here but not there renders a
+// blocked frame, and one admitted there but not here is a hole nothing uses.
+const PREVIEW_HOSTS = new Set(['localhost', '127.0.0.1']);
 
 /**
- * The device rail beside the plan. It moves through three stages as the run proceeds:
- *   building  an animation, from the first phase until the design is locked
- *   screens   a carousel of the plan-time screen previews `/design-system` renders at Step 6.75,
- *             which exist before any TSX is written
- *   qr        the Metro QR code, so the last thing the plan shows is how to open the real app
+ * Validate the live-preview address and return it in one canonical form.
+ *
+ * The page embeds this URL in a frame, so it must only ever point at the loopback address of the
+ * dev server the skill started with `npm run dev` (for example `http://localhost:8082`). Keeping it
+ * loopback-only stops the plan, which also carries the environment URL, tenant id and the whole
+ * app plan, from framing arbitrary remote content. Anything else is refused rather than repaired:
+ * a value that needs repairing did not come from the skill.
+ *
+ * The checks run on the parsed URL, never on the string. `http://localhost:8082@example.com/`
+ * starts with the right prefix, but everything before `@` is userinfo and its host is
+ * example.com. Parsing follows the WHATWG URL Standard, the same parser the browser uses:
+ * https://url.spec.whatwg.org/#concept-basic-url-parser
+ *
+ * The result is rebuilt from the parsed host, port and path, so nothing the checks did not look
+ * at can reach the page.
+ */
+function normalizePreviewUrl(value) {
+  const raw = typeof value === 'string' ? value.trim() : '';
+  const reject = (reason) => new Error(
+    `Invalid --preview-url '${raw}': ${reason}. Pass the local Expo web server, e.g. http://localhost:8082.`,
+  );
+
+  let url;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw reject('not a URL');
+  }
+  if (url.protocol !== 'http:') throw reject('only http: is allowed');
+  if (!PREVIEW_HOSTS.has(url.hostname)) throw reject('the host must be localhost or 127.0.0.1');
+  if (url.username || url.password) throw reject('credentials are not allowed');
+  // `URL` drops a scheme's default port, so `http://localhost:80` parses with an empty port and is
+  // refused along with a URL that names none. Expo never serves on 80, and the explicit port is
+  // what identifies the server the skill started.
+  if (!url.port || Number(url.port) < 1) throw reject('an explicit port is required');
+  // A bare trailing `?` or `#` parses to an empty search or hash, so the raw text is checked too.
+  if (url.search || url.hash || /[?#]/.test(raw)) throw reject('a query or fragment is not allowed');
+
+  return `http://${url.hostname}:${url.port}${url.pathname}`;
+}
+
+/**
+ * The device rail beside the plan. It moves through these stages as the run proceeds:
+ *   building  an animation, from the first phase until the preview step starts the web server
+ *   live      the app itself, running on sample data from the dev server the skill starts at
+ *             Step 3.5, so the user can try each change as it hot-reloads. Needs `previewUrl`;
+ *             see normalizePreviewUrl. From the preview gate the same server also serves the
+ *             app to a phone, and a `qrImage` recorded without a stage change is drawn under the
+ *             frame rather than in it
+ *   qr        the Metro QR code. Screens first moves here at Step 14, when the app starts reading
+ *             real data: the browser frame has no signed-in Power Apps host, so the wired app
+ *             would only show errors there, while the phone app is one. Data model first moves
+ *             here at its dev server step. Either way the plan ends on how to open the real app
+ *   building  again after `live` only when no QR code was recorded (the dev server had no LAN
+ *             address). `previewUrl` is kept, because it is how the page tells this stretch from
+ *             the first one; it neither frames nor links the server
+ *   screens   a carousel of the plan-time mockups `/design-system` renders into
+ *             `_plan_preview.html`. Kept for the legacy `/design-system` mockup flow; the
+ *             preview-first `/create-mobile-app` shows `live` instead
  */
 function setPhone(state, update) {
   state.phone = state.phone || { stage: 'building', screens: [] };
 
+  // Validated before anything is written, so a rejected URL or stage leaves the phone as it was.
+  const previewUrl = update.previewUrl === undefined ? undefined : normalizePreviewUrl(update.previewUrl);
   if (update.stage !== undefined) {
     if (!PHONE_STAGES.has(update.stage)) {
       throw new Error(`Unknown stage '${update.stage}'. Known: ${[...PHONE_STAGES].join(', ')}`);
     }
+    if (update.stage === 'live' && !previewUrl && !state.phone.previewUrl) {
+      throw new Error("Stage 'live' needs --preview-url, the address of the local Expo web server.");
+    }
     state.phone.stage = update.stage;
   }
+  if (previewUrl !== undefined) state.phone.previewUrl = previewUrl;
   if (update.screens !== undefined) {
     state.phone.screens = update.screens;
     delete state.phone.previewHtml;
@@ -229,7 +355,7 @@ function setSection(state, name, value, sectionState) {
   }
   state.sections = state.sections || {};
   // Merge so a later step can add to a section without restating what an earlier one wrote
-  // (for example Step 4 confirming the environment Step 1 resolved).
+  // (for example Step 3 confirming the environment Step 1 resolved).
   state.sections[name] = { ...(state.sections[name] || {}), ...value };
 
   // A section is written when it is *proposed*, so the user can read the rendered ER or screen
@@ -246,18 +372,54 @@ function setSection(state, name, value, sectionState) {
   return state;
 }
 
+/**
+ * Find a phase in the plan, adding it first if its build order's phase list knows it and the
+ * plan does not.
+ *
+ * `initState` hands back an existing plan unchanged so a resumed run keeps its progress, but a
+ * plan written by an older version of the skill was seeded from an older list and lacks any
+ * phase added since. Without this the resumed run's first `step --id` for that phase failed as
+ * an unknown phase. Ids the plan's build order does not know still return nothing, so a typo,
+ * or a phase from the other build order, is still reported by name.
+ *
+ * The new phase goes straight after the last phase already in the plan that the list runs
+ * before it. An older plan may hold its phases in an older order, so this cannot always
+ * reproduce the list exactly, but it never lists the new phase above work that has to happen
+ * first.
+ */
+function ensurePhase(state, id) {
+  const existing = state.phases.find((entry) => entry.id === id);
+  if (existing) return existing;
+
+  const phases = phasesFor(state.buildOrder);
+  const order = phases.findIndex((phase) => phase.id === id);
+  if (order === -1) return null;
+
+  const earlier = new Set(phases.slice(0, order).map((phase) => phase.id));
+  let insertAt = 0;
+  state.phases.forEach((entry, index) => {
+    if (earlier.has(entry.id)) insertAt = index + 1;
+  });
+  const added = { ...phases[order], status: 'pending', note: '' };
+  state.phases.splice(insertAt, 0, added);
+  return added;
+}
+
 function applyStep(state, { id, status, note }) {
-  const phase = state.phases.find((entry) => entry.id === id);
-  if (!phase) {
-    throw new Error(`Unknown phase '${id}'. Known: ${PHASES.map((p) => p.id).join(', ')}`);
-  }
+  // Status first, so a bad call cannot leave a phase inserted into the plan it then refuses.
   if (!STATUSES.has(status)) {
     throw new Error(`Unknown status '${status}'. Known: ${[...STATUSES].join(', ')}`);
   }
+  const phase = ensurePhase(state, id);
+  if (!phase) {
+    const known = state.phases.map((p) => p.id).join(', ');
+    throw new Error(`Unknown phase '${id}'. Known: ${known}`);
+  }
 
   // A note describes the status it was written with, so it must not outlive it. A gate opens
-  // with "Gate 1 — awaiting your approval" and is later closed by a bare `--status done`;
-  // without this the approved step kept asking for an approval the user had already given.
+  // with "Architecture gate - awaiting your approval" and is later closed by a bare
+  // `--status done`; without this the approved step kept asking for an approval the user had
+  // already given.
   // A repeated status keeps its note, so progress updates like "3 of 12 screens built" survive
   // an `active` -> `active` refresh.
   if (note !== undefined) phase.note = String(note);
@@ -281,22 +443,24 @@ function applyStep(state, { id, status, note }) {
 }
 
 // Sections the user is actually asked to approve. `trust` is deliberately absent: it is written
-// `proposed` at Gate 1 and only finalised at Step 10, but no gate asks the user to answer for it,
-// so including it held the banner up for most of the run with no question to answer.
+// `proposed` at the architecture gate and only finalised at Step 13, but no gate asks the user to
+// answer for it, so including it held the banner up for most of the run with no question to answer.
 const AWAITING_LABEL = {
   architecture: 'the architecture', dataModel: 'the data model', screens: 'the screen plan',
   design: 'the design system', offline: 'the offline profile',
 };
 
 // An active phase announces it is blocked through its note. Both spellings are accepted because
-// a gate writes "Gate 2 - awaiting your approval" while an ordinary question reads more naturally
-// as "Waiting for your answers"; matching only the first missed every prompt that is not a gate.
+// a gate writes "Data model gate - awaiting your approval" while an ordinary question reads more
+// naturally as "Waiting for your answers"; matching only the first missed every prompt that is
+// not a gate.
 const AWAITING_NOTE = /\bawaiting\b|\bwaiting for\b/i;
 
 /**
  * `init` runs at Step 2b, before the data platform is decided, so the top-level value is
- * "unknown" and nothing updates it. Gate 1 records the real answer on the architecture section,
- * so read that once it exists and fall back to whatever `init` was given.
+ * "unknown" and nothing updates it. The architecture gate (Step 10) records the real answer on
+ * the architecture section, so read that once it exists and fall back to whatever `init` was
+ * given.
  */
 function dataPlatformLabel(state) {
   const approved = ((state.sections || {}).architecture || {}).dataPlatform;
@@ -315,9 +479,10 @@ function failedTitle(state) {
  *
  * The active phase's note is the authority, because it is the only signal that distinguishes
  * "a question is open" from "work is in progress". A `proposed` section does not mean a question
- * is open: `screens` is proposed at Gate 3 and stays proposed until Step 3.9, so between Gate 3's
- * approval and Gate 4 the plan showed "Review the screen plan, then answer in your terminal"
- * while the planner was busy writing specs and nobody had been asked anything.
+ * is open: `screens` is proposed at the screen graph gate and stays proposed while the planner
+ * writes the per-screen specs into it, so once the graph was approved the plan still showed
+ * "Review the screen plan, then answer in your terminal" while the planner was busy and nobody
+ * had been asked anything.
  *
  * A proposed section still raises the banner when the phase says nothing at all, so a gate that
  * forgets its note is not silent.
@@ -344,6 +509,8 @@ function summarize(state) {
   const finished = counted.length > 0 && done === counted.length;
 
   return {
+    // A continued creation must stay in the build order it started with, so `show` reports it.
+    buildOrder: state.buildOrder || DEFAULT_BUILD_ORDER,
     total: counted.length,
     done,
     failed,
@@ -392,8 +559,9 @@ function capabilityLabels(state) {
 // the app root and the plan is written into `docs/`, so one level up is the whole path.
 const PLAN_DOC = 'native-app-plan.md';
 
-// The full-size screen mockups `/design-system` renders at the app root. The carousel shows the
-// same blocks in a phone frame; this is the link out to them at full width.
+// The full-size screen mockups `/design-system` renders at the app root. The legacy `screens`
+// carousel shows the same blocks in a phone frame; this is the link out to them at full width.
+// A preview-first run shows the live app instead and may never write this file.
 const SCREEN_PREVIEW = '_plan_preview.html';
 
 // Linked only when really present: each is written partway through the run, so an unconditional
@@ -437,7 +605,14 @@ function render(projectRoot, state) {
   summary.planDocHref = siblingHref(projectRoot, PLAN_DOC);
   summary.planDocEditorHref = editorHref(projectRoot, PLAN_DOC);
   summary.screenPreviewHref = siblingHref(projectRoot, SCREEN_PREVIEW);
-  return renderTemplate({
+  // A fingerprint of everything the page shows, minus the render time. The open page compares it
+  // with the sidecar below and reloads only when they differ, because every reload restarts the
+  // live app in the phone. A command that leaves the plan as it was leaves the version as it was.
+  summary.version = crypto.createHash('sha256')
+    .update(JSON.stringify([state.appName, state.phases, summary, state.sections || {},
+      state.sectionStates || {}, state.phone || null, dataPlatformLabel(state), capabilityLabels(state)]))
+    .digest('hex').slice(0, 16);
+  const published = renderTemplate({
     templatePath: TEMPLATE_PATH,
     outputPath: outputPath(projectRoot),
     allowOverwrite: true,
@@ -456,6 +631,9 @@ function render(projectRoot, state) {
       PHONE: state.phone || { stage: 'building', screens: [] },
       CAPABILITIES: capabilityLabels(state),
       BRAND_ICON: brandIconDataUri(),
+      PHONE_SHELL_CSS: phoneShellCss(),
+      PHONE_SHELL: phoneShellMarkup({ screenId: 'deviceScreen' }),
+      PHONE_APP_AREA: APP_AREA,
       AUTO_REFRESH: planRefreshScript({
         startedAt: state.startedAt,
         phases: state.phases,
@@ -467,9 +645,15 @@ function render(projectRoot, state) {
         settled: summary.settled,
         reloadMs: 10000,
         quietMs: 30000,
+        // Reload only when this version changes: see the version mode in lib/plan-refresh.js.
+        versionFile: VERSION_FILE,
+        version: summary.version,
       }),
     },
   });
+  // Published after the page, so a reader that sees the new version reloads into the new page.
+  publishAtomic(path.join(docsDir(projectRoot), VERSION_FILE), versionScript(summary.version, 'create-app-plan.html'));
+  return published;
 }
 
 function escapeHtml(value) {
@@ -875,7 +1059,7 @@ function writeEditProgress(projectRoot, options = {}) {
       + `Your phone and this machine need to be on the same network.</div>`
       + `${qrUrl ? `<div class="device-url">${escapeHtml(qrUrl)}</div>` : ''}</div>`
     : previewHtml
-      ? `<div class="device-carousel"><div class="device-carousel-frame">`
+      ? `<div class="device-carousel"><div class="device-carousel-frame device-app">`
         + `<iframe id="devicePreviewFrame" sandbox="" referrerpolicy="no-referrer" `
         + `title="Screen preview"></iframe></div></div>`
       : `<div class="device-building${status === 'failed' ? ' device-failed' : ''}">`
@@ -964,13 +1148,17 @@ function writeEditProgress(projectRoot, options = {}) {
       + `<button type="button" class="input-banner-close" id="inputBannerClose" aria-label="Dismiss">&times;</button>`
       + `</div>`
     : '';
-  const autoRefresh = planRefreshScript({
-    phase, note, status, waiting, items, changes, phone,
-  }, {
+  // Everything the page shows that can change, minus the render time and the CSP nonce.
+  const editProgress = { appName, phase, note, status, waiting, items, changes, phone };
+  const editVersion = progressVersion(editProgress);
+  const autoRefresh = planRefreshScript(editProgress, {
     waiting: waiting || status === 'waiting',
     settled,
     reloadMs: 2500,
     quietMs: 10000,
+    // Reload only when this version changes: see the version mode in lib/plan-refresh.js.
+    versionFile: EDIT_VERSION_FILE,
+    version: editVersion,
   });
 
   const html = `<!DOCTYPE html>
@@ -1075,14 +1263,12 @@ function writeEditProgress(projectRoot, options = {}) {
     @keyframes spin{to{transform:rotate(360deg);}}
     .device-rail{width:420px;flex-shrink:0;position:sticky;top:var(--topbar-h, 65px);height:calc(100vh - var(--topbar-h, 65px) - var(--footer-h));display:flex;flex-direction:column;align-items:center;justify-content:safe center;gap:14px;padding:24px 20px;overflow-y:auto;border-left:1px solid var(--border);background:var(--surface);}
     .device-rail-label{font-size:11px;font-weight:700;color:var(--text-dim);text-transform:uppercase;letter-spacing:1.2px;}
-    /* The phone gives up height before the other rail items. Below 360px the rail scrolls instead,
-       because a smaller frame cannot keep the QR handoff readable. */
-    .device{flex:0 1 620px;min-height:360px;max-height:620px;width:auto;max-width:calc(100vw - 44px);aspect-ratio:300/620;border-radius:40px;background:#1f1f1f;border:9px solid #2e2e2e;box-shadow:var(--shadow),0 18px 46px rgba(0,0,0,.22);position:relative;overflow:hidden;}
-    .device-notch{position:absolute;top:0;left:50%;transform:translateX(-50%);width:118px;height:22px;background:#2e2e2e;border-radius:0 0 14px 14px;z-index:2;}
-    .device-screen{position:absolute;inset:0;background:#faf9f8;overflow:hidden;container-type:size;}
+    /* The phone gives up height before the other rail items. Below 346px of screen the rail
+       scrolls instead, because a smaller frame cannot keep the QR handoff readable. The shell is
+       the iPhone 18 Pro from scripts/lib/phone-shell.js, shared with the build plan. */
+${phoneShellCss()}
     .device-building,.device-qr{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:0 26px;}
-    .device-carousel,.device-carousel-frame{position:absolute;inset:0;overflow:hidden;background:#fff;}
-    .device-carousel-frame iframe{position:absolute;width:375px;height:812px;border:0;transform-origin:top left;}
+    .device-carousel{position:absolute;inset:0;overflow:hidden;background:#fff;}
     .device-controls{width:300px;display:flex;align-items:center;justify-content:space-between;gap:8px;}
     .device-controls[hidden]{display:none;}
     .carousel-btn{width:30px;height:30px;border-radius:50%;border:1px solid var(--border);background:var(--surface);color:var(--text-bright);font-size:18px;cursor:pointer;display:grid;place-items:center;box-shadow:var(--shadow);}
@@ -1103,7 +1289,7 @@ function writeEditProgress(projectRoot, options = {}) {
     .device-copy{font-size:12.5px;color:var(--text-dim);line-height:1.55;}
     .device-progress{width:100%;height:4px;border-radius:4px;background:#eceaea;overflow:hidden;}
     .device-progress span{display:block;height:100%;background:var(--accent);}
-    .device-qr{justify-content:safe center;gap:16px;background:#fff;padding:30px 22px 18px;}
+    .device-qr{justify-content:safe center;gap:16px;background:#fff;padding:calc(var(--device-status-bar) + 8px) 22px calc(var(--device-home-bar) + 8px);}
     .device-qr img{flex:0 1 196px;min-height:84px;max-height:196px;width:auto;max-width:100%;aspect-ratio:1/1;object-fit:contain;}
     .device-url{font-family:'Cascadia Code','Consolas',monospace;font-size:11px;color:var(--accent);word-break:break-all;}
     .device-caption{font-size:12px;color:var(--text-dim);text-align:center;max-width:320px;min-height:38px;}
@@ -1115,12 +1301,12 @@ function writeEditProgress(projectRoot, options = {}) {
     .store-btn:hover{background:#141414;}
     .store-kicker{font-size:8.5px;letter-spacing:.03em;opacity:.9;}
     .store-btn strong{font-size:14px;font-weight:600;}
-    @container (max-height:520px){.device-qr{gap:8px;padding:28px 12px 14px;}.device-qr .device-title{font-size:14px;}.device-qr .device-copy{font-size:11px;line-height:1.4;}.device-url{font-size:10px;}}
+    @container (max-height:520px){.device-qr{gap:8px;padding:calc(var(--device-status-bar) + 4px) 12px calc(var(--device-home-bar) + 4px);}.device-qr .device-title{font-size:14px;}.device-qr .device-copy{font-size:11px;line-height:1.4;}.device-url{font-size:10px;}}
     .ai-footer{position:fixed;bottom:0;left:0;right:0;text-align:center;padding:10px;font-size:12px;color:var(--text-dim);border-top:1px solid var(--border);background:var(--surface);z-index:10;}
     @media(max-width:1180px){
       .shell{flex-direction:column;}
       .device-rail{width:100%;position:static;height:auto;border-left:0;border-top:1px solid var(--border);padding-bottom:72px;}
-      .device{flex:none;height:auto;min-height:0;width:min(300px,calc(100vw - 44px));}
+      .device{flex:none;height:auto;min-height:0;max-height:none;width:min(286px,calc(100vw - 72px));}
     }
     @media(max-width:720px){
       .topbar{padding:12px 16px;}
@@ -1188,10 +1374,7 @@ function writeEditProgress(projectRoot, options = {}) {
     </div>
     <aside class="device-rail${previewLink || qrLink || storeButtons ? ' has-actions' : ''}" aria-label="Device preview">
       <div class="device-rail-label">${qrImage ? 'Test the edited app' : previewHtml ? 'Your screens' : 'Device preview'}</div>
-      <div class="device">
-        <div class="device-notch"></div>
-        <div class="device-screen">${deviceContent}</div>
-      </div>
+      ${phoneShellMarkup({ content: deviceContent })}
       <div class="device-controls" id="deviceControls" ${previewHtml ? '' : 'hidden'}>
         <button class="carousel-btn" id="previousScreen" type="button" aria-label="Previous screen">&#8249;</button>
         <div class="carousel-dots" id="screenDots"></div>
@@ -1283,10 +1466,13 @@ function writeEditProgress(projectRoot, options = {}) {
         root.appendChild(head);
         root.appendChild(body);
         var reset = document.createElement('style');
+        // The gallery's page and phone backgrounds are dark. Scaled into the phone, the frame's
+        // last partial pixel row samples them and draws a grey rule under the screen.
         reset.textContent = 'html,body{width:100%;height:100%;margin:0!important;padding:0!important;'
-          + 'min-height:0!important;overflow:hidden}.phone{width:100%!important;height:100%!important;'
+          + 'min-height:0!important;overflow:hidden;background:transparent!important}'
+          + '.phone{width:100%!important;height:100%!important;'
           + 'margin:0!important;padding:0!important;border:0!important;border-radius:0!important;'
-          + 'box-shadow:none!important}.screen-wrap{border-radius:0!important}';
+          + 'box-shadow:none!important;background:transparent!important}.screen-wrap{border-radius:0!important}';
         head.appendChild(reset);
         var policy = document.createElement('meta');
         policy.setAttribute('http-equiv', 'Content-Security-Policy');
@@ -1326,11 +1512,12 @@ function writeEditProgress(projectRoot, options = {}) {
       var previous = document.getElementById('previousScreen');
       var next = document.getElementById('nextScreen');
       var dots = document.getElementById('screenDots');
+      // The mockup is drawn for the phone's app area (phone-shell.js), scaled to fit the frame.
       function fit() {
-        var scale = Math.min(frame.clientWidth / 375, frame.clientHeight / 812);
+        var scale = Math.min(frame.clientWidth / ${APP_AREA.width}, frame.clientHeight / ${APP_AREA.height});
         viewport.style.transform = 'scale(' + scale + ')';
-        viewport.style.left = (frame.clientWidth - 375 * scale) / 2 + 'px';
-        viewport.style.top = (frame.clientHeight - 812 * scale) / 2 + 'px';
+        viewport.style.left = (frame.clientWidth - ${APP_AREA.width} * scale) / 2 + 'px';
+        viewport.style.top = (frame.clientHeight - ${APP_AREA.height} * scale) / 2 + 'px';
       }
       function show(nextIndex) {
         index = Math.max(0, Math.min(screens.length - 1, nextIndex));
@@ -1423,6 +1610,8 @@ function writeEditProgress(projectRoot, options = {}) {
 </html>`;
 
   publishAtomic(filePath, html);
+  // After the page, so a reader that sees the new version reloads into the new page.
+  publishAtomic(path.join(path.dirname(filePath), EDIT_VERSION_FILE), versionScript(editVersion, 'edit-app-progress.html'));
   return filePath;
 }
 
@@ -1530,6 +1719,7 @@ function parseArgs(argv) {
     if (argument === '--working-dir') options.workingDir = argv[++index];
     else if (argument === '--app-name') options.appName = argv[++index];
     else if (argument === '--data-platform') options.dataPlatform = argv[++index];
+    else if (argument === '--build-order') options.buildOrder = argv[++index];
     else if (argument === '--id') options.id = argv[++index];
     else if (argument === '--status') options.status = argv[++index];
     else if (argument === '--note') options.note = argv[++index];
@@ -1552,6 +1742,12 @@ function parseArgs(argv) {
     }
     else if (argument === '--qr-image') options.qrImage = argv[++index];
     else if (argument === '--qr-url') options.qrUrl = argv[++index];
+    else if (argument === '--preview-url') {
+      options.previewUrl = argv[++index];
+      if (!options.previewUrl || options.previewUrl.startsWith('--')) {
+        throw new Error('--preview-url requires the local Expo web server URL, e.g. http://localhost:8082.');
+      }
+    }
     else if (!argument.startsWith('--') && !options.command) options.command = argument;
     else throw new Error(`Unknown argument: ${argument}`);
   }
@@ -1621,7 +1817,7 @@ if (require.main === module) {
       if (options.previewFile && options.screensFile) {
         throw new Error('Provide --preview-file or --screens-file, not both.');
       }
-      const update = { stage: options.stage, qrUrl: options.qrUrl };
+      const update = { stage: options.stage, qrUrl: options.qrUrl, previewUrl: options.previewUrl };
       if (options.previewFile) {
         // Retain the whole document: screen fragments alone lose shared CSS, root tokens,
         // and ancestor selectors. The page extracts each .screen inside an isolated viewport.
@@ -1675,7 +1871,11 @@ if (require.main === module) {
 module.exports = {
   DOCS_DIR,
   OUTPUT_FILE,
-  PHASES,
+  VERSION_FILE,
+  EDIT_VERSION_FILE,
+  BUILD_ORDERS,
+  DEFAULT_BUILD_ORDER,
+  PHASES_BY_BUILD_ORDER,
   STATE_FILE,
   applyStep,
   docsDir,
@@ -1683,6 +1883,7 @@ module.exports = {
   prepareEditTempDir,
   initState,
   loadState,
+  normalizePreviewUrl,
   outputPath,
   render,
   save,
