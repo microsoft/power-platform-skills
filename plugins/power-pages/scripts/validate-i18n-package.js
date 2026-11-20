@@ -801,8 +801,12 @@ function validateOfficialArtifactMetadata(metadata) {
   let tarballUrl;
   try {
     tarballUrl = new URL(tarball);
-  } catch {
-    throw new Error('Official npm metadata does not provide a valid tarball URL.');
+  } catch (error) {
+    throw createDiagnosticError(
+      'Official npm metadata does not provide a valid tarball URL.',
+      error,
+      'Official npm metadata contains an invalid tarball URL.'
+    );
   }
   if (tarballUrl.protocol !== 'https:' ||
       tarballUrl.hostname !== 'registry.npmjs.org' ||
@@ -820,12 +824,11 @@ function validateOfficialArtifactMetadata(metadata) {
 function validatePackageLockProvenance(projectRoot, packageName, metadata) {
   const lockPath = path.join(projectRoot, 'package-lock.json');
   if (!fs.existsSync(lockPath)) return { present: false, verified: false };
-  let lock;
-  try {
-    lock = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
-  } catch {
-    throw new Error('package-lock.json must contain valid JSON.');
-  }
+  const lock = parseJsonWithDiagnostic(
+    fs.readFileSync(lockPath, 'utf8'),
+    'package-lock.json must contain valid JSON.',
+    'package-lock.json'
+  );
   const entry = lock.packages?.[`node_modules/${packageName}`] ||
     lock.dependencies?.[packageName];
   if (!entry) return { present: false, verified: false };
@@ -838,8 +841,12 @@ function validatePackageLockProvenance(projectRoot, packageName, metadata) {
   let resolved;
   try {
     resolved = new URL(entry.resolved);
-  } catch {
-    throw new Error('The selected package lock entry has no valid resolved URL.');
+  } catch (error) {
+    throw createDiagnosticError(
+      'The selected package lock entry has no valid resolved URL.',
+      error,
+      'package-lock.json contains an invalid resolved URL.'
+    );
   }
   if (resolved.protocol !== 'https:' ||
       resolved.hostname !== 'registry.npmjs.org' ||
@@ -872,6 +879,45 @@ function resolveInstalledVersion(projectRoot, packageName, versionSpec) {
     }
   }
   return resolveVersionWithNpm(packageName, versionSpec);
+}
+
+function getJsonParseLocation(error) {
+  const message = error && typeof error.message === 'string'
+    ? error.message
+    : '';
+  const lineAndColumn = message.match(/\(line (\d+) column (\d+)\)/i);
+  if (lineAndColumn) {
+    return `line ${lineAndColumn[1]}, column ${lineAndColumn[2]}`;
+  }
+  const position = message.match(/\bposition (\d+)\b/i);
+  return position ? `position ${position[1]}` : null;
+}
+
+function createDiagnosticError(message, cause, cliDiagnostic) {
+  const error = new Error(message, { cause });
+  error.cliDiagnostic = cliDiagnostic;
+  return error;
+}
+
+function createJsonParseError(message, cause, context) {
+  const location = getJsonParseLocation(cause);
+  const diagnostic = `${context} contains invalid JSON` +
+    `${location ? ` at ${location}` : ''}.`;
+  return createDiagnosticError(message, cause, diagnostic);
+}
+
+function parseJsonWithDiagnostic(contents, message, context) {
+  try {
+    return JSON.parse(contents);
+  } catch (error) {
+    throw createJsonParseError(message, error, context);
+  }
+}
+
+function formatCliFailure(error) {
+  return typeof error?.cliDiagnostic === 'string'
+    ? `Localization package validation failed: ${error.cliDiagnostic}\n`
+    : 'Localization package validation failed before a result could be produced.\n';
 }
 
 function parseArgs(argv) {
@@ -996,12 +1042,11 @@ async function runCli() {
         'Mode evidence classification file must be a project-relative JSON file inside the project root.'
       );
     }
-    let classification;
-    try {
-      classification = JSON.parse(fs.readFileSync(classificationPath.path, 'utf8'));
-    } catch {
-      throw new Error('Mode evidence classification file must contain valid JSON.');
-    }
+    const classification = parseJsonWithDiagnostic(
+      fs.readFileSync(classificationPath.path, 'utf8'),
+      'Mode evidence classification file must contain valid JSON.',
+      'Mode evidence classification file'
+    );
     modeEvidenceClassification = validateModeEvidenceClassification(classification, {
       mode: args.mode,
       evidenceUrl: modeEvidenceUrl,
@@ -1080,9 +1125,7 @@ if (require.main === module) {
     } catch {
       // Preserve the original validation failure.
     }
-    process.stderr.write(
-      'Localization package validation failed before a result could be produced.\n'
-    );
+    process.stderr.write(formatCliFailure(error));
     process.exitCode = 1;
   });
 }
@@ -1094,12 +1137,14 @@ module.exports = {
   extractEvidenceText,
   fetchJson,
   fetchText,
+  formatCliFailure,
   isPrerelease,
   isPublicIpAddress,
   majorOf,
   modeSupported,
   normalizeLicense,
   packageSupportsFramework,
+  parseJsonWithDiagnostic,
   parseTelemetryErrorContext,
   peerRangeAllowsMajor,
   resolveInstalledVersion,

@@ -12,7 +12,9 @@ const {
   evaluatePackage,
   extractEvidenceText,
   fetchText,
+  formatCliFailure,
   isPublicIpAddress,
+  parseJsonWithDiagnostic,
   packageSupportsFramework,
   parseTelemetryErrorContext,
   peerRangeAllowsMajor,
@@ -906,6 +908,79 @@ test('requires official npm artifact metadata and matching package-lock provenan
       metadataWithProvenance
     ),
     /official npm integrity/
+  );
+});
+
+test('preserves validation causes while reporting only safe diagnostics', (t) => {
+  assert.throws(
+    () => parseJsonWithDiagnostic(
+      '{"secret":"sensitive classification data"',
+      'Mode evidence classification file must contain valid JSON.',
+      'Mode evidence classification file'
+    ),
+    (error) => {
+      assert.equal(error.cause?.name, 'SyntaxError');
+      assert.match(error.cliDiagnostic, /Mode evidence classification file contains invalid JSON/);
+      assert.match(formatCliFailure(error), /line 1, column/);
+      assert.doesNotMatch(formatCliFailure(error), /sensitive classification data/);
+      return true;
+    }
+  );
+
+  const projectRoot = createTempProject(t);
+  const metadata = {
+    version: '1.0.0',
+    artifactProvenance: { integrity: 'sha512-dGVzdA==' },
+  };
+  writeProjectFile(
+    projectRoot,
+    'package-lock.json',
+    '{"packages": {"node_modules/example": {"resolved": "sensitive value"'
+  );
+  assert.throws(
+    () => validatePackageLockProvenance(projectRoot, 'example', metadata),
+    (error) => {
+      assert.equal(error.cause?.name, 'SyntaxError');
+      assert.match(error.cliDiagnostic, /package-lock\.json contains invalid JSON/);
+      assert.match(error.cliDiagnostic, /line 1, column/);
+      assert.doesNotMatch(error.cliDiagnostic, /sensitive value/);
+      assert.equal(
+        formatCliFailure(error),
+        `Localization package validation failed: ${error.cliDiagnostic}\n`
+      );
+      return true;
+    }
+  );
+
+  assert.throws(
+    () => validateOfficialArtifactMetadata({
+      dist: { integrity: 'sha512-dGVzdA==', tarball: 'not-a-url' },
+    }),
+    (error) => {
+      assert.equal(error.cause?.code, 'ERR_INVALID_URL');
+      assert.match(error.cliDiagnostic, /invalid tarball URL/);
+      assert.doesNotMatch(error.cliDiagnostic, /not-a-url/);
+      return true;
+    }
+  );
+
+  writeProjectFile(projectRoot, 'package-lock.json', JSON.stringify({
+    packages: {
+      'node_modules/example': {
+        version: '1.0.0',
+        resolved: 'http://[invalid',
+        integrity: 'sha512-dGVzdA==',
+      },
+    },
+  }));
+  assert.throws(
+    () => validatePackageLockProvenance(projectRoot, 'example', metadata),
+    (error) => {
+      assert.equal(error.cause?.code, 'ERR_INVALID_URL');
+      assert.match(error.cliDiagnostic, /invalid resolved URL/);
+      assert.doesNotMatch(error.cliDiagnostic, /http:\/\/\[invalid/);
+      return true;
+    }
   );
 });
 
