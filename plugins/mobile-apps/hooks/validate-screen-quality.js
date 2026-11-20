@@ -317,7 +317,7 @@ function findSafeAreaProblems(content) {
   }
 
   // Branch parity guard: if the populated branch has SafeAreaView but loading/error
-  // branches early-return shared states above it, headers can clip under status/notch.
+  // branches early-return shared states above it, headers can clip under the status bar or Dynamic Island.
   const hasSafeAreaView = /<SafeAreaView\b/.test(content);
   if (hasSafeAreaView) {
     if (/if\s*\(\s*(?:is)?loading[^)]*\)\s*return\s*<LoadingState\b/i.test(content)) {

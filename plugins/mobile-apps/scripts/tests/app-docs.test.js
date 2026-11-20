@@ -16,6 +16,7 @@ const {
 const {
   createSkillDataModelFirst, createSkillExecution, createSkillWorkflow,
 } = require('./helpers/create-skill');
+const { phoneShellCss } = require('../lib/phone-shell');
 
 // Most tests here exercise the screens-first plan, whose phases include the preview and the
 // switch to real data. Data-model-first phase ordering is covered by its own contract tests.
@@ -1961,8 +1962,11 @@ test('the device rail moves through building, live and QR, and still accepts the
   const template = fs.readFileSync(
     path.resolve(__dirname, '..', '..', 'assets', 'run-plan.html'), 'utf8',
   );
-  assert.match(template, /\.device\{flex:0 1 620px;min-height:360px;max-height:620px;[^}]*aspect-ratio:300\/620;/);
-  assert.match(template, /@media\(max-width:1180px\)[\s\S]*\.device\{flex:none;height:auto;width:min\(300px/);
+  // Both pages size the phone by its screen; the bezel sits outside (content-box), so the whole
+  // phone still tops out at 620px.
+  assert.match(phoneShellCss(), /\.device\{[^}]*box-sizing:content-box;aspect-ratio:402\/874;flex:0 1 606px;min-height:346px;max-height:606px;/);
+  assert.match(template, /__RAW_PHONE_SHELL_CSS__/);
+  assert.match(template, /@media\(max-width:1180px\)[\s\S]*\.device\{flex:none;height:auto;min-height:0;max-height:none;width:min\(286px/);
   assert.match(template, /\.qr img\{flex:0 1 196px;min-height:84px;max-height:196px;[^}]*aspect-ratio:1\/1;/);
 
   const root = project('docs-rail');
@@ -1970,7 +1974,7 @@ test('the device rail moves through building, live and QR, and still accepts the
   const progress = writeEditProgress(root, { phase: 'preview', status: 'active' });
   const html = fs.readFileSync(progress, 'utf8');
   assert.match(html, /\.device-rail\{[^}]*justify-content:safe center;[^}]*overflow-y:auto;/);
-  assert.match(html, /\.device\{flex:0 1 620px;min-height:360px;max-height:620px;/);
+  assert.ok(html.includes(phoneShellCss()), 'the edit page draws the same phone');
   assert.match(html, /\.device-screen\{[^}]*container-type:size;/);
   assert.match(html, /\.device-qr img\{flex:0 1 196px;min-height:84px;max-height:196px;/);
   assert.match(html, /@container \(max-height:520px\)\{\.device-qr/);

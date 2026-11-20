@@ -41,6 +41,7 @@ const { pathToFileURL } = require('node:url');
 
 const { publishAtomic, renderTemplate } = require('./lib/render-template');
 const { planRefreshScript, progressVersion, versionScript } = require('./lib/plan-refresh');
+const { APP_AREA, phoneShellCss, phoneShellMarkup } = require('./lib/phone-shell');
 
 /**
  * The plan's state file is read by one process and rewritten by another as the run advances, so
@@ -630,6 +631,9 @@ function render(projectRoot, state) {
       PHONE: state.phone || { stage: 'building', screens: [] },
       CAPABILITIES: capabilityLabels(state),
       BRAND_ICON: brandIconDataUri(),
+      PHONE_SHELL_CSS: phoneShellCss(),
+      PHONE_SHELL: phoneShellMarkup({ screenId: 'deviceScreen' }),
+      PHONE_APP_AREA: APP_AREA,
       AUTO_REFRESH: planRefreshScript({
         startedAt: state.startedAt,
         phases: state.phases,
@@ -1055,7 +1059,7 @@ function writeEditProgress(projectRoot, options = {}) {
       + `Your phone and this machine need to be on the same network.</div>`
       + `${qrUrl ? `<div class="device-url">${escapeHtml(qrUrl)}</div>` : ''}</div>`
     : previewHtml
-      ? `<div class="device-carousel"><div class="device-carousel-frame">`
+      ? `<div class="device-carousel"><div class="device-carousel-frame device-app">`
         + `<iframe id="devicePreviewFrame" sandbox="" referrerpolicy="no-referrer" `
         + `title="Screen preview"></iframe></div></div>`
       : `<div class="device-building${status === 'failed' ? ' device-failed' : ''}">`
@@ -1259,14 +1263,12 @@ function writeEditProgress(projectRoot, options = {}) {
     @keyframes spin{to{transform:rotate(360deg);}}
     .device-rail{width:420px;flex-shrink:0;position:sticky;top:var(--topbar-h, 65px);height:calc(100vh - var(--topbar-h, 65px) - var(--footer-h));display:flex;flex-direction:column;align-items:center;justify-content:safe center;gap:14px;padding:24px 20px;overflow-y:auto;border-left:1px solid var(--border);background:var(--surface);}
     .device-rail-label{font-size:11px;font-weight:700;color:var(--text-dim);text-transform:uppercase;letter-spacing:1.2px;}
-    /* The phone gives up height before the other rail items. Below 360px the rail scrolls instead,
-       because a smaller frame cannot keep the QR handoff readable. */
-    .device{flex:0 1 620px;min-height:360px;max-height:620px;width:auto;max-width:calc(100vw - 44px);aspect-ratio:300/620;border-radius:40px;background:#1f1f1f;border:9px solid #2e2e2e;box-shadow:var(--shadow),0 18px 46px rgba(0,0,0,.22);position:relative;overflow:hidden;}
-    .device-notch{position:absolute;top:0;left:50%;transform:translateX(-50%);width:118px;height:22px;background:#2e2e2e;border-radius:0 0 14px 14px;z-index:2;}
-    .device-screen{position:absolute;inset:0;background:#faf9f8;overflow:hidden;container-type:size;}
+    /* The phone gives up height before the other rail items. Below 346px of screen the rail
+       scrolls instead, because a smaller frame cannot keep the QR handoff readable. The shell is
+       the iPhone 18 Pro from scripts/lib/phone-shell.js, shared with the build plan. */
+${phoneShellCss()}
     .device-building,.device-qr{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:0 26px;}
-    .device-carousel,.device-carousel-frame{position:absolute;inset:0;overflow:hidden;background:#fff;}
-    .device-carousel-frame iframe{position:absolute;width:375px;height:812px;border:0;transform-origin:top left;}
+    .device-carousel{position:absolute;inset:0;overflow:hidden;background:#fff;}
     .device-controls{width:300px;display:flex;align-items:center;justify-content:space-between;gap:8px;}
     .device-controls[hidden]{display:none;}
     .carousel-btn{width:30px;height:30px;border-radius:50%;border:1px solid var(--border);background:var(--surface);color:var(--text-bright);font-size:18px;cursor:pointer;display:grid;place-items:center;box-shadow:var(--shadow);}
@@ -1287,7 +1289,7 @@ function writeEditProgress(projectRoot, options = {}) {
     .device-copy{font-size:12.5px;color:var(--text-dim);line-height:1.55;}
     .device-progress{width:100%;height:4px;border-radius:4px;background:#eceaea;overflow:hidden;}
     .device-progress span{display:block;height:100%;background:var(--accent);}
-    .device-qr{justify-content:safe center;gap:16px;background:#fff;padding:30px 22px 18px;}
+    .device-qr{justify-content:safe center;gap:16px;background:#fff;padding:calc(var(--device-status-bar) + 8px) 22px calc(var(--device-home-bar) + 8px);}
     .device-qr img{flex:0 1 196px;min-height:84px;max-height:196px;width:auto;max-width:100%;aspect-ratio:1/1;object-fit:contain;}
     .device-url{font-family:'Cascadia Code','Consolas',monospace;font-size:11px;color:var(--accent);word-break:break-all;}
     .device-caption{font-size:12px;color:var(--text-dim);text-align:center;max-width:320px;min-height:38px;}
@@ -1299,12 +1301,12 @@ function writeEditProgress(projectRoot, options = {}) {
     .store-btn:hover{background:#141414;}
     .store-kicker{font-size:8.5px;letter-spacing:.03em;opacity:.9;}
     .store-btn strong{font-size:14px;font-weight:600;}
-    @container (max-height:520px){.device-qr{gap:8px;padding:28px 12px 14px;}.device-qr .device-title{font-size:14px;}.device-qr .device-copy{font-size:11px;line-height:1.4;}.device-url{font-size:10px;}}
+    @container (max-height:520px){.device-qr{gap:8px;padding:calc(var(--device-status-bar) + 4px) 12px calc(var(--device-home-bar) + 4px);}.device-qr .device-title{font-size:14px;}.device-qr .device-copy{font-size:11px;line-height:1.4;}.device-url{font-size:10px;}}
     .ai-footer{position:fixed;bottom:0;left:0;right:0;text-align:center;padding:10px;font-size:12px;color:var(--text-dim);border-top:1px solid var(--border);background:var(--surface);z-index:10;}
     @media(max-width:1180px){
       .shell{flex-direction:column;}
       .device-rail{width:100%;position:static;height:auto;border-left:0;border-top:1px solid var(--border);padding-bottom:72px;}
-      .device{flex:none;height:auto;min-height:0;width:min(300px,calc(100vw - 44px));}
+      .device{flex:none;height:auto;min-height:0;max-height:none;width:min(286px,calc(100vw - 72px));}
     }
     @media(max-width:720px){
       .topbar{padding:12px 16px;}
@@ -1372,10 +1374,7 @@ function writeEditProgress(projectRoot, options = {}) {
     </div>
     <aside class="device-rail${previewLink || qrLink || storeButtons ? ' has-actions' : ''}" aria-label="Device preview">
       <div class="device-rail-label">${qrImage ? 'Test the edited app' : previewHtml ? 'Your screens' : 'Device preview'}</div>
-      <div class="device">
-        <div class="device-notch"></div>
-        <div class="device-screen">${deviceContent}</div>
-      </div>
+      ${phoneShellMarkup({ content: deviceContent })}
       <div class="device-controls" id="deviceControls" ${previewHtml ? '' : 'hidden'}>
         <button class="carousel-btn" id="previousScreen" type="button" aria-label="Previous screen">&#8249;</button>
         <div class="carousel-dots" id="screenDots"></div>
@@ -1467,10 +1466,13 @@ function writeEditProgress(projectRoot, options = {}) {
         root.appendChild(head);
         root.appendChild(body);
         var reset = document.createElement('style');
+        // The gallery's page and phone backgrounds are dark. Scaled into the phone, the frame's
+        // last partial pixel row samples them and draws a grey rule under the screen.
         reset.textContent = 'html,body{width:100%;height:100%;margin:0!important;padding:0!important;'
-          + 'min-height:0!important;overflow:hidden}.phone{width:100%!important;height:100%!important;'
+          + 'min-height:0!important;overflow:hidden;background:transparent!important}'
+          + '.phone{width:100%!important;height:100%!important;'
           + 'margin:0!important;padding:0!important;border:0!important;border-radius:0!important;'
-          + 'box-shadow:none!important}.screen-wrap{border-radius:0!important}';
+          + 'box-shadow:none!important;background:transparent!important}.screen-wrap{border-radius:0!important}';
         head.appendChild(reset);
         var policy = document.createElement('meta');
         policy.setAttribute('http-equiv', 'Content-Security-Policy');
@@ -1510,11 +1512,12 @@ function writeEditProgress(projectRoot, options = {}) {
       var previous = document.getElementById('previousScreen');
       var next = document.getElementById('nextScreen');
       var dots = document.getElementById('screenDots');
+      // The mockup is drawn for the phone's app area (phone-shell.js), scaled to fit the frame.
       function fit() {
-        var scale = Math.min(frame.clientWidth / 375, frame.clientHeight / 812);
+        var scale = Math.min(frame.clientWidth / ${APP_AREA.width}, frame.clientHeight / ${APP_AREA.height});
         viewport.style.transform = 'scale(' + scale + ')';
-        viewport.style.left = (frame.clientWidth - 375 * scale) / 2 + 'px';
-        viewport.style.top = (frame.clientHeight - 812 * scale) / 2 + 'px';
+        viewport.style.left = (frame.clientWidth - ${APP_AREA.width} * scale) / 2 + 'px';
+        viewport.style.top = (frame.clientHeight - ${APP_AREA.height} * scale) / 2 + 'px';
       }
       function show(nextIndex) {
         index = Math.max(0, Math.min(screens.length - 1, nextIndex));

@@ -1270,7 +1270,7 @@ node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' phone --
 ```
 
 The page extracts every `.screen` block in document order and takes its label from the matching `data-screen` tab.
-It preserves shared styles, root tokens, and ancestor selectors inside a sandboxed 375 × 812 viewport, scaled to fit the phone.
+It preserves shared styles, root tokens, and ancestor selectors inside a sandboxed viewport the size of the phone's 402 × 778 app area, scaled to fit the phone.
 The gallery's outer phone shell and controls stay outside the carousel.
 Pass the file unchanged; copying only a screen's markup loses its stylesheet.
 The legacy `--screens-file` JSON input remains supported for self-contained screen documents.

@@ -87,10 +87,9 @@ body{font-family:var(--sans);background:var(--bg);color:var(--text);font-size:14
    stage adds the link and store row, so a budget sized for the building stage pushes the label
    under the topbar and the store row behind the footer on a 720px-tall window. Below 360px the
    phone stops shrinking and the rail scrolls, because a smaller phone cannot show the QR copy. */
-.device{flex:0 1 620px;min-height:360px;max-height:620px;width:auto;max-width:calc(100vw - 44px);aspect-ratio:300/620;border-radius:40px;background:#1f1f1f;border:9px solid #2e2e2e;box-shadow:var(--shadow-4),0 18px 46px rgba(0,0,0,0.22);position:relative;overflow:hidden;}
-.device-notch{position:absolute;top:0;left:50%;transform:translateX(-50%);width:118px;height:22px;background:#2e2e2e;border-radius:0 0 14px 14px;z-index:5;}
-.device-screen{position:absolute;inset:0;background:#faf9f8;overflow:hidden;container-type:size;}
-.device-screen iframe{border:0;}
+/* The phone: an iPhone 18 Pro shell from scripts/lib/phone-shell.js, shared with the edit page.
+   Its sizes are the screen's; the bezel sits outside them. */
+__RAW_PHONE_SHELL_CSS__
 /* Stage 1 - building */
 .bld{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:22px;background:#faf9f8;padding:0 28px;text-align:center;}
 .bld-orbit{position:relative;width:132px;height:132px;display:grid;place-items:center;}
@@ -110,35 +109,35 @@ body{font-family:var(--sans);background:var(--bg);color:var(--text);font-size:14
 @keyframes railFade{to{opacity:1;}}
 /* Stage 2 - carousel */
 .car{position:absolute;inset:0;background:#fff;}
-.car-frame{position:absolute;inset:0;overflow:hidden;contain:layout paint;}
-/* A 375 x 812 viewport is scaled, not reflowed into the smaller rail. Its sandboxed document
-   keeps mockup selectors, media queries, and fixed tab bars independent of the plan.
+/* The mockup is drawn into the phone's app area (.device-app) as a scaled, sandboxed document, so
+   its selectors, media queries, and fixed tab bars stay independent of the plan.
    https://developer.mozilla.org/en-US/docs/Web/HTML/Element/iframe#sandbox */
-.car-frame iframe{position:absolute;width:375px;height:812px;transform-origin:top left;}
 .car-nav{width:300px;display:flex;align-items:center;justify-content:space-between;gap:8px;}
 .car-btn{width:30px;height:30px;border-radius:50%;border:1px solid var(--border);background:var(--surface);color:var(--text-bright);font-size:15px;cursor:pointer;display:grid;place-items:center;box-shadow:var(--shadow-4);}
 .car-btn:disabled{opacity:.35;cursor:default;}
 .car-dots{display:flex;gap:5px;}
 .car-dot{width:6px;height:6px;border-radius:50%;background:var(--border-light);}
 .car-dot.on{background:var(--accent);}
-/* Live stage - the running app from the local Expo web server, scaled to the same 375-wide phone
-   viewport as the mockups. A browser reports zero safe-area insets, so the app would draw its
-   header under the notch; the frame starts below it instead, and the strip above takes the
-   device body's colour so it reads as bezel rather than as part of the app. */
-.live{position:absolute;inset:0;background:#1f1f1f;}
-.live .car-frame{top:22px;}
+/* Live stage - the running app from the local Expo web server, in the same app area as the
+   mockups. A browser reports zero safe-area insets, so the app would draw its header under the
+   Dynamic Island and its tab bar under the home indicator; the app area keeps it between them, as
+   the phone's own insets would. The strips around it take the app's likely background: the app
+   follows the browser's colour scheme (useColorScheme), and so does this. */
+.live{position:absolute;inset:0;background:#fff;}
+@media (prefers-color-scheme:dark){.live{background:#000;}}
 .rail-caption{font-size:12px;color:var(--text-dim);text-align:center;min-height:32px;padding:0 10px;}
 /* Stage 3 - QR */
 /* On a short window the phone shrinks (see .device), so the QR screen must fit a smaller frame:
-   the code gives up height first, the content clears the notch, and the copy tightens when the
-   phone is short. Without this the code slides under the notch and the Metro URL is cut off. */
-.qr{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:safe center;gap:16px;background:#fff;padding:30px 22px 18px;text-align:center;}
+   the code gives up height first, the content clears the status bar and home indicator, and the
+   copy tightens when the phone is short. Without this the code slides under the Dynamic Island
+   and the Metro URL is cut off. */
+.qr{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:safe center;gap:16px;background:#fff;padding:calc(var(--device-status-bar) + 8px) 22px calc(var(--device-home-bar) + 8px);text-align:center;}
 .qr img{flex:0 1 196px;min-height:84px;max-height:196px;width:auto;max-width:100%;aspect-ratio:1/1;object-fit:contain;}
 .qr-title{font-size:16px;font-weight:700;color:#201f1e;}
 .qr-sub{font-size:12.5px;color:#605e5c;line-height:1.55;}
 .qr-url{font-family:var(--mono);font-size:11px;color:#0078d4;word-break:break-all;}
-@container (max-height:520px){.qr{gap:8px;padding:28px 12px 14px;}.qr-title{font-size:14px;}.qr-sub{font-size:11px;line-height:1.4;}.qr-url{font-size:10px;}}
-@media(max-width:1180px){.shell{flex-direction:column;}.rail{width:100%;position:static;height:auto;border-left:none;border-top:1px solid var(--border);}.device{flex:none;height:auto;width:min(300px,calc(100vw - 44px));}}
+@container (max-height:520px){.qr{gap:8px;padding:calc(var(--device-status-bar) + 4px) 12px calc(var(--device-home-bar) + 4px);}.qr-title{font-size:14px;}.qr-sub{font-size:11px;line-height:1.4;}.qr-url{font-size:10px;}}
+@media(max-width:1180px){.shell{flex-direction:column;}.rail{width:100%;position:static;height:auto;border-left:none;border-top:1px solid var(--border);}.device{flex:none;height:auto;min-height:0;max-height:none;width:min(286px,calc(100vw - 72px));}}
 .sidebar{width:240px;background:var(--surface);border-right:1px solid var(--border);padding:20px 0;flex-shrink:0;}
 .nav-group-label{font-size:10px;font-weight:700;color:var(--text-dim);text-transform:uppercase;letter-spacing:1.2px;padding:16px 22px 6px;}
 .nav-btn{display:flex;align-items:center;gap:10px;width:100%;padding:11px 22px;background:none;border:none;border-left:2px solid transparent;color:var(--text-dim);font-size:13px;font-weight:500;cursor:pointer;font-family:var(--sans);text-align:left;transition:all 0.15s;}
@@ -529,10 +528,7 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
 
 <aside class="rail">
   <div class="rail-title" id="railTitle">Your app</div>
-  <div class="device">
-    <div class="device-notch"></div>
-    <div class="device-screen" id="deviceScreen"></div>
-  </div>
+  __RAW_PHONE_SHELL__
   <div id="railControls" hidden></div>
   <div class="rail-caption" id="railCaption"></div>
   <div class="rail-note" id="railNote" hidden></div>
@@ -556,6 +552,8 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
   // Code-owned, substituted at render time; never plan data.
   var brandIcon = document.getElementById('brandLogo').getAttribute('src') || '';
   var capabilities = __JSON_CAPABILITIES__;
+  // The phone's app area in points, between its status bar and home indicator (phone-shell.js).
+  var APP_AREA = __JSON_PHONE_APP_AREA__;
   // The user's display name; JSON-encoded at render time and only ever used as text.
   var appName = __JSON_APP_NAME__;
 
@@ -961,7 +959,7 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
       selected.removeAttribute('hidden');
       selected.style.setProperty('display', 'flex', 'important');
       // Preserve ancestor classes and inline tokens, but leave out the gallery's tabs, labels,
-      // notch and home indicator: the plan already supplies its own phone shell.
+      // status bar and home indicator: the plan already supplies its own phone shell.
       for (var ancestor = entry.parentElement; ancestor && ancestor !== source.body; ancestor = ancestor.parentElement) {
         var wrapper = ancestor.cloneNode(false);
         wrapper.appendChild(selected);
@@ -971,8 +969,10 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
       root.appendChild(head);
       root.appendChild(body);
       var reset = document.createElement('style');
-      reset.textContent = 'html,body{width:100%;height:100%;margin:0!important;padding:0!important;min-height:0!important;overflow:hidden;}'
-        + '.phone{width:100%!important;height:100%!important;margin:0!important;padding:0!important;border:0!important;border-radius:0!important;box-shadow:none!important;}'
+      // The gallery's page and phone backgrounds are dark. Scaled into the phone, the frame's last
+      // partial pixel row samples them and draws a grey rule under the screen, so they go too.
+      reset.textContent = 'html,body{width:100%;height:100%;margin:0!important;padding:0!important;min-height:0!important;overflow:hidden;background:transparent!important;}'
+        + '.phone{width:100%!important;height:100%!important;margin:0!important;padding:0!important;border:0!important;border-radius:0!important;box-shadow:none!important;background:transparent!important;}'
         + '.screen-wrap{border-radius:0!important;}';
       head.appendChild(reset);
       var tab = tabs.find(function (button) { return button.getAttribute('data-screen') === entry.id; });
@@ -1014,19 +1014,19 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
   }
 
   /**
-   * Scale a 375-wide phone viewport into the device screen instead of reflowing it into the
-   * narrower rail. The carousel and the live preview both use it, so a mockup and the running app
-   * are laid out at the same phone width. Mockups are drawn for exactly 375 x 812, so they keep
-   * that size and are letterboxed. `fillHeight` gives the running app whatever height fills the
-   * screen, as a real phone of another size would.
+   * Scale the phone's app area into the device screen instead of reflowing it into the narrower
+   * rail. The carousel and the live preview both use it, so a mockup and the running app are laid
+   * out at the same phone width. Mockups are drawn for exactly the app area, so they keep that
+   * size and are letterboxed if the box ever differs. `fillHeight` gives the running app whatever
+   * height fills the box, as a real phone of another size would.
    */
   function fitViewport(box, viewport, fillHeight) {
     var fit = function () {
-      var height = fillHeight ? box.clientHeight * 375 / box.clientWidth : 812;
-      var scale = Math.min(box.clientWidth / 375, box.clientHeight / height);
+      var height = fillHeight ? box.clientHeight * APP_AREA.width / box.clientWidth : APP_AREA.height;
+      var scale = Math.min(box.clientWidth / APP_AREA.width, box.clientHeight / height);
       viewport.style.height = height + 'px';
       viewport.style.transform = 'scale(' + scale + ')';
-      viewport.style.left = (box.clientWidth - 375 * scale) / 2 + 'px';
+      viewport.style.left = (box.clientWidth - APP_AREA.width * scale) / 2 + 'px';
       viewport.style.top = (box.clientHeight - height * scale) / 2 + 'px';
     };
     fit();
@@ -1041,6 +1041,9 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
     if (phone.stage === 'screens' && phone.previewHtml) phone.screens = previewScreens(phone.previewHtml);
     railPreviewLink();
     var screen = document.getElementById('deviceScreen');
+    var showsLive = phone.stage === 'live' && isLoopbackPreview(phone.previewUrl);
+    // The status bar's ink: dark on every light stage, and the running app's own scheme when live.
+    document.getElementById('device').setAttribute('data-tone', showsLive ? 'system' : 'light');
     var title = document.getElementById('railTitle');
     var caption = document.getElementById('railCaption');
     var controls = document.getElementById('railControls');
@@ -1072,10 +1075,10 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
     }
 
     // An unchecked URL falls through to the building animation rather than drawing a frame.
-    if (phone.stage === 'live' && isLoopbackPreview(phone.previewUrl)) {
+    if (showsLive) {
       title.textContent = 'Live preview';
       var live = el('div', 'live');
-      var liveBox = el('div', 'car-frame');
+      var liveBox = el('div', 'device-app');
       liveFrame = document.createElement('iframe');
       // allow-scripts: this is the real app, and it is nothing without its JavaScript.
       // allow-same-origin: normally unsafe beside allow-scripts, because a same-origin frame can
@@ -1101,7 +1104,7 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
       title.textContent = 'Your screens';
       var index = 0;
       var car = el('div', 'car');
-      var frame = el('div', 'car-frame');
+      var frame = el('div', 'device-app');
       var viewport = document.createElement('iframe');
       viewport.setAttribute('sandbox', '');
       viewport.setAttribute('referrerpolicy', 'no-referrer');

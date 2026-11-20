@@ -22,6 +22,7 @@ const vm = require('node:vm');
 
 const { applyStep, initState, outputPath, save, setPhone, setSection } = require('../app-docs');
 const { createSkillWorkflow } = require('./helpers/create-skill');
+const { APP_AREA, PHONE, phoneShellCss } = require('../lib/phone-shell');
 
 /** Mermaid's crow's-foot tokens. Anything else aborts the parse and blanks the diagram. */
 const ER_CARDINALITY_TOKENS = ['||--||', '}o--o{', '}o--||', '||--o{'];
@@ -805,7 +806,7 @@ test('preview extraction keeps shared styles, theme attributes, and ancestors wi
   const products = markup('div', { id: 'products', class: 'screen', hidden: '' }, [], 'Products');
   const detail = markup('div', { id: 'detail', class: 'screen' }, [], 'Details');
   const area = markup('div', { class: 'screen-area', style: '--spacing:12px' }, [products, detail]);
-  const wrap = markup('div', { class: 'screen-wrap' }, [markup('div', { class: 'notch' }), area]);
+  const wrap = markup('div', { class: 'screen-wrap' }, [markup('svg', { class: 'status-bar' }), area]);
   const body = markup('body', { class: 'brand', style: '--brand:#0078d4' }, [
     markup('div', { class: 'page-title' }, [], 'Gallery'),
     markup('div', { class: 'phone' }, [wrap]),
@@ -844,7 +845,7 @@ test('preview extraction keeps shared styles, theme attributes, and ancestors wi
     assert.match(screen.html, /\.card\{display:flex;gap:12px\}/);
     assert.match(screen.html, /class="screen-area" style="--spacing:12px"/);
     assert.match(screen.html, /class="screen active" style="display:flex!important"/);
-    assert.doesNotMatch(screen.html, /class="page-title"|class="notch"| hidden=/);
+    assert.doesNotMatch(screen.html, /class="page-title"|class="status-bar"| hidden=/);
   }
   assert.doesNotMatch(screens[0].html, /id="detail"/);
   assert.doesNotMatch(screens[1].html, /id="products"/);
@@ -1118,7 +1119,8 @@ test('screen documents are sandboxed and scaled, with carousel controls outside 
   assert.match(viewport.srcdoc, /default-src 'none'/);
   assert.match(viewport.srcdoc, /\.card\{display:flex;gap:12px\}/);
   const scale = Number(viewport.style.transform.match(/scale\(([^)]+)\)/)[1]);
-  assert.equal(scale, Math.min(282 / 375, 602 / 812));
+  assert.equal(scale, Math.min(282 / APP_AREA.width, 602 / APP_AREA.height));
+  assert.equal(elements.get('device').getAttribute('data-tone'), 'light', 'mockups are light screens');
   assert.equal(elements.get('railControls').hidden, false);
   assert.equal(elements.get('railControls').children[0].className, 'car-nav');
 });
@@ -1159,14 +1161,16 @@ test('the live stage frames the running app, sandboxed and scaled like the carou
   assert.equal(frame.getAttribute('title'), 'Live preview of Field "Readings"');
   assert.equal(frame.srcdoc, undefined, 'the live app is loaded by URL, not injected as markup');
 
-  // The carousel's 375-wide viewport, scaled into the device. Unlike a 375 x 812 mockup, the
-  // running app takes whatever height fills the screen, so it is never letterboxed.
+  // The phone's app area, as wide as the carousel's. Unlike a mockup, the running app takes
+  // whatever height fills the box, so it is never letterboxed.
   const scale = Number(frame.style.transform.match(/scale\(([^)]+)\)/)[1]);
-  assert.equal(scale, 282 / 375);
+  assert.equal(scale, 282 / APP_AREA.width);
   assert.equal(Number.parseFloat(frame.style.height) * scale, 602);
   assert.equal(frame.style.left, '0px');
   const classes = findAll(page.elements.get('deviceScreen'), (n) => n.className).map((n) => n.className);
-  assert.ok(classes.includes('live') && classes.includes('car-frame'));
+  assert.ok(classes.includes('live') && classes.includes('device-app'));
+  // The app follows the browser's colour scheme, so the status bar over it does too.
+  assert.equal(page.elements.get('device').getAttribute('data-tone'), 'system');
   assert.ok(!classes.includes('car') && !classes.includes('bld'), 'no carousel and no build animation');
 
   assert.equal(page.elements.get('railTitle').textContent, 'Live preview');
@@ -1539,7 +1543,8 @@ test('mockup CSS cannot reach past the phone frame', () => {
   // only affect their own element - except `position: fixed`, which would otherwise lay out
   // against the viewport. `contain: paint` makes the frame a containing block for fixed and
   // absolute descendants, so an injected overlay stays inside the phone.
-  assert.match(template, /\.car-frame\{[^}]*contain:layout paint/);
+  assert.match(phoneShellCss(), /\.device-app\{[^}]*contain:layout paint/);
+  assert.equal((template.match(/el\('div', 'device-app'\)/g) || []).length, 2, 'the carousel and the live app both use it');
   assert.match(template, /viewport\.setAttribute\('sandbox', ''\)/);
   // The mockup carousel runs nothing. The live preview is the one frame given any sandbox
   // tokens, and it is a cross-origin frame onto the local Expo web server, not mockup markup.
@@ -1588,4 +1593,22 @@ test('every function the page defines is defined exactly once', () => {
   }
   const duplicates = [...counts].filter(([, count]) => count > 1).map(([name]) => name);
   assert.deepEqual(duplicates, [], 'these functions are defined more than once');
+});
+
+test('every phone the plugin draws is the same iPhone 18 Pro', () => {
+  // The build plan and edit page draw the shell from lib/phone-shell.js. The screen-preview and
+  // design-system templates are standalone HTML that agents copy, so they repeat its sizes; a
+  // mockup laid out for another phone would be letterboxed or cropped in the plan's app area.
+  const read = (file) => fs.readFileSync(path.resolve(__dirname, '..', '..', file), 'utf8');
+  const mapping = read('shared/references/tamagui-html-mapping.md');
+  assert.match(mapping, new RegExp(`\\.phone \\{ width: ${PHONE.width}px; height: ${PHONE.height}px;`));
+  assert.match(mapping, new RegExp(`\\.status-bar \\{[^}]*height: ${PHONE.statusBar}px;`));
+  assert.match(mapping, new RegExp(`\\.home-ind \\{ height: ${PHONE.homeIndicator}px;`));
+  assert.match(mapping, new RegExp(`<svg class="status-bar" viewBox="0 0 ${PHONE.width} ${PHONE.statusBar}"`));
+  assert.match(mapping, new RegExp(`class="island"[^>]*width="${PHONE.island.width}" height="${PHONE.island.height}"`));
+  assert.doesNotMatch(mapping, /class="notch"/);
+  const gallery = read('skills/design-system/references/preview-template.md');
+  assert.match(gallery, new RegExp(`width: ${PHONE.width}px; height: ${PHONE.height}px;`));
+  assert.match(gallery, new RegExp(`\\.status-bar-mock \\{[^}]*height: ${PHONE.statusBar}px;`));
+  assert.equal(APP_AREA.height, PHONE.height - PHONE.statusBar - PHONE.homeIndicator);
 });
