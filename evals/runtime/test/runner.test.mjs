@@ -54,6 +54,17 @@ test('Linux browser jobs configure the sandbox after installing Chromium', async
   }
 });
 
+test('grader summaries and evidence archives are gated by credential checks', async () => {
+  const workflow = parseYaml(await readFile(path.join(repoRoot, '.github/workflows/power-pages-evals.yml'), 'utf8'));
+  const steps = workflow.jobs.evaluate.steps;
+  const credentialCheck = steps.findIndex(step => step.id === 'credential-check');
+  const report = steps.findIndex(step => step.name === 'explain failed checks');
+  const evidence = steps.find(step => step.name === 'upload grading evidence');
+  assert.ok(credentialCheck >= 0 && report > credentialCheck);
+  assert.equal(steps[report].if, "${{ always() && steps.credential-check.outcome == 'success' }}");
+  assert.equal(evidence.with['include-hidden-files'], true);
+});
+
 test('manual workflow selects available suites and rejects skills without one', async t => {
   const root = await mkdtemp(path.join(tmpdir(), 'pp-selection-test-'));
   t.after(() => rm(root, { recursive: true, force: true }));

@@ -123,11 +123,6 @@ jobs:
                   REASONING_EFFORT: ${{ matrix.reasoningEffort }}
                   JUDGE_REASONING_EFFORT: ${{ matrix.judgeReasoningEffort }}
               run: node evals/runtime/run.mjs run --skill "$SKILL" --runs "$RUNS" --model "$MODEL" --judge-model "$JUDGE_MODEL" --reasoning-effort "$REASONING_EFFORT" --judge-reasoning-effort "$JUDGE_REASONING_EFFORT" --out evals/reports/action
-            # Every score must be explainable from the run itself. Write the
-            # judge's reasons for each failed check to the run page.
-            - name: explain failed checks
-              if: ${{ always() }}
-              run: node evals/runtime/evidence.mjs report evals/reports/action >> "$GITHUB_STEP_SUMMARY"
             # Trials see only public fixtures and the public plugin, and their tools
             # cannot read the environment. Still refuse to upload if the run token
             # or any GitHub token shape appears anywhere in the evidence.
@@ -137,6 +132,11 @@ jobs:
               env:
                   GITHUB_TOKEN: ${{ github.token }}
               run: node evals/runtime/evidence.mjs check evals/reports/action
+            # Only publish judge explanations after checking the entire evidence
+            # tree, including error text, for credentials.
+            - name: explain failed checks
+              if: ${{ always() && steps.credential-check.outcome == 'success' }}
+              run: node evals/runtime/evidence.mjs report evals/reports/action >> "$GITHUB_STEP_SUMMARY"
             # Trajectories, grader reasons, generated files and screenshots. The
             # dashboard never reads this artifact; it fetches only power-pages-evals-*.
             - name: upload grading evidence
@@ -145,6 +145,7 @@ jobs:
               with:
                   name: power-pages-eval-evidence-${{ matrix.skill }}--${{ matrix.model }}
                   path: evals/reports/action
+                  include-hidden-files: true
                   if-no-files-found: warn
                   retention-days: 30
             # The public dashboard consumes only this scalar summary.

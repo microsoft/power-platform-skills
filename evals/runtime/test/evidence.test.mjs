@@ -11,7 +11,7 @@ async function runDir(t) {
   const result = (name, variant, status) => ({ name, kind: 'capability', variant, trial: 0, status });
   await writeFile(path.join(out, 'summary.json'), JSON.stringify({
     model: 'agent-model', judgeModel: 'judge-model',
-    suites: [{ skill: 'create-site', results: [
+    suites: [{ skill: 'create-site', runs: 1, expectedCases: [{ name: 'plan' }, { name: 'build' }], results: [
       result('plan', 'baseline', 'passed'),
       result('plan', 'skilled', 'failed'),
       result('build', 'skilled', 'error'),
@@ -36,6 +36,7 @@ test('failure report explains failed criteria and errors only', async t => {
   const report = await failureReport(await runDir(t));
   assert.match(report, /agent-model judged by judge-model/);
   assert.match(report, /plan \(skilled, trial 0\): failed/);
+  assert.match(report, /Recorded 3 of 4 expected trial arms/);
   assert.match(report, /`plan-quality` \(score 0\.75\): Strong plan with one gap\./);
   assert.match(report, /prompt\/Journey \(score 0\.75\): Collection asks only for a postcode\./);
   assert.match(report, /build \(skilled, trial 0\): error\n\n- Error: Error: judge timed out\n/);
@@ -46,6 +47,25 @@ test('failure report tolerates a run that wrote no summary', async t => {
   const out = await mkdtemp(path.join(tmpdir(), 'pp-evidence-empty-'));
   t.after(() => rm(out, { recursive: true, force: true }));
   assert.match(await failureReport(out), /run stopped before any trial/);
+});
+
+test('failure report identifies startup failures and interrupted runs as incomplete', async t => {
+  const out = await mkdtemp(path.join(tmpdir(), 'pp-evidence-incomplete-'));
+  t.after(() => rm(out, { recursive: true, force: true }));
+  const summary = {
+    model: 'agent-model', judgeModel: 'judge-model',
+    suites: [
+      { skill: 'startup-failure', runs: 1, expectedCases: [{ name: 'plan' }], results: [] },
+      { skill: 'interrupted', runs: 1, expectedCases: [{ name: 'plan' }], results: [
+        { name: 'plan', variant: 'baseline', trial: 0, status: 'passed' },
+      ] },
+    ],
+  };
+  await writeFile(path.join(out, 'summary.json'), JSON.stringify(summary));
+  const report = await failureReport(out);
+  assert.match(report, /startup-failure: incomplete[\s\S]*Recorded 0 of 2 expected trial arms/);
+  assert.match(report, /interrupted: incomplete[\s\S]*Recorded 1 of 2 expected trial arms/);
+  assert.doesNotMatch(report, /Every trial passed/);
 });
 
 test('credential scan flags real token shapes and the run token, not placeholders', async t => {

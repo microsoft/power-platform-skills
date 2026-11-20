@@ -46,8 +46,15 @@ export async function failureReport(outDir) {
   if (!summary) return '## Grader reasons\n\nNo summary was written; the run stopped before any trial.\n';
   const lines = [`## Grader reasons: ${summary.model} judged by ${summary.judgeModel}`, ''];
   let failures = 0;
+  let incomplete = 0;
   for (const suite of summary.suites ?? []) {
-    for (const result of suite.results ?? []) {
+    const results = suite.results ?? [];
+    const expected = (suite.expectedCases?.length ?? 0) * (suite.runs ?? 0) * 2;
+    if (expected === 0 || results.length !== expected) {
+      incomplete++;
+      lines.push(`### ${suite.skill}: incomplete`, '', `- Recorded ${results.length} of ${expected} expected trial arms.`, '');
+    }
+    for (const result of results) {
       if (result.status === 'passed') continue;
       failures++;
       const evidenceDir = path.join(outDir, 'private', suite.skill, result.name, `${result.variant}-${result.trial}`);
@@ -64,7 +71,7 @@ export async function failureReport(outDir) {
       lines.push('');
     }
   }
-  if (!failures) lines.push('Every trial passed.', '');
+  if (!failures && !incomplete) lines.push('Every trial passed.', '');
   return `${lines.join('\n')}\n`;
 }
 
