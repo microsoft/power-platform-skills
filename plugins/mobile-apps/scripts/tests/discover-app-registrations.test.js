@@ -126,6 +126,14 @@ test('preserves invalid JSON causes without echoing Azure CLI output', () => {
       }
     );
   }
+  assert.throws(
+    () => runAzJson(['account', 'show'], 30000, () => '{} {}'),
+    (error) => {
+      assert.equal(error.cause?.name, 'SyntaxError');
+      assert.match(error.message, /line 1, column 4|position 3/);
+      return true;
+    }
+  );
 
   assert.throws(
     () => runAzJson(['account', 'show'], 30000, () => ''),

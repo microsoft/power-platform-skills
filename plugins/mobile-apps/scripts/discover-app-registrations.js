@@ -126,12 +126,12 @@ function getJsonParseLocation(error) {
     ? error.message
     : '';
   const lineAndColumn = message.match(
-    /\bin JSON at position \d+ \(line (\d+) column (\d+)\)$/i
+    /\b(?:in|after) JSON at position \d+ \(line (\d+) column (\d+)\)$/i
   );
   if (lineAndColumn) {
     return `line ${lineAndColumn[1]}, column ${lineAndColumn[2]}`;
   }
-  const position = message.match(/\bin JSON at position (\d+)$/i);
+  const position = message.match(/\b(?:in|after) JSON at position (\d+)$/i);
   return position ? `position ${position[1]}` : null;
 }
 

@@ -655,6 +655,16 @@ test('preserves audit JSON parse causes and reports only the safe location', (t)
       }
     );
   }
+
+  fs.writeFileSync(auditPath, '{} {}');
+  assert.throws(
+    () => endLocalizationVerificationAudit(projectRoot, 'run-id'),
+    (error) => {
+      assert.equal(error.cause?.name, 'SyntaxError');
+      assert.match(error.message, /line 1, column 4|position 3/);
+      return true;
+    }
+  );
 });
 
 test('transaction manager rejects unknown and duplicate arguments', () => {

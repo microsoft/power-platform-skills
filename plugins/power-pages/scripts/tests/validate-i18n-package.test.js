@@ -951,6 +951,18 @@ test('preserves validation causes while reporting only safe diagnostics', (t) =>
       }
     );
   }
+  assert.throws(
+    () => parseJsonWithDiagnostic(
+      '{} {}',
+      'Test input must contain valid JSON.',
+      'Test input'
+    ),
+    (error) => {
+      assert.equal(error.cause?.name, 'SyntaxError');
+      assert.match(error.cliDiagnostic, /line 1, column 4|position 3/);
+      return true;
+    }
+  );
 
   const projectRoot = createTempProject(t);
   const metadata = {
