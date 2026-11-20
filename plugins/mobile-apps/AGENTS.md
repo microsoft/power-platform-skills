@@ -8,7 +8,7 @@ This file provides guidance to AI Agents when working with the **mobile-app** pl
 
 A plugin for building and deploying **Power Apps code apps that run as native mobile + web apps** using Expo + React Native + TypeScript. Connects to Power Platform via connectors using the standard `pa app add data-source` workflow.
 
-`/create-mobile-app` selects an exact published template package, acquires it only into a new/empty folder after approval, installs its lockfile after separate approval, then validates and prepares it. Existing fresh installed folders must match its package-owned host contract. See [mobile-release-lifecycle.md](shared/references/mobile-release-lifecycle.md); missing published compatibility metadata blocks native adoption.
+`/create-mobile-app` selects an exact published template package, acquires it only into a new/empty folder after approval, installs its lockfile after separate approval, then inspects and prepares it. Existing fresh installed folders use advisory local-development compatibility checks, not blocking admission before installation/startup. See [mobile-release-lifecycle.md](shared/references/mobile-release-lifecycle.md); strict compatibility remains required for deployment.
 
 ## Local Development
 
@@ -58,6 +58,12 @@ archive selected by the immutable template lock, never from mutable installed
 hashes alone.
 Metadata checks do not certify offline synchronization or database migration.
 Never patch, fork or locally rewrite a first-party package to work around a defect.
+For fixable upgrade failures, follow the [check-updates repair loop](skills/check-updates/SKILL.md#explain-choices-clearly-and-work-through-fixable-problems).
+Local workflows and their children follow the
+[local-development policy](shared/references/mobile-release-lifecycle.md#local-installation-and-startup-are-not-release-admission-gates):
+use `--local-development` on the resolver and changed-file validator; retain
+unverified compatibility without blocking installation/startup. Deployment
+keeps strict first-party package/base validation.
 
 Do not add preparation rewrites for `scheme`, `package`, `bundleIdentifier`, `src/playerConfig.ts`, `fingerprint.config.js`, or `native-runtime.json` unless those files exist in the synced main template.
 

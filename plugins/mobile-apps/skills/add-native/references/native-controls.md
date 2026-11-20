@@ -4,10 +4,10 @@ Read the [release lifecycle](../../../shared/references/mobile-release-lifecycle
 first. Resolve the existing app, not the newest plugin template:
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/resolve-mobile-release.js" --project-root '<working_dir>'
+node "${PLUGIN_ROOT}/scripts/resolve-mobile-release.js" --project-root '<working_dir>' --local-development
 ```
 
-Missing/unknown release records block native mutations. A package manifest,
+Local-development results follow the shared lifecycle policy. A package manifest,
 successful import, or successful TypeScript check does not prove that a player
 or wrapped base contains matching native code. Do not install the aggregate to
 fix older binaries. Upgrade only through a separately approved, exact verified
@@ -15,8 +15,18 @@ release migration.
 
 ## Public imports are release-conditional
 
+Use these import-selection rules before generating any wrapper:
+
+- **Strict context:** require the exact installed aggregate or legacy leaf in
+  the published inventory.
+- **Local context** (`validationScope: "local-development-only"`): select from
+  installed packages using their exact versions, public exports, docs and types;
+  no published inventory is required. Prefer aggregate subpaths when installed
+  and exposing the requested API; otherwise use the matching installed legacy
+  leaf. Keep Player/base compatibility unverified.
+
 `@microsoft/power-apps-native-controls` at the root is metadata, not a runtime
-barrel. When the resolved release includes the aggregate, use these subpaths:
+barrel. When the applicable branch selects the aggregate, use these subpaths:
 
 | Capability | Public subpath | Runtime exports |
 |---|---|---|
@@ -34,8 +44,7 @@ verified player/base is available, and not evidence of Expo 57 compatibility.
 Read the installed public README, exports, and types for the selected version;
 do not infer newer method signatures or copy a different library's examples.
 
-Legacy leaf imports are allowed only when the resolved release actually includes
-the matching leaf and version:
+Legacy leaf imports follow the same strict/local rules for the matching version:
 
 - `@microsoft/power-apps-native-pdf-viewer`
 - `@microsoft/power-apps-native-pen-input`

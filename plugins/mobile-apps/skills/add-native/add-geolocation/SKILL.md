@@ -30,16 +30,15 @@ Do not substitute another library's `configureSync` / `HttpSyncContract` API.
 ```bash
 cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 test -f app.config.js && test -f power.config.json && test -f package.json && test -d src || { echo "BLOCKED: working_dir is not an initialized app" >&2; exit 1; }
-node "${PLUGIN_ROOT}/scripts/resolve-mobile-release.js" --project-root '<working_dir>'
+node "${PLUGIN_ROOT}/scripts/resolve-mobile-release.js" --project-root '<working_dir>' --local-development
 ```
 
-Unknown/missing records block native mutation. Do not install packages, edit
-native config, or run local native builds. Match the installed public README,
-exports, and types to the resolved inventory before generating any wrapper.
-Use `@microsoft/power-apps-native-controls/geolocation` only when that aggregate
-is included in the verified release. Use the legacy
-`@microsoft/power-apps-native-bglocation` import only when the matching leaf
-is actually included. Pick one literal import at generation time, never both.
+Follow the lifecycle's local-development policy for unverified context. Do not install packages, edit
+native config, or run local native builds. Apply the native-controls
+import-selection rules to the strict/local context, using the installed public
+README, exports and types. Select `@microsoft/power-apps-native-controls/geolocation`
+or the matching legacy `@microsoft/power-apps-native-bglocation` leaf under those rules.
+Pick one literal import at generation time, never both.
 
 The public runtime exports are `BgLocationClient`, `geoService`, `AuthMethod`,
 and `ConnectionType`. Controls 0.2.0 uses background-location 0.2.3; do not copy
@@ -58,7 +57,7 @@ For a single coordinate read, write `src/native/location.ts`. This path needs
 Check the selected version's location permission requirements; native binary
 inclusion, OS declarations, runtime grants, and use are distinct.
 
-Conditional example for a resolved release that contains the aggregate:
+Conditional example when the import-selection rules select the aggregate:
 
 ```ts
 import { Platform } from 'react-native';
@@ -82,7 +81,7 @@ export async function getCurrentLocation() {
 Refine permission/error results only from the installed public contract. Do not
 guess fields or classify errors by matching arbitrary native error text. Screens
 show an appropriate denied/unsupported/failure state without exposing raw errors.
-If the resolved release instead supports `expo-location`, use its installed
+If the capability gate instead selects installed `expo-location`, use its
 one-shot contract with the same platform and result guards, not tracking setup.
 
 ## 3. Continuous tracking — permissions and ownership first

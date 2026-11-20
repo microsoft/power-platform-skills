@@ -12,11 +12,11 @@ function main(argv) {
     selectRelease, resolveProjectRelease, selectProjectRelease, summarizeRelease,
   } = require('./lib/mobile-release');
   const values = {};
-  const flags = new Set(['--project-root', '--release', '--host-version', '--template-version', '--default', '--platform', '--base-version', '--base-fingerprint', '--base-runtime-version', '--requirements-only']);
+  const flags = new Set(['--project-root', '--release', '--host-version', '--template-version', '--default', '--platform', '--base-version', '--base-fingerprint', '--base-runtime-version', '--requirements-only', '--local-development']);
   for (let index = 0; index < argv.length; index += 1) {
     const flag = argv[index];
     if (!flags.has(flag) || Object.hasOwn(values, flag)) fail('Unknown or duplicate release resolver argument.');
-    if (flag === '--default' || flag === '--requirements-only') {
+    if (flag === '--default' || flag === '--requirements-only' || flag === '--local-development') {
       values[flag] = true;
     } else {
       const value = argv[++index];
@@ -48,6 +48,34 @@ function main(argv) {
     if (['--release', '--host-version', '--template-version', '--default', '--platform', '--base-version', '--base-fingerprint', '--base-runtime-version'].some((flag) => values[flag])) {
       fail('Requirements-only planning cannot assert a selected release or check deployment targets. Use strict project resolution for admission and deployment.');
     }
+  }
+  if (values['--local-development']
+    && (!values['--project-root'] || ['--platform', '--requirements-only', '--release', '--host-version', '--template-version', '--default'].some((flag) => values[flag]))) {
+    fail('Local-development diagnostics require --project-root and cannot select a release or authorize deployment.');
+  }
+  if (values['--local-development']) {
+    const fs = require('node:fs');
+    if (!fs.existsSync(values['--project-root']) || !fs.statSync(values['--project-root']).isDirectory()) {
+      fail('Local-development diagnostics require an existing project directory.');
+    }
+    const summary = {
+      validationScope: 'local-development-only', packageCompatibility: 'unverified',
+      warnings: ['Native compatibility is not checked; local installation/startup may continue. Use /debug-app if Dev Player fails.'],
+    };
+    // Read recorded requirements only: local startup must not wait on registry
+    // access, inspect the dependency tree, or pretend to admit a native release.
+    try {
+      const source = selectProjectRelease(values['--project-root']);
+      summary.templateVersion = source.templateVersion;
+      summary.nativeRuntimeVersions = source.nativeRuntimeVersions;
+      summary.hostVersion = source.hostVersion;
+    } catch (error) {
+      if (error.code !== 'MOBILE_RELEASE_BLOCKED') throw error;
+      summary.warnings.unshift(error.message);
+    }
+    process.stderr.write(`${summary.warnings.map((warning) => `WARNING: ${warning}`).join('\n')}\n`);
+    process.stdout.write(`${JSON.stringify(summary, null, 2)}\n`);
+    return;
   }
 
   let selected = null;

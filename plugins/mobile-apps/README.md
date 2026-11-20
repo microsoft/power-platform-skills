@@ -175,11 +175,15 @@ bases/players. It checks for stale templates even when the host was already
 updated and supports same-template host repair. It previews every migration in
 a disposable copy, then asks separately before applying the full reviewed
 chain. Customer code, settings, local changes, and instruction files are preserved.
+Failed checks trigger diagnosis, suggested fixes and minimal app-code repairs in
+the test copy, preserving functionality. Repairs are tested and included in your
+approval before application.
 
 Managed/native packages are never offered as unrelated npm bumps. Pure-JS
 dependencies retain individual approval, validation, rollback, and direct-advisory
-auditing. Unsupported metadata, conflicts, unavailable releases, and incomplete
-previews block changes rather than inventing state. See
+auditing. Unsupported metadata, unavailable releases, package defects without a
+safe app-level fix, and unsafe recovery still block the affected upgrade. Required
+checks cannot be bypassed and dependencies are never patched. See
 [the lifecycle contract](shared/references/mobile-release-lifecycle.md).
 
 When an old app has no supported migration, retain the original app and report

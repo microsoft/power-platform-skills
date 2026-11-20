@@ -46,7 +46,7 @@ node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' step --i
 Use only a validated phase ID from the recorded creation state. Do not skip
 unresolved approval or validation gates merely because an older plan exists.
 
-Before continuing or resuming native work, resolve the app against its published host/template contract. Pass its sanitized compatibility context to every planner/builder; do not use the plugin template's current dependencies as the app's inventory.
+Before continuing or resuming local work, run the local-development diagnostic. Pass its sanitized compatibility context to every planner/builder, including any unverified warning; do not use the plugin template's current dependencies as the app's inventory or treat a warning-only result as a resolved release.
 
 **Keep the recorded build order.** `BUILD_ORDER` names the flow this creation started in; its finished phases belong to that order, so never switch orders mid-creation.
 Read that flow file and enter the verified phase at the first step its build-plan phase lists in `skillSteps` (the `phases` in `docs/.run-plan.json`).

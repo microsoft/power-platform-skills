@@ -24,6 +24,42 @@ upgrade, do not invoke this workflow on their app or make a rehearsal copy.
 
 Run the steps below in order. Begin the final response with `DONE` when updates complete or are declined, or `BLOCKED` when the workflow cannot continue.
 
+## Explain choices clearly and work through fixable problems
+
+Use plain language in prompts and progress updates. Say "test copy of your app"
+instead of "isolated preview", "upgrade steps" instead of "migration edges",
+"update the related packages together" instead of "coupled release", and "backup"
+instead of "recovery snapshot". Explain what each choice changes and whether the
+original app is affected; keep exact versions, commands and diagnostics in details.
+
+The goal is to complete the approved upgrade while keeping the app's functionality
+unchanged. For every failed preparation, install, migration or validation check:
+
+1. Explain the failure, its impact and a concrete possible fix. Investigate command
+   output and app usage of public package APIs before declaring a package defect.
+2. Make minimal app-owned source/configuration fixes in the test copy, including
+   imports, API calls, types or bundler settings. Test-copy approval covers these
+   repairs, not original-app edits. Preserve features, settings and data; never
+   weaken types/checks, suppress diagnostics or disable offline to pass. Ask before
+   changing behavior, dependencies, customer pins, install scripts or approved scope.
+3. Rerun the failed check, then all mandatory checks and relevant existing app
+   tests. Include repairs in the full diff and backup, and rehearse their order
+   with the upgrade steps before requesting real-app application approval.
+   For individual JavaScript updates, obtain approval and back up additional
+   app-code repair files before editing them.
+4. Resolve recoverable setup/auth/network problems and retry the reviewed target,
+   rather than returning `BLOCKED` at the first failure. Do not repeat failed
+   commands without new evidence. If a repair is declined, safely restore that
+   update, record it as skipped and continue independent work.
+
+Existing plugin-restart, publication, approval and recovery gates still apply.
+Otherwise stop the affected upgrade only when no safe app-level fix or supported
+recovery exists. Never patch npm packages via `node_modules`, `patch-package`,
+postinstall rewrites, forks, vendoring or local substitutes, or bypass protected
+metadata. For an unavoidable package defect, provide sanitized reproduction
+details and the required upstream fix (`/report-issue` for mobile-app packages).
+For any terminal blocker, explain the attempted remedies and how to resume.
+
 ## Step 1: Check The Plugin
 
 **Telemetry checkpoint: `check_mobile_app_plugin_version`**
@@ -88,8 +124,9 @@ Missing protected metadata, unpublished packages, an unfinalized host migration,
 
 For a patch/minor update with unchanged native requirements, no new Player or base release record is required. A native-changing update requires the host-owned migration and a matching Player for preview. Rely on the existing Player native-version mismatch check; it directs older apps to `/check-updates`. Do not add a routine Play Store/App Store lookup or block upgrade planning on store availability. Only inspect availability when it helps explain a specific mismatch; npm publication alone does not prove availability or a release date. Wrap performs its own selected-base compatibility and availability checks before deployment.
 
-The published planning boundary rejects native transitions without a host major
-and an unambiguous template migration. Package producers own version preparation;
+The published planning boundary rejects native transitions without an unambiguous
+template migration and rejects skipped host majors. Native counters can advance
+in a host patch/minor; an Expo SDK major requires a host major. Package producers own version preparation;
 use actual published versions, never predicted majors or private test identities.
 
 Interpret the decision:
@@ -104,7 +141,7 @@ Interpret the decision:
 ### Preview the entire change before approval
 
 1. Inspect the app's installed host documentation and supported CLI. Check for an active/interrupted upgrade journal **under `<working_dir>`**, never the process's unrelated cwd. Stop for documented recovery; do not delete a journal or reset template state.
-2. Show source/target template, host, Expo/RN, Android/iOS runtime requirements/fingerprints, the coupled dependency changes, and required downloads/install scripts. Report Player/base availability separately as verified or unknown; package metadata does not supply binary release evidence. Ask **Prepare isolated preview** or **Skip native release** (recommended). This only authorizes local rehearsal, not changes to the app. Skipping excludes all coupled packages from Steps 3-4.
+2. Show source/target template, host, Expo/RN, Android/iOS runtime requirements/fingerprints, the coupled dependency changes, and required downloads/install scripts. Report Player/base availability separately as verified or unknown; package metadata does not supply binary release evidence. Explain: "I'll test the upgrade and any needed compatibility fixes in a separate copy. Your app will stay unchanged until you approve the final changes." Ask **Test the upgrade in a copy of my app** or **Skip this app upgrade for now** (recommended). This only authorizes local rehearsal and the bounded app-code repairs above, not changes to the original app. Skipping excludes all coupled packages from Steps 3-4.
 3. Capture a private local snapshot of the current app (including dirty/untracked app-owned files, instructions, lockfiles, configuration, permissions and absent-file state). Exclude `.git`, `node_modules`, generated native build output, and logs from the rehearsal copy. Do not follow symlinks outside the project or upload the snapshot. Stop if the copy cannot preserve the app safely. No Git reset/checkout/stash.
    Restore the preview's source dependencies from its unchanged lock using the
    reviewed install policy before resolving inherited TypeScript configuration.
@@ -114,10 +151,10 @@ Interpret the decision:
    `npm install` during preview preparation: shells do not preserve a previous
    `cd`, and doing so can replace the source app's dependencies before approval.
    The helper keeps registry/auth context but directs npm writes to the explicit
-   preview prefix. Unsupported workspace/package-manager layouts block for review.
-   A missing source configuration is a preparation blocker; do not substitute
+   preview prefix. Unsupported workspace/package-manager layouts require review.
+   Diagnose and repair missing source configuration in the test copy; do not substitute
    target-reference `NODE_PATH` resolution for the source dependency context.
-4. Obtain the **exact reviewed target host** in a separate private tooling installation, not by installing it into the old app's dependency graph. Use `mobile-template-lifecycle.js acquire --destination '<reference_dir>' --host-version "<exact-host-version>"` with a new/empty directory. It installs the exact host with lifecycle scripts disabled, seeds the verified release's managed dependencies and overrides to avoid floating optional peers, and checks its npm lock integrity and contained upgrade CLI. Review any required lifecycle scripts separately before approving their execution. This tooling folder is not a scaffolded app; do not run app admission against it or copy its lock over the customer app. Read the installed host's actual `bin["upgrade-template"]` path and supported help; invoke that CLI with `--project '<preview_dir>' --dry-run` to preview one edge. The host owns the app's dependency edits and installation, including the section/spec recorded in the target's `managedDependencies`; an exact installed version does not authorize rewriting a reviewed range. Do not install a new host with incompatible peers into the old dependency set before previewing the coupled migration. Classify output: conflicts block application and need a reviewed resolution; other command failures block investigation. A nonzero preview is never automatically a clean plan.
+4. Obtain the **exact reviewed target host** in a separate private tooling installation, not by installing it into the old app's dependency graph. Use `mobile-template-lifecycle.js acquire --destination '<reference_dir>' --host-version "<exact-host-version>"` with a new/empty directory. It installs the exact host with lifecycle scripts disabled, seeds the verified release's managed dependencies and overrides to avoid floating optional peers, and checks its npm lock integrity and contained upgrade CLI. Review any required lifecycle scripts separately before approving their execution. This tooling folder is not a scaffolded app; do not run app admission against it or copy its lock over the customer app. Read the installed host's actual `bin["upgrade-template"]` path and supported help; invoke that CLI with `--project '<preview_dir>' --dry-run` to preview the complete remaining chain. The host owns the app's dependency edits and installation, including the section/spec recorded in the target's `managedDependencies`; an exact installed version does not authorize rewriting a reviewed range. Do not install a new host with incompatible peers into the old dependency set before previewing the coupled migration. Classify output: conflicts block application until reviewed and resolved; other command failures require diagnosis and the repair loop above, not an immediate exit. A nonzero preview is never automatically a clean plan.
    Package override conflicts are blocking even when source patches apply. Show
    the retained override and proposed direct dependency, obtain approval for the
    exact resolution, and rerun the preview. Never silently remove customer pins
@@ -129,7 +166,7 @@ Interpret the decision:
    published host lacks a safe validated installation path, block and request a
    producer fix. Migration authoring, release tagging, runtime preparation and
    Player build scripts are maintainer tools, not customer upgrade steps.
-5. For a clean edge, apply it only to the disposable copy with `upgrade-template --project '<preview_dir>'`, including its validated install. Do not use `--no-install` to simulate state advancement. Record every changed/deleted/created file and dependency, plus the actual before/after protected metadata. Require progress without overshoot, then repeat dry-run and apply until the selected target is reached. No target migration is needed for host-only repair. Never reuse approval of one preview for unseen later edges.
+5. Apply the clean full-chain plan only to the disposable copy with `upgrade-template --project '<preview_dir>'`, including its validated install. The host composes all required configuration edges before installing only the selected release's final dependencies once; it must not install a broken historical host as an intermediate step. Do not use `--no-install` to simulate state advancement. Record every changed/deleted/created file and dependency, plus the actual before/after protected metadata. Require the selected final target without overshoot, then rerun the dry-run and require no remaining changes. No target migration is needed for host-only repair. If an older selected CLI cannot safely compose the required chain, block for a producer fix rather than implementing a skill-side installer.
 6. Re-run `mobile-template-lifecycle.js plan --project-root '<preview_dir>' --host-version "<exact-host-version>"`
    and require `kind: "current"` to confirm the selected host/template/runtime
    state was reached. Do not run strict app admission or add a separate lockfile,
@@ -137,7 +174,8 @@ Interpret the decision:
    dependency installation. Use `validate-mobile-files.js --project-root '<preview_dir>' --upgrade-only --file <changed-file>`
    for changed-file policies without that duplicate package admission.
    Expo compatibility, Expo Doctor, TypeScript and platform bundles are mandatory;
-   any failure blocks application. Require successful Expo Doctor output from
+   any failure blocks application until the repair loop succeeds.
+   Require successful Expo Doctor output from
    this host-owned installation, or run it separately through the approved tooling.
    Surface planning's fingerprint `warnings` without claiming Player/Wrap support.
    Preserve customer instructions/settings and review conflicts rather than
@@ -155,13 +193,16 @@ Interpret the decision:
    When a client is available, load the intended route and exercise the customer
    workflow. Report bundle and runtime results separately; do not fabricate
    environment/auth configuration to manufacture a successful smoke test.
-7. Present the **aggregate full-chain diff**, each edge, conflicts/resolutions, install scripts, expected binaries, and rollback scope. Ask **Apply reviewed release** or **Skip native release** (recommended). Only explicit application approval authorizes real edits.
+7. Present the **aggregate full-chain diff**, each edge, conflicts/resolutions, app-code fixes, install scripts, expected binaries, check results and rollback scope. State any untested device workflows separately. Explain that the test copy passed required checks and a backup will be kept. Ask **Apply the tested upgrade to my app** or **Skip this app upgrade for now** (recommended). Only explicit application approval authorizes real edits.
 
 ### Apply only the approved plan
 
-Recheck every source input against the snapshot, including lock/dependency state and the project-scoped journal. Changed inputs invalidate approval and require a new preview. Take the recovery snapshot before the first real edit, then invoke the same verified reference host CLI and migration sequence rehearsed above with the real app's `--project` path. The host performs the coordinated installation; do not separately preinstall the new host into the old app. After every edge compare operations and state with the approved preview and validate before continuing. New operations, conflicts, lack of progress, or unexpected target metadata stop the chain; do not silently extend approval.
+Recheck every source input against the snapshot, including lock/dependency state and the project-scoped journal. Changed inputs invalidate approval and require a new preview. Take the recovery snapshot before the first real edit, then invoke the same verified reference host CLI and full-chain transaction rehearsed above with the real app's `--project` path, including the approved app-code fixes in their rehearsed order. The host performs the coordinated installation; do not separately preinstall the new host into the old app. Compare the aggregate operations and final state with the approved preview and validate. New operations, conflicts, lack of progress, or unexpected target metadata pause application for diagnosis and a revised preview/approval; do not silently extend approval.
 
 On failure restore only touched files from this invocation's snapshot, including deleted/created paths and original modes, without disturbing pre-existing customer changes. Reconcile installed dependencies from the restored lockfile using the reviewed install policy. If rollback or journal recovery cannot complete safely, preserve the snapshot/journal, report both failures, and stop. Never report `DONE` for a partial migration.
+
+After successful recovery, diagnose and repair the failure in the test copy,
+rerun validation, and obtain approval for the revised full diff before retrying.
 
 After success re-run the metadata-only plan and the same mandatory checks as the rehearsal against `<working_dir>`, passing `--upgrade-only` to changed-file validation. Fingerprint differences remain warnings; deployment retains its separate strict admission. Only a host-validated migration may advance protected template/runtime state; never set it by hand. Update the relevant existing plan/runtime summary, not unrelated memory-bank content. Release approval is not deployment approval.
 
@@ -181,7 +222,7 @@ Offer each remaining outdated direct **JavaScript-only** registry package separa
 
 For each approved JavaScript-only package update in Steps 3 and 4:
 
-1. Snapshot `package.json`, existing npm lockfiles, and `native-app-plan.md` when that package will change it under `.tmp/dependency-maintenance/`.
+1. Snapshot `package.json`, existing npm lockfiles, `native-app-plan.md` when that package will change it, and any approved app-code repair files (including modes and absent-file state) under `.tmp/dependency-maintenance/`.
    Before installation, capture the app's actual installed native dependencies
    and protected requirements in this package's recovery directory. The helper
    creates a new local snapshot and refuses to overwrite an existing one.
@@ -213,7 +254,7 @@ For each approved JavaScript-only package update in Steps 3 and 4:
    when TypeScript is declared), and `validate-mobile-files.js --upgrade-only`
    for each changed file (including `package.json`). That file-policy mode does
    not replace `check-native`. Never run `npx expo install --fix`.
-4. If any command fails, including `check-native`, restore that package's snapshot, reconcile `node_modules`, return `BLOCKED` with the failed command, and do not offer later packages. Keep `native-before.json` until recovery is verified; otherwise delete it with the successful package snapshot and continue.
+4. If any command fails, follow the repair loop above. For native-check failures, including `check-native`, restore that package's snapshot and reconcile `node_modules` from its restored lock before diagnosing a safe retry. Use the same recovery when needed for other failures. If the user declines the repair, restore safely, record the package as skipped and continue. Preserve recovery evidence and stop mutations if restoration is unsafe. Keep `native-before.json` until recovery is verified; delete it with the package snapshot only after successful validation or verified restoration.
 
 Do not update transitive packages directly, add overrides, move packages between dependency sections, or use Git to roll back project files.
 
@@ -229,4 +270,4 @@ Report a security finding only when all are true:
 
 Ignore string-only `via` rollups. When `fixAvailable` names a different package, include it only as context; never recommend a downgrade based on that graph-level fix.
 
-Remove this invocation's `outdated.json` and return `DONE` with a concise summary of changed, skipped, current, and unmanaged packages plus direct security findings. Use `BLOCKED` when release evidence, validation, migration, or recovery remains unresolved, even if the read-only audit completed. Do not include raw audit JSON, snapshots, credentials, or transitive package lists. If no direct advisory exists, say so.
+Remove this invocation's `outdated.json` and return `DONE` with a concise summary of changed, skipped, current, and unmanaged packages, app-code fixes, check results, untested device workflows and direct security findings. Use `BLOCKED` for unmet safety/publication/restart prerequisites or failures with no safe fix after the repair loop, even if the read-only audit completed. A declined repair with verified restoration is skipped, not an upgrade success. Do not include raw audit JSON, snapshots, credentials, or transitive package lists. If no direct advisory exists, say so.

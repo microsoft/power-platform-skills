@@ -15,12 +15,14 @@ const PLUGIN_ROOT = path.resolve(__dirname, '..');
 
 function usage() {
   return [
-    'Usage: node validate-mobile-files.js --project-root <path> (--all-source | --file <path> [--file <path> ...]) [--approved-js-dependency <name>@<exact-version> ...] [--upgrade-only]',
+    'Usage: node validate-mobile-files.js --project-root <path> (--all-source | --file <path> [--file <path> ...]) [--approved-js-dependency <name>@<exact-version> ...] [--upgrade-only | --local-development] [--before-package-json <path>]',
     '',
     'Paths must be regular files. Relative paths resolve from --project-root.',
     '--all-source validates every .ts/.tsx file under app/ and src/, plus root .ts/.tsx files.',
     'Approved JavaScript dependencies must use exact semver versions from the reviewed app plan.',
     '--upgrade-only skips app-lock/native-inventory admission; the upgrade must pass Expo, Expo Doctor and TypeScript checks.',
+    '--local-development retains file/package policies without blocking installation/startup on native compatibility.',
+    '--before-package-json supplies a project-local pre-install manifest to scope local JS approval checks to additions/changes.',
   ].join('\n');
 }
 
@@ -43,6 +45,7 @@ function parseArgs(argv) {
     projectRoot: null,
     targets: [],
     upgradeOnly: false,
+    localDevelopment: false,
   };
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -57,6 +60,12 @@ function parseArgs(argv) {
       parsed.allSource = true;
     } else if (arg === '--upgrade-only') {
       parsed.upgradeOnly = true;
+    } else if (arg === '--local-development') {
+      parsed.localDevelopment = true;
+    } else if (arg === '--before-package-json') {
+      const value = argv[index + 1];
+      if (!value || value.startsWith('--')) parsed.errors.push('Missing --before-package-json path.');
+      else { parsed.beforePackageJson = value; index += 1; }
     } else if (arg === '--diagnostic-artifacts') {
       parsed.errors.push('BLOCKED: --diagnostic-artifacts is retired. Use published host/template packages.');
       parsed.blocked = true;
@@ -76,6 +85,12 @@ function parseArgs(argv) {
     }
   }
 
+  if (parsed.upgradeOnly && parsed.localDevelopment) {
+    parsed.errors.push('Choose --upgrade-only or --local-development, not both.');
+  }
+  if (parsed.beforePackageJson && !parsed.localDevelopment) {
+    parsed.errors.push('--before-package-json requires --local-development.');
+  }
   return parsed;
 }
 
@@ -112,7 +127,7 @@ function collectSourceTargets(projectRoot) {
   return targets.sort();
 }
 
-function runValidator(validatorName, filePath, content, projectRoot, approvedJsDependencies, upgradeOnly) {
+function runValidator(validatorName, filePath, content, projectRoot, approvedJsDependencies, upgradeOnly, localDevelopment, beforePackageJson) {
   const validatorPath = path.join(PLUGIN_ROOT, 'hooks', validatorName);
   const payload = JSON.stringify({
     cwd: projectRoot,
@@ -123,7 +138,9 @@ function runValidator(validatorName, filePath, content, projectRoot, approvedJsD
       filePath,
       validation_mode: 'explicit-mobile-workflow',
       approved_js_dependencies: approvedJsDependencies,
+      before_package_json: beforePackageJson,
       ...(upgradeOnly ? { validation_scope: 'upgrade-only' } : {}),
+      ...(localDevelopment ? { validation_scope: 'local-development' } : {}),
     },
   });
 
@@ -143,12 +160,14 @@ function main(argv) {
   const {
     allSource,
     approvedJsDependencies,
+    beforePackageJson: beforePackageJsonArg,
     blocked: invalidSelection,
     errors,
     help,
     projectRoot: projectRootArg,
     targets,
     upgradeOnly,
+    localDevelopment,
   } = parseArgs(argv);
   if (help) {
     process.stdout.write(`${usage()}\n`);
@@ -173,10 +192,17 @@ function main(argv) {
     return 1;
   }
   const projectRoot = fs.realpathSync(requestedProjectRoot);
-  const validationTargets = allSource ? collectSourceTargets(projectRoot) : targets;
+  const validationTargets = allSource ? collectSourceTargets(projectRoot) : [...targets];
+  if (beforePackageJsonArg) validationTargets.push(beforePackageJsonArg);
+  const beforePath = beforePackageJsonArg ? path.resolve(projectRoot, beforePackageJsonArg) : null;
+  if (beforePath === path.join(projectRoot, 'package.json')) {
+    process.stderr.write('BLOCKED: --before-package-json must name a separate pre-install snapshot, not the current package.json.\n');
+    return 2;
+  }
 
   const files = new Set();
   let blocked = false;
+  let beforePackageJson;
 
   for (const target of validationTargets) {
     const requestedTargetPath = path.resolve(projectRoot, target);
@@ -207,7 +233,8 @@ function main(argv) {
       blocked = true;
       continue;
     }
-    files.add(targetPath);
+    if (requestedTargetPath === beforePath) beforePackageJson = fs.readFileSync(targetPath, 'utf8');
+    else files.add(targetPath);
   }
 
   let binaryFiles = 0;
@@ -225,6 +252,8 @@ function main(argv) {
         projectRoot,
         approvedJsDependencies,
         upgradeOnly,
+        localDevelopment,
+        beforePackageJson,
       );
       if (result.stdout) process.stdout.write(result.stdout);
       if (result.stderr) process.stderr.write(result.stderr);

@@ -158,6 +158,149 @@ test('upgrade file validation skips lock and installed-inventory admission but r
   blocked(invoke(true), /Forbidden dependency/);
 });
 
+test('local changed-file validation permits preinstall/native drift but retains package policy', (t) => {
+  const fixture = createFixture(t);
+  addDependency(fixture.projectRoot, '@microsoft/power-apps-native-controls', '1.0.0');
+  const invoke = (...flags) => spawnSync(process.execPath, [
+    path.join(fixture.pluginRoot, 'scripts/validate-mobile-files.js'),
+    '--project-root', fixture.projectRoot, '--file', 'package.json', ...flags,
+  ], {
+    cwd: fixture.projectRoot, encoding: 'utf8',
+    env: { ...process.env, POWER_PLATFORM_SKILLS_TELEMETRY_MOBILE_APP_OPTOUT: '1' },
+  });
+  blocked(invoke(), /Native\/runtime dependency/);
+  const result = invoke('--local-development');
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stderr, /WARNING: Local development[\s\S]*\/debug-app/);
+  fs.unlinkSync(path.join(fixture.projectRoot, 'package-lock.json'));
+  fs.rmSync(path.join(fixture.projectRoot, 'node_modules'), { recursive: true });
+  assert.equal(invoke('--local-development').status, 0);
+  modifyJson(path.join(fixture.projectRoot, 'package.json'), (pkg) => { pkg.dependencies.axios = '1.0.0'; });
+  blocked(invoke('--local-development'), /Forbidden dependency/);
+  modifyJson(path.join(fixture.projectRoot, 'package.json'), (pkg) => {
+    delete pkg.dependencies.axios;
+    pkg.dependencies['expo-msal-intune'] = '1.0.0';
+  });
+  blocked(invoke('--local-development'), /Vendor-only dependency/);
+  assert.equal(invoke('--local-development', '--upgrade-only').status, 1);
+});
+
+test('local JS installation requires exact approval without release admission', (t) => {
+  const { fixture } = calendarFixture(t);
+  addDependency(fixture.projectRoot, '@microsoft/power-apps-native-controls', '1.0.0');
+  const before = JSON.parse(fs.readFileSync(path.join(fixture.projectRoot, 'package.json'), 'utf8'));
+  delete before.dependencies['react-native-calendars'];
+  writeJson(path.join(fixture.projectRoot, 'before-install.json'), before);
+  const invoke = (...approved) => spawnSync(process.execPath, [
+    path.join(fixture.pluginRoot, 'scripts/validate-mobile-files.js'),
+    '--project-root', fixture.projectRoot, '--local-development', '--file', 'package.json',
+    '--before-package-json', 'before-install.json',
+    ...approved.flatMap((entry) => ['--approved-js-dependency', entry]),
+  ], {
+    cwd: fixture.projectRoot, encoding: 'utf8',
+    env: { ...process.env, POWER_PLATFORM_SKILLS_TELEMETRY_MOBILE_APP_OPTOUT: '1' },
+  });
+  blocked(invoke(), /user-approved JavaScript Dependencies plan/);
+  blocked(invoke('react-native-calendars@1.1300.0'), /user-approved JavaScript Dependencies plan/);
+  const approved = invoke('react-native-calendars@1.1314.0');
+  assert.equal(approved.status, 0, approved.stderr);
+  fs.writeFileSync(path.join(fixture.projectRoot, 'package-lock.json'), 'invalid and unrelated');
+  fs.writeFileSync(path.join(fixture.projectRoot, 'node_modules/expo-haptics/package.json'), 'invalid and unrelated');
+  assert.equal(invoke('react-native-calendars@1.1314.0').status, 0);
+  modifyJson(path.join(fixture.projectRoot, 'node_modules/react-native-calendars/package.json'), (pkg) => {
+    pkg.version = '1.1300.0';
+  });
+  blocked(invoke('react-native-calendars@1.1314.0'), /installed at its exact approved version/);
+  fs.writeFileSync(path.join(fixture.projectRoot, 'before-install.json'), 'invalid snapshot');
+  blocked(invoke('react-native-calendars@1.1314.0'), /previous package.json/);
+});
+
+test('ordinary local work never reapproves or scans unchanged JavaScript packages', (t) => {
+  const { fixture } = calendarFixture(t);
+  const content = fs.readFileSync(path.join(fixture.projectRoot, 'package.json'), 'utf8');
+  fs.writeFileSync(path.join(fixture.projectRoot, 'package-lock.json'), 'invalid and unrelated');
+  fs.writeFileSync(path.join(fixture.projectRoot, 'node_modules/react-native-calendars/package.json'), 'invalid existing installation');
+  for (const options of [
+    { input: { validation_scope: 'local-development' } },
+    { tool: 'Edit', input: { validation_scope: 'local-development', old_string: content, new_string: content } },
+  ]) {
+    const result = runValidator(fixture, options);
+    assert.equal(result.status, 0, result.stderr);
+  }
+});
+
+test('local edits enforce approval for added and changed JS dependencies, not existing rows', (t) => {
+  const fixture = createFixture(t);
+  addDependency(fixture.projectRoot, 'react-native-existing-ui', '1.0.0');
+  for (const version of ['1.0.0', '2.0.0']) {
+    const before = fs.readFileSync(path.join(fixture.projectRoot, 'package.json'), 'utf8');
+    addDependency(fixture.projectRoot, 'ordinary-js-library', version);
+    const input = {
+      validation_scope: 'local-development', old_string: before,
+      new_string: fs.readFileSync(path.join(fixture.projectRoot, 'package.json'), 'utf8'),
+    };
+    blocked(runValidator(fixture, { tool: 'Edit', input }), /user-approved JavaScript Dependencies plan/);
+    const result = runValidator(fixture, { tool: 'Edit', input, approved: [`ordinary-js-library@${version}`] });
+    assert.equal(result.status, 0, result.stderr);
+  }
+});
+
+test('local JS inspection follows nested, hoisted and aliased dependencies without reading the lock', (t) => {
+  const { fixture } = calendarFixture(t);
+  addDependency(fixture.projectRoot, '@scope/helper', '1.0.0', { section: null });
+  addDependency(fixture.projectRoot, 'helper-alias', '1.0.0', {
+    section: null, installPath: 'node_modules/react-native-calendars/node_modules/helper-alias',
+    properties: { name: 'canonical-helper' },
+  });
+  modifyJson(path.join(fixture.projectRoot, 'node_modules/@scope/helper/package.json'), (pkg) => {
+    pkg.dependencies = { 'react-native-calendars': '*' };
+  });
+  modifyJson(path.join(fixture.projectRoot, 'node_modules/react-native-calendars/package.json'), (pkg) => {
+    pkg.dependencies = { '@scope/helper': '*', 'helper-alias': 'npm:canonical-helper@1.0.0' };
+    pkg.optionalDependencies = { 'missing-optional-helper': '1.0.0' };
+  });
+  writeJson(path.join(fixture.projectRoot, 'node_modules/react-native-calendars/node_modules/unrelated/package.json'), { invalid: true });
+  fs.writeFileSync(path.join(fixture.projectRoot, 'package-lock.json'), 'invalid and unrelated');
+  const invoke = () => runValidator(fixture, {
+    approved: ['react-native-calendars@1.1314.0'], input: { validation_scope: 'local-development' },
+  });
+  const result = invoke();
+  assert.equal(result.status, 0, result.stderr);
+  modifyJson(path.join(fixture.projectRoot, 'node_modules/react-native-calendars/node_modules/helper-alias/package.json'), (pkg) => {
+    pkg.codegenConfig = {};
+  });
+  blocked(invoke(), /native\/runtime/i);
+});
+
+test('a local dependency snapshot cannot replace the manifest validation target', (t) => {
+  const fixture = createFixture(t);
+  addDependency(fixture.projectRoot, 'axios', '1.0.0');
+  const result = spawnSync(process.execPath, [
+    path.join(fixture.pluginRoot, 'scripts/validate-mobile-files.js'),
+    '--project-root', fixture.projectRoot, '--local-development', '--file', 'package.json',
+    '--before-package-json', 'package.json',
+  ], {
+    cwd: fixture.projectRoot, encoding: 'utf8',
+    env: { ...process.env, POWER_PLATFORM_SKILLS_TELEMETRY_MOBILE_APP_OPTOUT: '1' },
+  });
+  blocked(result, /separate pre-install snapshot/);
+});
+
+test('local JS approval cannot bypass native contents or transitive native dependencies', (t) => {
+  for (const transitive of [false, true]) {
+    const fixture = createFixture(t);
+    addDependency(fixture.projectRoot, 'ordinary-js-wrapper', '1.0.0', {
+      properties: transitive ? { dependencies: { 'native-child': '1.0.0' } } : { codegenConfig: {} },
+    });
+    if (transitive) addDependency(fixture.projectRoot, 'native-child', '1.0.0', {
+      section: null, properties: { codegenConfig: {} },
+    });
+    blocked(runValidator(fixture, {
+      approved: ['ordinary-js-wrapper@1.0.0'], input: { validation_scope: 'local-development' },
+    }), /contains native\/runtime code/);
+  }
+});
+
 test('old apps are admitted by their release, not by a newer default release', (t) => {
   const old = fixtureRelease();
   const newest = fixtureRelease(2);
@@ -223,9 +366,9 @@ test('a JS-only host remains runtime-sensitive and its installed version cannot 
   blocked(runValidator(fixture), /native inventory/);
 });
 
-test('nested native instances must match their exact reviewed path and version', (t) => {
+test('nested first-party instances must match a reviewed identity and version', (t) => {
   const release = fixtureRelease();
-  const nested = 'node_modules/expo/node_modules/ordinary-bridge';
+  const nested = 'node_modules/expo/node_modules/@microsoft/power-apps-native-common';
   release.nativePackages[nested] = '1.0.0';
   const fixture = createFixture(t, { release });
   assert.equal(runValidator(fixture).status, 0);
@@ -266,7 +409,7 @@ test('detects ordinary-name native modules in a JS dependency transitive closure
   addDependency(fixture.projectRoot, 'ordinary-bridge', '1.0.0', {
     section: null, installPath: 'node_modules/ordinary-ui/node_modules/ordinary-bridge', properties: { codegenConfig: {} },
   });
-  blocked(runValidator(fixture), /Unreviewed native package/);
+  blocked(runValidator(fixture), /Native\/runtime dependency/);
 });
 
 test('rejects malformed package, app, lock and installed JSON without leaking content', (t) => {

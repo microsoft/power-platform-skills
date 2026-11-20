@@ -873,7 +873,7 @@ node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' step --i
 ```
 
 This step is template-only and foreground-only. Do not clone/copy templates, do not run background scaffold jobs, and do not use any legacy fallback path.
-Acquisition and release resolution must already have passed Step 0.
+Acquisition and the local-development diagnostic must already have completed Step 0; compatibility warnings do not block this preparation.
 
 **Print before starting:**
 > "→ [Step 5/13] Preparing existing Expo standalone template in <working_dir> …"
@@ -1336,7 +1336,7 @@ becoming an arbitrary CSS value.
 
 **Telemetry checkpoint: `install_approved_javascript_dependencies`**
 
-Read and execute the Installation Contract in [`shared/references/javascript-dependency-planning.md`](${PLUGIN_ROOT}/shared/references/javascript-dependency-planning.md) for every approved row in `## Screens → ### JavaScript Dependencies`. If the subsection is absent or says `None.`, continue without changing dependencies.
+Read and execute the Installation Contract in [`shared/references/javascript-dependency-planning.md`](${PLUGIN_ROOT}/shared/references/javascript-dependency-planning.md) for new or changed approved rows in `## Screens → ### JavaScript Dependencies`; reuse unchanged existing rows. If the subsection is absent or says `None.`, continue without changing dependencies.
 
 Gate 4 approval is consent for exactly the packages and versions in the table. Install them into `<working_dir>` before any skeleton or builder imports them, validate `package.json` and the lockfile, and verify module resolution. Do not substitute another package/version, infer a package from a compiler error, or route a JS-only package through `/add-native`. If final inspection finds native code/config or incompatible runtime dependencies, remove only the newly added package and STOP with the exact failed criterion.
 

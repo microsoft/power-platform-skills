@@ -228,7 +228,7 @@ There is no app-name collision check: `pa app list` returns only code apps, so i
 
 **Telemetry checkpoint: `prepare_template_files`**
 
-Step 0 already acquired or validated the template against its published release and installed its lock; this step never acquires, installs, or re-resolves.
+Step 0 already acquired the template or ran its local-development diagnostic, and installed its lock; this step never acquires, installs, or re-resolves.
 `prepare-mobile-template.js` owns every change to the template before `init`: identity, the web-preview output override (Step 3.5), shared helpers including `src/hooks/data/core.ts`, the root provider contract, and removing an empty placeholder `power.config.json`.
 `.tmp/prepare.json` keeps its `writtenFiles` for Step 7's changed-file gate. Nothing writes under `src/generated/`, which only Power Apps generation commands own.
 
