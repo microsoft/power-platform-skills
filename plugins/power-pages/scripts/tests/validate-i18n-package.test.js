@@ -934,6 +934,23 @@ test('preserves validation causes while reporting only safe diagnostics', (t) =>
       return true;
     }
   );
+  for (const malformedJson of [
+    '{"value":"position 123456789" nope}',
+    '{"value":"line 123456789 column 987654321" nope}',
+  ]) {
+    assert.throws(
+      () => parseJsonWithDiagnostic(
+        malformedJson,
+        'Test input must contain valid JSON.',
+        'Test input'
+      ),
+      (error) => {
+        assert.equal(error.cause?.name, 'SyntaxError');
+        assert.doesNotMatch(error.cliDiagnostic, /123456789|987654321/);
+        return true;
+      }
+    );
+  }
 
   const projectRoot = createTempProject(t);
   const metadata = {

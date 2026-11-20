@@ -621,6 +621,7 @@ test('allows only one rendered audit lease for a transaction', (t) => {
 
 test('preserves audit JSON parse causes and reports only the safe location', (t) => {
   const projectRoot = createTempProject(t);
+  const auditPath = path.join(projectRoot, TRANSACTION_AUDIT_FILE);
   writeProjectFile(
     projectRoot,
     TRANSACTION_AUDIT_FILE,
@@ -639,6 +640,21 @@ test('preserves audit JSON parse causes and reports only the safe location', (t)
       return true;
     }
   );
+
+  for (const malformedJson of [
+    'position 123456789',
+    'line 123456789 column 987654321',
+  ]) {
+    fs.writeFileSync(auditPath, malformedJson);
+    assert.throws(
+      () => endLocalizationVerificationAudit(projectRoot, 'run-id'),
+      (error) => {
+        assert.equal(error.cause?.name, 'SyntaxError');
+        assert.doesNotMatch(error.message, /123456789|987654321/);
+        return true;
+      }
+    );
+  }
 });
 
 test('transaction manager rejects unknown and duplicate arguments', () => {

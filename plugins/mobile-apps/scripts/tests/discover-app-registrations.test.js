@@ -113,6 +113,20 @@ test('preserves invalid JSON causes without echoing Azure CLI output', () => {
     }
   );
 
+  for (const malformedJson of [
+    'position 123456789',
+    'line 123456789 column 987654321',
+  ]) {
+    assert.throws(
+      () => runAzJson(['account', 'show'], 30000, () => malformedJson),
+      (error) => {
+        assert.equal(error.cause?.name, 'SyntaxError');
+        assert.doesNotMatch(error.message, /123456789|987654321/);
+        return true;
+      }
+    );
+  }
+
   assert.throws(
     () => runAzJson(['account', 'show'], 30000, () => ''),
     (error) => {

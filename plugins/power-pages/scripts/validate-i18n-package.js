@@ -885,11 +885,13 @@ function getJsonParseLocation(error) {
   const message = error && typeof error.message === 'string'
     ? error.message
     : '';
-  const lineAndColumn = message.match(/\(line (\d+) column (\d+)\)/i);
+  const lineAndColumn = message.match(
+    /\bin JSON at position \d+ \(line (\d+) column (\d+)\)$/i
+  );
   if (lineAndColumn) {
     return `line ${lineAndColumn[1]}, column ${lineAndColumn[2]}`;
   }
-  const position = message.match(/\bposition (\d+)\b/i);
+  const position = message.match(/\bin JSON at position (\d+)$/i);
   return position ? `position ${position[1]}` : null;
 }
 
