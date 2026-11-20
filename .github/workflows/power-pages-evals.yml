@@ -74,6 +74,8 @@ jobs:
         name: ${{ matrix.skill }}/${{ matrix.case }} ${{ matrix.model }} ${{ matrix.reasoningEffort }}
         strategy:
             fail-fast: false
+            # Two effort runs share one PAT. Limit bursts to avoid account-wide 429s.
+            max-parallel: 6
             matrix:
                 include: ${{ fromJSON(needs.select.outputs.matrix) }}
         # Playwright 1.58.2 cannot install Chromium on Ubuntu 26.04.
@@ -108,7 +110,7 @@ jobs:
                   JUDGE_MODEL: ${{ matrix.judgeModel }}
                   REASONING_EFFORT: ${{ matrix.reasoningEffort }}
                   JUDGE_REASONING_EFFORT: ${{ matrix.judgeReasoningEffort }}
-              run: node evals/runtime/run.mjs run --skill "$SKILL" --case "$CASE" --runs "$RUNS" --model "$MODEL" --judge-model "$JUDGE_MODEL" --reasoning-effort "$REASONING_EFFORT" --judge-reasoning-effort "$JUDGE_REASONING_EFFORT" --out evals/reports/action
+              run: node evals/runtime/retry-case.mjs
             # Refuse to upload if the PAT or any GitHub token shape appears in evidence.
             - name: check evidence for credentials
               id: credential-check

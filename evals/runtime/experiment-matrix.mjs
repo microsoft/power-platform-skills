@@ -36,7 +36,7 @@ export function judgeFor(model, judgeModel, fallbackJudge) {
 export function buildMatrix({ skills, models, catalog, effort, judgeModel, judgeEffort, fallbackJudge }) {
   const byId = new Map(catalog.filter(entry => entry.policy?.state !== 'disabled').map(entry => [entry.id, entry]));
   const unavailable = [];
-  const include = [];
+  const pairs = [];
   for (const model of models) {
     const entry = byId.get(model);
     const resolved = entry && resolveEffort(entry, effort);
@@ -47,15 +47,30 @@ export function buildMatrix({ skills, models, catalog, effort, judgeModel, judge
     if (!resolvedJudgeEffort) throw new Error(`Judge model is unavailable: ${selectedJudge}`);
     const pair = { model, judgeModel: selectedJudge, reasoningEffort: resolved, judgeReasoningEffort: resolvedJudgeEffort };
     validateModelPair(pair);
-    for (const { skill, name } of skills) include.push({ skill, case: name, ...pair });
+    pairs.push(pair);
   }
-  return { include, unavailable };
+  // Interleave models so a limited parallel queue starts different models together.
+  return { include: skills.flatMap(({ skill, name }) => pairs.map(pair => ({ skill, case: name, ...pair }))), unavailable };
+}
+
+export function selectRetryJobs(include, selected) {
+  if (!selected.startsWith('retry:')) return include;
+  const requested = JSON.parse(selected.slice('retry:'.length));
+  if (!Array.isArray(requested) || !requested.length || requested.some(name => typeof name !== 'string') ||
+      new Set(requested).size !== requested.length) throw new Error('Retry selection must contain distinct job names');
+  const jobName = item => `${item.skill}/${item.case} ${item.model} ${item.reasoningEffort}`;
+  const available = new Map(include.map(item => [jobName(item), item]));
+  const missing = requested.filter(name => !available.has(name));
+  if (missing.length) throw new Error(`Retry jobs are unavailable: ${missing.join(', ')}`);
+  const requestedSet = new Set(requested);
+  return include.filter(item => requestedSet.has(jobName(item)));
 }
 
 async function main() {
   const token = process.env.EVAL_TOKEN;
   if (!token) throw new Error('PP_EVAL_COPILOT_TOKEN secret is required for experiment runs');
-  const skills = await selectCases(process.env.SELECTED_SKILL);
+  const selected = process.env.SELECTED_SKILL;
+  const skills = await selectCases(selected?.startsWith('retry:') ? 'all' : selected);
   const models = process.env.MODELS.split(',').map(model => model.trim()).filter(Boolean);
   if (!models.length || new Set(models).size !== models.length) throw new Error('Provide distinct comma-separated models');
   const home = await mkdtemp(path.join(tmpdir(), 'pp-eval-catalog-'));
@@ -67,11 +82,13 @@ async function main() {
   let catalog;
   try { await client.start(); catalog = await client.listModels(); }
   finally { await client.stop().catch(() => {}); await rm(home, { recursive: true, force: true }); }
-  const { include, unavailable } = buildMatrix({
+  const matrix = buildMatrix({
     skills, models, catalog, effort: process.env.REASONING_EFFORT,
     judgeModel: process.env.JUDGE_MODEL.trim(), judgeEffort: process.env.JUDGE_REASONING_EFFORT,
     fallbackJudge: 'claude-opus-5.5',
   });
+  const include = selectRetryJobs(matrix.include, selected);
+  const { unavailable } = matrix;
   // Only IDs, policy and effort lists: the catalog carries no credentials.
   const lines = [
     '## Model catalog for the supplied token', '',

@@ -9,7 +9,7 @@ import { createRequire } from 'node:module';
 import { parse as parseYaml } from 'yaml';
 import { evaluate, outcomeRecord, parseArgs } from '../run.mjs';
 import { loadSuites, repoRoot, trialGraders } from '../suites.mjs';
-import { buildMatrix, selectCases } from '../experiment-matrix.mjs';
+import { buildMatrix, selectCases, selectRetryJobs } from '../experiment-matrix.mjs';
 
 test('only covered skills have Vally suites; legacy-only skills remain unselected', async () => {
   const suites = await loadSuites();
@@ -112,6 +112,23 @@ test('experiment runs requested available model and effort combinations with dis
   assert.equal(maxJudge.include[0].judgeReasoningEffort, 'xhigh');
 });
 
+test('retry selection includes only requested cases and refuses missing jobs', async () => {
+  const skills = (await selectCases('all')).slice(0, 2);
+  const catalog = ['claude-opus-5.5', 'gpt-6.1-sol'].map(id => ({
+    id, capabilities: { supports: { reasoningEffort: true } }, supportedReasoningEfforts: ['medium'],
+  }));
+  const { include } = buildMatrix({
+    skills, models: catalog.map(entry => entry.id), catalog, effort: 'medium',
+    judgeModel: '', judgeEffort: 'medium', fallbackJudge: 'claude-opus-5.5',
+  });
+  assert.deepEqual(include.slice(0, 2).map(item => item.model), ['claude-opus-5.5', 'gpt-6.1-sol']);
+  const target = include[2];
+  const name = `${target.skill}/${target.case} ${target.model} ${target.reasoningEffort}`;
+  assert.deepEqual(selectRetryJobs(include, `retry:${JSON.stringify([name])}`), [target]);
+  assert.throws(() => selectRetryJobs(include, 'retry:["missing"]'), /unavailable/);
+  assert.throws(() => selectRetryJobs(include, `retry:${JSON.stringify([name, name])}`), /distinct/);
+});
+
 test('experiment workflow dispatches per-case jobs with guarded evidence', async () => {
   const workflow = parseYaml(await readFile(path.join(repoRoot, '.github/workflows/power-pages-evals.yml'), 'utf8'));
   const select = workflow.jobs.select;
@@ -119,8 +136,8 @@ test('experiment workflow dispatches per-case jobs with guarded evidence', async
   assert.equal(select.steps.find(step => step.id === 'select').run, 'node evals/runtime/experiment-matrix.mjs');
   assert.match(select.if, /github\.actor == 'priyanshu92'/);
   assert.equal(evaluate.if, select.if);
-  assert.equal(evaluate.strategy['max-parallel'], undefined);
-  assert.match(evaluate.steps.find(step => step.name === 'measure paired offline trials').run, /--case "\$CASE"/);
+  assert.equal(evaluate.strategy['max-parallel'], 6);
+  assert.equal(evaluate.steps.find(step => step.name === 'measure paired offline trials').run, 'node evals/runtime/retry-case.mjs');
   assert.match(evaluate.steps.find(step => step.name === 'upload grading evidence').with.name, /^pp-eval-experiment-/);
 });
 
