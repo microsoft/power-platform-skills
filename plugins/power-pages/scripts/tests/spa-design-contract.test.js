@@ -4,6 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const { readCreateSiteGuidance } = require('./helpers/create-site-guidance');
 
 const pluginRoot = path.resolve(__dirname, '..', '..');
 const read = (file) => fs.readFileSync(path.join(pluginRoot, ...file.split('/')), 'utf8').replace(/\r\n/g, '\n');
@@ -30,7 +31,7 @@ test('non-SPA dispatch remains isolated from the SPA standalone review workflow'
 });
 
 test('SPA creation retains typography, critique, and accessibility completion contracts', () => {
-  const source = read('skills/create-site/SKILL.md');
+  const source = readCreateSiteGuidance('spa');
   const routed = source.split('## Phase 2: Scaffold & Launch Dev Server');
   assert.equal(routed.length, 2);
   assert.match(routed[0], /Non-SPA \(Liquid \+ Web Template\)/);

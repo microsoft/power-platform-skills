@@ -1,0 +1,92 @@
+import { useEffect, useRef, useState } from 'react'
+import { Link } from 'react-router-dom'
+import { useAuth } from '../hooks/useAuth'
+
+const INCLUDE_PROFILE_PAGE = true  // set by skill based on Phase 2.1 answer
+
+export default function AuthButton() {
+  const { isAuthenticated, isLoading, displayName, initials, logout } = useAuth()
+  const [open, setOpen] = useState(false)
+  const containerRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    function onMouseDown(e: MouseEvent) {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        setOpen(false)
+      }
+    }
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === 'Escape') setOpen(false)
+    }
+    document.addEventListener('mousedown', onMouseDown)
+    document.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.removeEventListener('mousedown', onMouseDown)
+      document.removeEventListener('keydown', onKeyDown)
+    }
+  }, [open])
+
+  if (isLoading) return null
+
+  if (!isAuthenticated) {
+    return (
+      <Link to="/login" className="btn-primary" style={{ padding: '8px 20px', fontSize: '0.875rem', textDecoration: 'none' }}>
+        Sign In
+      </Link>
+    )
+  }
+
+  return (
+    <div ref={containerRef} style={{ position: 'relative' }}>
+      <button type="button"
+        onClick={() => setOpen(o => !o)}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        style={{
+          display: 'flex', alignItems: 'center', gap: 10,
+          background: 'none', border: 'none', cursor: 'pointer', padding: 4,
+        }}>
+        <div style={{ width: 32, height: 32, borderRadius: '50%', background: 'var(--color-primary)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.75rem', fontWeight: 600 }} aria-hidden="true">{initials}</div>
+        <span style={{ fontSize: '0.875rem', fontWeight: 500 }}>{displayName}</span>
+        <span aria-hidden="true" style={{ fontSize: '0.65rem', color: 'var(--color-text-muted)' }}>▾</span>
+      </button>
+
+      {open && (
+        <div role="menu"
+          style={{
+            position: 'absolute', top: 'calc(100% + 8px)', right: 0,
+            minWidth: 180,
+            background: 'var(--color-surface)',
+            border: '1px solid var(--color-border)',
+            borderRadius: 'var(--radius-sm)',
+            boxShadow: 'var(--shadow-md)',
+            padding: 4,
+            zIndex: 100,
+          }}>
+          {INCLUDE_PROFILE_PAGE && (
+            <Link to="/user-profile" role="menuitem"
+              onClick={() => setOpen(false)}
+              style={menuItemStyle}>
+              My Profile
+            </Link>
+          )}
+          <button type="button" role="menuitem"
+            onClick={() => { setOpen(false); logout('/'); }}
+            style={{ ...menuItemStyle, background: 'none', border: 'none', textAlign: 'left', cursor: 'pointer', width: '100%' }}>
+            Sign Out
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}
+
+const menuItemStyle: React.CSSProperties = {
+  display: 'block',
+  padding: '10px 14px',
+  fontSize: '0.875rem',
+  color: 'var(--color-text)',
+  textDecoration: 'none',
+  borderRadius: 'var(--radius-sm)',
+}

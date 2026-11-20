@@ -25,8 +25,8 @@
 //     Waivable: no — new component types must be added to the discovery module.
 //
 //   GATE-must-have-marker
-//     Trigger: a skill/reference workflow section contains an `AskUserQuestion` prompt
-//              (matched by `` `AskUserQuestion` `` near a `:`).
+//     Trigger: a section contains a legacy host-tool prompt or portable
+//              `Ask the user:` introduction.
 //     Require: the same section contains at least one preceding
 //              `<!-- gate: ... -->` or `<!-- not-a-gate: ... -->` marker.
 //     Scope:   Every SKILL.md, references/*-workflow.md and workflows/*.md under skills/ → severity 'error'.
@@ -354,7 +354,7 @@ const PPCTYPE_FILTER_PATTERN = /powerpagecomponenttype\s+eq\s+(\d+)/gi;
 //
 //   <!-- not-a-gate: <reason text> -->
 //
-// Pairing rule: each `AskUserQuestion` prompt in a phase section must be
+// Pairing rule: each recognized prompt in a phase section must be
 // preceded (anywhere earlier in the same section) by at least one
 // `<!-- gate: ... -->` or `<!-- not-a-gate: ... -->` marker.
 
@@ -371,12 +371,10 @@ const GATE_MARKER_PATTERN =
 // anchors the match.
 const NOT_A_GATE_PATTERN = /<!--\s*not-a-gate:\s*([\s\S]+?)\s*-->/g;
 
-// Strong-signal AskUserQuestion prompt detection. Requires backticked
-// `AskUserQuestion` followed (on the same line, within ~150 chars) by a colon
-// — filters out prose mentions like "the AskUserQuestion tool" and table cells.
-// Allows backticks inside the matched range so multi-select prompts of the
-// form "Use `AskUserQuestion` with `multiSelect: true`:" are still detected.
-const PROMPT_LINE_PATTERN = /`AskUserQuestion`[^\n]{0,150}:/;
+// Recognize both legacy `Use `AskUserQuestion`:` and portable `Ask the user:`
+// introductions. Anchor the portable form so prose and question-table cells
+// do not create false positives. Keep legacy matching for unconverted skills.
+const PROMPT_LINE_PATTERN = /`AskUserQuestion`[^\n]{0,150}:|^\s*Ask the user:/;
 
 function splitIntoSections(content) {
   const lines = content.split(/\r?\n/);
@@ -428,7 +426,7 @@ function extractNotAGateMarkers(content) {
   return out;
 }
 
-// Find AskUserQuestion prompts. Returns array of line numbers where a prompt
+// Find user prompts. Returns array of line numbers where a prompt
 // is introduced.
 function findPromptLines(content) {
   const lines = content.split(/\r?\n/);
@@ -605,7 +603,7 @@ function collectFindings({ pluginRoot }) {
           severity: SKILL_SEVERITY,
           file,
           message:
-            `Phase section "${u.heading}" contains an \`AskUserQuestion\` prompt (line ${u.lineNum}) ` +
+            `Phase section "${u.heading}" contains a user prompt (line ${u.lineNum}) ` +
             `with no preceding \`<!-- gate: ... -->\` or \`<!-- not-a-gate: ... -->\` marker in the same section.`,
           hint: 'See references/approval-gates.md §4 (marker syntax) and §6 (catalog).',
         });

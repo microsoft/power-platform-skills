@@ -1,0 +1,77 @@
+import { useState, useEffect } from 'react';
+import { login, getAuthProvider, getAuthError } from '../services/authService';
+import './LocalLoginForm.css';
+
+export function LocalLoginForm() {
+  const [credential, setCredential] = useState('');
+  const [password, setPassword] = useState('');
+  const [rememberMe, setRememberMe] = useState(false);
+  const [error, setError] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const provider = getAuthProvider();
+  const isEmailMode = provider.loginByEmail ?? true;
+
+  // Check for server-side auth errors passed via URL query params
+  useEffect(() => {
+    const serverError = getAuthError();
+    if (serverError) setError(serverError);
+  }, []);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
+    setIsSubmitting(true);
+    try {
+      await login(undefined, { username: credential, password, rememberMe });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Login failed. Please check your credentials.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  return (
+    <form className="local-login-form" onSubmit={handleSubmit}>
+      {error && <div className="form-error" role="alert">{error}</div>}
+      <div className="form-field">
+        <label htmlFor="credential">{isEmailMode ? 'Email' : 'Username'}</label>
+        <input
+          id="credential"
+          type={isEmailMode ? 'email' : 'text'}
+          value={credential}
+          onChange={(e) => setCredential(e.target.value)}
+          required
+          autoComplete={isEmailMode ? 'email' : 'username'}
+        />
+      </div>
+      <div className="form-field">
+        <label htmlFor="password">Password</label>
+        <input
+          id="password"
+          type="password"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          required
+          autoComplete="current-password"
+        />
+      </div>
+      <div className="form-field form-checkbox">
+        <label>
+          <input
+            type="checkbox"
+            checked={rememberMe}
+            onChange={(e) => setRememberMe(e.target.checked)}
+          />
+          Remember me
+        </label>
+      </div>
+      <button type="submit" disabled={isSubmitting}>
+        {isSubmitting ? 'Signing in...' : 'Sign In'}
+      </button>
+      <div className="form-links">
+        <a href="/forgot-password">Forgot password?</a>
+      </div>
+    </form>
+  );
+}

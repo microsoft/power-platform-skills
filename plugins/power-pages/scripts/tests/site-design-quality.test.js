@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { checkColorPair } = require('../lib/style-site-contrast');
+const { readCreateSiteGuidance } = require('./helpers/create-site-guidance');
 
 const pluginRoot = path.resolve(__dirname, '..', '..');
 const sharedPath = path.join(pluginRoot, 'references', 'site-design-quality.md');
@@ -58,7 +59,7 @@ test('non-SPA final design review preserves local approval, evidence, and native
   const style = fs.readFileSync(path.join(pluginRoot, 'skills', 'edit-site',
     'references', 'style-site-workflow.md'), 'utf8');
   const create = fs.readFileSync(path.join(pluginRoot, 'skills', 'create-site', 'SKILL.md'), 'utf8');
-  const nonSpaCreation = fs.readFileSync(path.join(pluginRoot, 'skills', 'create-site', 'workflows', 'non-spa-site.md'), 'utf8');
+  const nonSpaCreation = readCreateSiteGuidance('non-spa');
   const common = create
     .split('## Phase 2: Scaffold & Launch Dev Server')[0]
     .replace(/^---\r?\n[\s\S]*?\r?\n---/, '');
@@ -190,7 +191,7 @@ test('non-SPA imagery reuses its asset workflow and SPA execution remains in the
   }
   assert.match(nonSpa, /\$\{PLUGIN_ROOT\}\/scripts\/prepare-non-spa-asset\.js/);
   assert.match(documents.get(codePath), /index\.html/);
-  assert.match(documents.get(codePath), /browser_snapshot/);
+  assert.match(documents.get(codePath), /browser structure inspection/);
   for (const content of [shared, nonSpa]) {
     assert.doesNotMatch(content, /browser_snapshot|npm run dev|python -m http\.server/);
     assert.doesNotMatch(content, /<link\b[^>]*fonts\.googleapis/);

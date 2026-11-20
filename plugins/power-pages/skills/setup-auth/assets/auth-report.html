@@ -327,14 +327,18 @@ overviewCard.appendChild(el('h3', { text: 'Highlights' }));
 const ul = el('ul');
 ul.style.cssText = 'margin-left:18px;font-size:13px;color:var(--text);';
 function addHighlight(text) { ul.appendChild(el('li', { text: text })); }
+function termsEnforcementNote(features) {
+  if (!features.termsAndConditions) return 'Not enabled';
+  if (features.termsPrerequisiteStatus === 'unverified') return 'Scaffolded; enforcement unverified (Privacy Extensions solution check failed)';
+  if (features.termsEnforced && (!features.termsPrerequisiteStatus || features.termsPrerequisiteStatus === 'detected')) return 'Enabled - solution detected; live enforcement not tested';
+  return 'Scaffolded but NOT enforced (Privacy Extensions solution missing or prerequisites incomplete)';
+}
 if (PROVIDERS.length) addHighlight(`${PROVIDERS.length} identity provider${PROVIDERS.length === 1 ? '' : 's'} configured.`);
 if (LOCAL_AUTH) addHighlight(`Local authentication enabled (login by ${LOCAL_AUTH.loginBy || 'username'}, registration: ${LOCAL_AUTH.registrationMode || 'unspecified'}).`);
 if (OPTIONAL_FEATURES) {
   if (OPTIONAL_FEATURES.profilePage) addHighlight('Profile page (/user-profile) was scaffolded.');
   if (OPTIONAL_FEATURES.termsAndConditions) {
-    addHighlight(OPTIONAL_FEATURES.termsEnforced
-      ? 'Terms & Conditions enabled — Privacy Extensions solution detected, enforcement will work.'
-      : 'Terms & Conditions scaffolded — Privacy Extensions solution NOT detected, enforcement will be silently ignored until the solution is installed.');
+    addHighlight(`Terms & Conditions: ${termsEnforcementNote(OPTIONAL_FEATURES)}.`);
   }
   if (OPTIONAL_FEATURES.federatedLogout) addHighlight('Federated (RP-initiated) logout enabled — users will be signed out of the identity provider on sign-out.');
 }
@@ -405,7 +409,7 @@ if (!OPTIONAL_FEATURES || Object.keys(OPTIONAL_FEATURES).length === 0) {
   const grid = el('div', { class: 'kv' });
   const featureRows = [
     ['Profile page', OPTIONAL_FEATURES.profilePage, '/user-profile SPA page with edit form'],
-    ['Terms & Conditions', OPTIONAL_FEATURES.termsAndConditions, OPTIONAL_FEATURES.termsEnforced ? 'Enabled — solution detected' : 'Scaffolded but NOT enforced (Privacy Extensions solution missing)'],
+    ['Terms & Conditions', OPTIONAL_FEATURES.termsAndConditions, termsEnforcementNote(OPTIONAL_FEATURES)],
     ['Federated logout', OPTIONAL_FEATURES.federatedLogout, 'Signs the user out of the identity provider as well'],
     ['Session keep-alive', OPTIONAL_FEATURES.sessionKeepAlive, 'Pings the server periodically to extend the session'],
   ];
