@@ -80,7 +80,7 @@ jobs:
                 include: ${{ fromJSON(needs.select.outputs.matrix) }}
         # Playwright 1.58.2 cannot install Chromium on Ubuntu 26.04.
         runs-on: ubuntu-24.04
-        # Max effort allows 30m per arm (two arms plus grading), and
+        # Max effort allows 60m per arm (two arms plus grading), and
         # retry-case.mjs may rerun a rate-limited case after a cooldown.
         timeout-minutes: 240
         permissions:

@@ -306,7 +306,7 @@ test('agent turn budget scales with reasoning effort', async t => {
       gradeTrajectory: async () => { throw new Error('test grading skipped'); },
     });
   }
-  assert.deepEqual(timeouts, { medium: 600_000, high: 1_200_000, max: 1_800_000 });
+  assert.deepEqual(timeouts, { medium: 600_000, high: 1_200_000, max: 3_600_000 });
 });
 
 test('a grading exception preserves the completed agent usage in the error summary', async t => {

@@ -9,7 +9,10 @@ const modelId = /^[a-z0-9][a-z0-9._-]{0,127}$/;
 // over 10 minutes and failed with "Timeout after 600000ms waiting for
 // session.idle", an infrastructure error that measured nothing. Longer budgets
 // let deeper reasoning finish; graders and thresholds are unchanged.
-const AGENT_TIMEOUT_MINUTES = Object.freeze({ none: 10, low: 10, medium: 10, high: 20, xhigh: 30, max: 30 });
+// 30m was still short at max: Claude calls emitted 15-52k output tokens each,
+// taking 2-7.5 minutes per call, and a graded arm needed 22m for 17 calls.
+// Sibling arms that needed more calls timed out while still making progress.
+const AGENT_TIMEOUT_MINUTES = Object.freeze({ none: 10, low: 10, medium: 10, high: 20, xhigh: 60, max: 60 });
 
 export function agentTimeoutMs(reasoningEffort) {
   const minutes = AGENT_TIMEOUT_MINUTES[reasoningEffort];
