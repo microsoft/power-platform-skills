@@ -2,7 +2,7 @@
   "name": "power-platform-skills",
   "plugins": [
     {
-      "name": "code-apps-preview",
+      "name": "code-apps",
       "source": {
         "source": "local",
         "path": "./plugins/code-apps"

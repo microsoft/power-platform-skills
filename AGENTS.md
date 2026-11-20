@@ -209,7 +209,8 @@ Current adopters: `power-pages`, `mobile-apps`, `model-apps`, `pcf`, `power-auto
 ## Legacy Marketplace Compatibility
 
 Keep the root `.claude-plugin/marketplace.json` and each plugin's
-`.claude-plugin/plugin.json` as JSON mirrors of their Open Plugins counterparts.
+`.claude-plugin/plugin.json` as JSON mirrors of their Open Plugins counterparts,
+except for the client-specific marketplace differences documented below.
 The shared root marketplace must stay dual-compatible while keeping per-plugin
 entries minimal: each plugin entry should include only the required `name` and
 repository-root-relative `source` fields. Keep marketplace-level `owner` and
@@ -228,11 +229,27 @@ share skills/runtime files. A recognized portable root manifest takes precedence
 merge the two component sets. Do not migrate siblings or remove legacy mirrors merely because
 one plugin adopts the portable format.
 
+### Plugin renames
+
+Code Apps uses the canonical name `code-apps` and retains its directory `plugins/code-apps`.
+The root `marketplace.json` also retains `code-apps-preview` as an old-name entry with the same source.
+This entry preserves lookup only. Do not claim that it automatically enables or migrates the renamed plugin.
+The standalone installer and site use `canonicalPlugins` from `scripts/install.js` to avoid duplicate installations and listings.
+That helper accepts only the known rename in `PLUGIN_RENAMES` and requires both entries to use the same local source.
+
+The Claude catalog omits the old-name entry and carries top-level
+`"renames": { "code-apps-preview": "code-apps" }` instead.
+Keep that history equal to `PLUGIN_RENAMES`. Do not add it to the root or Codex catalog.
+The Codex catalog lists only the canonical name because its entry and manifest names must match.
+The compatibility validator checks these intentional differences and still rejects other manifest-name mismatches.
+Keep the old-name entry until a separate reviewed change removes it. Do not invent a removal deadline.
+
 ### External plugins
 
 A plugin maintained in another repository (today `dataverse`, from `microsoft/Dataverse-skills`) is listed with a remote `source` object instead of a `./plugins/<name>` path.
 Its metadata and legacy mirrors live in that repository, so nothing for it is committed under `plugins/`.
-This is the one place where the two marketplace files intentionally differ, because each host reads a different file and spells a subdirectory source differently:
+The two marketplace files intentionally differ for remote subdirectory sources,
+because each host reads a different file and spells that source differently:
 
 - `marketplace.json` (read by Copilot CLI): `{ "source": "github", "repo": "owner/repo", "path": "sub/dir" }`.
   Copilot CLI rejects `git-subdir` and then refuses the whole marketplace, breaking every plugin in it.
