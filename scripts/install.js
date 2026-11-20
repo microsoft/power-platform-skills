@@ -33,6 +33,10 @@ const HOME = os.homedir();
 // repository's own marketplace; installing it here by default would load its skills twice.
 const OPT_IN_PLUGINS = { dataverse: "--include-dataverse" };
 
+// Keep this history equal to Claude's `renames` map. The installer also runs as a
+// standalone download, so it cannot load another repository file for this map.
+const PLUGIN_RENAMES = Object.freeze({ "code-apps-preview": "code-apps" });
+
 const USAGE = `Usage: node install.js [--include-dataverse]
 
 Options:
@@ -85,6 +89,19 @@ function selectPlugins(pluginNames, includedOptIn) {
     }
   }
   return { selected, skipped };
+}
+
+function canonicalPlugins(plugins) {
+  return plugins.filter((plugin) => {
+    if (!Object.hasOwn(PLUGIN_RENAMES, plugin.name)) return true;
+    const target = plugins.find((entry) => entry.name === PLUGIN_RENAMES[plugin.name]);
+    // Older catalogs can still contain only the preview package.
+    if (!target) return true;
+    if (typeof plugin.source !== "string" || plugin.source !== target.source) {
+      throw new Error(`Plugin alias '${plugin.name}' must use the same local source as '${target.name}'`);
+    }
+    return false;
+  });
 }
 
 // ── Helpers ───────────────────────────────────────────────────
@@ -575,7 +592,7 @@ async function main() {
 
   const manifest = await loadMarketplace();
   const { selected: plugins, skipped } = selectPlugins(
-    manifest.plugins.map((p) => p.name),
+    canonicalPlugins(manifest.plugins).map((p) => p.name),
     options.includedOptIn
   );
 
@@ -621,6 +638,6 @@ if (require.main === module || module.id === "[stdin]") {
 }
 
 module.exports = {
-  parseArgs, selectPlugins, OPT_IN_PLUGINS, isValidPluginName, parseMarketplaceManifest,
+  parseArgs, selectPlugins, OPT_IN_PLUGINS, PLUGIN_RENAMES, canonicalPlugins, isValidPluginName, parseMarketplaceManifest,
   loadMarketplace, resolveCommand, run, installClaude, installCopilot, main,
 };

@@ -11,7 +11,7 @@ const { EventEmitter } = require('node:events');
 const { execFileSync } = require('node:child_process');
 
 const {
-  parseArgs, selectPlugins, OPT_IN_PLUGINS, isValidPluginName, parseMarketplaceManifest,
+  parseArgs, selectPlugins, OPT_IN_PLUGINS, canonicalPlugins, isValidPluginName, parseMarketplaceManifest,
 } = require('../install.js');
 
 const MARKETPLACE = ['power-pages', 'model-apps', 'dataverse', 'power-automate'];
@@ -118,6 +118,13 @@ test('without flags, every plugin except dataverse is installed', () => {
   const { selected, skipped } = selectPlugins(MARKETPLACE, parseArgs([]).includedOptIn);
   assert.deepEqual(selected, ['power-pages', 'model-apps', 'power-automate']);
   assert.deepEqual(skipped, ['dataverse']);
+  const preview = { name: 'code-apps-preview', source: './plugins/code-apps' };
+  const current = { name: 'code-apps', source: './plugins/code-apps' };
+  assert.deepEqual(canonicalPlugins([preview, current]), [current]);
+  assert.deepEqual(canonicalPlugins([preview]), [preview]);
+  assert.throws(() => canonicalPlugins([preview, { ...current, source: './plugins/other' }]), /same local source/);
+  assert.deepEqual(canonicalPlugins([{ ...preview, name: 'unrelated-alias' }, current]),
+    [{ ...preview, name: 'unrelated-alias' }, current]);
 });
 
 test('--include-dataverse installs dataverse alongside the other plugins', () => {
@@ -434,19 +441,25 @@ test('main preserves default and opt-in selection for clone, downloaded and pipe
         if (script === undefined && includeDataverse) continue;
         const argv = script === undefined ? ['node'] : ['node', script];
         if (includeDataverse) argv.push('--include-dataverse');
+        const catalog = manifest();
+        catalog.plugins.push(
+          { name: 'code-apps', source: './plugins/code-apps' },
+          { name: 'code-apps-preview', source: './plugins/code-apps' },
+        );
         const fixture = loadInstaller({
           platform, argv,
-          files: { [paths.join(root, 'marketplace.json')]: JSON.stringify(manifest()) },
+          files: { [paths.join(root, 'marketplace.json')]: JSON.stringify(catalog) },
           commands: ['claude', 'copilot', 'pac', 'az'].map((cli) => paths.join(cliDir, cli + extension)),
         });
         await fixture.installer.main();
         const calls = fixture.calls.filter((call) => platform === 'win32'
           ? call.args[4].includes(' plugin install ') : call.args[1] === 'install');
-        const expected = includeDataverse ? MARKETPLACE : MARKETPLACE.filter((name) => name !== 'dataverse');
+        const expected = [...(includeDataverse ? MARKETPLACE : MARKETPLACE.filter((name) => name !== 'dataverse')), 'code-apps'];
         assert.equal(calls.length, expected.length * 2);
         for (const name of expected) {
           assert.equal(calls.filter((call) => call.args.join(' ').includes(`${name}@power-platform-skills`)).length, 2);
         }
+        assert.ok(calls.every((call) => !call.args.join(' ').includes('code-apps-preview@')));
         assert.deepEqual(fixture.requests, [], 'local installs do not need another repository file or network request');
         if (!includeDataverse) assert.ok(fixture.messages.some((line) => line.includes('Skipping dataverse')));
       }

@@ -6,13 +6,14 @@
  * during auto-update, so these committed mirror files must stay semantically in
  * sync whenever marketplace/plugin metadata changes.
  *
- * The one intentional difference is the `source` of a plugin hosted in another
- * repository, which each host spells differently. See REMOTE PLUGIN SOURCES below.
+ * Intentional differences cover remote sources and known plugin renames.
+ * Other metadata and per-plugin manifests must still mirror.
  */
 
 const fs = require('fs');
 const path = require('path');
 const assert = require('assert/strict');
+const { PLUGIN_RENAMES, canonicalPlugins } = require('./install.js');
 
 const ROOT = path.resolve(__dirname, '..');
 
@@ -112,11 +113,13 @@ function assertMinimalMarketplaceEntry(plugin) {
   assert.match(plugin.source, /^\.\//, 'source must start with ./');
 }
 
-function assertMinimalMarketplace(marketplace) {
+function assertMinimalMarketplace(marketplace, allowRenames = false) {
   // Keep marketplace-level metadata here because it describes the collection, not
   // any individual plugin. Per-plugin optional fields still stay out of `plugins`
   // entries to avoid overriding the corresponding `.plugin/plugin.json` metadata.
-  assert.deepEqual(Object.keys(marketplace).sort(), ['metadata', 'name', 'owner', 'plugins']);
+  const keys = ['metadata', 'name', 'owner', 'plugins'];
+  if (allowRenames && Object.hasOwn(marketplace, 'renames')) keys.push('renames');
+  assert.deepEqual(Object.keys(marketplace).sort(), keys.sort());
   assert.equal(typeof marketplace.name, 'string', 'name must be a string');
   assert.notEqual(marketplace.name.trim(), '', 'name must not be empty');
   assert.equal(typeof marketplace.owner?.name, 'string', 'owner.name must be a string');
@@ -176,18 +179,29 @@ function validate(root = ROOT) {
 
   check('marketplace shape', () => {
     assertMinimalMarketplace(openMarketplace);
-    assertMinimalMarketplace(legacyMarketplace);
+    assertMinimalMarketplace(legacyMarketplace, true);
   });
   if (errors.length > 0) return errors;
 
-  // Everything except remote plugin sources must be a byte-for-byte semantic mirror,
-  // so compare the files with those sources swapped for their expected legacy form.
+  let canonicalEntries;
+  check('marketplace aliases', () => {
+    canonicalEntries = canonicalPlugins(openMarketplace.plugins);
+    for (const plugin of openMarketplace.plugins) assertMinimalMarketplaceEntry(plugin);
+  });
+  if (errors.length > 0) return errors;
+
+  // Claude consumes rename history, not duplicate old-name entries. Copilot retains
+  // those entries for lookup only. Neither implies automatic migration in other clients.
+  // https://code.claude.com/docs/en/plugins/host-marketplace#rename-or-remove-a-plugin
+  const renames = Object.fromEntries(Object.entries(PLUGIN_RENAMES)
+    .filter(([, target]) => canonicalEntries.some((plugin) => plugin.name === target)));
   check('legacy marketplace manifest', () => {
     const expectedLegacy = {
       ...openMarketplace,
-      plugins: openMarketplace.plugins.map((plugin) =>
+      plugins: canonicalEntries.map((plugin) =>
         isRemoteSource(plugin.source) ? { ...plugin, source: expectedLegacyRemoteSource(plugin.source) } : plugin
       ),
+      ...(Object.keys(renames).length > 0 ? { renames } : {}),
     };
     assert.deepEqual(legacyMarketplace, expectedLegacy);
   });
@@ -195,7 +209,7 @@ function validate(root = ROOT) {
   const legacyPlugins = new Map(legacyMarketplace.plugins.map((plugin) => [plugin.name, plugin]));
   const openPluginNames = new Set();
 
-  for (const plugin of openMarketplace.plugins) {
+  for (const plugin of canonicalEntries) {
     openPluginNames.add(plugin.name);
 
     if (isRemoteSource(plugin.source)) {

@@ -29,7 +29,7 @@
             "source": "./plugins/canvas-apps"
         },
         {
-            "name": "code-apps-preview",
+            "name": "code-apps",
             "source": "./plugins/code-apps"
         },
         {
@@ -56,5 +56,8 @@
                 "path": ".github/plugins/dataverse"
             }
         }
-    ]
+    ],
+    "renames": {
+        "code-apps-preview": "code-apps"
+    }
 }
