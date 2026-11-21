@@ -99,6 +99,22 @@ const RESPONSIVE_PREVIEWS = [{
   mobile: 'spa/company-portal/previews/narrow.png',
 }];
 
+test('SPA prerequisite applications are validated and retained for selected families', () => {
+  const applications = ['PowerPages_PartnerPortal_V2', 'Another_Application'];
+  for (const template of [VALID_TEMPLATE, VALID_TEMPLATE_FAMILY]) {
+    const catalog = { templates: [{ ...template, prerequisiteApplications: applications }] };
+    assert.equal(validateCatalogShape(catalog), null);
+    assert.deepEqual(normalizeCatalogFamilies(catalog)[0].prerequisiteApplications, applications);
+    assert.equal(validateCatalogShape({ templates: [{ ...template, prerequisiteApplications: [] }] }), null);
+    assert.equal(normalizeCatalogFamilies({ templates: [template] })[0].prerequisiteApplications, undefined);
+    for (const invalid of [null, 'PowerPages_PartnerPortal_V2', [null], [''], ['bad name'], ['valid;command'], ['App', 'app']]) {
+      assert.match(validateCatalogShape({ templates: [{ ...template, prerequisiteApplications: invalid }] }), /prerequisite/);
+    }
+  }
+  assert.match(validateCatalogShape({ templates: [{ ...VALID_TRADITIONAL_TEMPLATE_FAMILY, prerequisiteApplications: applications }] }), /prerequisite/);
+  assert.match(validateCatalogShape({ templates: [{ ...VALID_TEMPLATE_FAMILY, variants: { react: { prerequisiteApplications: applications } } }] }), /family level/);
+});
+
 test('SPA responsive previews validate without legacy images and reject malformed pages', () => {
   const { previewImages, ...template } = VALID_TEMPLATE;
   const validate = (responsivePreviews) => validateCatalogShape({

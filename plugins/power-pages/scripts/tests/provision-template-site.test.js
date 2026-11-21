@@ -159,6 +159,18 @@ test('findCodeSiteRoot resolves one nested PAC clone output and rejects ambiguit
   assert.throws(() => findCodeSiteRoot(dir), /found 2/);
 });
 
+test('findCodeSiteRoot accepts metadata-only clones and rejects mixed clone ambiguity', (t) => {
+  const dir = tempDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const site = path.join(dir, 'supplier-portal');
+  fs.mkdirSync(path.join(site, '.powerpages-site'), { recursive: true });
+  fs.writeFileSync(path.join(site, '.powerpages-site', 'website.yml'), `id: ${CLONED_ID}\n`);
+  assert.equal(findCodeSiteRoot(dir), site);
+
+  createSource(path.join(dir, 'another-site'));
+  assert.throws(() => findCodeSiteRoot(dir), /found 2/);
+});
+
 test('inspectClonedSiteIdentity reads the new website record id from cloned metadata', (t) => {
   const dir = tempDir();
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
