@@ -145,6 +145,36 @@ test('registry authentication recovery preserves the reviewed feed and interrupt
   assert.match(updates, /project-scoped journal and recovery instructions before resuming/);
 });
 
+test('shared failure guidance cannot override release-owned dependency and Babel recovery', () => {
+  const shared = read('shared/shared-instructions.md');
+  const start = shared.indexOf('### Dependency installation / SDK validation failures');
+  const end = shared.indexOf('### Native run or web run failures', start);
+  assert.ok(start >= 0 && end > start);
+  const failures = shared.slice(start, end);
+  assert.match(failures, /existing configured registry/);
+  assert.match(failures, /Do not switch registries/);
+  assert.match(failures, /never run `expo install --fix`/);
+  assert.match(failures, /approved same-lock recovery/);
+  assert.match(failures, /Do not append `react-native-reanimated\/plugin`/);
+  assert.doesNotMatch(failures, /Run `npx --no-install expo install --fix`|Likely an internal-feed-only package/);
+
+  const customization = read('template/CUSTOMIZATION.md');
+  assert.match(customization, /legacy test fixture/);
+  assert.match(customization, /does not update the dependencies/);
+  assert.match(customization, /Run `\/check-updates`/);
+  assert.doesNotMatch(customization, /host@latest/);
+
+  const quality = read('docs/base-template-quality-fixes.md');
+  assert.match(quality, /telemetry may initialize a missing `expo\.extra\.telemetry\.appInstanceId`/);
+  assert.doesNotMatch(quality, /identity is minted only after `proceed`/);
+
+  const cli = read('shared/cli-binary.md');
+  assert.match(cli, /exposes only `pa`/);
+  assert.match(cli, /approved same-lock restoration/);
+  assert.match(cli, /Re-supply `\$PA` and `PA_KIND` in every fresh shell/);
+  assert.doesNotMatch(cli, /Both are installed together|mobile skills never bootstrap dependencies themselves/);
+});
+
 test('requested Metro smoke tests distinguish bundle compilation from runtime behavior', () => {
   assert.match(updates, /a responding `\/status` endpoint alone does not verify bundling/);
   assert.match(updates, /load the intended route and exercise the customer\s+workflow/);

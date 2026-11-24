@@ -103,10 +103,14 @@ test('skill contracts read logs and persist host-neutral state under .powernativ
   assert.match(prepareScript, /typeof pkg\.scripts\?\.\[scriptName\] !== 'string'/);
   assert.match(prepareScript, /pkg\.scripts\[scriptName\]\.trim\(\) === ''/);
   assert.match(templatePreparation, /verifyLifecycleScripts/);
-  assert.match(createSkill, /always receives a scannable code even when Metro runs in a background terminal/);
+  assert.match(createSkill, /always provide the observed native Metro URL even when no PNG can be generated/);
   assert.match(createSkill, /Do not rely on Expo's terminal-rendered QR as the only presentation path/);
-  // The QR generator must come from the template's pinned devDependency, never a registry fetch.
+  // Optional QR images must use an installed generator, never a registry fetch.
   assert.match(createSkill, /npx --no-install qrcode -o "\$METRO_QR"/);
+  assert.match(createSkill, /do not assume every published template pins it/);
+  assert.match(createSkill, /no QR image was generated/);
+  assert.match(createSkill, /Add `--qr-image[^`]*` only when this run successfully/);
+  assert.doesNotMatch(createSkill, /The template pins `qrcode`/);
   assert.doesNotMatch(createSkill, /npx --yes|npm_config_registry=/);
   assert.match(createSkill, /continue through the optional debug handoff and print the summary/);
   assert.doesNotMatch(createSkill, /stops after Step 16/);

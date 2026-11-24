@@ -20,7 +20,7 @@ Steps it names, by build order:
 
 This skill launches the template's canonical `npm run dev` command. The template owns the `dev` and `predev` command bodies; this skill relies only on npm's lifecycle ordering and does not require either script to expand to a particular command. Logging is configured in `metro.config.js`.
 
-1. `npm run dev` prints the native Metro URL as `LAN development server: http://<lan-ip>:<port>/` before Metro starts, and may also render a QR in its terminal. Capture the URL and generate the QR PNG below so the user always receives a scannable code even when Metro runs in a background terminal or the host does not expose terminal rendering.
+1. `npm run dev` prints the native Metro URL as `LAN development server: http://<lan-ip>:<port>/` before Metro starts, and may also render a QR in its terminal. Capture the URL. Generate the optional QR PNG only when a local generator is available, and always provide the observed native Metro URL even when no PNG can be generated.
 2. Hot-reload works on file edits — no restart needed for screen tweaks.
 3. `/debug-app` reads project-local `.powernative` logs regardless of whether the user or the agent started Metro. It never needs an opaque terminal ID.
 
@@ -117,17 +117,21 @@ Branch as follows:
 
 **When Expo prints a Metro URL:** Do not rely on Expo's terminal-rendered QR as the only presentation path.
 
-1. **Generate QR code PNG and present it to the user** (chat-first, deterministic fallback):
-  - Define `METRO_QR='<working_dir>/.expo/metro-qr.png'` and run `npx --no-install qrcode -o "$METRO_QR" "<metro-url>"`. The template pins `qrcode` as a devDependency, so this runs the copy from the user's `npm install` and never downloads. If it fails (for example, a project created before the pin), continue without the image — never retry with `--yes`, a bare `npx qrcode`, or a different registry.
-  - Verify the PNG with a host-neutral Node check: `node -e "const fs=require('node:fs'); process.exit(fs.existsSync(process.argv[1]) ? 0 : 1)" "$METRO_QR"`. If it fails, print the qrcode error and continue without the image.
+1. **Optionally generate a QR code PNG and present it to the user:**
+  - Check the actual app for `node_modules/.bin/qrcode` or `node_modules/.bin/qrcode.cmd`; do not assume every published template pins it. Only when that installed generator exists, define `METRO_QR='<working_dir>/.expo/metro-qr.png'` and run `npx --no-install qrcode -o "$METRO_QR" "<metro-url>"`. If it is absent or generation fails, explain that the image is unavailable and continue with the observed native Metro URL. Never install a new dependency, retry with `--yes`, use a bare `npx qrcode`, or switch registries for this optional image.
+  - After successful generation in this run, verify the PNG with a host-neutral Node check: `node -e "const fs=require('node:fs'); process.exit(fs.existsSync(process.argv[1]) ? 0 : 1)" "$METRO_QR"`. If it fails, print the error and continue without the image. Do not reuse a stale PNG from another URL/run.
   - **Chat-first render (best effort):** read and base64-encode the file with Node (`node -e "process.stdout.write(require('node:fs').readFileSync(process.argv[1]).toString('base64'))" "$METRO_QR"`) and embed in markdown as a data URI (`![QR](data:image/png;base64,<data>)`) so hosts that support inline image markdown show the QR directly in chat.
-  - **Guaranteed visible fallback: the build plan, not a new window.** If inline chat image rendering is unavailable, do **not** open the PNG with the host's file-open tool or an OS command. The plan already draws the QR in its phone frame and links the file underneath it for scanning full size, so a window opening on top of a run the user is watching adds nothing. Print the quoted path instead, and point at the plan. Never interpolate an unquoted project path.
+  - **When a PNG was generated:** if inline chat image rendering is unavailable, do **not** open the PNG with the host's file-open tool or an OS command. Pass the verified image to the existing build plan and print its quoted path. Without an image, show the Metro URL and direct the user to the Host's terminal QR or the client's URL-entry option; do not claim that a QR exists in chat or in the plan.
   - Surface only the native Metro URL immediately after the image/fallback message.
-2. Follow with:
+2. If a PNG was generated, follow with:
 
   > "✓ Metro is running on port `<port>`.
   > 📱 Scan the QR code shown above (it is also in the build plan, and at `<working_dir>/.expo/metro-qr.png`) with your native dev client to load the app. Metro URL: `<metro-url>`
   > 🔄 Edits hot-reload automatically. Debug logs: `<working_dir>/.powernative/metro-logs/`."
+
+   Otherwise report that Metro is running, give the observed native URL, and say
+   that no QR image was generated. Missing optional image tooling is not a failed
+   Metro launch or permission to change the app's dependencies.
 
 **Persist only stable discovery paths to memory bank** so resumed sessions and downstream skills can find the session without coupling to a host terminal:
 
@@ -140,14 +144,17 @@ Branch as follows:
 
 Do not persist PIDs, ports, or Metro URLs to the memory bank. They are ephemeral and are resolved from the latest `.powernative` log when needed.
 
-**Put the QR in the plan** so the document ends on the thing the user acts on:
+**Record the native URL in the plan:**
 
 ```bash
 node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' phone --stage qr \
-  --qr-image '<working_dir>/.expo/metro-qr.png' --qr-url "<metro-url>"
+  --qr-url "<metro-url>"
 ```
 
-The PNG is inlined as a data URI, so the plan still shows the code after `.expo/` is cleaned. This
+Add `--qr-image '<working_dir>/.expo/metro-qr.png'` only when this run successfully
+generated and verified that PNG. A supplied PNG is inlined as a data URI, so the
+plan can still show that code after `.expo/` is cleaned. Do not claim an image is
+present when only the URL was recorded. This
 is the phone's final stage: animation while building, then the screen carousel once designed (data
 model first), or the live web preview with this code under it from the preview gate and this code in
 the frame from the moment real data is connected (screens first).

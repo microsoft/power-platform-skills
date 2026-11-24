@@ -62,7 +62,9 @@ Profile ID resolution (in order):
 
 STOP if no profile can be resolved. Print: `Run /setup-offline-profile first, or pass --profile-id`.
 
-> **`power.config.json` is intentionally NOT consulted here.** That file is owned by `pa app init`. The profile ID lives in `offline-profile.json` only.
+> **Do not read the profile ID from `power.config.json`.** That file supplies the
+> selected app environment above, but the offline profile ID belongs to
+> `offline-profile.json` or the explicitly selected profile argument.
 
 ### Step 2 — Pick users/teams
 
@@ -125,7 +127,9 @@ node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
   "teams?\$filter=name eq '<team-name>' and teamtype eq 0&\$select=teamid,name&\$top=1" --tenant-id "<tenantId>"
 ```
 
-(`teamtype eq 0` excludes Access Teams and Owner Teams — only Manage Teams get profile assignments.)
+The query selects **Owner teams** (`teamtype = 0`), not Access teams (`1`).
+It also excludes group-team types; do not describe this filter as all teams or
+silently widen it. See the [Team table's type values](https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/reference/team#properties).
 
 Construct three lists:
 - `to_add` — resolved IDs to POST
