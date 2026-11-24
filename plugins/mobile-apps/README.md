@@ -140,8 +140,11 @@ connector wiring.
 
 5. Start mobile app:
 
-    `/create-mobile-app` starts Metro with `npm run dev`; its `predev` lifecycle
-    runs schema generation and type-checking before Expo starts.
+    `/create-mobile-app` starts Metro with the template-owned `npm run dev`.
+    npm runs the app's declared `predev` command first. The published template's
+    `predev` generates connector schemas; type-checking is a separate
+    `npm run type-check` command. Inspect the app's scripts rather than assuming
+    `predev` performs both checks or rewriting its command.
     The template's Metro config delegates sanitized logging to the native host package, which writes `.powernative/metro-logs/`,
     so `/debug-app` works after switching between VS Code, Copilot CLI, and
     Claude Code without asking for a terminal ID.
@@ -366,7 +369,7 @@ separate approval. Cloud-flow integration is not supported.
 
 ```text
 > /edit-app "Improve the search screen to make it easier to use on mobile"
-> /deploy                        # npm run build + pa app push
+> /deploy                        # build, stage web/native artifacts, then confirm and push
 > /open-wrap-url --app-id <id> --env-id <env-id>   # open make.powerapps.com Wrap page for this app
 > /preview-screens               # browser preview of generated screens (no Metro needed)
 > /list-connections              # diagnostic when a service call returns 401
@@ -468,7 +471,7 @@ metadata alone never means the app is healthy.
 | `/debug-app` | ✅ v0 | Diagnoses install/startup/QR failures before an app is loaded, then monitors live sanitized `.powernative` logs for runtime or silent failures. Same-lock restoration and Metro restart require explicit approval; it does not upgrade dependencies. `startup` returns without the runtime monitor; `--no-fix` stays non-mutating. |
 | `/setup-app-insights` | ✅ v0 | Configure optional customer-owned Application Insights telemetry — discover or accept an existing Azure resource and wire `app.json` → `expo.extra.appInsightsConfig` + `PowerAppsProvider`, change the resource, or disable it. Off by default; invoking it is the opt-in. Also delegated to by `/edit-app`. Never provisions Azure resources or stores the connection string. |
 | `/check-updates` | ✅ v0 | Offers a coordinated verified native release/template upgrade or host repair, then individually approved JS-only updates and direct-advisory auditing. Full-chain preview, explicit application approval, validation, and rollback; never independent native bumps. |
-| `/deploy` | ✅ v0 | Build + push — `npm run build` then `pa app push` to the env in `power.config.json`. **Does not** drive `expo run:ios` or `expo run:android` (out of scope for v0). |
+| `/deploy` | ✅ v0 | Run the app's package-owned web/native bundle commands, stage their complete outputs in the configured upload directory, then confirm `pa app push` to the env in `power.config.json`. **Does not** drive `expo run:ios` or `expo run:android` (out of scope for v0). |
 | `/open-wrap-url` | ✅ v0 | Opens the Wrap URL in browser for an app ID using `https://make.powerapps.com/environments/<envID>/wrap?appID=<appID>`. Requires both `--app-id` and `--env-id`. |
 | `/report-issue` | ✅ v0 | Read-only diagnostic — collects env / Expo / Node versions, project context, recent errors, and renders a copy-paste-ready GitHub issue body. Sanitizes secrets. |
 | `/telemetry` | ✅ v0 | Enable, disable, or show the per-user Mobile Apps telemetry transmission preference. |

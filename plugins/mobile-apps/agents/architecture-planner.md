@@ -217,10 +217,11 @@ separately approved release migration.
 For custom workflows outside Dataverse File/Image form fields, plan `image-picker` with `/add-native image-picker` for user-selected photos and videos, or `document-picker` with `/add-native document-picker` for documents and other files. For Dataverse-bound File/Image fields, plan host `<FilePicker>` / `<ImagePicker>` controls instead. Do not plan broad media-library access when either scoped picker path satisfies the workflow.
 
 Select aggregate subpaths only when the verified release includes controls;
-retain legacy imports only when matching leaves are included. Controls 0.2.0
-uses an Expo 55 / React Native 0.83.6 baseline, not Expo 57. Do not install the
-aggregate to fix an older binary. Host `enableNativeControls` registration
-requires a verified supporting host; published host 0.4.0 lacks it.
+retain legacy imports only when matching leaves are included. Read the
+[current and historical package examples](../skills/add-native/references/native-controls.md#current-and-historical-package-examples)
+for version-specific facts; do not use a historical example as the current
+app's package pin. Do not install the aggregate to fix an older binary.
+Host `enableNativeControls` registration requires a verified supporting host.
 
 One-shot `location` via `new BgLocationClient().getCurrentLocation()` needs no
 `app_id`, data source, table, or `startTracking`. Continuous `geolocation`

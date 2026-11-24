@@ -28,7 +28,7 @@ confirmation, offline coverage, and TypeScript.
 
 ## Workflow
 
-1. Check memory bank → 1.2 Verified release + selected bases → 1.5 App ID preflight → 2. Build → 2.4 Native package → 2.5 Offline profile coverage gate → 3. Deploy → 4. Update memory bank
+1. Check memory bank → 1.2 Verified release + selected bases → 1.3 Build/upload contract → 1.5 App ID preflight → 2. Web build → 2.4 Native packages + staging → 2.5 Offline profile coverage gate → 3. Deploy → 4. Update memory bank
 
 ---
 
@@ -92,11 +92,48 @@ Different declarations require another verified base; optional per-customer
 permission wrapping is deferred. Do not edit plugins/permissions or run a local
 native build to bypass a mismatch.
 
+### Step 1.3 — Resolve the build and upload directories
+
+From the same `<working_dir>`, inspect the app's `package.json`, installed Host
+documentation/scripts, and `power.config.json`. Resolve the installed CLI per
+[cli-binary.md](../../shared/cli-binary.md). Record the web output directory,
+native output directory, configured upload directory, and web entry point
+before running a build.
+
+For the published Host **1.0.4** / template package **0.1.4**, the contract is:
+
+| App command | Output | Owner |
+|---|---|---|
+| `npm run bundle:web` | `dist-web/index.html` and the complete hosted web assets | Host `js-bundle web`, including hosted-path handling |
+| `npm run bundle:android` | `dist/index.android.bundle.hbc` and `dist/powerapps-customer-assets-android/` | Host native package producer |
+| `npm run bundle:ios` | `dist/main.jsbundle.hbc` and `dist/powerapps-customer-assets-ios/` | Host native package producer |
+
+These are version-specific examples, not pins or permission to update an older
+app. Prefer the app's supported `bundle:web` command. If an older/customized app
+uses a declared `build` script instead, inspect its installed release contract
+and review its actual outputs; do not invent aliases, fetch newer tooling, or
+fall back to a raw Expo export that omits Host-owned web preparation.
+
+The grouped `pa` CLI uses `buildPath` and `buildEntryPoint` in
+`power.config.json`; legacy CLIs may use `distPath`. Follow the selected CLI's
+actual configuration semantics. Do not assume that it uploads `dist/`, and do
+not change `appType`, `appId`, environment, or the configured upload directory
+just to accommodate the build output. Missing, conflicting, or unsupported
+configuration requires review before proceeding.
+
+Resolve all output paths within the app and reject symlinks, paths outside the
+app, and destinations overlapping source, configuration, `.git`, or
+`node_modules`. Before **each** build/push cycle, identify and obtain approval
+to clear only confirmed generated build outputs, including any separate upload
+directory. Preserve source and configuration; never clear the app root or an
+unreviewed custom directory. A previous build must not satisfy this run's checks.
+
 ### Step 1.5 — App ID preflight (first-deploy gate)
 
 Read `power.config.json` **before building anything**:
 
 ```bash
+cd -- '<working_dir>' || exit $?
 node -e "const c=require('./power.config.json');console.log(c.appId||'MISSING')"
 ```
 
@@ -105,9 +142,9 @@ node -e "const c=require('./power.config.json');console.log(c.appId||'MISSING')"
 
   > "⚠️ First deploy detected — `power.config.json` has no `appId` yet. The app ID is minted by the first push, but it is compiled **into** the native bundle at build time. So two full build+push cycles are required. I'll run both; the second is not optional."
 
-  Then run Steps 2 → 2.4 → 2.5 → 3 **twice**. In cycle 2, `npm run build` *and* the Step 2.4 native packaging commands must all re-run — the Hermes bundles from cycle 1 have an empty app ID compiled in. Step 2.5 (offline profile gate) may be skipped on cycle 2 **only if** no schema or profile file changed between the two cycles; if in doubt, re-run it — it is a local, no-network check.
+  Then run Steps 2 → 2.4 → 2.5 → 3 **twice**. In cycle 2, the web build, both native packaging commands, staging, and final upload verification must all re-run — the Hermes bundles from cycle 1 have an empty app ID compiled in. Step 2.5 (offline profile gate) may be skipped on cycle 2 **only if** no schema or profile file changed between the two cycles; if in doubt, re-run it — it is a local, no-network check.
 
-**Why two cycles are unavoidable.** `power-apps push` mints the app ID and writes it back to `power.config.json`, but it refuses to run at all without an existing build — it fails immediately if the configured `buildPath` (`./dist`) is absent. So the ID cannot be minted before the first build, and the first build cannot contain the ID.
+**Why two cycles are unavoidable.** The first app push mints the app ID and writes it back to `power.config.json`, but it refuses to run at all without an existing build — it fails immediately if the configured upload directory is absent. So the ID cannot be minted before the first build, and the first build cannot contain the ID.
 
 **Why this is so easy to miss.** The runtime guard is:
 
@@ -122,46 +159,29 @@ Web is **exempt**, and so is Dev Player. The Code App, `npm run dev`, and the br
 **Telemetry checkpoint: `build_power_apps_bundle`**
 
 **Print before starting:**
-> "→ Building production web bundle via `npm run build` (= `expo export --platform web`). ~30–90 seconds."
+> "→ Building the production web bundle with the app's published Host command. ~30–90 seconds."
 
-First regenerate `connectorSchemas.ts` so `app/_layout.tsx`'s `schemaMap` import reflects every connector currently in `.power/schemas/`. The npm `prestart`/`preandroid`/`preios` hooks cover dev runs, but `npm run build` does **not** — if a connector was added since the last `npm run dev`, the bundled JS would ship a stale schema map. Always regenerate before build:
-
-```bash
-npm run generate-schemas
-npm run build
-```
-
-If `package.json` has no `build` script, fall back to:
+Regenerate `connectorSchemas.ts` so the bundled schema map reflects every
+connector currently in `.power/schemas/`, then type-check. Do not assume `predev`
+or a bundle command performs both checks. With the current template's scripts:
 
 ```bash
-npx --no-install expo export --platform web
+cd -- '<working_dir>' || exit $?
+npm run generate-schemas || exit $?
+npm run type-check || exit $?
+npm run bundle:web || exit $?
 ```
 
-(Use the resolved app's scripts, not assumptions about the newest template.
-Both forms produce `dist/` web output, not a new native binary.)
+For a different supported script contract, use the commands and output directory
+reviewed in Step 1.3. If TypeScript is declared without a `type-check` script,
+use the installed `npx --no-install tsc --noEmit`; do not add scripts or silently
+skip type-checking.
 
-**Known issue — `expo export --platform web` never exits.** The export finishes its work (writes `dist/`, prints `Exported: dist` and the asset count) and then **hangs indefinitely**. Reproduced deterministically across separate runs; observed still alive 2h34m after completing. `dist/` is complete and correct when this happens. Suspected cause: the Metro config returned by `createPowerAppsMetroConfig` (`metro.config.js`) installs a dev-server middleware internally, which appears to hold an open handle — a web *export* should not need a dev server. Note the template itself only calls `createPowerAppsMetroConfig`; the middleware is applied inside `@microsoft/power-apps-native-host`, not in app code. **Not yet root-caused.**
-
-**Do not wait on the process.** Run it detached and poll for the artifact. Per shared-instructions, scratch files stay project-local in `.tmp/` — a fixed `/tmp/` path would collide across concurrent projects, and a stale log there could satisfy the grep below and falsely report success:
-
-```bash
-mkdir -p .tmp
-rm -f .tmp/expo-web-export.log
-npx --no-install expo export --platform web > .tmp/expo-web-export.log 2>&1 &
-EXPORT_PID=$!
-for _ in $(seq 1 90); do
-  grep -q "Exported: dist" .tmp/expo-web-export.log 2>/dev/null && break
-  sleep 2
-done
-if ! grep -q "Exported: dist" .tmp/expo-web-export.log 2>/dev/null; then
-  echo "web export did not complete in 180s"; tail -30 .tmp/expo-web-export.log; exit 1
-fi
-test -f dist/index.html || { echo "dist/index.html missing"; exit 1; }
-kill "$EXPORT_PID" 2>/dev/null || true
-echo "✓ web export complete (process terminated manually — known hang)"
-```
-
-Treat a completed `dist/` as success even though the process had to be killed. The Step 2.4 native packaging commands are **not** affected — both exit 0 cleanly and stage into `dist/` via a temp dir, so they do not clear the web build.
+Wait for the package-owned command to exit successfully. The Host owns export
+completion handling and hosted web postprocessing. Do not duplicate its logic
+with a detached raw Expo command, log-marker polling, or manually killing a
+process and treating existing files as success. A nonzero exit or timeout blocks
+deployment even when an output directory exists.
 
 If the build fails:
 
@@ -169,7 +189,9 @@ If the build fails:
 - **Other TypeScript errors** → report file + line and STOP. Don't deploy a broken build.
 - **Metro bundler errors** → surface the full stack and STOP.
 
-Verify `dist/` exists with `index.html` before continuing.
+Verify the reviewed web output contains its entry point and complete generated
+assets before continuing. For the contract above this is `dist-web/index.html`,
+not yet the final upload directory. Do not copy only `index.html`.
 
 ### Step 2.4 — Native package (Hermes bundle + customer assets)
 
@@ -186,21 +208,65 @@ node -e 'const major=Number(process.versions.node.split(".")[0]); if (major < 22
 If this or a release-specific engine check fails, STOP and ask the user to
 switch to a supported Node version. Do not fetch newer native dependencies.
 
-The web build above produces `dist/index.html` (the hosted Code App). Native **wrapped** apps additionally need a precompiled Hermes bundle **and** the customer's images/fonts as hash-addressed asset files, so the wrap pipeline never compiles or downloads JavaScript. Produce both platforms:
+The web build above produces the hosted entry point in the reviewed web output
+directory (`dist-web/` for the current contract). Native **wrapped** apps
+additionally need a precompiled Hermes bundle **and** the customer's images/fonts
+as hash-addressed asset files, so the wrap pipeline never compiles or downloads
+JavaScript. Produce both platforms:
 
 ```bash
-npm run bundle:android
-npm run bundle:ios
+cd -- '<working_dir>' || exit $?
+npm run bundle:android || exit $?
+npm run bundle:ios || exit $?
 ```
 
-Each command produces that platform's native Hermes bundle **and** its customer asset package, writing next to `dist/index.html`:
+Each current Host command produces that platform's native Hermes bundle **and**
+its customer asset package under `dist/`, separately from the web output:
 
 - **Android:** `dist/index.android.bundle.hbc` (Hermes bytecode) + `dist/powerapps-customer-assets-android/` (`manifest.json` + `assets/<fileHash>.<type>`)
 - **iOS:** `dist/main.jsbundle.hbc` (Hermes bytecode) + `dist/powerapps-customer-assets-ios/` (`manifest.json` + `assets/<fileHash>.<type>`)
 
 Both platforms are required — the verification below fails if either bundle or either manifest is missing.
 
-These sit alongside `index.html` under the same container SAS, so the wrap pipeline fetches them as siblings — no RP or connector change is required.
+#### Stage one complete upload directory
+
+After the web build and **both** native commands succeed in this pass, assemble
+the configured upload directory recorded in Step 1.3:
+
+1. Copy the **complete web output**, preserving relative paths, including
+   `index.html`, `_expo/`, assets, and any other generated web files.
+2. Place both `.hbc` files and both complete platform asset directories at that
+   same upload root. Preserve their manifests, hashed assets, and any packaged
+   Firebase client files byte-for-byte. Do not rewrite manifests or their hashes.
+3. If an output already is the upload directory, leave it in place and copy only
+   the other outputs. Do not copy a directory onto itself, nest `dist-web/`
+   inside the upload root, or overwrite a conflicting web/native path.
+4. Recheck the final upload contents after copying. Never upload source,
+   dependencies, or files left over from a previous build.
+
+For the current contract **only when the reviewed upload directory is `dist/`**,
+the native producer has already placed its files at the upload root. After the
+path/cleanup checks above, stage the complete web output into it:
+
+```bash
+cd -- '<working_dir>' || exit $?
+test -f dist-web/index.html || { echo "MISSING web entry"; exit 1; }
+test -f dist/index.android.bundle.hbc || { echo "MISSING android bundle"; exit 1; }
+test -f dist/main.jsbundle.hbc || { echo "MISSING ios bundle"; exit 1; }
+test -f dist/powerapps-customer-assets-android/manifest.json || { echo "MISSING android manifest"; exit 1; }
+test -f dist/powerapps-customer-assets-ios/manifest.json || { echo "MISSING ios manifest"; exit 1; }
+cp -R dist-web/. dist/ || exit $?
+```
+
+For a reviewed `dist-web/` upload directory, the web files are already in place;
+copy the two native bundles and complete platform asset directories there
+instead. For a custom generated upload directory, copy both output sets there.
+Preserve `power.config.json`; an unsupported path/layout requires review, not
+an automatic configuration rewrite. Rebuild before restaging if a later command
+cleared or changed an output.
+
+All files must be siblings under the same uploaded root so Wrap can fetch the
+native bundles and matching asset directories next to the web entry point.
 
 **Verify before continuing** — STOP on any failure (never push a web-only build for a native-wrapped app):
 
@@ -209,16 +275,23 @@ bytecode/engine ABI, Expo/RN, native module, player, or selected-base
 compatibility; Step 1.2 must also pass for both platforms.
 
 ```bash
+cd -- '<reviewed-upload-root>' || exit $?
+test -f index.html || { echo "MISSING web entry"; exit 1; }
 # Hermes magic bytes on both bundles (expect c61fbc03)
-for f in dist/index.android.bundle.hbc dist/main.jsbundle.hbc; do
+for f in index.android.bundle.hbc main.jsbundle.hbc; do
   test -f "$f" || { echo "MISSING $f"; exit 1; }
   node -e 'const fs=require("fs"),b=Buffer.alloc(4),fd=fs.openSync(process.argv[1],"r");fs.readSync(fd,b,0,4,0);fs.closeSync(fd);process.exit(b.toString("hex")==="c61fbc03"?0:1)' "$f" || { echo "$f is not Hermes bytecode"; exit 1; }
 done
 # both asset manifests present
-test -f dist/powerapps-customer-assets-android/manifest.json || { echo "MISSING android manifest"; exit 1; }
-test -f dist/powerapps-customer-assets-ios/manifest.json     || { echo "MISSING ios manifest"; exit 1; }
+test -f powerapps-customer-assets-android/manifest.json || { echo "MISSING android manifest"; exit 1; }
+test -f powerapps-customer-assets-ios/manifest.json     || { echo "MISSING ios manifest"; exit 1; }
 echo "✓ native package + asset manifests present"
 ```
+
+The example expects the current Host's `index.html` entry point. If the reviewed
+release uses another entry point, verify the configured file instead. Confirm
+each manifest's platform, bundle path/hash, and referenced assets agree with the
+staged files; file presence alone is not an integrity check.
 
 If a native packaging step fails, surface the error and STOP. If the app renders bundled images/fonts, also confirm each `manifest.json` `assets` array is non-empty (an empty array means the app doesn't `require()` any static asset yet).
 
@@ -274,12 +347,15 @@ Do not push until the gate is resolved (reconciled to `in-sync`, or explicitly o
 Re-run Step 1.2 for the app and both actual intended base versions and
 fingerprints before this push. Neither the environment override nor the
 offline override can waive it.
+Also recheck the Step 1.3 upload path and entry point against the unchanged
+configuration, and verify the complete staged payload from this build pass.
 
 **Resolve and confirm the target environment FIRST.** `pa app push` deploys to the environment configured in `power.config.json`. Resolve that ID to a Dataverse URL so the user catches drift before pushing.
 
 Run:
 
 ```bash
+cd -- '<working_dir>' || exit $?
 ENV_ID=$(node -e "console.log(require('./power.config.json').environmentId)")
 node "${PLUGIN_ROOT}/scripts/resolve-environment.js" "$ENV_ID"
 ```
@@ -302,6 +378,7 @@ Wait for the exact phrase `yes deploy to <env-name>` (case-insensitive, env-name
 > Resolve the CLI first (see [cli-binary.md](${PLUGIN_ROOT}/shared/cli-binary.md)): run as `$PA app push` (`npx --no-install pa …`), never a bare `pa`. On `power-apps`-only projects, translate to `power-apps push`.
 
 ```bash
+cd -- '<working_dir>' || exit $?
 $PA app push --non-interactive
 ```
 
@@ -310,10 +387,11 @@ Capture the app URL from the output if printed.
 **First-deploy loop-back.** If Step 1.5 reported `MISSING`, re-read the config now:
 
 ```bash
+cd -- '<working_dir>' || exit $?
 node -e "const c=require('./power.config.json');console.log(c.appId||'STILL MISSING')"
 ```
 
-- **GUID** → the app was registered. **Go back to Step 2 and run Build → 2.4 → 2.5 → Deploy one more time.** The artifacts now sitting in `dist/` (and already uploaded to the blob) still have an empty app ID compiled in; without the second cycle the wrapped app fails on-device. Step 2.5 may be skipped on this second pass **only if** nothing under `.datamodel-manifest.json` / `offline-profile.json` changed since cycle 1.
+- **GUID** → the app was registered. **Go back to Step 2 and run Web build → 2.4 Native packages + staging → 2.5 → Deploy one more time.** Clear only the reviewed generated outputs as in Step 1.3, then rebuild and restage everything: the first payload still has an empty app ID compiled in. Without this second cycle the wrapped app fails on-device. Step 2.5 may be skipped on this second pass **only if** nothing under `.datamodel-manifest.json` / `offline-profile.json` changed since cycle 1.
 - **`STILL MISSING`** → push did not register the app. STOP and report. Do not proceed to wrap.
 
 On the second pass this check is a no-op, and Step 4 runs as normal.
@@ -345,7 +423,7 @@ Print the summary card:
 Version       : <new-version>
 Environment   : <env-name>
 App URL       : <url or "see make.powerapps.com">
-Bundle path   : dist/
+Bundle path   : <reviewed configured upload directory>
 
 Local dev:    npm run dev  (writes .powernative logs for /debug-app)
 Re-deploy:    /deploy

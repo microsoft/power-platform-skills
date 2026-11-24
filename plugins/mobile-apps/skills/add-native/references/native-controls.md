@@ -37,10 +37,17 @@ barrel. When the applicable branch selects the aggregate, use these subpaths:
 There is no barcode subpath. Barcode/QR scanning stays with the resolved
 release's `expo-camera` wrapper.
 
-Controls **0.2.0** corresponds to PDF **0.2.9**, pen **0.1.9**, background
-location **0.2.3**, and extension SDK **0.4.2**, with an **Expo 55 /
-React Native 0.83.6** baseline. These are package facts, not a claim that a
-verified player/base is available, and not evidence of Expo 57 compatibility.
+### Current and historical package examples
+
+| Controls package | Runtime family | How to interpret it |
+|---|---|---|
+| **1.0.1** | **Expo 57 / React Native 0.86.3** | Its peers require Expo config plugins `>=57.0.9 <58`, React `>=19.2.3 <20`, and React Native `>=0.86.3 <0.87` |
+| **0.2.0** (historical) | **Expo 55 / React Native 0.83.6** | Retain this information for older apps; it is not evidence of Expo 57 compatibility |
+
+Both examples use PDF **0.2.9**, pen **0.1.9**, background location **0.2.3**,
+and extension SDK **0.4.2**. These are version-specific package facts, not a
+release catalogue, automatic install targets, or a claim that a verified
+player/base is available. Resolve the actual app; a template may omit controls.
 Read the installed public README, exports, and types for the selected version;
 do not infer newer method signatures or copy a different library's examples.
 
@@ -61,7 +68,7 @@ or failure results; no fake native implementation.
 
 `enableNativeControls` is host-owned plugin registration, not a consumer
 workaround. Use it only on a **verified host release** that supports it, and
-only as part of that release's migration. Published host **0.4.0 lacks it**.
+only as part of that release's migration. Historical host **0.4.0 lacks it**.
 Never inject it into an older host or copy native config into an app.
 
 Keep these separate:
