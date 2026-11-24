@@ -18,7 +18,7 @@ Start from the Power Platform mobile app template, then use the mobile-app
 skill to generate the app plan, data model, screens, native capabilities, and
 connector wiring.
 
-1. Install the mobile-app plugin before running its helper commands.
+1. Install the mobile-app plugin once.
 
     In VS Code, open Extensions, search for `@agentPlugins mobile-app`, install
     **mobile-app**, and reload VS Code. Alternatively, use GitHub Copilot CLI:
@@ -35,16 +35,49 @@ connector wiring.
     claude plugin install mobile-app@power-platform-skills --scope user
     ```
 
-    Restart the agent host after installation. Set `PLUGIN_ROOT` to the absolute
-    installed plugin directory reported by that host; do not assume a cache layout:
+    Restart the agent host after installation.
+
+2. **Create and install a new app with one terminal command:**
+
+    ```sh
+    npx @microsoft/power-apps-native-template@latest ./my-mobile-app && npm ci --prefix ./my-mobile-app
+    ```
+
+    Replace `my-mobile-app` with your app's folder name. This gets the release
+    on your npm registry's `latest` tag, creates the app, and installs the exact
+    dependencies from its shipped lockfile. Run it from the parent folder in
+    Bash, Command Prompt, or PowerShell 7+; approve npm's download prompt if shown.
+
+    **Need a specific version?** Replace `latest` with that version, for example:
+
+    ```sh
+    npx @microsoft/power-apps-native-template@0.1.4 ./my-mobile-app && npm ci --prefix ./my-mobile-app
+    ```
+
+    Run **one** of these alternatives, not both. The target must be new or empty.
+    Creation fails rather than overwriting an existing app; `&&` prevents the
+    install from running after a failed creation, and `--prefix` keeps dependency
+    writes inside the new app. The creator itself only copies files; the
+    `npm ci` part installs dependencies. Use `/check-updates` for an existing app.
+
+    These are developer-run terminal commands. `latest` selects a release, not
+    proof that an older Mobile Preview client or wrapped binary supports it.
+    Use a matching client/base or select a compatible exact template version.
+    Existing registry/authentication settings are respected.
+
+    <details>
+    <summary>Advanced: release inspection and agent-managed acquisition</summary>
+
+    Agents keep the creation skill's verified release selection and separate
+    acquisition/installation approval gates; the terminal shortcut is not an
+    instruction to bypass them. Developers do not need to run the helper sequence
+    below for the quickstart.
+
+    Set `PLUGIN_ROOT` to the absolute installed plugin directory reported by the
+    host, without assuming a cache layout. Inspect available channels if needed:
 
     ```sh
     export PLUGIN_ROOT='/absolute/path/to/installed/mobile-app'
-    ```
-
-2. Discover published template versions:
-
-    ```sh
     npm view @microsoft/power-apps-native-template dist-tags --json
     ```
 
@@ -82,7 +115,9 @@ connector wiring.
     with the immutable template lock's integrity. This is not an offline
     synchronization or database-upgrade test.
 
-3. Open the template folder in VS Code and run the skill from Copilot Chat:
+    </details>
+
+3. Open **my-mobile-app** in VS Code and run the skill from Copilot Chat:
 
     ```text
     /create-mobile-app

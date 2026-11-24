@@ -18,9 +18,11 @@ const test = require('node:test');
 const pluginRoot = path.resolve(__dirname, '..', '..');
 const testsDir = path.join(pluginRoot, 'scripts', 'tests');
 
-// Developer-run example retained in the legacy customization documentation; no
-// operational skill executes this floating-upgrade command.
+// Explicit developer-run quickstarts and the legacy customization example only.
+// Operational skills keep their verified acquisition and approval workflow.
 const USER_RUN = [
+  ['README.md', 'npx @microsoft/power-apps-native-template@latest ./my-mobile-app && npm ci --prefix ./my-mobile-app'],
+  ['README.md', 'npx @microsoft/power-apps-native-template@0.1.4 ./my-mobile-app && npm ci --prefix ./my-mobile-app'],
   ['template/CUSTOMIZATION.md', 'npx --package @microsoft/power-apps-native-host@latest'],
 ];
 

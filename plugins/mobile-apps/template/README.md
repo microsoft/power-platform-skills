@@ -45,11 +45,12 @@ connector wiring.
 	If installed but disabled or not loaded, enable/load the plugin in your host.
 	Installation is optional and never performed automatically by app guidance.
 
-2. Choose an exact published npm template and acquire it into a new/empty folder
-   using the guarded [plugin setup sequence](../README.md#setup).
+2. Follow the [one-command npm quickstart](../README.md#setup) to create and
+   install a new app. Use `latest` or select an exact published template version.
 
-   That sequence checks published metadata and integrity, invokes the contained
-   creation CLI, and separately obtains approval for shipped-lock `npm ci`.
+   The command invokes the published creation CLI and installs the shipped
+   lock with `npm ci`. Agent-managed acquisition keeps its separate metadata,
+   integrity, and approval checks, documented in that guide's advanced section.
    Do not use a Git checkout or this bundled fixture as a fallback for missing
    publications. Existing apps use the upgrade workflow below, not creation.
 

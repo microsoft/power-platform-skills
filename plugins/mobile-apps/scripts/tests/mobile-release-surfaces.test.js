@@ -114,8 +114,8 @@ test('README keeps the bundled directory as a fixture rather than a new-app temp
 
   const fixtureReadme = read('template/README.md');
   assert.match(fixtureReadme, /legacy preparation\/test fixture/);
-  assert.match(fixtureReadme, /guarded \[plugin setup sequence\]\(\.\.\/README\.md#setup\)/);
-  assert.match(fixtureReadme, /shipped-lock `npm ci`/);
+  assert.match(fixtureReadme, /\[one-command npm quickstart\]\(\.\.\/README\.md#setup\)/);
+  assert.match(fixtureReadme, /lock with `npm ci`/);
   assert.match(fixtureReadme, /Run `\/check-updates` from the existing app/);
   assert.doesNotMatch(fixtureReadme, /\bnpx degit\b|--from-version|host@latest|Each run upgrades one template version/);
 });

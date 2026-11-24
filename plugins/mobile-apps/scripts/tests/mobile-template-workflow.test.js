@@ -240,6 +240,52 @@ npm() {
   }
 });
 
+test('developer quickstarts select latest or an exact version and keep installation in the created app', t => {
+  const readme = read('README.md');
+  const commands = shellBlocks(readme, 'sh').filter(block => block.startsWith('npx @microsoft/power-apps-native-template@'));
+  assert.equal(commands.length, 2);
+  assert.ok(readme.indexOf(commands[0]) < readme.indexOf('<details>'));
+  assert.match(readme, /Agents keep the creation skill's verified release selection and separate/);
+  const bashPaths = process.platform === 'win32'
+    ? (spawnSync('where.exe', ['bash'], { encoding: 'utf8' }).stdout || '').split(/\r?\n/)
+    : [];
+  const bash = bashPaths.find(entry => /[\\/]Git[\\/]/i.test(entry)) || 'bash';
+  const stubs = `
+npx() {
+  [ "$#" -eq 2 ] || return 98
+  printf "%s" "$1" > selected-template.txt
+  [ "$FAILURE_STAGE" != creation ] || return 23
+  "$REAL_NODE" -e 'require("node:fs").mkdirSync(process.argv[1])' "$2"
+}
+npm() {
+  [ "$#" -eq 3 ] && [ "$1" = ci ] && [ "$2" = --prefix ] || return 97
+  "$REAL_NODE" -e 'const fs=require("node:fs"),path=require("node:path"),root=fs.realpathSync.native(process.argv[1]);fs.writeFileSync(path.join(root,"install-ran.txt"),root)' "$3" || return 96
+  [ "$FAILURE_STAGE" != installation ] || return 29
+}
+`;
+  for (const [index, command] of commands.entries()) {
+    for (const failure of ['creation', 'installation', 'none']) {
+      const directory = fs.mkdtempSync(path.join(os.tmpdir(), "mobile quickstart owner's "));
+      t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+      const destination = path.join(directory, 'my-mobile-app');
+      fs.writeFileSync(path.join(directory, 'customer.txt'), 'preserve parent files');
+      const result = spawnSync(bash, ['-s'], {
+        cwd: directory, input: `${stubs}\n${command}`, encoding: 'utf8', timeout: 10000,
+        env: { ...process.env, FAILURE_STAGE: failure, REAL_NODE: process.execPath.replaceAll('\\', '/') },
+      });
+      assert.equal(result.status, failure === 'creation' ? 23 : failure === 'installation' ? 29 : 0, result.stderr);
+      assert.equal(fs.readFileSync(path.join(directory, 'selected-template.txt'), 'utf8'),
+        `@microsoft/power-apps-native-template@${index === 0 ? 'latest' : '0.1.4'}`);
+      assert.equal(fs.existsSync(path.join(directory, 'install-ran.txt')), false);
+      assert.equal(fs.existsSync(path.join(destination, 'install-ran.txt')), failure !== 'creation');
+      if (failure !== 'creation') {
+        assert.equal(fs.readFileSync(path.join(destination, 'install-ran.txt'), 'utf8'), fs.realpathSync.native(destination));
+      }
+      assert.equal(fs.readFileSync(path.join(directory, 'customer.txt'), 'utf8'), 'preserve parent files');
+    }
+  }
+});
+
 test('deployment instructions require all three actual selected-base values', () => {
   const commands = shellBlocks(lifecycle).find(block => block.includes('--base-version'));
   assert.ok(commands);
