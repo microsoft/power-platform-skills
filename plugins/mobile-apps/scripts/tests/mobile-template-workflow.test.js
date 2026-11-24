@@ -245,6 +245,7 @@ test('developer quickstarts select latest or an exact version and keep installat
   const commands = shellBlocks(readme, 'sh').filter(block => block.startsWith('npx @microsoft/power-apps-native-template@'));
   assert.equal(commands.length, 2);
   assert.ok(readme.indexOf(commands[0]) < readme.indexOf('<details>'));
+  assert.ok(readme.indexOf(commands[0]) < readme.indexOf('copilot plugin install'));
   assert.match(readme, /Agents keep the creation skill's verified release selection and separate/);
   const bashPaths = process.platform === 'win32'
     ? (spawnSync('where.exe', ['bash'], { encoding: 'utf8' }).stdout || '').split(/\r?\n/)

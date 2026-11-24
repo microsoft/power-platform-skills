@@ -18,10 +18,49 @@ Start from the Power Platform mobile app template, then use the mobile-app
 skill to generate the app plan, data model, screens, native capabilities, and
 connector wiring.
 
-1. Install the mobile-app plugin once.
+1. **Create your app:**
 
-    In VS Code, open Extensions, search for `@agentPlugins mobile-app`, install
-    **mobile-app**, and reload VS Code. Alternatively, use GitHub Copilot CLI:
+    ```sh
+    npx @microsoft/power-apps-native-template@latest ./my-mobile-app && npm ci --prefix ./my-mobile-app
+    ```
+
+    Replace `my-mobile-app` with your app's folder name. This gets the release
+    on your npm registry's `latest` tag, creates the app, and installs the exact
+    dependencies from its shipped lockfile. Run it from the parent folder in
+    Bash, Command Prompt, or PowerShell 7+; approve npm's download prompt if shown.
+
+    <details>
+    <summary>Use a specific template version</summary>
+
+    Replace `latest` with the version you need, for example:
+
+    ```sh
+    npx @microsoft/power-apps-native-template@0.1.4 ./my-mobile-app && npm ci --prefix ./my-mobile-app
+    ```
+
+    </details>
+
+    Run **one** of these alternatives, not both. The target must be new or empty.
+    Creation fails rather than overwriting an existing app; `&&` prevents the
+    install from running after a failed creation, and `--prefix` keeps dependency
+    writes inside the new app. The creator itself only copies files; the
+    `npm ci` part installs dependencies. Use `/check-updates` for an existing app.
+
+    These are developer-run terminal commands. `latest` selects a release, not
+    proof that an older Mobile Preview client or wrapped binary supports it.
+    Use a matching client/base or select a compatible exact template version.
+    Existing registry/authentication settings are respected.
+
+2. **Open the app and enable the mobile-app skill:**
+
+    Open **my-mobile-app** in VS Code. In Extensions, search for
+    `@agentPlugins mobile-app`, install **mobile-app**, and reload VS Code.
+    Plugin installation is a one-time step; skip it if already installed.
+
+    <details>
+    <summary>Other plugin installation options</summary>
+
+    For GitHub Copilot CLI:
 
     ```sh
     copilot plugin marketplace add microsoft/power-platform-skills
@@ -37,33 +76,7 @@ connector wiring.
 
     Restart the agent host after installation.
 
-2. **Create and install a new app with one terminal command:**
-
-    ```sh
-    npx @microsoft/power-apps-native-template@latest ./my-mobile-app && npm ci --prefix ./my-mobile-app
-    ```
-
-    Replace `my-mobile-app` with your app's folder name. This gets the release
-    on your npm registry's `latest` tag, creates the app, and installs the exact
-    dependencies from its shipped lockfile. Run it from the parent folder in
-    Bash, Command Prompt, or PowerShell 7+; approve npm's download prompt if shown.
-
-    **Need a specific version?** Replace `latest` with that version, for example:
-
-    ```sh
-    npx @microsoft/power-apps-native-template@0.1.4 ./my-mobile-app && npm ci --prefix ./my-mobile-app
-    ```
-
-    Run **one** of these alternatives, not both. The target must be new or empty.
-    Creation fails rather than overwriting an existing app; `&&` prevents the
-    install from running after a failed creation, and `--prefix` keeps dependency
-    writes inside the new app. The creator itself only copies files; the
-    `npm ci` part installs dependencies. Use `/check-updates` for an existing app.
-
-    These are developer-run terminal commands. `latest` selects a release, not
-    proof that an older Mobile Preview client or wrapped binary supports it.
-    Use a matching client/base or select a compatible exact template version.
-    Existing registry/authentication settings are respected.
+    </details>
 
     <details>
     <summary>Advanced: release inspection and agent-managed acquisition</summary>
@@ -117,11 +130,13 @@ connector wiring.
 
     </details>
 
-3. Open **my-mobile-app** in VS Code and run the skill from Copilot Chat:
+3. **Start building in Copilot Chat:**
 
     ```text
     /create-mobile-app
     ```
+
+    Describe the app you want to build; the skill guides you through the setup.
 
     The template includes this host package and the required Expo / React Native
     runtime dependencies. The skill updates the app in place as it designs and
