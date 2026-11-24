@@ -24,10 +24,8 @@ connector wiring.
     npx @microsoft/power-apps-native-template@latest ./my-mobile-app && npm ci --prefix ./my-mobile-app
     ```
 
-    Replace `my-mobile-app` with your app's folder name. This gets the release
-    on your npm registry's `latest` tag, creates the app, and installs the exact
-    dependencies from its shipped lockfile. Run it from the parent folder in
-    Bash, Command Prompt, or PowerShell 7+; approve npm's download prompt if shown.
+    Replace `my-mobile-app` with your new app folder name. Run this from its
+    parent folder in Bash, Command Prompt, or PowerShell 7+.
 
     <details>
     <summary>Use a specific template version</summary>
@@ -38,27 +36,24 @@ connector wiring.
     npx @microsoft/power-apps-native-template@0.1.4 ./my-mobile-app && npm ci --prefix ./my-mobile-app
     ```
 
+    Use this instead of the `@latest` command.
+
     </details>
-
-    Run **one** of these alternatives, not both. The target must be new or empty.
-    Creation fails rather than overwriting an existing app; `&&` prevents the
-    install from running after a failed creation, and `--prefix` keeps dependency
-    writes inside the new app. The creator itself only copies files; the
-    `npm ci` part installs dependencies. Use `/check-updates` for an existing app.
-
-    These are developer-run terminal commands. `latest` selects a release, not
-    proof that an older Mobile Preview client or wrapped binary supports it.
-    Use a matching client/base or select a compatible exact template version.
-    Existing registry/authentication settings are respected.
 
 2. **Open the app and enable the mobile-app skill:**
 
-    Open **my-mobile-app** in VS Code. In Extensions, search for
-    `@agentPlugins mobile-app`, install **mobile-app**, and reload VS Code.
-    Plugin installation is a one-time step; skip it if already installed.
+    Open **my-mobile-app** in VS Code, then
+    [install mobile-app](https://vscode.dev/redirect?url=vscode%3A%2F%2Fchat-plugin%2Finstall%3Fsource%3Dmicrosoft%252Fpower-platform-skills%26plugin%3Dmobile-app).
+    Confirm the install prompts and start a new Copilot chat. Skip installation
+    if the plugin is already enabled.
 
     <details>
     <summary>Other plugin installation options</summary>
+
+    If the VS Code link is unavailable, follow the
+    [VS Code plugin installation guide](https://code.visualstudio.com/docs/agent-customization/agent-plugins#install-a-plugin-from-a-marketplace).
+    It covers **Chat: Open Customizations**, marketplace setup, and the
+    `chat.plugins.enabled` setting.
 
     For GitHub Copilot CLI:
 

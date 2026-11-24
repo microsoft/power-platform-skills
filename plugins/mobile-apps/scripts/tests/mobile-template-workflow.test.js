@@ -317,6 +317,23 @@ npm() {
   }
 });
 
+test('README uses the documented VS Code plugin install route for this marketplace and plugin', () => {
+  const readme = read('README.md');
+  const match = readme.match(/\[install mobile-app\]\((https:\/\/vscode\.dev\/redirect\?[^)]+)\)/);
+  assert.ok(match, 'Provide an HTTPS install link that works in GitHub-rendered Markdown');
+  const redirect = new URL(match[1]);
+  const install = new URL(redirect.searchParams.get('url'));
+  const { REPO } = require(path.resolve(root, '../../site/lib/install-links.js'));
+  const manifest = JSON.parse(read('.plugin/plugin.json'));
+  assert.equal(install.protocol, 'vscode:');
+  assert.equal(install.hostname, 'chat-plugin');
+  assert.equal(install.pathname, '/install');
+  assert.equal(install.searchParams.get('source'), REPO);
+  assert.equal(install.searchParams.get('plugin'), manifest.name);
+  assert.match(readme, /https:\/\/code\.visualstudio\.com\/docs\/agent-customization\/agent-plugins/);
+  assert.doesNotMatch(readme, /@agentPlugins/);
+});
+
 test('deployment instructions require all three actual selected-base values', () => {
   const commands = shellBlocks(lifecycle).find(block => block.includes('--base-version'));
   assert.ok(commands);
