@@ -161,7 +161,10 @@ Same shape as the profile/item entities — `componentstate`, `isvalidated`, `pu
 
 ## Layer 5 — Membership entities (assignment)
 
-Out of v0.1 scope (`/assign-offline-profile` lands in v0.3). Documented here for the v0.3 implementer:
+Assignment is a separate workflow, implemented by
+[assign-offline-profile](../../skills/assign-offline-profile/SKILL.md).
+Profile creation does not grant assignment permission; discover current
+memberships and approve the exact user/team delta before writes.
 
 | Entity | Purpose | Key fields |
 |---|---|---|
@@ -183,7 +186,7 @@ Shape:
   "profileId": "<guid>",
   "name": "...",
   "publishedOn": "<iso8601>",
-  "mode": "create-new" | "extend",
+  "mode": "create-new",
   "tables": [
     {
       "logicalName": "cr123_note",
@@ -198,8 +201,9 @@ Shape:
       "relationships": [
         {
           "associationId": "<guid>",
-          "relationshipName": "cr123_note_visit",
-          "relationshipId": "<guid>"
+          "schemaName": "cr123_note_visit",
+          "relationshipId": "<guid>",
+          "targetEntity": "cr123_visit"
         }
       ]
     }
@@ -222,6 +226,14 @@ App-level offline config (previously written into `power.config.json` as an `off
 ```
 
 `power.config.json` is intentionally NOT touched by the offline skill — it stays owned by `pa app init`.
+
+`mode` records `create-new` or `extend`. For the current Offline SDK, `tables`
+and their columns/relationships are project-owned planning/verification
+snapshots, not a replacement for the published profile fetched by native MDL.
+Inspect the selected SDK's public bootstrap contract before adding runtime
+settings. SDK 0.2.2 ignores deprecated `useDda` and `entitiesIncluded`; do not
+generate them as required workarounds. Preserve settings in older app snapshots
+until their version-specific cleanup is reviewed.
 
 ---
 

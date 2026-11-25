@@ -71,11 +71,15 @@ For each table in the profile, run a `count` query that applies the same filter 
 |---|---|---|
 | 1 (All records) | n/a | `?$count=true&$top=0` (whole table) |
 | 2 + me | recordsownedbyme=true | `?$count=true&$top=0&$filter=_ownerid_value eq <current-user-id>` |
-| 2 + team | recordsownedbymyteam=true | Approx: `_ownerid_value` in (current user's team-owned IDs); for estimate, use team count from `teamroles_association` |
+| 2 + team | recordsownedbymyteam=true | Resolve the current user's actual team memberships and count matching team-owned rows. If that scope cannot be resolved, report `unknown`; role-association counts are not row or membership counts. |
 | 2 + bu | recordsownedbymybusinessunit=true | `?$count=true&$top=0&$filter=_owningbusinessunit_value eq <current-bu-id>` |
 | 0 (Related only) | n/a | Can't estimate independently — depends on parents. Report `~depends on parent counts`. |
 
 For current-user/current-BU filters, resolve identity only inside this skill by calling Dataverse `WhoAmI` through `scripts/dataverse-request.js` against the resolved `<envUrl>` with `--tenant-id "<tenantId>"` from the same guarded root. If that call fails, report the affected scope as `unknown — current user/BU unavailable` instead of blocking the whole preview. Do not expect `scripts/resolve-environment.js` or `auth.config.json.environment` to provide `UserId` / `BusinessUnitId`.
+
+When several ownership flags are enabled, estimate their union, not the sum of
+independent counts that can double-count rows. Label approximations and missing
+scope explicitly; never substitute `teamroles_association` counts for data rows.
 
 For each table:
 

@@ -510,7 +510,7 @@ retry. For authentication failures:
 | Error | Action |
 | --- | --- |
 | `TS6133` (unused import) | Remove the unused import and retry once. |
-| `TS2305` / `TS2307` (missing export / module not found) | If the missing package ships native code/config, STOP unless it already exists in the template `package.json`. If an approved plan names a pure-JavaScript dependency, run `npm install --save-exact <package>@<approved-version>` and retry. Do not install an unplanned package merely to silence an import error. |
+| `TS2305` / `TS2307` (missing export / module not found) | Inspect the actual app's declared/installed package and public exports, not the bundled fixture. Native package changes require the approved release workflow; a missing declared installation follows approved same-lock recovery. If an approved plan names a pure-JavaScript dependency, run `npm install --save-exact <package>@<approved-version>` and retry. Do not install an unplanned package merely to silence an import error. |
 | Other TS error | Surface the file, line, and full message. STOP. Do not run platform builds. |
 
 ### `pa app add data-source` failures
@@ -523,13 +523,13 @@ retry. For authentication failures:
 | `environment not set` | Confirm `power.config.json` has `environmentId`; if missing, rerun `$PA app init -t MobileApp --display-name '<name>' --environment-id <id> --non-interactive`. |
 | Non-zero exit for any other reason | Report exact stderr. STOP. |
 
-### `npm install` / `npx --no-install expo install` failures
+### Dependency installation / SDK validation failures
 
 | Condition | Action |
 | --- | --- |
-| `404` for `@microsoft/power-apps-native-host` or `@microsoft/power-apps` | Likely an internal-feed-only package. Check npm registry/auth configuration for the correct Azure Artifacts feed. STOP. |
-| Peer-dep mismatch from Expo SDK | Run `npx --no-install expo install --fix` once. If still failing, surface the message and STOP. |
-| Reanimated install but build fails immediately after | `react-native-reanimated/plugin` is missing or wrongly ordered in `babel.config.js`. Add it as the **last** plugin entry. |
+| `404` for a selected Microsoft package or dependency | Verify the exact requested version and access through the app's existing configured registry. Published Microsoft packages are not necessarily private-feed-only. Do not switch registries, guess credentials, or replace the selected version. Report unavailable publication versus authentication/network failure separately. |
+| Peer-dep mismatch from Expo SDK | Diagnose the installed SDK and locked dependency graph. Preserve release pins; never run `expo install --fix` or force peer resolution. Use the owning workflow's approved same-lock recovery for a broken installation, or `/check-updates` for a coordinated release change. |
+| Reanimated or Worklets fails after installation | Inspect the installed versions and the selected release's Babel/preset contract. Do not append `react-native-reanimated/plugin`, replace Host-owned Babel configuration, or patch a package based only on the symptom. Use `/debug-app` to distinguish app configuration, installation, and package defects. |
 
 ### Native run or web run failures
 

@@ -1,6 +1,6 @@
 # CLI Binary Resolution (`pa` preferred, `power-apps` fallback)
 
-<!-- Mirrors plugins/code-apps/shared/cli-binary.md — keep both in sync. Mobile deltas: `connection list-*` rows, flag "Used by" cells, the `--force` row, `--app-type`/`-t` on `init`, and rule 4 (the user runs `npm install`). -->
+<!-- Shares the command/flag mapping with plugins/code-apps/shared/cli-binary.md. Mobile deltas: current binary availability, app-scoped locked installation recovery, `connection list-*` rows, flag "Used by" cells, the `--force` row, and `--app-type`/`-t` on `init`. -->
 
 **This file is the single source of truth for which CLI binary to run and how to translate commands.** Every skill that runs a Power Apps CLI command MUST resolve the binary using the algorithm below **before** running any command, and MUST author commands in the canonical grouped **`pa`** form (see the mapping table).
 
@@ -8,14 +8,18 @@
 
 ## Why two binaries
 
-`@microsoft/power-apps-cli` ships two executables from the **same package**:
+Depending on its version, `@microsoft/power-apps-cli` exposes the grouped `pa`
+binary, the historical flat `power-apps` binary, or both:
 
 | Binary       | Syntax  | Example                                    |
 | ------------ | ------- | ------------------------------------------ |
 | `pa`         | grouped | `pa app add data-source --connector ...`   |
 | `power-apps` | flat    | `power-apps add-data-source -a ...`        |
 
-Both are installed together, so a project's `node_modules/.bin/pa` shim exists **only if** the installed CLI version is new enough to include the grouped `pa` binary. Older projects have only `power-apps`. We therefore **prefer `pa`** and **fall back to `power-apps`**.
+For example, version **1.4.1** exposes only `pa`; do not expect a second binary
+to exist. Probe the actual project's installed shims: **prefer `pa`** and
+**fall back to `power-apps`** only when that legacy executable is present.
+These examples do not authorize changing the app's CLI version.
 
 **Two things differ between the binaries — the verb structure AND some flags:**
 
@@ -26,7 +30,7 @@ When translating a canonical `pa` command to flat `power-apps`, you must convert
 
 ---
 
-## Resolution algorithm (run once per session, then cache)
+## Resolution algorithm (app-scoped)
 
 Resolve from the **project root** (the directory containing `package.json` / `power.config.json`):
 
@@ -44,7 +48,7 @@ elif [ -e node_modules/.bin/power-apps ] || [ -e node_modules/.bin/power-apps.cm
   PA_KIND="power-apps"
 else
   # Neither shim present → the CLI is not installed yet.
-  # Run `npm install` in the project root (per the normal scaffold flow), then re-probe.
+  # Follow the owning workflow's approved locked installation, then re-probe.
   PA=""
   PA_KIND="none"
 fi
@@ -54,8 +58,8 @@ Rules:
 
 1. **Probe by file presence only** — do not pin or parse a version. A shim (`.bin/pa` or, on Windows, `.bin/pa.cmd`) existing == the grouped binary is available. This is deterministic and cheaper than spawning `--version`. Always check the `.cmd` variant too: npm/pnpm/yarn/bun create `pa.cmd`/`power-apps.cmd` on Windows and an extensionless-only probe would misclassify a valid install as `none`.
 2. **Always use `npx --no-install`.** Never run a bare `npx pa ...`: if the local shim is missing, npx would try to download and execute an unrelated remote package named `pa`. `--no-install` fails closed instead.
-3. **Cache the result** in the project memory bank (`CLI Binary` row — see `memory-bank.md`) so subsequent skills/commands in the session don't re-probe. Re-probe only after an `npm install` that could have changed the installed CLI.
-4. **`none` → install first.** If neither shim exists, the CLI isn't installed; STOP and ask the user to run `npm install` in the project root (mobile skills never bootstrap dependencies themselves), then re-probe before running any command.
+3. **Keep the result app-scoped.** A project memory-bank `CLI Binary` row is a hint, not proof that a shim still exists. Re-probe after dependency restoration or when changing app roots. Re-supply `$PA` and `PA_KIND` in every fresh shell as required by [app-working-directory.md](references/app-working-directory.md).
+4. **`none` → approved installation recovery.** Do not run a floating `npm install` or fetch an unrelated CLI. Creation may install the acquired template's shipped lock after approval; an existing app follows its owning workflow's approved same-lock restoration, normally `npm ci` in the explicitly bound app directory. Preserve registry routing and package declarations, then re-probe. A missing lock or undeclared CLI requires review, not an automatic new dependency.
 
 ---
 

@@ -1,9 +1,9 @@
 # Mobile Base Template Quality Contracts
 
-The Mobile Apps plug-in ships a deterministic Expo template contract so a new
-application reaches planning and screen generation from a clean,
-production-ready baseline. These rules apply to the bundled template and to
-`/create-mobile-app`.
+New apps acquire the published npm template and its selected Host contract.
+The plugin's bundled `template/` is a legacy preparation/test fixture, not the
+current app source or evidence of production/native readiness. These quality
+contracts describe bounded preparation of an acquired app and its fixture tests.
 
 ## Visual and Runtime Baseline
 
@@ -24,7 +24,8 @@ production-ready baseline. These rules apply to the bundled template and to
 
 ## Deterministic Template Preparation
 
-`scripts/prepare-mobile-template.js` is the sole Step 5 mutation path. It:
+`scripts/prepare-mobile-template.js` owns fresh-template preparation in both
+creation build orders. It:
 
 1. Updates the display name and slug.
 2. Removes only an empty placeholder `power.config.json`.
@@ -54,13 +55,16 @@ stubs from masking incomplete initialization.
 
 ## Lifecycle and Approval Safety
 
-The app instance identity is minted only after `proceed`, so `edit` and `abort`
-leave the fresh template unchanged. If a populated `power.config.json` already
+App feature/configuration changes require the owning workflow's approval.
+Existing skill telemetry may initialize a missing `expo.extra.telemetry.appInstanceId`
+in a valid app at invocation; do not describe the entire workflow entry as
+write-free or confuse that identity with native compatibility state.
+If a populated `power.config.json` already
 targets the approved environment, initialization is verified and skipped
 rather than invoking the CLI over an existing config.
 
-Step 3 writes `native-app-plan.md` before Step 5. The preparation gate therefore
-allows that approved plan while still rejecting created-app markers:
+An approved creation plan can exist before preparation. The preparation gate
+therefore allows that plan while still rejecting created-app markers:
 `memory-bank.md`, `.datamodel-manifest.json`, and generated service files.
 
 ## Validation Portability
@@ -77,5 +81,6 @@ route folder named `app/generated/` remains in scope. Mobile CI covers:
 - shared component accessibility and contrast contracts;
 - pristine route safe-area and icon rules;
 - generated-directory ownership;
-- full template dependency installation, TypeScript compilation, and
-  all-source mobile validation.
+- legacy fixture dependency installation, TypeScript compilation, and
+  all-source mobile validation. These checks do not certify every published
+  template or a matching device binary.

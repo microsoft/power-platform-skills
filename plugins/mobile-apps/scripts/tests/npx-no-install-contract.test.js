@@ -18,12 +18,11 @@ const test = require('node:test');
 const pluginRoot = path.resolve(__dirname, '..', '..');
 const testsDir = path.join(pluginRoot, 'scripts', 'tests');
 
-// Developer-run examples retained in the legacy template documentation; no
-// operational skill executes these acquisition or floating-upgrade commands.
+// Explicit developer-run template quickstarts only.
+// Operational skills keep their verified acquisition and approval workflow.
 const USER_RUN = [
-  ['template/README.md', 'npx degit microsoft/power-platform-skills/plugins/mobile-apps/template#main'],
-  ['template/README.md', 'npx --package @microsoft/power-apps-native-host@latest'],
-  ['template/CUSTOMIZATION.md', 'npx --package @microsoft/power-apps-native-host@latest'],
+  ['README.md', 'npx @microsoft/power-apps-native-template@latest ./my-mobile-app && npm ci --prefix ./my-mobile-app'],
+  ['README.md', 'npx @microsoft/power-apps-native-template@0.1.4 ./my-mobile-app && npm ci --prefix ./my-mobile-app'],
 ];
 
 const BARE_NPX = /\bnpx\s+(?!--no-install\b)/g;

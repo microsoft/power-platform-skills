@@ -58,16 +58,19 @@ projects, update them separately when required.
 
 ## Before upgrading
 
-The template now pins Zod 4.6.6 to fix oversized-collection validation.
-If your app uses Zod 3, review the [Zod 4 migration guide](https://zod.dev/v4/changelog) and update your schemas and error handling before adopting this dependency change.
-The bundled starter has no Zod imports to migrate.
+This legacy test fixture pins Zod 4.6.6; that does not update the dependencies
+in a published npm template or an existing app. Inspect the app's actual
+manifest and lock. If an approved update moves Zod 3 to Zod 4, review the
+[Zod 4 migration guide](https://zod.dev/v4/changelog) and test the app's schemas
+and error handling. The fixture itself has no Zod imports to migrate.
 
 1. Commit or back up your work.
-2. Preview the upgrade:
+2. Run `/check-updates` in the existing app to review an exact published release
+   and test its complete migration in a separate copy.
+3. Review warnings, app-code repairs, and validation results before separately
+   approving application to the original app.
+4. Resolve any `.rej` files in the test copy and rerun the required checks.
+   Preserve offline profiles, configuration, instructions, and customer data.
 
-   ```bash
-   npx --package @microsoft/power-apps-native-host@latest upgrade-template --dry-run
-   ```
-
-3. Review warnings and run the upgrade.
-4. Resolve any `.rej` files, then test your app.
+Do not independently install a floating Host or infer compatibility from this
+fixture's dependency versions. See the [published upgrade workflow](../skills/check-updates/SKILL.md).

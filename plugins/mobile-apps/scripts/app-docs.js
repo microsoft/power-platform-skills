@@ -303,7 +303,7 @@ function normalizePreviewUrl(value) {
  *             see normalizePreviewUrl. From the preview gate the same server also serves the
  *             app to a phone, and a `qrImage` recorded without a stage change is drawn under the
  *             frame rather than in it
- *   qr        the Metro QR code. Screens first moves here at Step 14, when the app starts reading
+ *   qr        the Metro QR code or URL-only handoff. Screens first moves here at Step 14, when the app starts reading
  *             real data: the browser frame has no signed-in Power Apps host, so the wired app
  *             would only show errors there, while the phone app is one. Data model first moves
  *             here at its dev server step. Either way the plan ends on how to open the real app
@@ -338,8 +338,14 @@ function setPhone(state, update) {
     state.phone.screens = [];
   }
   if (update.previewHref !== undefined) state.phone.previewHref = update.previewHref;
-  if (update.qrImage !== undefined) state.phone.qrImage = update.qrImage;
-  if (update.qrHref !== undefined) state.phone.qrHref = update.qrHref;
+  if (update.qrUrl !== undefined && !update.qrImage) {
+    // A URL-only handoff must not reuse an image/link from a previous Metro session.
+    delete state.phone.qrImage;
+    delete state.phone.qrHref;
+  } else {
+    if (update.qrImage !== undefined) state.phone.qrImage = update.qrImage;
+    if (update.qrHref !== undefined) state.phone.qrHref = update.qrHref;
+  }
   if (update.qrUrl !== undefined) state.phone.qrUrl = update.qrUrl;
 
   state.updatedAt = new Date().toISOString();

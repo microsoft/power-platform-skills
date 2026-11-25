@@ -30,5 +30,5 @@ gives no symptom, proceed directly to the Summary step.
 When the user is ready to deploy:
 
 ```
-/deploy            # runs npm run build + pa app push
+/deploy            # builds and stages web/native artifacts, then confirms the push
 ```

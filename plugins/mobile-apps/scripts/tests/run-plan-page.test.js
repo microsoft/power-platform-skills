@@ -20,7 +20,7 @@ const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
 
-const { applyStep, initState, outputPath, save, setPhone, setSection } = require('../app-docs');
+const { applyStep, initState, loadState, outputPath, save, setPhone, setSection } = require('../app-docs');
 const { createSkillWorkflow } = require('./helpers/create-skill');
 const { APP_AREA, PHONE, phoneShellCss } = require('../lib/phone-shell');
 
@@ -1230,7 +1230,46 @@ test('a QR recorded during the live stage sits under the frame and leaves the pr
   setPhone(state, { qrImage: 'https://example.com/qr.png' });
   save(root, state);
   const rejected = await runPage(outputPath(root));
-  assert.equal(findAll(rejected.elements.get('railPreviewLink'), (n) => n.className === 'rail-qr').length, 0);
+  assert.equal(findAll(rejected.elements.get('railPreviewLink'), (n) => n.tagName === 'IMG').length, 0);
+  assert.match(rejected.rendered('railPreviewLink'), /http:\/\/192\.168\.1\.4:8082\//);
+});
+
+test('URL-only handoffs render the current address in fresh and previously populated plans', async (t) => {
+  const url = 'http://192.0.2.2:8090/';
+  for (const stage of ['qr', 'live']) {
+    for (const populated of [false, true]) {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'run-plan-url-only-'));
+      t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+      const state = initState(root, { appName: 'URL handoff' });
+      if (stage === 'live') setPhone(state, { stage, previewUrl: 'http://localhost:8082/' });
+      if (populated) {
+        setPhone(state, {
+          qrImage: 'data:image/png;base64,iVBORw0KGgo=',
+          qrHref: '../.expo/old-qr.png',
+          qrUrl: 'http://192.0.2.1:8082/',
+        });
+      }
+      save(root, state);
+      const resumed = loadState(root);
+      setPhone(resumed, { ...(stage === 'qr' ? { stage } : {}), qrUrl: url });
+      save(root, resumed);
+
+      const page = await runPage(outputPath(root));
+      assert.deepEqual(page.thrown.map(error => error.message), []);
+      const handoff = stage === 'qr' ? 'deviceScreen' : 'railPreviewLink';
+      assert.ok(page.rendered(handoff).includes(url), `${stage}: show the current Metro URL`);
+      assert.match(page.rendered(handoff), /Enter URL/);
+      assert.doesNotMatch(page.rendered(handoff), /Scan to run|Scan with/);
+      assert.equal(findAll(page.elements.get(handoff), element => element.tagName === 'IMG').length, 0);
+      assert.equal(findAll(page.elements.get('railPreviewLink'), element =>
+        element.getAttribute('href') === '../.expo/old-qr.png').length, 0);
+      assert.equal(page.elements.get('railTitle').textContent,
+        stage === 'qr' ? 'Open it on your phone' : 'Live preview');
+      const frames = findAll(page.elements.get('deviceScreen'), element => element.tagName === 'IFRAME');
+      assert.equal(frames.length, stage === 'live' ? 1 : 0);
+      if (stage === 'live') assert.equal(frames[0].getAttribute('src'), 'http://localhost:8082/');
+    }
+  }
 });
 
 test('a live stage whose address fails the page check falls back to the build animation', async () => {

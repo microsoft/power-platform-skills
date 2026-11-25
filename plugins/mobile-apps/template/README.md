@@ -1,8 +1,14 @@
-# Power Apps Standalone App Template
+# Legacy Mobile App Preparation Fixture
 
-This template is an Expo, React Native, and TypeScript starter for building an
-iOS, Android, or hosted web app that connects to Power Platform data through
-`@microsoft/power-apps-native-host`.
+This directory is a **legacy preparation/test fixture**, not the current
+customer template. Its older dependency versions are intentional: they protect
+backward-compatible preparation and provide missing app-guidance defaults.
+Do not update those pins merely because a new runtime has shipped.
+
+New apps use the published
+[`@microsoft/power-apps-native-template`](https://www.npmjs.com/package/@microsoft/power-apps-native-template)
+package and its verified creation CLI. The following setup guidance applies to
+that acquired app, not to cloning or installing this fixture as a new app.
 
 ## Requirements
 
@@ -18,15 +24,7 @@ Start from the Power Platform mobile app template, then use the mobile-app
 skill to generate the app plan, data model, screens, native capabilities, and
 connector wiring.
 
-1. Create a new app from the template and install dependencies:
-
-	```sh
-	npx degit microsoft/power-platform-skills/plugins/mobile-apps/template#main my-mobile-app
-	cd my-mobile-app
-	npm install
-	```
-
-2. Install the mobile-app plugin from the Power Platform Skills marketplace.
+1. Install the mobile-app plugin from the Power Platform Skills marketplace.
 
 	For GitHub Copilot in VS Code:
 
@@ -47,7 +45,16 @@ connector wiring.
 	If installed but disabled or not loaded, enable/load the plugin in your host.
 	Installation is optional and never performed automatically by app guidance.
 
-3. Open the template folder in VS Code and run the skill from Copilot Chat:
+2. Follow the [one-command npm quickstart](../README.md#setup) to create and
+   install a new app. Use `latest` or select an exact published template version.
+
+   The command invokes the published creation CLI and installs the shipped
+   lock with `npm ci`. Agent-managed acquisition keeps its separate metadata,
+   integrity, and approval checks, documented in that guide's advanced section.
+   Do not use a Git checkout or this bundled fixture as a fallback for missing
+   publications. Existing apps use the upgrade workflow below, not creation.
+
+3. Open the acquired app folder in VS Code and run the skill from Copilot Chat:
 
 	```text
 	/create-mobile-app
@@ -96,8 +103,10 @@ connector wiring.
 
 5. Start mobile app:
 
-	`/create-mobile-app` starts Metro with `npm run dev`; its `predev` lifecycle
-	runs schema generation and type-checking before Expo starts.
+	`/create-mobile-app` starts Metro with the template-owned `npm run dev`.
+	npm runs the app's declared `predev` command first. The published template's
+	`predev` generates schemas; run `npm run type-check` separately rather than
+	assuming schema generation also type-checks the app.
 	The template's Metro config delegates sanitized logging to the native host package, which writes `.powernative/metro-logs/`,
 	allowing `/debug-app` to work across VS Code, Copilot CLI, and Claude Code
 	without a terminal ID.
@@ -173,64 +182,19 @@ do not block reporting in those cases.
 
 ## Upgrade the Native Host
 
-From the app directory, preview the next template upgrade:
+Run `/check-updates` from the existing app. It selects an exact published Host
+and matching template, rehearses the complete required migration chain in a
+test copy, validates the result, and asks separately before applying changes
+to the original app. See the [upgrade workflow](../skills/check-updates/SKILL.md).
 
-```bash
-npx --package @microsoft/power-apps-native-host@latest upgrade-template --dry-run
-```
-
-Apply it:
-
-```bash
-npx --package @microsoft/power-apps-native-host@latest upgrade-template
-```
-
-Each run upgrades one template version, installs compatible dependencies, and
-runs Expo validation. If another version is available, run the command again.
-The current version is stored in `app.json` under
-`expo.extra.powerappsNative`; do not edit this object.
-
-Apps created before this version file existed must specify their source template
-version:
-
-```bash
-npx --package @microsoft/power-apps-native-host@latest \
-	upgrade-template --from-version 1
-```
-
-The upgrader never changes `app/`, `src/`, `android/`, or `ios/`. If a root
-configuration change conflicts with your customization, it writes a `.rej` file
-for manual resolution. Failed validation restores files managed by the upgrade.
-
-Supported package managers are npm, pnpm, and Bun. See
-[CUSTOMIZATION.md](CUSTOMIZATION.md) before changing root configuration files.
-
-### Manual migration to a new template
-
-To migrate without `upgrade-template`, create a new app from the latest template
-instead of modifying the old app in place. Commit or back up the old app first.
-
-1. Create the new app and install its dependencies.
-2. Copy the contents of `app/` and `src/` from the old app into the same
-	directories in the new app:
-
-	```bash
-	cp -R ../old-app/app/. app/
-	cp -R ../old-app/src/. src/
-	```
-
-3. Copy app-owned assets and settings such as `assets/`, `auth.config.json`,
-	`power.config.json`, and `offline-profile.json` as needed. Review each file
-	before replacing the version supplied by the new template.
-4. Keep the new template's `package.json`, lock file, root configuration files,
-	`android/`, and `ios/`. Reapply old customizations selectively rather than
-	copying these files wholesale.
-5. Run `npm install`, `npm run type-check`, and the bundle command for each
-	target platform, such as `npm run bundle:android` or `npm run bundle:ios`.
-6. Give the resulting errors to GitHub Copilot in Agent mode and ask it to
-	update the migrated `app/` and `src/` code for the new template APIs while
-	preserving the new template configuration. Review the changes and rerun the
-	failing command until the build succeeds.
+The published Host owns dependency installation and protected state changes.
+Do not independently install a floating Host, invent a source version, copy a
+new template over the app, or edit `expo.extra.powerappsNative` by hand.
+Missing recorded state or an unsupported migration requires recovery/review.
+The current published migration supports npm; other package managers need
+explicit support from the selected Host, not a claim inherited from this fixture.
+Preserve app code, offline profiles, settings, and data through the reviewed
+preview/application process.
 
 ## Web
 
@@ -247,9 +211,14 @@ Power Platform tenant.
 Web builds are supported in Code Apps. They are also supported in Power Pages
 when the app uses Dataverse only.
 
-To publish as a Code App, run `npm run bundle:web`, set `appType` to `CodeApp`
-and `buildPath` to `dist-web` in `power.config.json`, then run
-`npx --no-install pa app push`. Ensure Code App and the Mobile App have different app id by removing the appId field before pushing the app
+For an explicitly approved, separate Code App, use that app's own configuration
+and the installed CLI's supported upload path for `npm run bundle:web`. Keep its
+identity separate from an existing Mobile App; do not remove the Mobile App's
+`appId` or change its `appType` just to publish web output.
+
+For mobile deployment, follow [`/deploy`](../skills/deploy/SKILL.md): build and
+stage the complete web/native payload into the existing configured upload
+directory, then confirm the target before pushing.
 
 To publish to Power Pages, run `npm run bundle:web -- powerpages`, then use the Power Pages
 skills to upload the generated `dist-web` directory.

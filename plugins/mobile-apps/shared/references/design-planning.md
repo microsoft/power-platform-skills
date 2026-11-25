@@ -8,7 +8,11 @@ Mobile-first rules apply throughout — no CSS variables, no Google Fonts, no ke
 
 ## Default Stack
 
-The bundled Expo template already ships a complete, production-ready design baseline. **If no design keywords are detected and the user did not specify an aesthetic, use the default and skip Step 3c's confirmation question entirely.**
+Use the acquired app's installed Host/Tamagui configuration as its design
+baseline, not the plugin's legacy bundled fixture. Design defaults are not
+production or native-compatibility qualification. **If no design keywords are
+detected and the user did not specify an aesthetic, use the app's default and
+skip Step 3c's confirmation question entirely.**
 
 | Layer | Default | Where it lives |
 |---|---|---|

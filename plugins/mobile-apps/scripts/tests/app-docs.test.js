@@ -2088,6 +2088,46 @@ test('the phone CLI records a live preview and refuses a remote one', (t) => {
     ['building', 'http://localhost:8082/']);
 });
 
+test('URL-only phone CLI updates clear old QR images and links without resetting the preview', (t) => {
+  const root = project('docs-phone-url-only');
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const state = initState(root, { appName: 'URL handoff' });
+  const oldImage = 'data:image/png;base64,iVBORw0KGgo=';
+  const oldUrl = 'http://192.0.2.1:8082/';
+  setPhone(state, {
+    stage: 'live', previewUrl: 'http://localhost:8082/',
+    qrImage: oldImage, qrHref: '../.expo/old-qr.png', qrUrl: oldUrl,
+  });
+  setPhone(state, { stage: 'building' });
+  assert.equal(state.phone.qrImage, oldImage, 'A stage-only update retains its existing handoff');
+  setPhone(state, { stage: 'live' });
+  save(root, state);
+
+  for (const [url, stageArgs] of [
+    [oldUrl, []],
+    ['http://192.0.2.2:8090/', ['--stage', 'qr']],
+  ]) {
+    const before = loadState(root);
+    setPhone(before, { qrImage: oldImage, qrHref: '../.expo/old-qr.png' });
+    save(root, before);
+    const result = spawnSync(process.execPath, [
+      scriptPath, '--working-dir', root, 'phone', ...stageArgs, '--qr-url', url,
+    ], { encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr);
+    const phone = loadState(root).phone;
+    assert.equal(phone.qrUrl, url);
+    assert.equal(phone.qrImage, undefined);
+    assert.equal(phone.qrHref, undefined);
+    assert.equal(phone.previewUrl, 'http://localhost:8082/');
+    assert.equal(phone.stage, stageArgs.length ? 'qr' : 'live');
+    const html = fs.readFileSync(outputPath(root), 'utf8');
+    const renderedState = JSON.parse(html.match(/<script id="phoneData" type="application\/json">([\s\S]*?)<\/script>/)[1]);
+    assert.equal(renderedState.qrUrl, url);
+    assert.equal(renderedState.qrImage, undefined);
+    assert.equal(renderedState.qrHref, undefined);
+  }
+});
+
 test('progress is reported as steps, never as a percentage', () => {
   const template = fs.readFileSync(
     path.resolve(__dirname, '..', '..', 'assets', 'run-plan.html'), 'utf8',

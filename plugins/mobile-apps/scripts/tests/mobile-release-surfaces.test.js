@@ -22,6 +22,13 @@ function codeBlock(source, marker) {
   return block[1];
 }
 
+function bashExecutable() {
+  const candidates = process.platform === 'win32'
+    ? (spawnSync('where.exe', ['bash'], { encoding: 'utf8' }).stdout || '').split(/\r?\n/)
+    : [];
+  return candidates.find(file => /[\\/]Git[\\/]/i.test(file)) || 'bash';
+}
+
 test('native example extraction supports LF and CRLF Markdown fences', () => {
   for (const newline of ['\n', '\r\n']) {
     for (const language of ['ts', 'typescript', 'tsx']) {
@@ -104,6 +111,13 @@ test('README keeps the bundled directory as a fixture rather than a new-app temp
   assert.match(entry, /missing-guidance defaults/);
   assert.match(entry, /not an app-template acquisition source/);
   assert.doesNotMatch(entry, /fresh-template working directory source/);
+
+  const fixtureReadme = read('template/README.md');
+  assert.match(fixtureReadme, /legacy preparation\/test fixture/);
+  assert.match(fixtureReadme, /\[one-command npm quickstart\]\(\.\.\/README\.md#setup\)/);
+  assert.match(fixtureReadme, /lock with `npm ci`/);
+  assert.match(fixtureReadme, /Run `\/check-updates` from the existing app/);
+  assert.doesNotMatch(fixtureReadme, /\bnpx degit\b|--from-version|host@latest|Each run upgrades one template version/);
 });
 
 test('release links are valid local references from every owned surface', () => {
@@ -144,10 +158,7 @@ test('deploy checks both actual intended base versions and fingerprints before b
 test('multi-command native admission blocks propagate the first resolver failure', t => {
   const root = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'mobile-admission-gate-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  const candidates = process.platform === 'win32'
-    ? (spawnSync('where.exe', ['bash'], { encoding: 'utf8' }).stdout || '').split(/\r?\n/)
-    : [];
-  const bash = candidates.find(file => /[\\/]Git[\\/]/i.test(file)) || 'bash';
+  const bash = bashExecutable();
   for (const [file, marker] of [
     ['skills/add-native/add-pdf-report/SKILL.md', "const required='expo-print'"],
     ['skills/deploy/SKILL.md', '--platform android'],
@@ -166,7 +177,7 @@ test('multi-command native admission blocks propagate the first resolver failure
 test('deployment retains app-ID two-pass packaging, offline reconciliation, and user confirmation', () => {
   const source = read('skills/deploy/SKILL.md');
   assert.match(source, /two full build\+push cycles are required/);
-  assert.match(source, /In cycle 2, `npm run build` \*and\* the Step 2\.4 native packaging commands must all re-run/);
+  assert.match(source, /In cycle 2, the web build, both native packaging commands, staging, and final upload verification must all re-run/);
   assert.match(source, /npm run bundle:android/);
   assert.match(source, /npm run bundle:ios/);
   assert.match(source, /c61fbc03/);
@@ -177,6 +188,91 @@ test('deployment retains app-ID two-pass packaging, offline reconciliation, and 
   assert.match(source, /exact phrase `yes deploy to <env-name>`/);
   assert.match(source, /explicitly type `override`/);
   assert.match(source, /Do not proceed on a bare `y`/);
+  assert.match(source, /Preserve `power\.config\.json`/);
+  assert.match(source, /A previous build must not satisfy this run's checks/);
+  assert.doesNotMatch(source, /EXPORT_PID|Exported: dist|npx --no-install expo export/);
+});
+
+test('documented deployment builds stop at the first failed package command', t => {
+  const root = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'mobile-deploy commands-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const blocks = shellBlocks(read('skills/deploy/SKILL.md'));
+  const phases = [
+    ['bundle:web', ['generate-schemas', 'type-check', 'bundle:web']],
+    ['bundle:android', ['bundle:android', 'bundle:ios']],
+  ];
+  for (const [marker, scripts] of phases) {
+    const block = blocks.find(value => value.includes(`npm run ${marker}`));
+    assert.ok(block, marker);
+    const command = block.replaceAll('<working_dir>', root.replaceAll('\\', '/').replaceAll("'", "'\\''"));
+    for (const failure of [...scripts, 'none']) {
+      const result = spawnSync(bashExecutable(), ['-s'], {
+        input: 'npm() { printf "%s\\n" "$2"; if [ "$2" = "$FAIL_SCRIPT" ]; then return 23; fi; return 0; }\n' + command,
+        cwd: root, encoding: 'utf8', timeout: 10000,
+        env: { ...process.env, FAIL_SCRIPT: failure },
+      });
+      assert.equal(result.status, failure === 'none' ? 0 : 23, result.stderr);
+      const last = scripts.indexOf(failure);
+      assert.deepEqual(result.stdout.trim().split(/\r?\n/), last < 0 ? scripts : scripts.slice(0, last + 1));
+    }
+  }
+});
+
+test('documented staging preserves complete web/native payloads and checks the actual upload root', t => {
+  const root = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'mobile-deploy staging-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const blocks = shellBlocks(read('skills/deploy/SKILL.md'));
+  const stage = blocks.find(value => value.includes('cp -R dist-web/. dist/'));
+  const verify = blocks.find(value => value.includes('<reviewed-upload-root>'));
+  assert.ok(stage && verify);
+  const files = {
+    'dist-web/index.html': Buffer.from('<script src="./_expo/static/js/web/entry.js"></script>'),
+    'dist-web/_expo/static/js/web/entry.js': Buffer.from('web bundle'),
+    'dist-web/assets/icon.png': Buffer.from([1, 2, 3, 4]),
+    'dist/index.android.bundle.hbc': Buffer.from('c61fbc03c103191f', 'hex'),
+    'dist/main.jsbundle.hbc': Buffer.from('c61fbc03c103191f', 'hex'),
+    'dist/powerapps-customer-assets-android/manifest.json': Buffer.from('{"platform":"android"}'),
+    'dist/powerapps-customer-assets-android/assets/native.png': Buffer.from([4, 3, 2, 1]),
+    'dist/powerapps-customer-assets-android/firebase/google-services.json': Buffer.from('{"project_info":{}}'),
+    'dist/powerapps-customer-assets-ios/manifest.json': Buffer.from('{"platform":"ios"}'),
+  };
+  const config = '{"appType":"MobileApp","buildPath":"./dist","buildEntryPoint":"index.html"}\n';
+  fs.writeFileSync(path.join(root, 'power.config.json'), config);
+  for (const [relative, content] of Object.entries(files)) {
+    fs.mkdirSync(path.dirname(path.join(root, relative)), { recursive: true });
+    fs.writeFileSync(path.join(root, relative), content);
+  }
+  const shellPath = value => value.replaceAll('\\', '/').replaceAll("'", "'\\''");
+  const result = spawnSync(bashExecutable(), ['-s'], {
+    input: stage.replaceAll('<working_dir>', shellPath(root)),
+    cwd: root, encoding: 'utf8', timeout: 10000,
+  });
+  assert.equal(result.status, 0, result.stderr);
+  for (const [relative, content] of Object.entries(files)) {
+    const staged = relative.replace(/^dist-web\//, 'dist/');
+    assert.deepEqual(fs.readFileSync(path.join(root, staged)), content, staged);
+  }
+  assert.equal(fs.existsSync(path.join(root, 'dist/dist-web')), false);
+  assert.equal(fs.readFileSync(path.join(root, 'power.config.json'), 'utf8'), config);
+
+  const upload = path.join(root, 'reviewed upload');
+  fs.cpSync(path.join(root, 'dist'), upload, { recursive: true });
+  fs.unlinkSync(path.join(root, 'dist/main.jsbundle.hbc'));
+  const check = () => spawnSync(bashExecutable(), ['-s'], {
+    input: verify.replaceAll('<reviewed-upload-root>', shellPath(upload)),
+    cwd: root, encoding: 'utf8', timeout: 10000,
+  });
+  assert.equal(check().status, 0, 'Verify the selected upload directory, not the producer output');
+  fs.writeFileSync(path.join(upload, 'main.jsbundle.hbc'), 'not Hermes bytecode');
+  assert.notEqual(check().status, 0, 'Invalid staged bytecode must block the push');
+
+  fs.unlinkSync(path.join(root, 'dist/index.html'));
+  const missing = spawnSync(bashExecutable(), ['-s'], {
+    input: stage.replaceAll('<working_dir>', shellPath(root)),
+    cwd: root, encoding: 'utf8', timeout: 10000,
+  });
+  assert.notEqual(missing.status, 0);
+  assert.equal(fs.existsSync(path.join(root, 'dist/index.html')), false, 'Do not stage a web-only payload after a native build failure');
 });
 
 test('controls adoption is conditional and documents the public aggregate contract', () => {
@@ -191,6 +287,12 @@ test('controls adoption is conditional and documents the public aggregate contra
   }
   assert.match(source, /Expo 55/);
   assert.match(source, /not evidence of Expo 57 compatibility/);
+  assert.match(source, /Current and historical package examples/);
+  assert.match(source, /automatic install targets/);
+  assert.match(source, /Resolve the actual app; a template may omit controls/);
+  for (const file of ['agents/native-app-planner.md', 'agents/architecture-planner.md', 'skills/edit-app/SKILL.md']) {
+    assert.match(read(file), /native-controls\.md#current-and-historical-package-examples/, file);
+  }
   assert.match(source, /Do not install the aggregate to[\s\S]{0,20}fix older binaries/);
   assert.match(source, /Legacy leaf imports follow the same strict\/local rules for the matching version/);
   assert.match(source, /installed public README, exports, and types/);
