@@ -152,7 +152,9 @@ node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' phone --
 ```
 
 Add `--qr-image '<working_dir>/.expo/metro-qr.png'` only when this run successfully
-generated and verified that PNG. A supplied PNG is inlined as a data URI, so the
+generated and verified that PNG. A URL-only update clears any saved QR image and
+full-size image link, and the plan shows the current URL with Enter URL guidance.
+A supplied PNG is inlined as a data URI, so the
 plan can still show that code after `.expo/` is cleaned. Do not claim an image is
 present when only the URL was recorded. This
 is the phone's final stage: animation while building, then the screen carousel once designed (data

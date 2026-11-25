@@ -518,6 +518,7 @@ LAN URL and explain that no PNG was
 generated. Never install a dependency, retry with `--yes` or a bare `npx qrcode`,
 reuse a stale PNG, or claim the plan contains an image that was not generated.
 Record the URL with `app-docs.js phone --qr-url` without `--qr-image` in that case.
+URL-only updates clear old QR images/links and show the URL below the live preview.
 After successful generation, show the PNG in chat the way the dev server step
 does: base64-encode it with Node and embed it as a `data:image/png;base64,` markdown
 image. Where the host cannot render that, point at the plan instead of opening
