@@ -189,8 +189,14 @@ outside the source app. It verifies disjoint canonical paths and unchanged input
 preserves npm configuration, and binds `npm ci` to the preview's explicit prefix.
 Never rely on a previous shell's `cd` or run bare installs during preview setup.
 Unsupported workspace/package-manager layouts require review, not a fallback install.
-The isolated target tooling acquisition uses the verified release's managed pins
-and overrides so optional peers cannot float to an unreviewed newer SDK.
+When the selected template lock contains the exact target Host and its published
+integrity, the isolated tooling install uses that template's dependency declarations,
+overrides, and locked registry packages with `npm ci`. This freezes indirect and
+optional peer versions as well as direct dependencies. A lock mismatch or failed
+`ci` blocks that installation; it does not trigger an unlocked retry. A compatible
+template can still predate a same-runtime Host repair: in that case the helper
+uses the target Host's managed dependencies and overrides with strict `npm install`
+instead of running the older locked CLI. Both paths keep package scripts disabled.
 Run the independent Expo check with `mobile-template-lifecycle.js check-sdk
 --project-root '<app_dir>'`, in both rehearsal and approved application. It runs
 the app's installed CLI in that app's directory with `EXPO_OFFLINE=1` scoped only
