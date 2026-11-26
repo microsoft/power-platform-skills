@@ -49,3 +49,15 @@ jobs:
               shell: bash
               working-directory: plugins/power-pages/skills/compare-site-configurations/scripts/tests
               run: node --test
+
+            # Node 22 can parse TypeScript templates with its built-in API, so
+            # template execution needs no compiler dependency. Keep the full
+            # script suite on Node 20 to preserve the plugin's runtime baseline.
+            - name: setup-node-for-auth-templates
+              uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+              with:
+                  node-version: 22
+
+            - name: run-auth-template-tests
+              shell: bash
+              run: node --test plugins/power-pages/scripts/tests/setup-auth-guidance.test.js

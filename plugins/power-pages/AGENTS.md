@@ -326,7 +326,9 @@ references/                    ← Shared reference docs used by multiple skills
 skills/
   create-site/
     SKILL.md                   ← Routes SPA and Enhanced-only non-SPA creation
-    workflows/non-spa-site.md ← Environment-backed non-SPA provisioning and download workflow
+    references/non-spa-site-workflow.md ← Non-SPA disclosure, invariants and ordered-stage router
+    references/*-workflow.md ← Router and focused SPA/non-SPA stages, loaded from the entry's resource map
+    assets/plan-labels.example.json ← Complete localizable HTML-plan label dictionary
     assets/{react,vue,angular,astro}/  ← Framework templates with __PLACEHOLDER__ tokens
     references/design-aesthetics.md  ← Compatibility pointer to the shared principles and SPA adapter
     scripts/list-site-templates.js ← Curated Create Website template metadata and model-toggle disclosure
@@ -369,8 +371,12 @@ skills/
     scripts/validate-ai-webapi.js ← Node script validating summarization code, headers, and Summarization/* settings
   setup-auth/
     SKILL.md                   ← Authentication & authorization skill definition
-    references/authentication-reference.md ← Login/logout flow, auth service, framework patterns
-    references/authorization-reference.md  ← Role-based access control, guards, directives
+    references/authentication-reference.md ← Common authentication contract
+    references/authorization-reference.md  ← Common authorization contract
+    references/provider-*.md   ← On-demand identity-provider setup
+    references/framework-*.md  ← On-demand framework bindings
+    references/*-workflow.md   ← Discovery, planning, provisioning and optional-feature workflows
+    assets/*.template          ← Service, form and profile templates
     scripts/validate-auth.js   ← Node script validating auth service and authorization code
   setup-solution/
     SKILL.md                   ← Solution creation skill definition
@@ -706,6 +712,17 @@ Checks for `docs/alm/last-pipeline.json` (Power Platform Pipelines path) — val
 Checks `docs/alm/last-deploy.json` marker for required fields (`pipelineId`, `stageRunId`, `solutionName`, `status`, `deployedAt`). Blocks if `status === "Failed"` — a failed deployment requires investigation before retrying. Gracefully exits 0 when no deploy marker is found (not a deploy-pipeline session).
 
 ## Skill Development Guide
+
+### Portable skill rollout
+
+`setup-auth` and `create-site` use capability-based instructions instead of host-specific tool names.
+Both keep `name` and `description`; `create-site` also retains its original `argument-hint: Optional site description` for clients that display invocation hints.
+Keep their entries under 500 lines and approximately 5,000 tokens, with direct conditional links to focused branch resources.
+Use `Ask the user:` for prompt introductions and preserve approval markers and catalog IDs in the owning `references/*-workflow.md`.
+Run `validate-auth.js --complete` from the site root because host hooks are not available in every agent.
+For `create-site`, retain the non-SPA compatibility router and run `validate-site.js` explicitly with the selected locale/direction for SPAs or project/model evidence for non-SPAs.
+Its source-contract tests follow the ordered resource maps rather than requiring workflows to remain inline.
+The conventions below remain the defaults for skills not yet converted.
 
 All skills in this plugin follow a consistent set of patterns. When creating a new skill, follow every convention below to maintain consistency across the plugin.
 

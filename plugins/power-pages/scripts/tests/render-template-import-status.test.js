@@ -6,6 +6,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const vm = require('node:vm');
+const { readCreateSiteGuidance } = require('./helpers/create-site-guidance');
 
 const {
   buildModel,
@@ -19,7 +20,7 @@ function tempDir() {
 }
 
 test('create-site forwards the selected variant structured previews with a legacy CLI fallback', () => {
-  const skill = fs.readFileSync(path.join(__dirname, '../../skills/create-site/SKILL.md'), 'utf8');
+  const skill = readCreateSiteGuidance('spa');
   assert.match(skill, /each SPA family and variant, prefer `responsivePreviews` when present/);
   assert.match(skill, /preserving the page's `id` and `displayName`/);
   assert.match(skill, /variant defines neither field/);

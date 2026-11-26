@@ -1,0 +1,37 @@
+<div/>
+<script>
+  // SPA Site Shell Header — Server-to-SPA redirect for auth pages.
+  // This template runs on server-rendered pages and redirects to SPA equivalents.
+  // Uses a separate template because pac pages upload-code-site wipes the original Header.
+  (function () {
+    var path = window.location.pathname.toLowerCase();
+    var search = window.location.search;
+    var spaBase = window.location.origin;
+    // Add an entry here for each server-rendered auth page that has a SPA equivalent.
+    // Only include entries the site actually needs (e.g., omit /redeeminvitation when
+    // InvitationEnabled is false).
+    var redirects = {
+      '/account/login/resetpassword': '/reset-password',
+      '/account/login/redeeminvitation': '/redeem-invitation',
+      '/register': '/redeem-invitation',
+      '/account/login/register': '/registration',
+      '/account/login/externallogincallback': '/external-login-confirmation',
+      '/account/login/termsandconditions': '/terms',
+      '/account/login/externalauthenticationfailed': '/login',
+      '/signin': '/login'
+    };
+    // Special case: ExternalAuthenticationFailed may arrive with no query string
+    // (generic failure) or with ?message=access_denied (user-denied at IdP).
+    // Ensure the Login page always shows SOME error indication.
+    if (path === '/account/login/externalauthenticationfailed' && !search) {
+      window.location.replace(spaBase + '/login?message=external_auth_failed');
+      return;
+    }
+    for (var serverPath in redirects) {
+      if (path === serverPath) {
+        window.location.replace(spaBase + redirects[serverPath] + search);
+        return;
+      }
+    }
+  })();
+</script>

@@ -1,0 +1,118 @@
+export interface ProfileContact {
+  contactid: string;
+  firstname: string | null;
+  lastname: string | null;
+  mobilephone: string | null;
+  address1_line1: string | null;
+  address1_city: string | null;
+  address1_stateorprovince: string | null;
+  address1_postalcode: string | null;
+  address1_country: string | null;
+}
+
+export type ProfileUpdate = Partial<Omit<ProfileContact, 'contactid'>>;
+
+const PROFILE_FIELDS = [
+  'contactid', 'firstname', 'lastname',
+  'mobilephone', 'address1_line1', 'address1_city', 'address1_stateorprovince',
+  'address1_postalcode', 'address1_country',
+].join(',');
+
+export async function getMyProfile(contactId: string): Promise<ProfileContact> {
+  if (isDevelopment) {
+    return {
+      contactid: contactId,
+      firstname: 'Dev', lastname: 'User',
+      mobilephone: null,
+      address1_line1: null, address1_city: null,
+      address1_stateorprovince: null, address1_postalcode: null, address1_country: null,
+    };
+  }
+
+  const url = `/_api/contacts(${encodeURIComponent(contactId)})?$select=${PROFILE_FIELDS}`;
+  const token = await fetchAntiForgeryToken();
+  // Power Pages requires the CSRF token on Web API calls, including reads.
+  // https://learn.microsoft.com/power-pages/configure/web-api-overview#authenticating-portal-web-api-requests
+  const response = await fetch(url, {
+    headers: { '__RequestVerificationToken': token },
+    credentials: 'same-origin',
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to load profile (status ${response.status}).`);
+  }
+  return response.json();
+}
+
+export async function updateMyProfile(
+  contactId: string,
+  payload: ProfileUpdate
+): Promise<void> {
+  if (isDevelopment) {
+    return;
+  }
+
+  const token = await fetchAntiForgeryToken();
+
+  // Only include defined fields - undefined means "don't touch this column".
+  // Explicit null clears the column.
+  const body: Record<string, string | null> = {};
+  for (const [key, value] of Object.entries(payload)) {
+    if (value !== undefined) body[key] = value;
+  }
+
+  const response = await fetch(`/_api/contacts(${encodeURIComponent(contactId)})`, {
+    method: 'PATCH',
+    headers: {
+      'Content-Type': 'application/json',
+      'If-Match': '*',
+      '__RequestVerificationToken': token,
+    },
+    body: JSON.stringify(body),
+    credentials: 'same-origin',
+  });
+
+  if (!response.ok) {
+    // OData errors use {"error":{"message":"..."}}. Some responses are HTML;
+    // retain the status in that case, without catching the error we will throw.
+    // https://docs.oasis-open.org/odata/odata-json-format/v4.01/odata-json-format-v4.01.html#sec_ErrorResponse
+    let errorBody;
+    try {
+      errorBody = await response.json();
+    } catch (error) {
+      if (!(error instanceof SyntaxError)) throw error;
+    }
+    const message = errorBody?.error?.message;
+    throw new Error(typeof message === 'string'
+      ? message
+      : `Failed to update profile (status ${response.status}).`);
+  }
+}
+
+/**
+ * After a successful contact PATCH, mirror the saved name fields into the
+ * in-memory `window.Microsoft.Dynamic365.Portal.User` snapshot so the
+ * header avatar / display name reflect the new values without a full
+ * page reload.
+ *
+ * Why this is needed: `Portal.User` is set ONCE by the server when the
+ * page is rendered. Our Web API PATCH updates Dataverse but does NOT
+ * touch this client-side object. `useAuth()` reads from it via
+ * `getCurrentUser()`, so without this helper the header keeps showing
+ * the pre-save name until the next full page navigation.
+ *
+ * Only the fields the header actually uses are mirrored (firstName,
+ * lastName). Other contact fields stay untouched. Call this AFTER the
+ * PATCH has succeeded, then call `refresh()` from useAuth to trigger a
+ * re-render.
+ */
+export function applyContactUpdateLocally(payload: ProfileUpdate): void {
+  if (typeof window === 'undefined') return;
+  const portalUser = window.Microsoft?.Dynamic365?.Portal?.User;
+  if (!portalUser) return;
+  if (payload.firstname !== undefined) {
+    portalUser.firstName = payload.firstname ?? '';
+  }
+  if (payload.lastname !== undefined) {
+    portalUser.lastName = payload.lastname ?? '';
+  }
+}

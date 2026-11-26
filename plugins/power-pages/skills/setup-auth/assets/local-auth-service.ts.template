@@ -1,0 +1,247 @@
+// Merge these additions into authService.ts only for local auth.
+// In loginWithProvider, require credentials for a local provider, then return
+// loginLocal(options.credentials.credential, options.credentials.password,
+//   options.credentials.rememberMe, options.returnUrl, options.invitationCode).
+export async function loginLocal(
+  credential: string,
+  password: string,
+  rememberMe = false,
+  returnUrl = '/',
+  invitationCode?: string
+): Promise<void> {
+  if (!LOCAL_PROVIDER) throw new Error('Local authentication is not configured.');
+  if (isDevelopment) {
+    sessionStorage.removeItem(DEV_SIGNEDOUT_KEY);
+    window.location.reload();
+    return;
+  }
+  const token = await fetchAntiForgeryToken();
+  const body = new URLSearchParams({
+    __RequestVerificationToken: token,
+    [LOCAL_PROVIDER.loginByEmail ? 'Email' : 'Username']: credential,
+    PasswordValue: password,
+    ReturnUrl: returnUrl,
+  });
+  if (rememberMe) body.set('RememberMe', 'true');
+  if (invitationCode) body.set('InvitationCode', invitationCode);
+  const loginUrl = invitationCode
+    ? `/SignIn?InvitationCode=${encodeURIComponent(invitationCode)}`
+    : '/SignIn';
+  const response = await fetch(loginUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: body.toString(),
+    credentials: 'same-origin',
+    redirect: 'follow',
+  });
+  if (!response.ok) throw new Error(`Login failed: ${response.status}`);
+  // When terms are enabled, insert the TermsRequiredError check here before
+  // handling a redirect; otherwise the deferred session looks like success.
+  if (response.redirected || response.url.endsWith(returnUrl)) {
+    window.location.href = returnUrl;
+    return;
+  }
+  const errors = parseServerErrors(await response.text());
+  throw new Error(errors.length ? errors.join(' ') : 'Invalid email or password. Please try again.');
+}
+
+export async function register(
+  fields: { email?: string; username?: string; password: string; confirmPassword: string },
+  returnUrl?: string,
+  invitationCode?: string
+): Promise<void> {
+  if (!fields.email && !fields.username) {
+    throw new Error('Registration requires either an email or username.');
+  }
+
+  if (isDevelopment) {
+    sessionStorage.removeItem(DEV_SIGNEDOUT_KEY);
+    window.location.reload();
+    return;
+  }
+
+  // Step 1: Fetch the server-rendered registration page to get ViewState and field names
+  const params = new URLSearchParams();
+  if (returnUrl) params.set('returnUrl', returnUrl);
+  if (invitationCode) params.set('invitationCode', invitationCode);
+  const qs = params.toString();
+  const regUrl = `/Account/Login/Register${qs ? `?${qs}` : ''}`;
+
+  const pageResponse = await fetch(regUrl, { credentials: 'same-origin' });
+  if (!pageResponse.ok) {
+    throw new Error(`Failed to load registration page: ${pageResponse.status}`);
+  }
+
+  const pageHtml = await pageResponse.text();
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(pageHtml, 'text/html');
+
+  // Step 2: Extract the form element and resolve the action URL
+  const serverForm = doc.getElementById('Register') as HTMLFormElement | null;
+  if (!serverForm) {
+    throw new Error('Registration form not found on the server page.');
+  }
+
+  // The server form has a relative action like "./Register?msCorrelationId=..."
+  // Resolve it relative to /Account/Login/ (the server page's path), NOT the SPA's current URL.
+  const rawAction = serverForm.getAttribute('action') || '';
+  let formAction: string;
+  if (rawAction.startsWith('http') || rawAction.startsWith('/')) {
+    formAction = rawAction;
+  } else {
+    const base = new URL('/Account/Login/', window.location.origin);
+    formAction = new URL(rawAction, base).pathname + new URL(rawAction, base).search;
+  }
+
+  // Step 3: Extract ViewState, anti-forgery token, and other hidden fields
+  const viewState = (doc.getElementById('__VIEWSTATE') as HTMLInputElement)?.value || '';
+  const viewStateGenerator = (doc.getElementById('__VIEWSTATEGENERATOR') as HTMLInputElement)?.value || '';
+  const eventValidation = (doc.querySelector('input[name="__EVENTVALIDATION"]') as HTMLInputElement)?.value || '';
+  const antiForgeryToken = (doc.querySelector('input[name="__RequestVerificationToken"]') as HTMLInputElement)?.value || '';
+
+  // Step 4: Find the correct Web Forms control names by their IDs
+  const emailInput = doc.getElementById('EmailTextBox') as HTMLInputElement | null;
+  const usernameInput = doc.getElementById('UsernameTextBox') as HTMLInputElement | null;
+  const passwordInput = doc.getElementById('PasswordTextBox') as HTMLInputElement | null;
+  const confirmInput = doc.getElementById('ConfirmPasswordTextBox') as HTMLInputElement | null;
+  const submitBtn = doc.getElementById('SubmitButton') as HTMLInputElement | null;
+
+  // Step 5: Build the POST body with Web Forms field names
+  const body = new URLSearchParams();
+  body.set('__VIEWSTATE', viewState);
+  body.set('__VIEWSTATEGENERATOR', viewStateGenerator);
+  body.set('__EVENTTARGET', '');
+  body.set('__EVENTARGUMENT', '');
+  body.set('__VIEWSTATEENCRYPTED', '');
+
+  if (eventValidation) body.set('__EVENTVALIDATION', eventValidation);
+  if (antiForgeryToken) body.set('__RequestVerificationToken', antiForgeryToken);
+
+  if (fields.email && emailInput) body.set(emailInput.name, fields.email);
+  if (fields.username && usernameInput) body.set(usernameInput.name, fields.username);
+  if (passwordInput) body.set(passwordInput.name, fields.password);
+  if (confirmInput) body.set(confirmInput.name, fields.confirmPassword);
+  if (submitBtn) body.set(submitBtn.name, submitBtn.value || 'Register');
+
+  // Step 6: POST via fetch() to stay in the SPA and parse server errors
+  const response = await fetch(formAction, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: body.toString(),
+    credentials: 'same-origin',
+    redirect: 'follow',
+  });
+
+  if (!response.ok) throw new Error(`Registration failed: ${response.status}`);
+  // When terms are enabled, insert the TermsRequiredError check here, before
+  // handling a redirect to the deferred registration's terms page.
+  // If the fetch followed a redirect, registration succeeded
+  if (response.redirected) {
+    window.location.href = response.url;
+    return;
+  }
+
+  // If we got a 200, the server returned the page with errors - parse them
+  const responseHtml = await response.text();
+  const errors = parseServerErrors(responseHtml);
+  if (errors.length > 0) {
+    throw new Error(errors.join(' '));
+  }
+
+  if (response.url !== window.location.href) {
+    window.location.href = response.url;
+    return;
+  }
+
+  throw new Error('Registration failed. Please try again.');
+}
+
+// --- Forgot Password ---
+// MVC form POST (like login, not Web Forms like registration).
+// Posts Email + anti-forgery token to /Account/Login/ForgotPassword.
+// Server sends a reset email. The reset link goes to the server-rendered
+// /Account/Login/ResetPassword page, redirected by the shell to /reset-password.
+
+export async function forgotPassword(email: string): Promise<void> {
+  if (isDevelopment) {
+    alert('Dev mode: Password reset email would be sent to ' + email);
+    return;
+  }
+
+  const token = await fetchAntiForgeryToken();
+
+  const body = new URLSearchParams();
+  body.set('__RequestVerificationToken', token);
+  body.set('Email', email);
+
+  const response = await fetch('/Account/Login/ForgotPassword', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: body.toString(),
+    credentials: 'same-origin',
+    redirect: 'follow',
+  });
+
+  if (!response.ok) throw new Error(`Password reset email request failed: ${response.status}`);
+  // A successful request shows the same confirmation for unknown accounts, so
+  // account existence stays private. HTTP failures must not show that confirmation.
+  const html = await response.text();
+  const errors = parseServerErrors(html);
+  if (errors.length > 0) {
+    throw new Error(errors.join(' '));
+  }
+
+  // No errors = success. The server sent the email.
+  // The calling component should handle .then() to show a "check your email" confirmation.
+}
+
+// --- Reset Password ---
+// MVC form POST. The user arrives at the SPA /reset-password page via the header template
+// redirect (server's /Account/Login/ResetPassword → SPA /reset-password).
+// UserId and Code come from the URL query params set by the email reset link.
+
+export async function resetPassword(
+  userId: string,
+  code: string,
+  password: string,
+  confirmPassword: string
+): Promise<void> {
+  if (isDevelopment) {
+    alert('Dev mode: Password would be reset.');
+    window.location.href = '/login';
+    return;
+  }
+
+  const token = await fetchAntiForgeryToken();
+
+  const body = new URLSearchParams();
+  body.set('__RequestVerificationToken', token);
+  body.set('UserId', userId);
+  body.set('Code', code);
+  body.set('Password', password);       // Note: Password here, NOT PasswordValue (different from login)
+  body.set('ConfirmPassword', confirmPassword);
+
+  const response = await fetch('/Account/Login/ResetPassword', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: body.toString(),
+    credentials: 'same-origin',
+    redirect: 'follow',
+  });
+
+  if (!response.ok) throw new Error(`Password reset failed: ${response.status}`);
+
+  if (response.redirected) {
+    window.location.href = '/login?message=password_reset_success';
+    return;
+  }
+
+  const html = await response.text();
+  const errors = parseServerErrors(html);
+  if (errors.length > 0) {
+    throw new Error(errors.join(' '));
+  }
+
+  // If no errors and not redirected, assume success
+  window.location.href = '/login?message=password_reset_success';
+}
