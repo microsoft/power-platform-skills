@@ -25,6 +25,10 @@ Keep this precedence in `scripts/lib/template-catalog.js`; create-site caches th
 The read-only browser shows each framework's effective previews in a labeled group within the family tab.
 The non-SPA experience-preview disclosure in `references/non-spa-preview.md` is separate and unchanged.
 
+SPA catalog families may declare `prerequisiteApplications` as an ordered array of PAC application unique names, for example `["PowerPages_PartnerPortal_V2"]` for a Partner Portal template. The external samples catalog and its schema must publish this field for a template to use it; this repository does not contain those template manifests. The create-site workflow obtains consent, installs and verifies each application in the confirmed environment before importing solutions, and stops on failure. Never infer prerequisites from a display name.
+
+On Windows, create-site resolves an installed `pac.cmd` launcher's native `pac.exe` before running template helpers. Keep any PATH adjustment process-local and propagate it to fresh shells and background commands. A missing executable or unreadable authentication detail is not proof of a tenant mismatch; retain the tenant/environment validation gate after command discovery.
+
 ## Data-model migration reliability
 
 Keep `migrate-datamodel`'s four phases, track selection, and approval gates unchanged
