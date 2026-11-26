@@ -1,11 +1,10 @@
 #!/usr/bin/env node
 'use strict';
 
-const { resolveContext, parseCliArgs, emitJson, runCli } = require('./lib/power-platform-api');
+const { setTimeout: sleep } = require('node:timers/promises');
+const { resolveContext, request, parseCliArgs, emitJson, runCli } = require('./lib/power-platform-api');
 const { UUID_REGEX, CLOUD_TO_API } = require('./lib/validation-helpers');
 const { tenantIdFromToken } = require('./lib/cli-tenant-alignment');
-const { callGovernance } = require('../skills/manage-governance/scripts/governance-transport');
-const { isSupportedPolicy } = require('../skills/manage-governance/scripts/policies');
 
 const ROOT = 'EnableExternalAuthProviders';
 const OAUTH = 'EnableProtocolOpenAuth';
@@ -24,6 +23,9 @@ const POLICY_LABELS = Object.freeze({
 // workflow's different dependency graph. Governance overrides site settings.
 // https://learn.microsoft.com/en-us/power-pages/security/external-auth-control
 const PROVIDERS = Object.freeze({
+  // The built-in workforce provider (legacy AzureAD settings) is independent
+  // of these controls; Entra External ID remains governed through `oidc`.
+  'entra-id': { label: 'Microsoft Entra ID', policies: [] },
   facebook: { label: 'Facebook', policies: [ROOT, OAUTH, 'EnableIdpOAuthFacebook'] },
   google: { label: 'Google', policies: [ROOT, OAUTH, 'EnableIdpOAuthGoogle'] },
   microsoft: { label: 'Microsoft Account', policies: [ROOT, OAUTH, 'EnableIdpOAuthMicrosoft'] },
@@ -33,9 +35,11 @@ const PROVIDERS = Object.freeze({
   local: { label: 'Local login', policies: [ROOT, 'EnableAuthenticationLocalLogin'] },
 });
 
+class AuthGovernanceInputError extends TypeError {}
+
 function assertId(value, name) {
   if (typeof value !== 'string' || !UUID_REGEX.test(value) || /^0{8}-0{4}-0{4}-0{4}-0{12}$/.test(value)) {
-    throw new TypeError(`${name} must be a non-empty, non-zero GUID.`);
+    throw new AuthGovernanceInputError(`${name} must be a non-empty, non-zero GUID.`);
   }
 }
 
@@ -73,15 +77,47 @@ function contextProblem(context, envId, tenantId) {
 }
 
 function readState(body) {
-  // getPortal returns one boolean, not All/None/Include/Exclude or membership
-  // lists (manage-governance/references/commands.md). The shared HTTP parser
-  // leaves text/plain JSON primitives as strings, e.g. "true" or "false".
-  // Accept only those exact primitives; unknown shapes never authorize setup.
+  // The portal-level endpoint returns one boolean, not environment-level
+  // All/None/Include/Exclude or membership lists. The shared HTTP parser
+  // leaves text/plain primitives as strings, e.g. "true" or .NET's "True".
+  // Accept only boolean text, ignoring case; unknown shapes never authorize setup.
   if (body === true || body === false) return body ? 'enabled' : 'disabled';
-  if (typeof body === 'string' && /^(true|false)$/.test(body.trim())) {
-    return body.trim() === 'true' ? 'enabled' : 'disabled';
+  if (typeof body === 'string' && /^(true|false)$/i.test(body.trim())) {
+    return body.trim().toLowerCase() === 'true' ? 'enabled' : 'disabled';
   }
   return 'unknown';
+}
+
+function canContinueSetup(policies) {
+  return policies.every((item) => item.state === 'enabled' ||
+    (item.state === 'unknown' && item.error.code === 'ReadUnavailable'));
+}
+
+function isTransientStatus(status) {
+  return status === 0 || status === 429 || (status >= 500 && status <= 599 && status !== 501);
+}
+
+async function readWithRetry(args, read, wait) {
+  // Retry only unavailable reads, never auth/target errors or malformed results.
+  // Three attempts with 500ms/1000ms backoff bound repeated service failures.
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    let response;
+    try {
+      response = await read(args);
+    } catch (error) {
+      // Generic thrown errors can be programming/route failures, not outages.
+      // Only recognized network failures may enter warning-and-continue.
+      if (!['ETIMEDOUT', 'ECONNRESET', 'ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN',
+        'EPIPE', 'UND_ERR_CONNECT_TIMEOUT'].includes(error?.code)) throw error;
+      response = { ok: false, statusCode: 0 };
+    }
+    if (attempt === 3 || response?.ok !== false || !Number.isInteger(response.statusCode) ||
+        response.error?.code === 'ContextError' ||
+        !isTransientStatus(response.statusCode)) {
+      return response;
+    }
+    await wait(500 * attempt);
+  }
 }
 
 function decisionMessage(label, policies) {
@@ -96,9 +132,14 @@ function decisionMessage(label, policies) {
       'Contact your administrator if you need this setting enabled.');
   }
   if (verificationErrors.length) {
-    sections.push(`${label} setup stopped because portal governance could not be verified.\n\n` +
+    const canContinue = canContinueSetup(policies);
+    sections.push((canContinue
+      ? `Warning: ${label} portal governance could not be verified.\n\n`
+      : `${label} setup stopped because portal governance could not be verified.\n\n`) +
       verificationErrors.map((item) => `- ${item.label} (${item.policy}): ${item.error.message}`).join('\n'));
-    sections.push('Resolve the verification errors and retry before changing provider settings or the login page.');
+    sections.push(canContinue
+      ? 'Continue setup with this warning, without treating these policies as enabled. Power Pages runtime governance still applies; the configured sign-in methods may not work.'
+      : 'Resolve the verification errors and retry before changing provider settings or the login page.');
   }
   sections.push('This read-only check made no provider settings or login-page changes.');
   return sections.join('\n\n');
@@ -110,8 +151,12 @@ function providerResult(provider, policies) {
   const blockedPolicies = required.filter((item) => item.state === 'disabled');
   const verificationErrors = required.filter((item) => item.state === 'unknown');
   const status = verificationErrors.length ? 'unverified' : blockedPolicies.length ? 'blocked' : 'enabled';
-  const message = decisionMessage(definition.label, required);
-  return { provider, label: definition.label, status, allowed: status === 'enabled', blockedPolicies, verificationErrors, message };
+  const message = required.length ? decisionMessage(definition.label, required)
+    : `${definition.label} setup is independent of authentication governance settings.`;
+  return {
+    provider, label: definition.label, status, allowed: status === 'enabled',
+    canContinue: canContinueSetup(required), blockedPolicies, verificationErrors, message,
+  };
 }
 
 /**
@@ -121,12 +166,29 @@ function providerResult(provider, policies) {
  */
 async function checkAuthGovernance(options, dependencies = {}) {
   const { tenantId, envId, portalId, websiteRecordId } = options || {};
+  const selected = options?.providers || [options?.provider];
+  if (!Array.isArray(selected) || !selected.length ||
+      selected.some((provider) => typeof provider !== 'string' || !Object.hasOwn(PROVIDERS, provider))) {
+    throw new AuthGovernanceInputError(`Select one or more providers: ${Object.keys(PROVIDERS).join(', ')}.`);
+  }
+  const providers = [...new Set(selected)];
+  const keys = [...new Set(providers.flatMap((provider) => PROVIDERS[provider].policies))];
+  // Workforce-only setup must not gain governance-specific target or CLI
+  // authentication prerequisites. Mixed batches still pass every guard below.
+  if (!keys.length) {
+    const results = providers.map((provider) => providerResult(provider, []));
+    return {
+      tenantId: tenantId ?? null, envId: envId ?? null, portalId: portalId ?? null,
+      status: 'enabled', allowed: true, canContinue: true, policies: [], providers: results,
+      message: results.map((result) => result.message).join('\n\n'),
+    };
+  }
   assertId(envId, 'envId');
   assertId(portalId, 'portalId (Power Platform host ID, not websiteRecordId)');
   if (websiteRecordId !== undefined) {
     assertId(websiteRecordId, 'websiteRecordId');
     if (portalId.toLowerCase() === websiteRecordId.toLowerCase()) {
-      throw new TypeError('portalId must be the Power Platform host ID, not the Dataverse websiteRecordId.');
+      throw new AuthGovernanceInputError('portalId must be the Power Platform host ID, not the Dataverse websiteRecordId.');
     }
   }
   let problem;
@@ -137,20 +199,13 @@ async function checkAuthGovernance(options, dependencies = {}) {
   } else {
     assertId(tenantId, 'tenantId (expected portal owning tenant)');
   }
-  const selected = options.providers || [options.provider];
-  if (!Array.isArray(selected) || !selected.length ||
-      selected.some((provider) => typeof provider !== 'string' || !Object.hasOwn(PROVIDERS, provider))) {
-    throw new TypeError(`Select one or more providers: ${Object.keys(PROVIDERS).join(', ')}.`);
-  }
-  const providers = [...new Set(selected)];
-  const keys = [...new Set(providers.flatMap((provider) => PROVIDERS[provider].policies))];
-  if (keys.some((policy) => !isSupportedPolicy(policy))) throw new Error('Unsupported authentication governance policy.');
   const resolve = dependencies.resolveContext || resolveContext;
-  const read = dependencies.callGovernance || callGovernance;
+  const read = dependencies.request || request;
+  const wait = dependencies.sleep || sleep;
   let context;
   if (!problem) {
     try {
-      // Never let callGovernance select its implicit TIP/configured environment.
+      // Resolve the normal CLI context explicitly; no archived-skill routing.
       context = options.context || await resolve();
       problem = contextProblem(context, envId, tenantId);
     } catch {
@@ -162,16 +217,27 @@ async function checkAuthGovernance(options, dependencies = {}) {
     const item = { policy, label: POLICY_LABELS[policy], state: 'unknown' };
     if (problem) return { ...item, error: { code: 'ContextError', message: problem } };
     try {
-      const response = await read({ op: 'getPortal', envId, portalId, policy, context });
+      // IDs are validated above; policy keys come only from the fixed provider
+      // mapping, never a caller-supplied policy or archived skill registry.
+      const response = await readWithRetry({
+        context, method: 'GET', path: `/websites/${portalId}/governance/${policy}`,
+      }, read, wait);
       if (!response?.ok || !Number.isInteger(response.statusCode) ||
           response.statusCode < 200 || response.statusCode >= 300) {
         const statusCode = Number.isInteger(response?.statusCode) ? response.statusCode : 0;
+        // 404 does not establish an unsupported endpoint or a default policy.
+        // Only explicit unavailable-read envelopes permit setup continuation.
+        const unavailable = response?.ok === false && Number.isInteger(response.statusCode) &&
+          (statusCode === 403 || statusCode === 405 || statusCode === 501 || isTransientStatus(statusCode)) &&
+          response.error?.code !== 'ContextError';
         const message = statusCode === 401 || statusCode === 403
           ? `Governance access was rejected (HTTP ${statusCode}). Check CLI sign-in and administrator permissions.`
           : statusCode === 404
             ? 'Portal-level governance was not found (HTTP 404). Verify the host ID and API availability in the target environment.'
-            : `Portal-level governance read failed (${statusCode ? `HTTP ${statusCode}` : 'no response'}). Retry after resolving service or network errors.`;
-        return { ...item, error: { code: 'ReadFailed', statusCode, message } };
+            : statusCode === 405 || statusCode === 501
+              ? `The portal-level governance endpoint is unavailable (HTTP ${statusCode}). Its policies could not be verified.`
+              : `Portal-level governance read failed (${statusCode ? `HTTP ${statusCode}` : 'no response'}). Retry after resolving service or network errors.`;
+        return { ...item, error: { code: unavailable ? 'ReadUnavailable' : 'ReadFailed', statusCode, message } };
       }
       const state = readState(response.body);
       return state === 'unknown'
@@ -185,28 +251,12 @@ async function checkAuthGovernance(options, dependencies = {}) {
   const status = results.some((result) => result.status === 'unverified') ? 'unverified'
     : results.some((result) => result.status === 'blocked') ? 'blocked' : 'enabled';
   return {
-    tenantId: tenantId ?? null, envId, portalId, status, allowed: status === 'enabled', policies, providers: results,
+    tenantId: tenantId ?? null, envId, portalId, status, allowed: status === 'enabled',
+    canContinue: canContinueSetup(policies), policies, providers: results,
     // Summarize denied batches from unique policies, not provider order: allowed
     // siblings must not lead the message or repeat a shared parent's restriction.
     message: status === 'enabled' ? results.map((result) => result.message).join('\n\n')
       : decisionMessage(results.length === 1 ? results[0].label : 'Authentication', policies),
-  };
-}
-
-class AuthGovernanceVerificationError extends Error {
-  constructor(result) {
-    super(result.message);
-    this.name = 'AuthGovernanceVerificationError';
-    this.code = 'AuthGovernanceUnverified';
-    this.result = result;
-  }
-}
-
-function enabledCheck(provider) {
-  return async (options, dependencies) => {
-    const result = await checkAuthGovernance({ ...options, provider, providers: [provider] }, dependencies);
-    if (result.status === 'unverified') throw new AuthGovernanceVerificationError(result);
-    return result.allowed;
   };
 }
 
@@ -216,8 +266,10 @@ async function main() {
     process.stdout.write(
       'Usage: node check-auth-governance.js --tenantId <owning-tenant-guid> --envId <guid> --portalId <host-guid> --providers facebook,google\n' +
       'Optional: --websiteRecordId <guid> (rejects using the record ID as the host ID)\n' +
+      'Workforce Microsoft Entra ID: --providers entra-id needs no target IDs or CLI authentication for this check.\n' +
       `Providers: ${Object.keys(PROVIDERS).join(', ')}\n` +
-      'Read-only, setup-time gate. Exit 0: allowed; 1: blocked; 2: unverifiable. Invalid input exits 1.\n'
+      'Read-only, setup-time gate. Exit 0: allowed; 1: blocked; 2: unverifiable; 3: invalid input or execution failure.\n' +
+      'On exit 2, inspect canContinue: true means warn and continue setup, not verified policy approval.\n'
     );
     return;
   }
@@ -229,16 +281,16 @@ async function main() {
   process.exitCode = result.allowed ? 0 : result.status === 'unverified' ? 2 : 1;
 }
 
-runCli(module, main);
+runCli(module, async () => {
+  try {
+    await main();
+  } catch (error) {
+    // Reserve 1 for verified policy blocks without changing shared CLI defaults.
+    // Only checker-authored input errors are safe to echo; crashes may contain secrets.
+    process.stderr.write((error instanceof AuthGovernanceInputError ? error.message
+      : 'Authentication governance check failed unexpectedly. Retry the check before continuing setup.') + '\n');
+    process.exitCode = 3;
+  }
+});
 
-module.exports = {
-  checkAuthGovernance,
-  AuthGovernanceVerificationError,
-  isFacebookOAuthEnabled: enabledCheck('facebook'),
-  isGoogleOAuthEnabled: enabledCheck('google'),
-  isMicrosoftOAuthEnabled: enabledCheck('microsoft'),
-  isOidcEnabled: enabledCheck('oidc'),
-  isSamlEnabled: enabledCheck('saml'),
-  isWsFederationEnabled: enabledCheck('ws-federation'),
-  isLocalLoginEnabled: enabledCheck('local'),
-};
+module.exports = { checkAuthGovernance };

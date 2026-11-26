@@ -25,6 +25,16 @@ function testToken(tenant) {
   return `${header}.${payload}.test-signature`;
 }
 
+function requestedPolicy(call) {
+  const prefix = `/websites/${portalId}/governance/`;
+  assert.equal(call.method, 'GET');
+  assert.equal(call.body, undefined);
+  assert.ok(call.path.startsWith(prefix), `Expected a policy read for the confirmed host: ${call.path}`);
+  const policy = call.path.slice(prefix.length);
+  assert.match(policy, /^Enable[A-Za-z0-9]+$/);
+  return policy;
+}
+
 function harness(responses = {}, contextOverrides = {}) {
   const context = {
     tenantId,
@@ -40,10 +50,11 @@ function harness(responses = {}, contextOverrides = {}) {
     context, calls,
     get resolutions() { return resolutions; },
     dependencies: {
+      async sleep() {},
       resolveContext() { resolutions++; return context; },
-      async callGovernance(args) {
+      async request(args) {
         calls.push(args);
-        const response = responses[args.policy];
+        const response = responses[requestedPolicy(args)];
         if (response instanceof Error) throw response;
         return response === undefined ? { ok: true, statusCode: 200, body: true } : response;
       },
@@ -51,26 +62,98 @@ function harness(responses = {}, contextOverrides = {}) {
   };
 }
 
-const methods = [
-  ['facebook', 'isFacebookOAuthEnabled', [ROOT, OAUTH, FACEBOOK]],
-  ['google', 'isGoogleOAuthEnabled', [ROOT, OAUTH, 'EnableIdpOAuthGoogle']],
-  ['microsoft', 'isMicrosoftOAuthEnabled', [ROOT, OAUTH, 'EnableIdpOAuthMicrosoft']],
-  ['oidc', 'isOidcEnabled', [ROOT, 'EnableProtocolOpenIdConnect']],
-  ['saml', 'isSamlEnabled', [ROOT, 'EnableProtocolSAML20']],
-  ['ws-federation', 'isWsFederationEnabled', [ROOT, 'EnableProtocolWsFederation']],
-  ['local', 'isLocalLoginEnabled', [ROOT, 'EnableAuthenticationLocalLogin']],
-];
+const providerPolicies = {
+  facebook: [ROOT, OAUTH, FACEBOOK],
+  google: [ROOT, OAUTH, 'EnableIdpOAuthGoogle'],
+  microsoft: [ROOT, OAUTH, 'EnableIdpOAuthMicrosoft'],
+  oidc: [ROOT, 'EnableProtocolOpenIdConnect'],
+  saml: [ROOT, 'EnableProtocolSAML20'],
+  'ws-federation': [ROOT, 'EnableProtocolWsFederation'],
+  local: [ROOT, 'EnableAuthenticationLocalLogin'],
+};
 
-for (const [provider, wrapper, policies] of methods) {
-  test(`${wrapper} reads only its complete dependency chain`, async () => {
+test('workforce Entra-only setup needs no governance target, authentication, or policy reads', async () => {
+  const h = harness();
+  h.dependencies.resolveContext = () => { assert.fail('Workforce Entra must not resolve governance authentication'); };
+  const result = await checker.checkAuthGovernance({ providers: ['entra-id', 'entra-id'] }, h.dependencies);
+  assert.equal(result.allowed, true);
+  assert.equal(result.status, 'enabled');
+  assert.deepEqual(result.policies, []);
+  assert.deepEqual(result.providers.map((item) => item.provider), ['entra-id']);
+  assert.deepEqual(result.providers[0].blockedPolicies, []);
+  assert.deepEqual(result.providers[0].verificationErrors, []);
+  assert.equal(result.tenantId, null);
+  assert.equal(result.envId, null);
+  assert.equal(result.portalId, null);
+  assert.match(result.message, /Microsoft Entra ID setup is independent/);
+  assert.doesNotMatch(result.message, /allowed by portal governance/);
+  assert.equal(h.calls.length, 0);
+});
+
+test('retained workforce Entra does not add OIDC checks when adding Google', async () => {
+  for (const response of [
+    { ok: true, statusCode: 200, body: false },
+    { ok: false, statusCode: 403 },
+  ]) {
+    const h = harness({ EnableProtocolOpenIdConnect: response });
+    const result = await checker.checkAuthGovernance(
+      { ...options, providers: ['entra-id', 'google'] }, h.dependencies
+    );
+    assert.equal(result.allowed, true);
+    assert.deepEqual(result.providers.map((item) => item.provider), ['entra-id', 'google']);
+    assert.deepEqual(h.calls.map(requestedPolicy), [ROOT, OAUTH, 'EnableIdpOAuthGoogle']);
+    assert.equal(h.resolutions, 1);
+  }
+});
+
+test('mixed batches preserve Entra exemption without bypassing governed restrictions or tenant guards', async () => {
+  for (const [responses, contextOverrides, expected, reads] of [
+    [{ [ROOT]: { ok: true, statusCode: 200, body: false } }, {}, 'blocked', 3],
+    [{ EnableIdpOAuthGoogle: { ok: false, statusCode: 403 } }, {}, 'unverified', 3],
+    [{}, { tenantId: portalId }, 'unverified', 0],
+  ]) {
+    const h = harness(responses, contextOverrides);
+    const result = await checker.checkAuthGovernance(
+      { ...options, providers: ['entra-id', 'google'] }, h.dependencies
+    );
+    assert.equal(result.allowed, false);
+    assert.equal(result.status, expected);
+    assert.equal(result.providers[0].allowed, true);
+    assert.deepEqual(result.providers[0].blockedPolicies, []);
+    assert.deepEqual(result.providers[0].verificationErrors, []);
+    assert.equal(h.calls.length, reads);
+    assert.doesNotMatch(result.message, /Microsoft Entra ID/);
+  }
+  const h = harness();
+  await assert.rejects(checker.checkAuthGovernance({ providers: ['entra-id', 'google'] }, h.dependencies), TypeError);
+  assert.equal(h.resolutions, 0);
+  assert.equal(h.calls.length, 0);
+});
+
+test('Entra External ID remains governed as OIDC alongside exempt workforce Entra', async () => {
+  for (const policy of [ROOT, 'EnableProtocolOpenIdConnect']) {
+    const h = harness({ [policy]: { ok: true, statusCode: 200, body: false } });
+    const result = await checker.checkAuthGovernance(
+      { ...options, providers: ['entra-id', 'oidc'] }, h.dependencies
+    );
+    assert.equal(result.status, 'blocked');
+    assert.equal(result.providers[0].allowed, true);
+    assert.equal(result.providers[1].allowed, false);
+    assert.deepEqual(result.providers[1].blockedPolicies.map((item) => item.policy), [policy]);
+    assert.deepEqual(h.calls.map(requestedPolicy), [ROOT, 'EnableProtocolOpenIdConnect']);
+  }
+});
+
+for (const [provider, policies] of Object.entries(providerPolicies)) {
+  test(`${provider} reads only its complete dependency chain`, async () => {
     const h = harness();
-    assert.equal(await checker[wrapper](options, h.dependencies), true);
-    assert.deepEqual(h.calls.map((call) => call.policy), policies);
+    const result = await checker.checkAuthGovernance({ ...options, providers: [provider] }, h.dependencies);
+    assert.equal(result.allowed, true);
+    assert.deepEqual(h.calls.map(requestedPolicy), policies);
     assert.equal(h.resolutions, 1);
     for (const call of h.calls) {
-      assert.equal(call.op, 'getPortal');
-      assert.equal(call.envId, envId);
-      assert.equal(call.portalId, portalId);
+      assert.equal(call.method, 'GET');
+      assert.equal(call.context.environmentId, envId);
       assert.strictEqual(call.context, h.context);
       assert.equal(call.body, undefined);
     }
@@ -85,7 +168,6 @@ for (const [provider, wrapper, policies] of methods) {
       assert.deepEqual(result.providers[0].blockedPolicies.map((item) => item.policy), [policy]);
       assert.equal(result.message.split('\n\n')[0],
         `Your administrator has restricted the use of ${result.providers[0].blockedPolicies[0].label} for this website. Contact your administrator if you need this setting enabled.`);
-      assert.equal(await checker[wrapper](options, h.dependencies), false);
     }
   });
 }
@@ -133,13 +215,13 @@ test('sovereign blockers omit admin links and configuration navigation', async (
 test('batch starts all unique parent/child reads in parallel with one context', { timeout: 3000 }, async () => {
   const h = harness();
   const pending = [];
-  h.dependencies.callGovernance = (args) => {
+  h.dependencies.request = (args) => {
     h.calls.push(args);
     return new Promise((resolve) => pending.push(resolve));
   };
   const promise = checker.checkAuthGovernance({ ...options, providers: ['facebook', 'google', 'facebook'] }, h.dependencies);
   await new Promise((resolve) => setImmediate(resolve));
-  assert.deepEqual(h.calls.map((call) => call.policy), [ROOT, OAUTH, FACEBOOK, 'EnableIdpOAuthGoogle']);
+  assert.deepEqual(h.calls.map(requestedPolicy), [ROOT, OAUTH, FACEBOOK, 'EnableIdpOAuthGoogle']);
   assert.equal(h.resolutions, 1);
   for (const resolve of pending) resolve({ ok: true, statusCode: 200, body: true });
   const result = await promise;
@@ -157,12 +239,15 @@ test('reads are fresh for each invocation, never persistently cached', async () 
   assert.equal(h.resolutions, 2);
 });
 
-test('only boolean and exact text boolean primitives are accepted', async () => {
-  for (const [body, status] of [[true, 'enabled'], [false, 'blocked'], ['true', 'enabled'], [' false\n', 'blocked']]) {
+test('only boolean and case-insensitive text boolean primitives are accepted', async () => {
+  for (const [body, status] of [
+    [true, 'enabled'], [false, 'blocked'], ['true', 'enabled'], [' false\n', 'blocked'],
+    ['True', 'enabled'], ['False', 'blocked'], [' \tTRUE\r\n', 'enabled'], ['fAlSe', 'blocked'],
+  ]) {
     const result = await checker.checkAuthGovernance(options, harness({ [FACEBOOK]: { ok: true, statusCode: 200, body } }).dependencies);
     assert.equal(result.status, status);
   }
-  for (const body of [null, undefined, 0, 1, '', 'True', '"true"', 'Enabled', 'All', 'None',
+  for (const body of [null, undefined, 0, 1, '', '"true"', '"True"', 'true false', 'true\nfalse', 'Enabled', 'All', 'None',
     'Include', 'Exclude', {}, [], { enabled: true }, { value: true }, { IncludedSites: [portalId] }]) {
     const result = await checker.checkAuthGovernance(options, harness({ [FACEBOOK]: { ok: true, statusCode: 200, body } }).dependencies);
     assert.equal(result.status, 'unverified');
@@ -187,13 +272,119 @@ test('HTTP, permission, timeout, and thrown failures are unverified and do not d
     assert.equal(result.providers[0].blockedPolicies.length, 0);
     assert.doesNotMatch(JSON.stringify(result), /PRIVATE_TEST_TOKEN/);
     assert.doesNotMatch(result.message, /allow this portal|manage\/portals\/settings/);
-    await assert.rejects(checker.isFacebookOAuthEnabled(options, h.dependencies), (error) => {
-      assert.ok(error instanceof checker.AuthGovernanceVerificationError);
-      assert.equal(error.code, 'AuthGovernanceUnverified');
-      assert.equal(error.result.status, 'unverified');
-      return true;
-    });
   }
+});
+
+test('transient reads recover with bounded backoff without repeating successful parents or resolving auth again', async () => {
+  for (const statusCode of [0, 429, 500, 502, 503, 504, 599]) {
+    const h = harness();
+    const waits = [];
+    let attempts = 0;
+    h.dependencies.sleep = async (ms) => { waits.push(ms); };
+    h.dependencies.request = async (args) => {
+      h.calls.push(args);
+      if (requestedPolicy(args) === FACEBOOK && ++attempts < 3) return { ok: false, statusCode };
+      return { ok: true, statusCode: 200, body: true };
+    };
+    const result = await checker.checkAuthGovernance(options, h.dependencies);
+    assert.equal(result.status, 'enabled');
+    assert.equal(result.allowed, true);
+    assert.equal(result.canContinue, true);
+    assert.deepEqual(waits, [500, 1000]);
+    assert.equal(h.calls.filter((call) => requestedPolicy(call) === FACEBOOK).length, 3);
+    assert.equal(h.calls.filter((call) => requestedPolicy(call) === ROOT).length, 1);
+    assert.equal(h.calls.filter((call) => requestedPolicy(call) === OAUTH).length, 1);
+    assert.equal(h.resolutions, 1);
+  }
+});
+
+test('exhausted transient reads warn and continue without claiming policy approval', async () => {
+  for (const statusCode of [0, 429, 500, 503]) {
+    const h = harness({ [FACEBOOK]: { ok: false, statusCode } });
+    const waits = [];
+    h.dependencies.sleep = async (ms) => { waits.push(ms); };
+    const result = await checker.checkAuthGovernance(options, h.dependencies);
+    assert.equal(result.status, 'unverified');
+    assert.equal(result.allowed, false);
+    assert.equal(result.canContinue, true);
+    assert.equal(result.providers[0].canContinue, true);
+    assert.equal(result.providers[0].verificationErrors[0].error.code, 'ReadUnavailable');
+    assert.equal(h.calls.filter((call) => requestedPolicy(call) === FACEBOOK).length, 3);
+    assert.deepEqual(waits, [500, 1000]);
+    assert.match(result.message, /Warning:.*could not be verified/);
+    assert.match(result.message, /Continue setup with this warning/);
+    assert.match(result.message, /runtime governance still applies/);
+    assert.match(result.message, /sign-in methods may not work/);
+    assert.doesNotMatch(result.message, /setup stopped|setup is allowed/);
+  }
+});
+
+test('403 and unsupported endpoint statuses warn without retry; unexplained 404 and other failures still stop', async () => {
+  for (const [response, canContinue] of [
+    [{ ok: false, statusCode: 403 }, true],
+    [{ ok: false, statusCode: 405 }, true],
+    [{ ok: false, statusCode: 501 }, true],
+    [{ ok: false, statusCode: 401 }, false],
+    [{ ok: false, statusCode: 404 }, false],
+    [{ ok: false, statusCode: 400 }, false],
+    [{ ok: false, statusCode: 0, error: { code: 'ContextError' } }, false],
+    [{ ok: false, statusCode: '503' }, false],
+    [{ ok: true, statusCode: 503 }, false],
+    [{ ok: true, statusCode: 200, body: { enabled: true } }, false],
+    [null, false], [{}, false], [new Error('PRIVATE_TEST_TOKEN'), false],
+  ]) {
+    const h = harness({ [FACEBOOK]: response });
+    h.dependencies.sleep = async () => { assert.fail('This failure must not be retried'); };
+    const result = await checker.checkAuthGovernance(options, h.dependencies);
+    assert.equal(result.status, 'unverified');
+    assert.equal(result.allowed, false);
+    assert.equal(result.canContinue, canContinue);
+    assert.equal(h.calls.length, 3);
+    assert.doesNotMatch(JSON.stringify(result), /PRIVATE_TEST_TOKEN/);
+  }
+});
+
+test('recognized thrown network errors retry but never disclose raw exception details', async () => {
+  const failure = new Error('PRIVATE_TEST_TOKEN');
+  failure.code = 'ETIMEDOUT';
+  const h = harness({ [FACEBOOK]: failure });
+  const result = await checker.checkAuthGovernance(options, h.dependencies);
+  assert.equal(result.canContinue, true);
+  assert.equal(result.allowed, false);
+  assert.equal(h.calls.filter((call) => requestedPolicy(call) === FACEBOOK).length, 3);
+  assert.doesNotMatch(JSON.stringify(result), /PRIVATE_TEST_TOKEN/);
+});
+
+test('known restrictions or non-continuable errors prevent warning-based continuation across the batch', async () => {
+  for (const otherResponse of [
+    { ok: true, statusCode: 200, body: false },
+    { ok: false, statusCode: 404 },
+    { ok: true, statusCode: 200, body: 'not-a-boolean' },
+  ]) {
+    const h = harness({
+      [FACEBOOK]: { ok: false, statusCode: 503 },
+      EnableIdpOAuthGoogle: otherResponse,
+    });
+    const result = await checker.checkAuthGovernance(
+      { ...options, providers: ['facebook', 'google', 'entra-id'] }, h.dependencies
+    );
+    assert.equal(result.status, 'unverified');
+    assert.equal(result.providers[0].canContinue, true);
+    assert.equal(result.canContinue, false);
+    assert.doesNotMatch(result.message, /Continue setup with this warning/);
+  }
+  const h = harness();
+  let attempts = 0;
+  h.dependencies.request = async (args) => {
+    if (requestedPolicy(args) === FACEBOOK) {
+      return ++attempts === 1 ? { ok: false, statusCode: 503 } : { ok: true, statusCode: 200, body: false };
+    }
+    return { ok: true, statusCode: 200, body: true };
+  };
+  const result = await checker.checkAuthGovernance(options, h.dependencies);
+  assert.equal(result.status, 'blocked');
+  assert.equal(result.canContinue, false);
+  assert.equal(attempts, 2);
 });
 
 test('mixed selections stop as a batch and retain enabled, blocked, and unverified diagnostics', async () => {
@@ -221,11 +412,6 @@ test('known disabled parents are retained when another read cannot be verified',
   assert.equal(result.providers[0].message, result.message);
   assert.match(result.message, /Facebook OAuth.*HTTP 403/);
   assert.doesNotMatch(result.message, /Also disabled|\(EnableExternalAuthProviders\)/);
-  await assert.rejects(checker.isFacebookOAuthEnabled(options, h.dependencies), (error) => {
-    assert.ok(error instanceof checker.AuthGovernanceVerificationError);
-    assert.ok(error.message.startsWith(restriction));
-    return true;
-  });
 });
 
 test('denied batch summaries never start with an enabled provider or an unknown policy', async () => {
@@ -285,6 +471,7 @@ test('context errors and environment/cloud/base URL mismatches stop before reads
     const h = harness({}, changes);
     const result = await checker.checkAuthGovernance(options, h.dependencies);
     assert.equal(result.status, 'unverified');
+    assert.equal(result.canContinue, false);
     assert.equal(h.calls.length, 0);
     assert.doesNotMatch(JSON.stringify(result), /PRIVATE_TEST_TOKEN/);
   }
@@ -321,6 +508,7 @@ test('missing expected owning tenant stops before authentication and never defau
     assert.equal(result.allowed, false);
     assert.equal(result.status, 'unverified');
     assert.match(result.message, /portal owning tenant ID is required/);
+    assert.equal(result.canContinue, false);
     assert.equal(h.resolutions, 0);
     assert.equal(h.calls.length, 0);
   }
@@ -340,14 +528,15 @@ test('account/token tenants must both be available and match the confirmed owner
     assert.equal(result.providers[0].blockedPolicies.length, 0);
     assert.equal(h.calls.length, 0);
     assert.equal(h.resolutions, 1);
+    assert.equal(result.canContinue, false);
     assert.match(result.message, /tenant/);
     assert.match(result.message, /No governance requests were sent/);
     assert.ok(!JSON.stringify(result).includes(String(h.context.token)));
   }
 });
 
-test('every provider wrapper applies the same missing/mismatched tenant guard', async () => {
-  for (const [, wrapper] of methods) {
+test('every governed provider applies the same missing/mismatched tenant guard', async () => {
+  for (const provider of Object.keys(providerPolicies)) {
     for (const [target, overrides] of [
       [{ ...options, tenantId: undefined }, {}],
       [options, { tenantId: portalId }],
@@ -355,14 +544,11 @@ test('every provider wrapper applies the same missing/mismatched tenant guard', 
       [options, { token: testToken(portalId) }],
     ]) {
       const h = harness({}, overrides);
-      await assert.rejects(checker[wrapper](target, h.dependencies), (error) => {
-        assert.ok(error instanceof checker.AuthGovernanceVerificationError);
-        assert.equal(error.code, 'AuthGovernanceUnverified');
-        assert.equal(error.result.allowed, false);
-        assert.equal(error.result.status, 'unverified');
-        assert.doesNotMatch(error.message, /PRIVATE_TEST_TOKEN/);
-        return true;
-      });
+      const result = await checker.checkAuthGovernance({ ...target, providers: [provider] }, h.dependencies);
+      assert.equal(result.allowed, false);
+      assert.equal(result.canContinue, false);
+      assert.equal(result.status, 'unverified');
+      assert.doesNotMatch(result.message, /PRIVATE_TEST_TOKEN/);
       assert.equal(h.calls.length, 0);
     }
   }
@@ -382,8 +568,14 @@ test('CLI import/help/invalid-input paths are offline and import-safe', () => {
   assert.equal(help.status, 0, help.stderr);
   assert.match(help.stdout, /Read-only, setup-time gate/);
   assert.match(help.stdout, /--tenantId/);
-  const invalid = spawnSync(process.execPath, [script, '--envId', 'invalid'], spawnOptions);
-  assert.equal(invalid.status, 1);
+  const entra = spawnSync(process.execPath, [script, '--providers', 'entra-id'], spawnOptions);
+  assert.equal(entra.status, 0, entra.stderr);
+  const entraResult = JSON.parse(entra.stdout);
+  assert.equal(entraResult.allowed, true);
+  assert.deepEqual(entraResult.policies, []);
+  assert.match(entraResult.message, /Microsoft Entra ID setup is independent/);
+  const invalid = spawnSync(process.execPath, [script, '--envId', 'invalid', '--providers', 'facebook'], spawnOptions);
+  assert.equal(invalid.status, 3);
   assert.match(invalid.stderr, /envId must be/);
   const missingTenant = spawnSync(process.execPath, [
     script, '--envId', envId, '--portalId', portalId, '--providers', 'facebook',
@@ -394,43 +586,75 @@ test('CLI import/help/invalid-input paths are offline and import-safe', () => {
   const invalidTenant = spawnSync(process.execPath, [
     script, '--tenantId', 'invalid', '--envId', envId, '--portalId', portalId, '--providers', 'facebook',
   ], spawnOptions);
-  assert.equal(invalidTenant.status, 1);
+  assert.equal(invalidTenant.status, 3);
   assert.match(invalidTenant.stderr, /tenantId.*must be/);
 });
 
-async function invokeCli(h, flags) {
+async function invokeCli(h, flags, emit = (result) => JSON.parse(JSON.stringify(result))) {
   const script = require.resolve('../check-auth-governance');
   const realRequire = createRequire(script);
   let output;
+  let stderr = '';
   let completion;
   const sandbox = {
     module: { exports: {} },
-    process: { argv: ['node', script, ...flags] },
+    process: {
+      argv: ['node', script, ...flags],
+      stderr: { write(text) { stderr += text; } },
+    },
     require(name) {
       if (name === './lib/power-platform-api') {
         return {
           ...realRequire(name),
           resolveContext: h.dependencies.resolveContext,
-          emitJson(result) { output = JSON.parse(JSON.stringify(result)); },
+          request: h.dependencies.request,
+          emitJson(result) { output = emit(result); },
           runCli(_module, main) { completion = main(); },
         };
       }
-      if (name === '../skills/manage-governance/scripts/governance-transport') {
-        return { callGovernance: h.dependencies.callGovernance };
-      }
+      if (name.includes('manage-governance')) throw new Error('Checker must not load archived governance modules');
+      if (name === 'node:timers/promises') return { setTimeout: h.dependencies.sleep };
       return realRequire(name);
     },
   };
   vm.runInNewContext(fs.readFileSync(script, 'utf8'), sandbox, { filename: script });
   await completion;
-  return { output, exitCode: sandbox.process.exitCode };
+  return { output, stderr, exitCode: sandbox.process.exitCode };
 }
 
+test('CLI usage errors exit 3 without claiming a governance restriction or sending requests', async () => {
+  for (const flags of [
+    [], ['--providers', 'unsupported'],
+    ['--envId', envId, '--portalId', websiteRecordId, '--websiteRecordId', websiteRecordId, '--providers', 'facebook'],
+  ]) {
+    const h = harness();
+    const { output, stderr, exitCode } = await invokeCli(h, flags);
+    assert.equal(exitCode, 3);
+    assert.equal(output, undefined);
+    assert.match(stderr, /Select one or more providers|Power Platform host ID/);
+    assert.doesNotMatch(stderr, /Your administrator has restricted/);
+    assert.equal(h.resolutions, 0);
+    assert.equal(h.calls.length, 0);
+  }
+});
+
+test('CLI unexpected failures exit 3 and redact raw exception messages', async () => {
+  for (const error of [new Error('PRIVATE_TEST_TOKEN'), new TypeError('PRIVATE_TEST_TOKEN')]) {
+    const { output, stderr, exitCode } = await invokeCli(harness(), ['--providers', 'entra-id'], () => { throw error; });
+    assert.equal(exitCode, 3);
+    assert.equal(output, undefined);
+    assert.match(stderr, /check failed unexpectedly/);
+    assert.doesNotMatch(stderr, /PRIVATE_TEST_TOKEN|Your administrator has restricted/);
+  }
+});
+
 test('CLI emits the complete decision and exits 0/1/2 for enabled/blocked/unverified', async () => {
-  for (const [response, status, exitCode] of [
-    [{ ok: true, statusCode: 200, body: true }, 'enabled', 0],
-    [{ ok: true, statusCode: 200, body: false }, 'blocked', 1],
-    [{ ok: false, statusCode: 404 }, 'unverified', 2],
+  for (const [response, status, exitCode, canContinue] of [
+    [{ ok: true, statusCode: 200, body: true }, 'enabled', 0, true],
+    [{ ok: true, statusCode: 200, body: false }, 'blocked', 1, false],
+    [{ ok: false, statusCode: 404 }, 'unverified', 2, false],
+    [{ ok: false, statusCode: 403 }, 'unverified', 2, true],
+    [{ ok: false, statusCode: 503 }, 'unverified', 2, true],
   ]) {
     const h = harness({ [FACEBOOK]: response });
     const { output, exitCode: actualExit } = await invokeCli(h, [
@@ -439,6 +663,7 @@ test('CLI emits the complete decision and exits 0/1/2 for enabled/blocked/unveri
     assert.equal(actualExit, exitCode);
     assert.equal(output.status, status);
     assert.equal(output.allowed, exitCode === 0);
+    assert.equal(output.canContinue, canContinue);
     assert.equal(output.envId, envId);
     assert.equal(output.tenantId, tenantId);
     assert.equal(output.portalId, portalId);
@@ -459,6 +684,7 @@ test('CLI denied batches use restriction-first messages and retain fail-closed e
     ]);
     assert.equal(actualExit, exitCode);
     assert.equal(output.allowed, false);
+    assert.equal(output.canContinue, false);
     assert.equal(output.message.split('\n\n')[0],
       `Your administrator has restricted the use of ${label} for this website. Contact your administrator if you need this setting enabled.`);
     assert.doesNotMatch(output.message, /setup is allowed|Also disabled/);
@@ -477,24 +703,24 @@ test('CLI tenant mismatch/unavailability exits 2 with zero governance requests',
     assert.equal(output.allowed, false);
     assert.equal(output.status, 'unverified');
     assert.equal(output.tenantId, tenantId);
+    assert.equal(output.canContinue, false);
     assert.equal(h.calls.length, 0);
     assert.ok(output.providers.every((provider) => provider.status === 'unverified'));
     assert.ok(!JSON.stringify(output).includes(h.context.token));
   }
 });
 
-test('setup-auth gates provider walkthroughs, provisioning, UI generation, and settings', () => {
-  const root = path.resolve(__dirname, '..', '..');
-  const skill = fs.readFileSync(path.join(root, 'skills', 'setup-auth', 'SKILL.md'), 'utf8');
+test('setup-auth checks before provider walkthroughs and again before deployment', () => {
+  const { skill, reference } = workflowSources();
   const selection = skill.indexOf('**Before provider-specific follow-ups:**');
   assert.ok(selection > 0 && selection < skill.indexOf('**For "Facebook"**'));
-  assert.match(skill.slice(selection, selection + 750), /smart-inference and `keep-only`/);
-  assert.match(skill.slice(skill.indexOf('#### 2.1.2'), skill.indexOf('#### 2.1.2') + 800), /rerun it immediately before configuring a real IdP/);
-  assert.match(skill.slice(skill.indexOf('## Phase 3:'), skill.indexOf('## Phase 3:') + 900), /Rerun the governance preflight/);
-  assert.match(skill.slice(skill.indexOf('## Phase 5:'), skill.indexOf('## Phase 5:') + 700), /Rerun the governance preflight/);
-  assert.match(skill.slice(skill.indexOf('#### 8.1 Create Site Settings'), skill.indexOf('#### 8.1 Create Site Settings') + 700), /Stop on blocked\/unverified/);
-  assert.match(skill.slice(skill.indexOf('#### 8.4 Ask to Deploy'), skill.indexOf('#### 8.4 Ask to Deploy') + 1400), /Deploy only when all selected providers are allowed/);
-  const reference = fs.readFileSync(path.join(root, 'skills', 'setup-auth', 'references', 'governance-preflight.md'), 'utf8');
+  const initial = skill.slice(selection, skill.indexOf('**Blocked-message presentation:**'));
+  assert.match(initial, /smart-inference and `keep-only`/);
+  assert.match(initial, /initial.*check once/);
+  assert.match(initial, /reuse an initial result already obtained for the same unchanged context/);
+  const deploy = skill.slice(skill.indexOf('#### 8.4 Ask to Deploy'), skill.indexOf('#### 8.5'));
+  assert.match(deploy, /Rerun the governance preflight.*immediately before invoking `\/deploy-site`/);
+  assert.match(deploy, /Deploy only when batch `canContinue: true`/);
   assert.match(reference, /Stop the entire selected batch before mutation/);
   assert.match(reference, /does not invoke or re-enable/);
   assert.match(reference, /not a visitor-side runtime filter/);
@@ -504,6 +730,95 @@ test('setup-auth gates provider walkthroughs, provisioning, UI generation, and s
   assert.doesNotMatch(reference, /\*\*Known gap:\*\*/);
 });
 
+test('setup-auth consistently distinguishes exempt workforce Entra from governed Entra External ID', () => {
+  const root = path.resolve(__dirname, '..', '..');
+  const skill = fs.readFileSync(path.join(root, 'skills', 'setup-auth', 'SKILL.md'), 'utf8');
+  const reference = fs.readFileSync(path.join(root, 'skills', 'setup-auth', 'references', 'governance-preflight.md'), 'utf8');
+  const principles = skill.slice(skill.indexOf('## Core Principles'), skill.indexOf('**Initial request:**'));
+  assert.match(principles, /Skip all governance preflights\/rechecks and their target\/tenant\/Azure CLI prerequisites for Entra-only setup/);
+  assert.match(principles, /Microsoft Entra External ID is distinct and remains governed as OIDC/);
+  assert.match(principles, /This exemption applies to every gate below/);
+  const selection = skill.slice(skill.indexOf('**Before provider-specific follow-ups:**'), skill.indexOf('**Blocked-message presentation:**'));
+  assert.match(selection, /workforce Entra -> exempt `entra-id`; Entra External ID -> governed `oidc`/);
+  assert.match(reference, /workforce Microsoft Entra ID -> `entra-id` \(no required policies\)/);
+  assert.match(reference, /legacy `Authentication\/OpenIdConnect\/AzureAD\/\*` settings/);
+  assert.match(reference, /Preserve the existing Entra settings and normal\s+auth service, claims mapping, login UI, and role-based UI behavior/);
+  assert.doesNotMatch(reference, /including Entra External ID and workforce Entra/);
+});
+
+test('generation stages reuse the initial decision instead of repeating reads and retain warnings', () => {
+  const { skill, reference } = workflowSources();
+  const stages = [
+    ['#### 2.1.2', '## Phase 3:'],
+    ['## Phase 3:', '## Phase 4:'],
+    ['## Phase 5:', '## Phase 6:'],
+    ['#### 8.1 Create Site Settings', '#### 8.2'],
+  ];
+  for (const [startHeading, endHeading] of stages) {
+    const start = skill.indexOf(startHeading);
+    const end = skill.indexOf(endHeading, start + startHeading.length);
+    assert.ok(start >= 0 && end > start, `${startHeading} must have bounded content`);
+    const section = skill.slice(start, end);
+    assert.match(section, /Reuse the initial governance preflight result/);
+    assert.match(section, /unavailable-read warning/);
+    assert.match(section, /Check lifecycle for context invalidation/);
+    assert.doesNotMatch(section, /Rerun the governance preflight|rerun it immediately before/);
+  }
+  assert.match(reference, /three total\s+attempts/);
+  assert.match(reference, /500 ms.*1000 ms/);
+  assert.match(reference, /Do not add a separate continuation prompt/);
+  assert.match(reference, /Do not infer\s+that a 404 means an unsupported endpoint/);
+  assert.match(reference, /Use the batch `canContinue` and `message`/);
+  assert.doesNotMatch(skill, /stop on any non-allowed result|Stop on blocked\/unverified|If blocked\/unverified/);
+});
+
+test('two-check lifecycle invalidates changed or uncertain context and preserves artifacts on a late stop', () => {
+  const { skill, reference } = workflowSources();
+  const start = reference.indexOf('## Check lifecycle');
+  const end = reference.indexOf('## Reads and decisions', start);
+  assert.ok(start >= 0 && end > start);
+  const lifecycle = reference.slice(start, end);
+  assert.match(lifecycle, /two check points/);
+  assert.match(lifecycle, /Initial check:.*After selecting all providers, before provider-specific/);
+  assert.match(lifecycle, /Deployment check:.*After deployment consent, immediately before invoking/);
+  assert.match(lifecycle, /Never reuse the initial result for deployment/);
+  assert.match(lifecycle, /If the user does not deploy, no deployment check is needed/);
+  assert.match(lifecycle, /smart-inference, keep-only, and normal selection paths share this same initial\s+check/);
+  assert.match(lifecycle, /Do not repeat inventory, CLI authentication resolution,\s+or policy reads solely because a phase changes, a consent prompt is answered,\s+or an ordinary pause\/resume occurs/);
+  assert.match(lifecycle, /Retain `canContinue`, `allowed`, and the warning/);
+  assert.match(lifecycle, /when the target, owning tenant,\s+account\/cloud context, or selected provider instances change/);
+  assert.match(lifecycle, /if the result or context is missing or uncertain, recheck instead/);
+  assert.match(lifecycle, /Do not persist tokens, create an on-disk cache, or reuse results across\s+independent setup runs/);
+  assert.match(lifecycle, /Workforce Entra-only setup remains exempt from both check points/);
+  assert.match(lifecycle, /preserve all\s+earlier local artifacts and report what was already changed/);
+  assert.match(lifecycle, /Do not deploy, automatically roll back, or claim that the\s+whole run made no changes/);
+  assert.match(skill, /retain its result for the converging Phase 2.1 path rather than checking again/);
+  assert.doesNotMatch(reference, /immediately before each later mutation stage/);
+});
+
+test('governed-provider target instructions distinguish activation, failed discovery, and sign-in recovery', () => {
+  const { skill, reference } = workflowSources();
+  const prerequisites = skill.slice(skill.indexOf('> **Prerequisites:**'), skill.indexOf('## Workflow'));
+  assert.match(prerequisites, /governance preflight additionally needs a provisioned host and PAC\/Azure CLI sign-in/);
+  assert.match(prerequisites, /Deployment alone does not establish activation or a host `portalId`/);
+  assert.match(prerequisites, /Workforce Entra-only setup is exempt/);
+  const recovery = reference.slice(reference.indexOf('### Governed-provider prerequisites and recovery'),
+    reference.indexOf('Run from the project'));
+  assert.match(recovery, /Verify a previously obtained `portalId` \(including one reported during deployment\)/);
+  assert.match(recovery, /match the project's\s+`websiteRecordId` and deployed URL when available/);
+  assert.match(recovery, /Successful, complete inventory has no matching host.*\/activate-site/);
+  assert.match(recovery, /after activation, refresh inventory before retrying setup/);
+  assert.match(recovery, /Inventory read fails, returns an error, or is partial\/incomplete.*do not claim the site is inactive/);
+  assert.match(recovery, /Confirm pagination completed before concluding no host exists/);
+  assert.match(recovery, /Multiple matches, conflicting IDs\/URLs, or failed\/obsolete hosts.*Stop/);
+  assert.match(recovery, /If PAC is not signed in/);
+  assert.match(recovery, /If Azure CLI sign-in is missing/);
+  assert.match(recovery, /Never switch accounts or environments automatically/);
+  assert.match(recovery, /Workforce Entra-only setup skips this entire governance-specific prerequisite/);
+  assert.match(recovery, /Do not\s+activate a site automatically/);
+  assert.match(recovery, /warning-and-continue rule to bypass unresolved identity\s+or inventory failures/);
+});
+
 // Keep these IDs aligned with the maker-facing 66-case plan. These cases run
 // sequentially against injected reads, never by toggling a live portal policy.
 async function numberedDecision(t, id, h, target, status, blocked = []) {
@@ -511,13 +826,13 @@ async function numberedDecision(t, id, h, target, status, blocked = []) {
   const actualBlocked = result.providers.flatMap((provider) => provider.blockedPolicies.map((item) => item.policy));
   t.diagnostic(JSON.stringify({
     caseId: id, verification: 'mocked checker', expected: status, actual: result.status,
-    expectedBlocked: blocked, actualBlocked, reads: h.calls.map((call) => call.policy),
+    expectedBlocked: blocked, actualBlocked, reads: h.calls.map(requestedPolicy),
     message: result.message,
   }));
   assert.equal(result.status, status);
   assert.equal(result.allowed, status === 'enabled');
   assert.deepEqual(actualBlocked, blocked);
-  assert.ok(h.calls.every((call) => call.op === 'getPortal' && call.body === undefined));
+  assert.ok(h.calls.every((call) => call.method === 'GET' && call.body === undefined));
   assert.doesNotMatch(JSON.stringify(result), /PRIVATE_TEST_TOKEN/);
   if (h.context.token) assert.ok(!JSON.stringify(result).includes(h.context.token));
   return result;
@@ -534,7 +849,7 @@ const socialStates = [
   [false, false, false],
 ];
 for (const [group, provider] of ['google', 'facebook', 'microsoft'].entries()) {
-  const [, wrapper, policies] = methods.find((method) => method[0] === provider);
+  const policies = providerPolicies[provider];
   for (const [index, states] of socialStates.entries()) {
     const id = group * 8 + index + 1;
     const blocked = policies.filter((_, position) => !states[position]);
@@ -546,15 +861,14 @@ for (const [group, provider] of ['google', 'facebook', 'microsoft'].entries()) {
       if (id === 1) responses[FACEBOOK] = { ok: true, statusCode: 200, body: true };
       const h = harness(responses);
       const result = await numberedDecision(t, id, h, { ...options, providers: [provider] }, expected, blocked);
-      assert.deepEqual(h.calls.map((call) => call.policy), policies);
+      assert.deepEqual(h.calls.map(requestedPolicy), policies);
       assert.deepEqual(result.providers[0].blockedPolicies.map((item) => item.policy), blocked);
-      assert.equal(await checker[wrapper](options, h.dependencies), expected === 'enabled');
     });
   }
 }
 
 for (const [group, provider] of ['oidc', 'saml', 'ws-federation', 'local'].entries()) {
-  const [, , policies] = methods.find((method) => method[0] === provider);
+  const policies = providerPolicies[provider];
   for (const [index, states] of [[true, true], [true, false], [false, true], [false, false]].entries()) {
     const id = 25 + group * 4 + index;
     const blocked = policies.filter((_, position) => !states[position]);
@@ -562,7 +876,7 @@ for (const [group, provider] of ['oidc', 'saml', 'ws-federation', 'local'].entri
       const responses = Object.fromEntries(policies.map((policy, position) => [policy, { ok: true, statusCode: 200, body: states[position] }]));
       const h = harness(responses);
       const result = await numberedDecision(t, id, h, { ...options, providers: [provider] }, blocked.length ? 'blocked' : 'enabled', blocked);
-      assert.deepEqual(h.calls.map((call) => call.policy), policies);
+      assert.deepEqual(h.calls.map(requestedPolicy), policies);
       assert.deepEqual(result.providers[0].blockedPolicies.map((item) => item.policy), blocked);
     });
   }
@@ -576,7 +890,7 @@ for (const [id, provider, unrelated] of [
   test(`Case ${id}: ${provider} ignores disabled unrelated policy ${unrelated}`, async (t) => {
     const h = harness({ [unrelated]: { ok: true, statusCode: 200, body: false } });
     await numberedDecision(t, id, h, { ...options, providers: [provider] }, 'enabled');
-    assert.ok(!h.calls.some((call) => call.policy === unrelated));
+    assert.ok(!h.calls.some((call) => requestedPolicy(call) === unrelated));
   });
 }
 
@@ -584,7 +898,7 @@ test('Case 44: non-OAuth methods ignore disabled OAuth', async (t) => {
   for (const provider of ['oidc', 'saml', 'ws-federation', 'local']) {
     const h = harness({ [OAUTH]: { ok: true, statusCode: 200, body: false } });
     await numberedDecision(t, 44, h, { ...options, providers: [provider] }, 'enabled');
-    assert.ok(!h.calls.some((call) => call.policy === OAUTH));
+    assert.ok(!h.calls.some((call) => requestedPolicy(call) === OAUTH));
   }
 });
 
@@ -625,7 +939,7 @@ test('Case 52: environment scopes are never interpreted as portal booleans', asy
   for (const body of ['All', 'None', 'Include', 'Exclude']) {
     const h = harness({ [FACEBOOK]: { ok: true, statusCode: 200, body } });
     await numberedDecision(t, 52, h, options, 'unverified');
-    assert.ok(h.calls.every((call) => call.op === 'getPortal'));
+    assert.ok(h.calls.every((call) => call.method === 'GET'));
   }
 });
 
@@ -691,15 +1005,15 @@ test('Case 58: expected tenant mismatch must stop before policy reads', async (t
 test('Case 59: all-enabled provider batch shares parents and starts reads concurrently', { timeout: 3000 }, async (t) => {
   const h = harness();
   const pending = [];
-  h.dependencies.callGovernance = (args) => {
+  h.dependencies.request = (args) => {
     h.calls.push(args);
     return new Promise((resolve) => pending.push(resolve));
   };
   const promise = checker.checkAuthGovernance({ ...options, providers: ['facebook', 'google', 'microsoft'] }, h.dependencies);
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(pending.length, 5);
-  assert.equal(h.calls.filter((call) => call.policy === ROOT).length, 1);
-  assert.equal(h.calls.filter((call) => call.policy === OAUTH).length, 1);
+  assert.equal(h.calls.filter((call) => requestedPolicy(call) === ROOT).length, 1);
+  assert.equal(h.calls.filter((call) => requestedPolicy(call) === OAUTH).length, 1);
   for (const resolve of pending) resolve({ ok: true, statusCode: 200, body: true });
   const result = await promise;
   assert.equal(result.allowed, true);
@@ -767,7 +1081,8 @@ test('Case 63: keep-only newly surfaced providers have a documented preflight ga
   const { skill, reference } = workflowSources();
   const start = skill.indexOf('- **`keep-only`**');
   assert.ok(start >= 0);
-  assert.match(skill.slice(start, start + 600), /run the governance preflight for every existing provider being surfaced\/regenerated/);
+  const keepOnly = skill.slice(start, skill.indexOf('- **`keep-and-add`**', start));
+  assert.match(keepOnly, /run the initial governance preflight for every existing provider being surfaced\/regenerated once/);
   assert.match(reference, /including\s+existing providers in keep-only\/keep-and-add mode/);
   t.diagnostic(JSON.stringify({ caseId: 63, verification: 'instruction check only', actual: 'gate present; full skill execution not exercised' }));
 });
@@ -776,7 +1091,7 @@ test('Case 64: a late blocker preserves earlier artifacts and reports earlier wo
   const { skill, reference } = workflowSources();
   assert.match(reference, /If earlier stages already changed files, report those changes accurately/);
   assert.match(skill, /preserve existing settings and disclose any earlier generated files/);
-  assert.match(skill, /Stop on blocked\/unverified results and leave earlier local artifacts intact/);
+  assert.match(skill, /Stop when batch `canContinue: false` and leave earlier local artifacts intact/);
   t.diagnostic(JSON.stringify({ caseId: 64, verification: 'instruction check only', actual: 'preservation/reporting instructions present; full skill execution not exercised' }));
 });
 
@@ -787,7 +1102,7 @@ test('Case 65: policy writes, deletion, overrides, and partial configuration are
   t.diagnostic(JSON.stringify({ caseId: 65, verification: 'instruction check only', actual: 'no-write/no-partial-setup contract present; full skill execution not exercised' }));
 });
 
-test('Case 66: result messages and wrapper errors never expose raw secrets', async (t) => {
+test('Case 66: result messages never expose raw secrets', async (t) => {
   const h = harness({
     [FACEBOOK]: {
       ok: false, statusCode: 403,
@@ -796,9 +1111,4 @@ test('Case 66: result messages and wrapper errors never expose raw secrets', asy
     },
   });
   await numberedDecision(t, 66, h, options, 'unverified');
-  await assert.rejects(checker.isFacebookOAuthEnabled(options, h.dependencies), (error) => {
-    assert.doesNotMatch(error.message, /PRIVATE_TEST_TOKEN/);
-    assert.doesNotMatch(JSON.stringify(error.result), /PRIVATE_TEST_TOKEN/);
-    return true;
-  });
 });

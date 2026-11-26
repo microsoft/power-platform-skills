@@ -33,7 +33,8 @@ Configure authentication (login/logout) and role-based authorization for a Power
 - **Framework-appropriate patterns** — Every auth artifact (hooks, composables, services, directives, guards) must match the detected framework's idioms and conventions.
 - **Development parity** — Include mock data for local development so developers can test auth flows and role-based UI without deploying to Power Pages.
 - **Preserve site integrity** — Before changing navigation, auth pages, dialogs, or role-based UI, read `${PLUGIN_ROOT}/references/site-modification-integrity.md`. Synchronize all visible auth states across configured locale resources and keep them bidirectional and expansion-safe.
-- **Governance before setup** — Follow `${PLUGIN_ROOT}/skills/setup-auth/references/governance-preflight.md` before any IdP walkthrough/provisioning, provider-setting change, or custom login/registration provider addition. Confirm the portal's owning tenant from the target environment or user input and pass `--tenantId` on every check; never infer the expected owner from the current Azure CLI account. A tenant mismatch or blocked/unverifiable required portal policy stops the selected batch; never switch accounts automatically, enable policies automatically, or invoke the disabled `manage-governance` skill.
+- **Governance before setup** — Follow `${PLUGIN_ROOT}/skills/setup-auth/references/governance-preflight.md`: check once after provider selection before walkthroughs or changes, reuse the initial result during generation, and check fresh immediately before deployment. Invalidate the result when target/provider/account context changes or cannot be reliably retained on resume; do not repeat checks solely for phase transitions or consent prompts. Confirm the portal's owning tenant from the target environment or user input and pass `--tenantId` on every check; never infer the expected owner from the current Azure CLI account. Stop the selected batch when batch `canContinue: false`, including tenant mismatches or any verified disabled requirement. The checker retries transient reads; when only unavailable reads remain (`allowed: false`, `canContinue: true`), display the batch warning and automatically continue setup. Never call this verified approval or bypass existing consent; runtime governance still applies and sign-in may not work. Never switch accounts automatically, enable policies automatically, or invoke the disabled `manage-governance` skill.
+- **Workforce Entra exemption** — Built-in Microsoft Entra ID (`entra-id`, legacy `AzureAD` settings) is independent of authentication governance. Skip all governance preflights/rechecks and their target/tenant/Azure CLI prerequisites for Entra-only setup. In mixed selections, check only the governed providers' policies; retain workforce Entra in the generated auth service/UI and preserve its normal settings behavior. Microsoft Entra External ID is distinct and remains governed as OIDC. This exemption applies to every gate below, including smart-inference, keep-only/keep-and-add, provisioning, code/UI generation, settings, and deployment.
 
 **Initial request:** $ARGUMENTS
 
@@ -42,6 +43,7 @@ Configure authentication (login/logout) and role-based authorization for a Power
 > - An existing Power Pages SPA site created via `/create-site`
 > - The site must be deployed at least once (`.powerpages-site` folder must exist)
 > - Web roles must be created via `/create-webroles`
+> - For governed providers, the governance preflight additionally needs a provisioned host and PAC/Azure CLI sign-in aligned to the confirmed owning tenant. Deployment alone does not establish activation or a host `portalId`. Follow the target-verification and recovery steps in `${PLUGIN_ROOT}/skills/setup-auth/references/governance-preflight.md` before provider-specific walkthroughs or changes. Workforce Entra-only setup is exempt from these governance-specific prerequisites.
 
 ## Workflow
 
@@ -270,7 +272,7 @@ Before asking the user which providers they want, analyze the site context from 
 |----------|---------|
 | Would you like to proceed with this recommended configuration? | Yes, proceed with recommendation, No, let me choose providers |
 
-**If "Yes"**: Skip Phase 2.1 provider selection, run the governance preflight for the recommended provider(s), and collect provider-specific details (ClientId, tenant name, etc.) only if all required policies are verified enabled.
+**If "Yes"**: Skip Phase 2.1 provider selection, run the initial governance preflight for the recommended provider(s), and retain its result for the converging Phase 2.1 path rather than checking again. Collect provider-specific details (ClientId, tenant name, etc.) only when batch `canContinue: true`, showing any unavailable-read warning first.
 
 **If "No"** or **if you cannot infer with confidence**: Fall back to Phase 2.1 below.
 
@@ -288,7 +290,7 @@ Before asking the user which providers they want, analyze the site context from 
 
 The behavior depends on the `MERGE_MODE` chosen in Phase 1.5:
 
-- **`keep-only`** (user chose "keep all existing, no new provider this run") → Skip the new-provider selection question entirely, but run the governance preflight for every existing provider being surfaced/regenerated. If allowed, proceed to the "Local Authentication" follow-ups only if local was detected. Phase 3.2 will generate `AUTH_PROVIDERS` from `EXISTING_PROVIDERS` only.
+- **`keep-only`** (user chose "keep all existing, no new provider this run") → Skip the new-provider selection question entirely, but run the initial governance preflight for every existing provider being surfaced/regenerated once, following the shared initial-check instructions below. If batch `canContinue: true`, show any warning and proceed to the "Local Authentication" follow-ups only if local was detected. Phase 3.2 will generate `AUTH_PROVIDERS` from `EXISTING_PROVIDERS` only.
 - **`keep-and-add`** (default — user wants to add one more) → Ask the user what to add. The provider selection question below should still be multi-select (the user could be adding multiple new providers in one go), but the existing providers are NOT in the list (they're already configured — the question is asking what's *new*). Common patterns:
   - User has Entra External ID, wants to add Local Auth → user selects "Local Authentication" → ask local follow-ups → Phase 3.2 merges
   - User has Entra External ID + Local, wants to add a *second* Entra External ID tenant → user selects "Entra External ID" → after collecting Authority/ClientId, ask: `"You already have an Entra External ID provider configured for tenant {existing-tenant}. This new one is a separate instance — give it a distinct ProviderName slug (used in site setting keys like Authentication/OpenIdConnect/{ProviderName}/* and in code as the provider id)."` Let the user pick a slug (default to the next incrementing number, e.g., `OpenIdConnect_2`) or pick a custom name (e.g., `EntraExternalId_Employee`).
@@ -306,7 +308,7 @@ If the user has NOT specified which provider(s) they want, use `AskUserQuestion`
 |----------|---------|
 | Which identity provider(s) do you want to use? (select all that apply) | Entra External ID (Recommended) — Customer identity with self-service sign-up (CIAM), Microsoft Entra ID — Azure AD / Entra ID for internal/employee sites, OpenID Connect — Okta, Auth0, or any OIDC-compliant provider, SAML2 — SAML 2.0 identity provider (ADFS, Shibboleth, Login.gov, etc.), WS-Federation — WS-Federation identity provider, Microsoft Account — Sign in with Microsoft personal/work account, Facebook — Sign in with Facebook, Google — Sign in with Google |
 
-**Before provider-specific follow-ups:** Read `${PLUGIN_ROOT}/skills/setup-auth/references/governance-preflight.md` and run `scripts/check-auth-governance.js` with the confirmed owning `--tenantId`, exact target environment/host, and all providers being configured or surfaced. This also applies to smart-inference and `keep-only` paths that skip the selection question. Show its blocked/unverified messages and stop on any non-allowed result, before any app-registration walkthrough or changes.
+**Before provider-specific follow-ups:** Read `${PLUGIN_ROOT}/skills/setup-auth/references/governance-preflight.md`. Skip the gate for workforce Entra-only setup. Otherwise run the initial `scripts/check-auth-governance.js` check once with confirmed owning `--tenantId`, exact environment/host, and all providers being configured or surfaced: workforce Entra -> exempt `entra-id`; Entra External ID -> governed `oidc`. This includes smart-inference and `keep-only` paths; reuse an initial result already obtained for the same unchanged context. Inspect batch `canContinue`: stop when false; when true, show any unavailable-read warning and continue without an extra prompt, even on exit 2. Retain the initial result and context per Check lifecycle for later phases. Never override known restrictions.
 
 **Blocked-message presentation:** Use this exact wording, replacing the placeholder with the disabled protocol/provider label(s): "Your administrator has restricted the use of [authentication Protocol/Provider] for this website. Contact your administrator if you need this setting enabled." Do not append policy-state summaries, portal/environment details, admin links, or configuration navigation unless the user explicitly asks for those details. Scope any no-change statement to this run or the read-only check, and disclose any earlier changes. Apply this format at every later preflight gate as well. Do not tell users to enable policies when the result is merely unverifiable.
 
@@ -1013,7 +1015,7 @@ For each setting the user wants to configure, create the site setting using `cre
 
 Applies to **OIDC providers** (Okta, Auth0, Entra External ID, and other OIDC). For SAML2, WS-Federation, social, or local auth, use the Phase 2.1 walkthroughs.
 
-Complete the governance preflight before this walkthrough, and rerun it immediately before configuring a real IdP app on the user's behalf. Governance approval does not replace the existing provisioning consent.
+Reuse the initial governance preflight result for this walkthrough and IdP provisioning, retaining any unavailable-read warning. Do not rerun it solely before configuring a real IdP app; follow Check lifecycle for context invalidation. The preflight does not replace the existing provisioning consent.
 
 Power Pages needs an OIDC **app registration** at the IDP, wired to this site. **How you set it up depends entirely on the identity provider**, so read the provider's own current documentation first.
 
@@ -1123,7 +1125,7 @@ Use `AskUserQuestion` to get approval:
 
 Reference: `${PLUGIN_ROOT}/skills/setup-auth/references/authentication-reference.md`
 
-Rerun the governance preflight for every provider the generated service/UI will surface before writing auth code. If blocked/unverified, stop without dropping providers or changing their existing settings. This setup-only gate is not browser runtime filtering.
+Reuse the initial governance preflight result for the selected providers, retaining any unavailable-read warning; do not reread policies for this phase. Follow Check lifecycle for context invalidation. This setup-only gate is not browser runtime filtering.
 
 ### Actions
 
@@ -1337,7 +1339,7 @@ Add a comment at the top of the authorization utilities:
 
 **Goal:** Create the login/logout button component and integrate it into the site's navigation.
 
-Rerun the governance preflight immediately before adding providers to the custom login/registration UI. Stop the selected batch on blocked/unverified results; preserve existing settings and disclose any earlier generated files.
+Reuse the initial governance preflight result when adding the selected providers to the custom login/registration UI, retaining any unavailable-read warning; do not reread policies for this phase. Follow Check lifecycle for context invalidation. On a stop, preserve existing settings and disclose any earlier generated files.
 
 ### Actions
 
@@ -2147,7 +2149,7 @@ source change.
 
 #### 8.1 Create Site Settings
 
-Rerun the governance preflight before creating/changing provider site settings, and again before deployment after any pause or target change. Stop on blocked/unverified results and disclose any earlier local changes; do not claim the entire run made no changes.
+Reuse the initial governance preflight result for provider site settings, retaining any unavailable-read warning; do not reread policies for this phase. Follow Check lifecycle for context invalidation. The fresh deployment check belongs to Phase 8.4, not this step. Disclose any earlier local changes; do not claim the entire run made no changes.
 
 The site needs provider-specific site settings. Check if `.powerpages-site/site-settings/` exists. Use the `create-site-setting.js` script for all site settings:
 
@@ -3011,7 +3013,7 @@ Use `AskUserQuestion`:
 |----------|---------|
 | Authentication and authorization are configured. To make login work, the site needs to be deployed. Would you like to deploy now? | Yes, deploy now (Recommended), No, I'll deploy later |
 
-**If "Yes, deploy now"**: Rerun the governance preflight against the confirmed deployment environment/host immediately before invoking `/deploy-site`. Deploy only when all selected providers are allowed. Stop on blocked/unverified results and leave earlier local artifacts intact.
+**If "Yes, deploy now"**: Rerun the governance preflight against the confirmed deployment environment/host immediately before invoking `/deploy-site`. Deploy only when batch `canContinue: true`, displaying any unavailable-read warning without claiming verified approval. Stop when batch `canContinue: false` and leave earlier local artifacts intact.
 
 **If "No"**: Remind the user:
 
