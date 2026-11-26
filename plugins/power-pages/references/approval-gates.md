@@ -469,7 +469,7 @@ When **removing** a gate, also remove its catalog row in the same PR.
 
 ---
 
-### 6.13 `create-site` (21 gates)
+### 6.13 `create-site` (22 gates)
 
 | ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
 |---|---|---|---|---|---|
@@ -488,6 +488,7 @@ When **removing** a gate, also remove its catalog row in the same PR.
 | `create-site:5.7.critique-blocked` | gate | progress | 5.7 | A critical design gate still fails after three critique rounds - *"Keep fixing / Continue and record it as a known issue / Stop here"* | nothing |
 | `create-site:7.review` | gate | plan | 7 | Live site ready — *"Would you like any changes?"* | nothing |
 | `create-site:8.deploy` | gate | plan | 8 | *"Deploy now (Recommended) / Skip for now"* — invokes `/deploy-site` on Yes; remaining `SAMPLE CONTENT` is listed and counted first, with Skip recommended | nothing |
+| `create-site:8.design-eval` | gate | plan | 8 (step 7) | After the final summary — *"Run design evaluation (Recommended) / Skip for now"* — dispatches `/design-eval`, whose own gates approve any site change | nothing |
 | `create-site:non-spa-1-select-model` | gate | plan | Non-SPA 1 | Confirm Enhanced data model with Bootstrap 5; Standard new-site creation is unavailable | nothing |
 | `create-site:non-spa-1-confirm-environment` | gate | consent | Non-SPA 1 | Confirm the exact Dataverse environment before non-SPA planning or provisioning | nothing |
 | `create-site:non-spa-1-confirm-capability` | gate | progress | Non-SPA 1 | Open the environment's direct admin URL and confirm **Switch to Enhanced Data Model** is on because no public read API exists | nothing |
@@ -820,6 +821,18 @@ changes are not rolled back.
 |---|---|---|---|---|---|
 | `manage-governance:2.2.consent` | disabled | consent | 2.2 | NLP-path consent after the resolved impact summary: *"Proceed with this change?"* — **Apply now / Cancel**. Fires PER CHANGE; implemented by 4.2.3, not a second approval. | nothing |
 | `manage-governance:4.2.3.consent` | disabled | consent | 4.2.3 | After rendering the live Current State / New State summary: *"Proceed with this change?"* — **Apply now / Cancel**. Fires PER LOOP ITERATION, including prerequisite parent-policy changes. Only a selected **Apply now** authorizes the POST. | nothing |
+
+---
+
+### 6.37 `design-eval` (2 gates + 1 data-gathering prompt)
+
+Evaluates a code site's design, writes a report under `docs/design-eval/`, and fixes only the issues the user picks. Both gates repeat once per evaluation round.
+
+| ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
+|---|---|---|---|---|---|
+| `design-eval:1.site-url` | not-a-gate | — | 1 | No running dev server can be found or started — asks for the URL where the site runs; nothing evaluated or changed yet | — |
+| `design-eval:6.fix-select` | gate | plan | 6 | After the summary — multi-select *"Which issues should I fix?"* over the top major issues, plus **None for now**. Fires PER ROUND. | nothing |
+| `design-eval:7.rerun` | gate | plan | 7 | After fixes were applied — *"Run again (Recommended) / Not now"*. Fires PER ROUND in which fixes were applied. | applied-design-fixes |
 
 ---
 

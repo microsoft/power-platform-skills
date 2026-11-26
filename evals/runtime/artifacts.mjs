@@ -3,7 +3,8 @@ import { parse as parseJs } from 'acorn';
 import { parseDocument } from 'yaml';
 import { lstat, readFile } from 'node:fs/promises';
 import { assertKeys, assertObject, confinedPath, relativePath } from './paths.mjs';
-import { inspectDocument, inspectSite } from './browser-checks.mjs';
+import { inspectDocument, inspectSite, siteContext } from './browser-checks.mjs';
+import { collectDesignEvidence, designSummary, gradeDesign } from './design-checks.mjs';
 import { buildSite } from './site-build.mjs';
 
 const textFields = ['requiredText', 'forbiddenText', 'requiredPatterns', 'forbiddenPatterns', 'minTextLength'];
@@ -83,8 +84,16 @@ export function validateContract(contract) {
     }
   }
   if (contract.site !== undefined) {
-    assertKeys(contract.site, ['root', 'routes'], 'site');
+    assertKeys(contract.site, ['root', 'routes', 'design'], 'site');
     relativePath(contract.site.root);
+    if (contract.site.design !== undefined) {
+      // Opt-in design grade: measured candidates plus a screenshot-seeing judge, scored by formula.
+      assertKeys(contract.site.design, ['failOn'], 'site design');
+      const failOn = contract.site.design.failOn ?? ['gate'];
+      if (!Array.isArray(failOn) || !failOn.length || failOn.some(item => !['gate', 'major'].includes(item)) || new Set(failOn).size !== failOn.length) {
+        throw new Error('site.design.failOn must list "gate" and/or "major"');
+      }
+    }
     if (!Array.isArray(contract.site.routes) || contract.site.routes.length === 0) {
       throw new Error('A site check requires routes');
     }
@@ -190,7 +199,7 @@ function textChecks(text, spec, add, prefix) {
   if (spec.minTextLength !== undefined) add(`${prefix}: substantive content`, normalize(text).length >= spec.minTextLength);
 }
 
-export async function gradeArtifacts({ contract, workDir, suiteDir, output = '', evidenceDir, signal, browser = true }) {
+export async function gradeArtifacts({ contract, workDir, suiteDir, output = '', evidenceDir, signal, browser = true, design = {} }) {
   validateContract(contract);
   const checks = [];
   const add = (name, passed) => checks.push({ name, passed: Boolean(passed) });
@@ -274,6 +283,7 @@ export async function gradeArtifacts({ contract, workDir, suiteDir, output = '',
         const inspected = await inspectSite({ distDir: built.distDir, routes, evidenceDir, signal });
         for (const check of inspected.checks) add(`${root} ${check.name}`, check.passed);
         for (const route of routes) textChecks(inspected.texts[route.path] ?? '', route, add, `${root} route ${route.path}`);
+        if (contract.site.design) await designChecks({ contract, built, routes, evidenceDir, signal, design, add, checks, root });
       } finally {
         await built.cleanup();
       }
@@ -309,7 +319,26 @@ export async function gradeArtifacts({ contract, workDir, suiteDir, output = '',
   };
 }
 
-export function registerArtifactGrader(registry) {
+async function designChecks({ contract, built, routes, evidenceDir, signal, design, add, checks, root }) {
+  // A missing judge or an unusable judge answer is a grading error, never a silent pass.
+  if (!design.judge || !design.model) throw new Error('Design grading needs a vision-capable judge model');
+  const failOn = contract.site.design.failOn ?? ['gate'];
+  const evidence = await collectDesignEvidence({
+    newContext: options => siteContext({ distDir: built.distDir, ...options }), routes, evidenceDir, signal,
+  });
+  const grade = await gradeDesign({ evidence, judge: design.judge, model: design.model, reasoningEffort: design.reasoningEffort, evidenceDir, signal });
+  const summary = designSummary(grade);
+  add(`${root} design: evidence complete`, grade.coverage.complete);
+  if (!grade.coverage.complete) checks.at(-1).evidence = grade.coverage.gaps.map(g => `${g.route} ${g.viewport} ${g.step}: ${g.error}`).join('; ');
+  add(`${root} design: no critical gate fails`, grade.failingGates.length === 0);
+  checks.at(-1).evidence = summary;
+  if (failOn.includes('major')) {
+    add(`${root} design: no major issue`, grade.counts.major === 0);
+    checks.at(-1).evidence = summary;
+  }
+}
+
+export function registerArtifactGrader(registry, { designJudge } = {}) {
   registry.register({
     metadata: {
       name: 'power-pages-artifacts', description: 'Offline document, source and ER outcome checks',
@@ -322,6 +351,7 @@ export function registerArtifactGrader(registry) {
         contract: JSON.parse(await readFile(input.config.contract, 'utf8')),
         suiteDir: input.config.suiteDir, workDir: input.trajectory.workDir,
         output: input.trajectory.output, evidenceDir: input.config.evidenceDir, signal: input.signal,
+        design: { judge: designJudge, model: input.config.judgeModel, reasoningEffort: input.config.judgeReasoningEffort },
       });
     },
   });

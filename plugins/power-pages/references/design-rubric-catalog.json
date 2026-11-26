@@ -1,0 +1,1379 @@
+{
+  "version": "2.3.1",
+  "severities": {
+    "major": {
+      "load": 1.0,
+      "definition": "A clear defect a visitor would notice, or one that blocks some visitors, that a design reviewer would ask to fix before shipping. Examples: text too faint to read, a layout that breaks on phones, no clear main action, placeholder text left on the page."
+    },
+    "minor": {
+      "load": 0.25,
+      "definition": "A polish or consistency problem that makes the site feel less finished but does not stop anyone using it. Examples: too many corner styles, a missing favicon, slightly uneven section spacing."
+    }
+  },
+  "efforts": {
+    "S": "Under 15 minutes, usually one CSS rule or token change.",
+    "M": "Under 2 hours, touches several components.",
+    "L": "Structural change to layout, content, or design system."
+  },
+  "scoring": {
+    "formula": "load = majors + 0.25 * minors; score = 5 - 4 * tanh(0.2 * load), per category, rounded to 2 decimals",
+    "penaltySteepness": 0.2,
+    "verdicts": [
+      {
+        "when": "gate",
+        "verdict": "Not ready",
+        "meaning": "At least one critical gate fails. These are the problems that most damage a first visit and must be fixed."
+      },
+      {
+        "when": "incomplete",
+        "verdict": "Incomplete",
+        "meaning": "No gate fails, but some pages, viewports, or checks could not be evaluated (see Coverage), so the site cannot be called ready."
+      },
+      {
+        "when": "major",
+        "verdict": "Needs revision",
+        "meaning": "No gate fails, but one or more major issues should be fixed before shipping."
+      },
+      {
+        "when": "otherwise",
+        "verdict": "Ready",
+        "meaning": "No gates fail and no major issues were found. Minor issues are left to judgement."
+      }
+    ]
+  },
+  "profiles": {
+    "full": {
+      "description": "The complete review: every measured candidate and every judgment item on every page, with category scores.",
+      "judgments": "all",
+      "measured": "all",
+      "scores": true
+    },
+    "first-impression": {
+      "description": "A quick check of the start page's first screens only (create-site Phase 5.2): the five-second test, one focal point, a clear primary action on desktop and mobile, fonts loaded, nothing overflowing. No category scores; the result is pass or fail.",
+      "judgments": [
+        "J-01",
+        "J-02",
+        "J-14",
+        "J-15"
+      ],
+      "measured": [
+        "RES-01",
+        "RES-02",
+        "RES-03",
+        "TYP-07",
+        "TYP-09"
+      ],
+      "scores": false,
+      "verdicts": [
+        {
+          "when": "gate",
+          "verdict": "First impression fails",
+          "meaning": "A critical gate fails on the start page's first screens."
+        },
+        {
+          "when": "incomplete",
+          "verdict": "Incomplete",
+          "meaning": "Some first-screen evidence could not be collected."
+        },
+        {
+          "when": "major",
+          "verdict": "First impression fails",
+          "meaning": "A major first-impression issue remains."
+        },
+        {
+          "when": "otherwise",
+          "verdict": "First impression passes",
+          "meaning": "No gate or major issue on the start page's first screens. This is not a full review."
+        }
+      ]
+    }
+  },
+  "categories": [
+    {
+      "id": "message",
+      "name": "Message & Persuasion",
+      "question": "Will visitors understand it, trust it, and act?",
+      "dimensions": [
+        "FI",
+        "AH",
+        "NF",
+        "CV",
+        "TP"
+      ]
+    },
+    {
+      "id": "usability",
+      "name": "Usability & Accessibility",
+      "question": "Can everyone use it easily, on any device?",
+      "dimensions": [
+        "UX",
+        "RA",
+        "IM"
+      ]
+    },
+    {
+      "id": "craft",
+      "name": "Visual Craft & Brand",
+      "question": "Does it look deliberate, cohesive, polished, and specific to this organization?",
+      "dimensions": [
+        "BC",
+        "DF"
+      ]
+    }
+  ],
+  "dimensions": {
+    "FI": {
+      "name": "First impression & clarity",
+      "question": "In the first five seconds, before scrolling, can a visitor tell what this is, who it is for, why to trust it, and what to do next?"
+    },
+    "AH": {
+      "name": "Attention & hierarchy",
+      "question": "Is there one obvious focal point per screen, and a clear reading order created by size, weight, and color?"
+    },
+    "NF": {
+      "name": "Narrative & page flow",
+      "question": "Does each page tell a story in a sensible order, with each section earning the next scroll and a strong ending?"
+    },
+    "CV": {
+      "name": "Copy & value communication",
+      "question": "Is the text real, specific, outcome-led, and consistent (including call-to-action labels), with no placeholder or leftover content?"
+    },
+    "TP": {
+      "name": "Trust & proof",
+      "question": "Does the site give honest, relevant reasons to believe it, placed where visitors would doubt?"
+    },
+    "UX": {
+      "name": "Cognitive fluency & usability",
+      "question": "Is the site effortless to use: simple navigation and forms, working links, no errors, and fast, stable loading?"
+    },
+    "RA": {
+      "name": "Responsive & accessible design",
+      "question": "Does it work on every screen size and for people with disabilities (WCAG 2.2 AA: contrast, keyboard, focus, labels, zoom, reduced motion)?"
+    },
+    "IM": {
+      "name": "Interaction & motion craft",
+      "question": "Do interactive elements respond with designed states (hover, focus, loading, empty, error), and does motion help rather than distract?"
+    },
+    "BC": {
+      "name": "Brand & visual coherence",
+      "question": "Do fonts, colors, shapes, icons, imagery, and motion form one system that feels specific to this organization?"
+    },
+    "DF": {
+      "name": "Detail & memorable finish",
+      "question": "Are alignment, spacing, crops, and small details refined, and does the site have a memorable signature moment?"
+    }
+  },
+  "issues": [
+    {
+      "id": "ACC-01",
+      "dimension": "RA",
+      "detection": "auto",
+      "severity": "major",
+      "effort": "S",
+      "title": "Text contrast below WCAG AA",
+      "trigger": "axe rule color-contrast reports at least one node.",
+      "fix": [
+        "Darken the text color or lighten the background until normal text is at least 4.5:1 and large text (24px, or 18.66px bold) is at least 3:1.",
+        "Make the change in the color tokens (for example --color-text-muted), not per component, so every usage is fixed at once.",
+        "Re-run the grader to confirm color-contrast is clean."
+      ],
+      "refs": [
+        "WCAG 1.4.3"
+      ],
+      "gate": "G3",
+      "gateWhen": "Gate G3 when any failing text is below 2.5:1."
+    },
+    {
+      "id": "ACC-02",
+      "dimension": "RA",
+      "detection": "auto",
+      "severity": "major",
+      "effort": "S",
+      "title": "Images or icons without a text alternative",
+      "trigger": "axe rules image-alt, role-img-alt, svg-img-alt, input-image-alt, area-alt, or object-alt report at least one node.",
+      "fix": [
+        "Add meaningful alt text that describes the image's purpose in context.",
+        "Use alt=\"\" for purely decorative images, and aria-hidden=\"true\" for decorative SVG icons.",
+        "Give icon-only controls an aria-label."
+      ],
+      "refs": [
+        "WCAG 1.1.1"
+      ]
+    },
+    {
+      "id": "ACC-03",
+      "dimension": "RA",
+      "detection": "auto",
+      "severity": "major",
+      "effort": "S",
+      "title": "Form controls without labels",
+      "trigger": "axe rules label, select-name, aria-input-field-name, aria-toggle-field-name, or label-title-only report at least one node.",
+      "fix": [
+        "Associate a visible <label for> with every input, select, and textarea.",
+        "Do not rely on placeholder text as the only label.",
+        "For a visually hidden label, use an sr-only class rather than removing the label."
+      ],
+      "refs": [
+        "WCAG 1.3.1",
+        "WCAG 4.1.2"
+      ],
+      "gate": "G3",
+      "gateWhen": "Gate G3 always: unlabeled form fields break the primary flow for screen-reader users."
+    },
+    {
+      "id": "ACC-04",
+      "dimension": "RA",
+      "detection": "auto",
+      "severity": "major",
+      "effort": "S",
+      "title": "Links or buttons without an accessible name",
+      "trigger": "axe rules link-name, button-name, or aria-command-name report at least one node.",
+      "fix": [
+        "Give icon-only links and buttons an aria-label that names the action (for example aria-label=\"Open menu\").",
+        "Make sure link text describes the destination; avoid empty anchors wrapping only an image without alt."
+      ],
+      "refs": [
+        "WCAG 2.4.4",
+        "WCAG 4.1.2"
+      ]
+    },
+    {
+      "id": "ACC-05",
+      "dimension": "RA",
+      "detection": "auto",
+      "severity": "minor",
+      "effort": "S",
+      "title": "Heading levels skipped or empty",
+      "trigger": "axe rules heading-order or empty-heading report at least one node.",
+      "fix": [
+        "Use heading levels in order (h1 → h2 → h3) and never skip a level for visual size; style with classes instead.",
+        "Remove empty heading elements or give them text."
+      ],
+      "refs": [
+        "WCAG 1.3.1"
+      ]
+    },
+    {
+      "id": "ACC-06",
+      "dimension": "RA",
+      "detection": "auto",
+      "severity": "minor",
+      "effort": "M",
+      "title": "Missing or misused landmarks",
+      "trigger": "axe rules region, landmark-one-main, landmark-no-duplicate-main, landmark-unique, landmark-banner-is-top-level, landmark-contentinfo-is-top-level, landmark-main-is-top-level, or landmark-complementary-is-top-level report at least one node.",
+      "fix": [
+        "Wrap the page in semantic landmarks: <header>, <nav>, exactly one <main>, and <footer>.",
+        "Move content that sits outside every landmark into the appropriate one."
+      ],
+      "refs": [
+        "WCAG 1.3.1"
+      ]
+    },
+    {
+      "id": "ACC-07",
+      "dimension": "RA",
+      "detection": "auto",
+      "severity": "major",
+      "effort": "S",
+      "title": "Document language or title missing",
+      "trigger": "axe rules html-has-lang, html-lang-valid, valid-lang, or document-title report a violation.",
+      "fix": [
+        "Set <html lang=\"en\"> (or the site's language).",
+        "Give every route a unique, descriptive <title> such as \"Services | Contoso\"."
+      ],
+      "refs": [
+        "WCAG 3.1.1",
+        "WCAG 2.4.2"
+      ]
+    },
+    {
+      "id": "ACC-08",
+      "dimension": "RA",
+      "detection": "auto",
+      "severity": "major",
+      "effort": "S",
+      "title": "Keyboard focus is not visible",
+      "trigger": "At least one of the first 20 keyboard tab stops shows no visible change (outline, box-shadow, border, background, color, underline, or transform) when focused.",
+      "fix": [
+        "Add a global rule such as :focus-visible { outline: 3px solid var(--color-focus); outline-offset: 2px; }.",
+        "Remove any outline: none / outline: 0 that has no replacement indicator.",
+        "Make sure the focus color has at least 3:1 contrast against adjacent colors."
+      ],
+      "refs": [
+        "WCAG 2.4.7",
+        "WCAG 2.4.11"
+      ],
+      "gate": "G3",
+      "gateWhen": "Gate G3 always: keyboard users cannot see where they are."
+    },
+    {
+      "id": "ACC-09",
+      "dimension": "RA",
+      "detection": "auto",
+      "severity": "minor",
+      "effort": "S",
+      "title": "Animations ignore prefers-reduced-motion",
+      "trigger": "With prefers-reduced-motion: reduce emulated, at least one element still has a CSS animation longer than 10ms, or a script-driven Web Animation is still running.",
+      "escalation": "major when at least one of those animations loops infinitely.",
+      "fix": [
+        "Wrap non-essential animations in @media (prefers-reduced-motion: no-preference) { ... }, or disable them in @media (prefers-reduced-motion: reduce).",
+        "Keep essential feedback such as loading spinners, but simplify them."
+      ],
+      "refs": [
+        "WCAG 2.3.3",
+        "WCAG 2.2.2"
+      ]
+    },
+    {
+      "id": "ACC-10",
+      "dimension": "RA",
+      "detection": "auto",
+      "severity": "minor",
+      "effort": "S",
+      "title": "Touch targets too small",
+      "trigger": "axe rule target-size reports at least one node (targets smaller than 24×24 CSS px without sufficient spacing).",
+      "escalation": "major when 5 or more targets fail.",
+      "fix": [
+        "Give interactive elements at least 24×24 px of hit area (44×44 px is the recommended size on touch screens) using padding or min-height/min-width.",
+        "Add spacing between adjacent small targets such as icon rows and footer links."
+      ],
+      "refs": [
+        "WCAG 2.5.8"
+      ]
+    },
+    {
+      "id": "ACC-11",
+      "dimension": "RA",
+      "detection": "auto",
+      "severity": "major",
+      "effort": "M",
+      "title": "Other WCAG violations",
+      "trigger": "Any other WCAG 2.2 A/AA axe rule reports a violation. All such rules form one issue, listed rule by rule as instances.",
+      "escalation": "major when any of those rules has axe impact critical or serious; otherwise minor.",
+      "fix": [
+        "Follow the axe help link for the specific rule.",
+        "Fix the pattern in the shared component so every instance is fixed."
+      ],
+      "refs": [
+        "WCAG 2.2 AA"
+      ]
+    },
+    {
+      "id": "ACC-12",
+      "dimension": "RA",
+      "detection": "auto",
+      "severity": "major",
+      "effort": "S",
+      "title": "Pinch-zoom disabled",
+      "trigger": "axe rule meta-viewport reports a violation (user-scalable=no or maximum-scale below 2).",
+      "fix": [
+        "Use <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"> and remove user-scalable=no and maximum-scale."
+      ],
+      "refs": [
+        "WCAG 1.4.4"
+      ]
+    },
+    {
+      "id": "RES-01",
+      "dimension": "RA",
+      "detection": "auto",
+      "severity": "major",
+      "effort": "M",
+      "title": "Horizontal scrolling on narrow screens",
+      "trigger": "At a mobile (390px) or tablet width, the page is wider than the screen, so it scrolls sideways.",
+      "fix": [
+        "Find the offending elements listed in the evidence (they extend past the right edge).",
+        "Replace fixed widths with max-width: 100% / width: min(100%, Npx), let flex rows wrap (flex-wrap: wrap), and collapse multi-column grids at small breakpoints.",
+        "If a wide table must keep its columns, wrap it in an element with overflow-x: auto, tabindex=\"0\", role=\"region\", and an aria-label, so it scrolls inside the page and stays reachable by keyboard.",
+        "Add overflow-wrap: anywhere to long words or URLs.",
+        "Do not hide the symptom with body { overflow-x: hidden } unless the overflowing element is purely decorative."
+      ],
+      "refs": [
+        "WCAG 1.4.10"
+      ],
+      "gate": "G5",
+      "gateWhen": "Gate G5 when it happens at the mobile width."
+    },
+    {
+      "id": "RES-02",
+      "dimension": "RA",
+      "detection": "auto",
+      "severity": "major",
+      "effort": "S",
+      "title": "Missing responsive viewport meta tag",
+      "trigger": "No <meta name=\"viewport\"> containing width=device-width.",
+      "fix": [
+        "Add <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"> to the HTML entry point."
+      ],
+      "refs": [
+        "WCAG 1.4.10"
+      ],
+      "gate": "G5",
+      "gateWhen": "Gate G5 always: without it phones render a shrunken desktop page."
+    },
+    {
+      "id": "RES-03",
+      "dimension": "RA",
+      "detection": "auto",
+      "severity": "major",
+      "effort": "M",
+      "title": "Text elements overlap",
+      "trigger": "Two visible, unrelated text elements overlap by at least 30% of the smaller element's area (at least 50px²) at any viewport. Elements under 0.5 opacity or aria-hidden are ignored.",
+      "fix": [
+        "Remove fixed heights and negative margins from text containers so they can grow with content.",
+        "Replace absolute positioning of text with flex or grid layout.",
+        "Check line-height values below 1 on multi-line headings."
+      ],
+      "gate": "G5",
+      "gateWhen": "Gate G5 when it happens at the mobile width."
+    },
+    {
+      "id": "RES-04",
+      "dimension": "RA",
+      "detection": "auto",
+      "severity": "minor",
+      "effort": "S",
+      "title": "Text clipped by its container",
+      "trigger": "A text element with overflow: hidden has content larger than its box, and no intentional truncation (text-overflow: ellipsis or line-clamp) is set.",
+      "fix": [
+        "If a wide table, row, or card grid is cut off by a wrapper with overflow: hidden, let the wrapper scroll sideways (overflow-x: auto) or stack the columns on small screens, so no content becomes unreachable. A wrapper that scrolls must be reachable by keyboard: give it tabindex=\"0\", role=\"region\", and an aria-label that names its content.",
+        "Remove fixed heights and widths on text containers, or use min-height.",
+        "If truncation is intended, make it explicit with text-overflow: ellipsis or line-clamp, and expose the full text (for example in a title attribute or a detail view)."
+      ],
+      "escalation": "major when it happens at the mobile width.",
+      "gate": "G5",
+      "gateWhen": "Gate G5 (and major) when it happens at the mobile width."
+    },
+    {
+      "id": "RES-05",
+      "dimension": "RA",
+      "detection": "auto",
+      "severity": "major",
+      "effort": "S",
+      "title": "Body text too small on mobile",
+      "trigger": "At the mobile viewport, at least one paragraph-like text block (at least 40 characters) is rendered below 14px.",
+      "fix": [
+        "Set the base body size to at least 16px and do not scale it down at small breakpoints.",
+        "Use clamp() for fluid sizes with a readable minimum, for example font-size: clamp(1rem, 0.95rem + 0.3vw, 1.125rem)."
+      ]
+    },
+    {
+      "id": "RES-06",
+      "dimension": "RA",
+      "detection": "auto",
+      "severity": "major",
+      "effort": "S",
+      "title": "Fixed header takes too much of the mobile screen",
+      "trigger": "At the mobile viewport, a fixed or sticky full-width element at the top of the screen is taller than 20% of the viewport height.",
+      "fix": [
+        "Collapse navigation into a menu button on small screens.",
+        "Reduce header padding and logo size at small breakpoints, or make the header non-sticky on mobile."
+      ]
+    },
+    {
+      "id": "INT-01",
+      "dimension": "IM",
+      "detection": "auto",
+      "severity": "minor",
+      "effort": "S",
+      "title": "Buttons show no hover feedback",
+      "trigger": "At the desktop viewport, at least half of the sampled buttons and button-styled links (up to 8) show no visual change on hover. The link for the current page (aria-current or an active class) and skip links or other controls kept off-screen until focused are not sampled.",
+      "fix": [
+        "Add a hover state to buttons and CTA links: a background or color shift, underline, shadow, or a small translate.",
+        "Add transition: background-color .15s, color .15s, transform .15s so it feels smooth."
+      ]
+    },
+    {
+      "id": "INT-02",
+      "dimension": "UX",
+      "detection": "auto",
+      "severity": "minor",
+      "effort": "S",
+      "title": "Dead links",
+      "trigger": "A visible link has an empty href, href=\"#\", or a javascript: URL.",
+      "escalation": "major when the dead link is inside the header or navigation.",
+      "fix": [
+        "Point every link to a real route or section anchor.",
+        "If the element triggers an action rather than navigating, use a <button>.",
+        "Remove navigation items for pages that do not exist yet."
+      ]
+    },
+    {
+      "id": "INT-03",
+      "dimension": "UX",
+      "detection": "auto",
+      "severity": "major",
+      "effort": "M",
+      "title": "JavaScript errors at runtime",
+      "trigger": "An uncaught exception or console.error occurs while the page loads.",
+      "fix": [
+        "Open the browser console, reproduce the error, and fix the failing component.",
+        "Guard data-dependent rendering against undefined values and show a loading or empty state instead."
+      ]
+    },
+    {
+      "id": "INT-04",
+      "dimension": "UX",
+      "detection": "auto",
+      "severity": "major",
+      "effort": "S",
+      "title": "Failed resource requests",
+      "trigger": "A stylesheet, script, font, or data request returns HTTP 400 or higher or fails to load (images are covered by IMG-01).",
+      "fix": [
+        "Correct the asset path (check the build base path and the public folder).",
+        "Remove references to assets that no longer exist.",
+        "For API calls, handle the error and show a user-facing message."
+      ]
+    },
+    {
+      "id": "TYP-01",
+      "dimension": "AH",
+      "detection": "auto",
+      "severity": "major",
+      "effort": "S",
+      "title": "Page has no H1, or more than one",
+      "trigger": "The page has no visible h1 (major), or more than one visible h1 (minor, variant=multiple).",
+      "fix": [
+        "Give each page exactly one h1 that states the page's main topic. It is usually the hero headline.",
+        "Demote any other h1 elements to h2."
+      ]
+    },
+    {
+      "id": "TYP-02",
+      "dimension": "AH",
+      "detection": "auto",
+      "severity": "major",
+      "effort": "S",
+      "title": "Weak typographic scale",
+      "trigger": "At the desktop viewport, h1 font size divided by body text size is below 1.6.",
+      "escalation": "minor when the ratio is between 1.6 and 2.0.",
+      "fix": [
+        "Make the h1 dramatically larger than body text: aim for 2.5–3.5× on desktop (for example clamp(2.5rem, 5vw, 4.5rem)).",
+        "Define a modular scale (for example 1.25 or 1.333) as tokens (--text-sm … --text-5xl) and use it everywhere."
+      ]
+    },
+    {
+      "id": "TYP-03",
+      "dimension": "RA",
+      "detection": "auto",
+      "severity": "minor",
+      "effort": "S",
+      "title": "Body text below 16px on desktop",
+      "trigger": "At the desktop viewport, the dominant paragraph text size is below 16px.",
+      "fix": [
+        "Set body text to 16–18px (1rem–1.125rem). Use smaller sizes only for captions and metadata."
+      ]
+    },
+    {
+      "id": "TYP-04",
+      "dimension": "DF",
+      "detection": "auto",
+      "severity": "major",
+      "effort": "S",
+      "title": "Cramped or loose line height",
+      "trigger": "Multi-line paragraph text (at least 80 characters and 2 or more rendered lines, excluding headings and navigation) with line-height/font-size below 1.3 (major) or above 2.0 (minor, variant=loose).",
+      "fix": [
+        "Use line-height 1.5–1.7 for body text and 1.05–1.25 for large headings.",
+        "Set it once on body and on heading tokens instead of per component."
+      ]
+    },
+    {
+      "id": "TYP-05",
+      "dimension": "DF",
+      "detection": "auto",
+      "severity": "minor",
+      "effort": "S",
+      "title": "Lines too long to read comfortably",
+      "trigger": "At the desktop viewport, a paragraph of at least 150 characters wraps onto 2 or more lines at more than about 90 characters per line.",
+      "fix": [
+        "Constrain prose with max-width: 65ch–75ch on paragraphs or their container."
+      ]
+    },
+    {
+      "id": "TYP-06",
+      "dimension": "BC",
+      "detection": "auto",
+      "severity": "minor",
+      "effort": "S",
+      "title": "Too many font families",
+      "trigger": "More than 3 distinct primary font families render visible text.",
+      "fix": [
+        "Limit the design to a display font, a body font, and optionally a monospace font, declared as --font-heading, --font-body, and --font-mono.",
+        "Replace stray font-family declarations with the tokens."
+      ]
+    },
+    {
+      "id": "TYP-07",
+      "dimension": "BC",
+      "detection": "auto",
+      "severity": "major",
+      "effort": "S",
+      "title": "Declared web font did not load",
+      "trigger": "A font face fails to load, or visible text declares a non-system primary family that is not available, so text silently falls back.",
+      "fix": [
+        "Check the Google Fonts <link> (family names, weights, display=swap) or the @font-face src URLs.",
+        "Make sure the family name in CSS exactly matches the loaded font, including quotes and spaces.",
+        "Load every weight that is used."
+      ],
+      "gate": "G6",
+      "gateWhen": "Gate G6 always."
+    },
+    {
+      "id": "TYP-08",
+      "dimension": "BC",
+      "detection": "auto",
+      "severity": "minor",
+      "effort": "M",
+      "title": "Font-size sprawl",
+      "trigger": "At the desktop viewport, more than 10 distinct font sizes render visible text.",
+      "fix": [
+        "Define a type scale of 6–8 sizes as tokens and map every text style onto it.",
+        "Replace one-off pixel sizes with the nearest scale step."
+      ]
+    },
+    {
+      "id": "CLR-01",
+      "dimension": "BC",
+      "detection": "auto",
+      "severity": "minor",
+      "effort": "M",
+      "title": "Color palette sprawl",
+      "trigger": "More than 10 visually distinct chromatic colors (saturation 0.15 or higher, perceptually clustered) are used for text, backgrounds, or borders.",
+      "fix": [
+        "Consolidate to a palette of primary, secondary, accent, plus neutrals, defined as CSS variables.",
+        "Replace near-duplicate one-off colors with the nearest token."
+      ]
+    },
+    {
+      "id": "CLR-02",
+      "dimension": "BC",
+      "detection": "auto",
+      "severity": "minor",
+      "effort": "M",
+      "title": "No color design tokens",
+      "trigger": "No CSS custom properties with color values are defined on :root or html, and no utility-class color system is in use (fewer than 10 classes such as bg-blue-500).",
+      "fix": [
+        "Define --color-primary, --color-accent, --color-bg, --color-surface, --color-text, --color-text-muted, and --color-border on :root.",
+        "Replace hard-coded colors in components with var(--color-…)."
+      ]
+    },
+    {
+      "id": "LAY-01",
+      "dimension": "DF",
+      "detection": "auto",
+      "severity": "minor",
+      "effort": "M",
+      "title": "Spacing does not follow a scale",
+      "trigger": "At the desktop viewport, more than 30% of distinct margin/padding/gap values up to 160px are not multiples of 4px, or more than 24 distinct values are used. Larger values are treated as layout, not spacing.",
+      "fix": [
+        "Adopt a spacing scale (4, 8, 12, 16, 24, 32, 48, 64, 96) as --space-* tokens.",
+        "Replace arbitrary values with the nearest step."
+      ]
+    },
+    {
+      "id": "LAY-02",
+      "dimension": "BC",
+      "detection": "auto",
+      "severity": "minor",
+      "effort": "S",
+      "title": "Inconsistent corner radii",
+      "trigger": "More than 6 distinct non-zero border-radius values are used (999px+ pill values count as one).",
+      "fix": [
+        "Define 2–3 radius tokens (--radius-sm, --radius-md, --radius-pill) and apply them consistently by component type."
+      ]
+    },
+    {
+      "id": "LAY-03",
+      "dimension": "BC",
+      "detection": "auto",
+      "severity": "minor",
+      "effort": "S",
+      "title": "Inconsistent shadows",
+      "trigger": "More than 6 distinct box-shadow values are used.",
+      "fix": [
+        "Define 2–3 elevation tokens (--shadow-sm, --shadow-md, --shadow-lg) and use only those."
+      ]
+    },
+    {
+      "id": "CON-01",
+      "dimension": "CV",
+      "detection": "auto",
+      "severity": "major",
+      "effort": "S",
+      "title": "Placeholder or garbage text visible",
+      "trigger": "Visible text or the title contains lorem ipsum, undefined, NaN, null, [object Object], unrendered template syntax ({{ }}, ${ }), or __UPPER_CASE__ tokens.",
+      "fix": [
+        "Replace placeholder copy with real content.",
+        "For undefined/NaN/[object Object], fix the data binding and add fallbacks for missing values.",
+        "Replace __TOKEN__ values left by the scaffold (for example __SITE_NAME__)."
+      ]
+    },
+    {
+      "id": "CON-02",
+      "dimension": "CV",
+      "detection": "auto",
+      "severity": "major",
+      "effort": "S",
+      "title": "Scaffold or template leftovers",
+      "trigger": "Visible text or the title contains known scaffold strings (create-site placeholder screens such as \"Waiting for your input\" or \"Initializing...\", framework defaults such as \"Vite + React\" or \"React App\", or generic text such as \"Your Company\" or \"Welcome to your site\").",
+      "fix": [
+        "Replace the scaffold page or component with the real implementation.",
+        "Set a real <title> and site name."
+      ]
+    },
+    {
+      "id": "CON-03",
+      "dimension": "DF",
+      "detection": "auto",
+      "severity": "minor",
+      "effort": "S",
+      "title": "Missing meta description or favicon",
+      "trigger": "No non-empty <meta name=\"description\">, or no <link rel=\"icon\">.",
+      "fix": [
+        "Add a 120–160 character meta description per page.",
+        "Add a favicon that matches the brand (SVG preferred), with an apple-touch-icon."
+      ]
+    },
+    {
+      "id": "CON-04",
+      "dimension": "DF",
+      "detection": "auto",
+      "severity": "minor",
+      "effort": "S",
+      "title": "Empty visible section",
+      "trigger": "A visible section or main-level block at least 200px tall contains no text, media, or background image.",
+      "fix": [
+        "Remove the empty container, or fill it with the intended content.",
+        "If content loads asynchronously, show a skeleton or empty-state message instead of a blank block."
+      ]
+    },
+    {
+      "id": "IMG-01",
+      "dimension": "DF",
+      "detection": "auto",
+      "severity": "major",
+      "effort": "S",
+      "title": "Broken images",
+      "trigger": "A visible <img> finished loading with naturalWidth 0, or its request failed.",
+      "fix": [
+        "Fix the image path. Assets in the public folder are referenced from the site root.",
+        "Replace hot-linked images with locally hosted, optimized files.",
+        "Set a graceful fallback (background color plus alt text) for remote images."
+      ]
+    },
+    {
+      "id": "IMG-02",
+      "dimension": "DF",
+      "detection": "auto",
+      "severity": "major",
+      "effort": "S",
+      "title": "Distorted (stretched or squashed) images",
+      "trigger": "A visible image uses object-fit: fill and its rendered aspect ratio differs from its natural aspect ratio by more than 5%.",
+      "fix": [
+        "Add object-fit: cover (or contain) and set an explicit aspect-ratio on the image box.",
+        "Never set both width and height to fixed values without object-fit."
+      ]
+    },
+    {
+      "id": "IMG-03",
+      "dimension": "DF",
+      "detection": "auto",
+      "severity": "major",
+      "effort": "S",
+      "title": "Upscaled, blurry images",
+      "trigger": "A visible image at least 150px wide is rendered wider than its natural pixel width.",
+      "fix": [
+        "Use a source at least 2× the rendered width for high-DPI screens, served via srcset/sizes.",
+        "If no larger source exists, render the image smaller."
+      ]
+    },
+    {
+      "id": "IMG-04",
+      "dimension": "TP",
+      "detection": "auto",
+      "severity": "major",
+      "effort": "S",
+      "title": "Placeholder image services",
+      "trigger": "An image is served from a placeholder service (placehold.co, via.placeholder.com, picsum.photos, dummyimage.com, placekitten.com, fakeimg.pl, loremflickr.com, placeimg.com).",
+      "fix": [
+        "Replace with real, relevant imagery: brand photography or properly licensed stock images.",
+        "If no image is available, use a deliberate illustration or a typographic treatment instead of a placeholder."
+      ]
+    },
+    {
+      "id": "IMG-05",
+      "dimension": "UX",
+      "detection": "auto",
+      "severity": "minor",
+      "effort": "S",
+      "title": "Oversized image files",
+      "trigger": "An image rendered at least 50px wide has a natural width more than 4× its largest rendered width (more than 2× even on a 2× display).",
+      "fix": [
+        "Resize to about 2× the largest rendered width, and serve responsive sizes with srcset.",
+        "Use modern formats (WebP/AVIF) and loading=\"lazy\" below the fold."
+      ]
+    },
+    {
+      "id": "PRF-01",
+      "dimension": "UX",
+      "detection": "auto",
+      "severity": "minor",
+      "effort": "M",
+      "title": "Layout shifts during load",
+      "trigger": "Cumulative Layout Shift (no recent input) is above 0.1.",
+      "escalation": "major when CLS is above 0.25.",
+      "fix": [
+        "Give images and embeds explicit width/height or aspect-ratio.",
+        "Reserve space for async content with skeletons.",
+        "Load fonts with font-display: swap and matched fallback metrics (size-adjust) to limit text reflow."
+      ]
+    },
+    {
+      "id": "PRF-02",
+      "dimension": "UX",
+      "detection": "auto",
+      "severity": "minor",
+      "effort": "S",
+      "title": "Web fonts block text rendering",
+      "trigger": "A Google Fonts stylesheet without display=swap/optional/fallback, or an @font-face with font-display auto or block.",
+      "fix": [
+        "Append &display=swap to the Google Fonts URL, or set font-display: swap in @font-face rules.",
+        "Preconnect to fonts.googleapis.com and fonts.gstatic.com."
+      ]
+    },
+    {
+      "id": "PRF-03",
+      "dimension": "UX",
+      "detection": "auto",
+      "severity": "minor",
+      "effort": "M",
+      "title": "Heavy page weight",
+      "trigger": "Images, fonts, stylesheets, and documents downloaded by the page exceed 4 MB in total. Scripts are excluded so dev-server builds are not penalized.",
+      "fix": [
+        "Compress and resize images (usually the main cause).",
+        "Lazy-load below-the-fold media, and avoid shipping unused fonts and weights."
+      ]
+    },
+    {
+      "id": "AES-01",
+      "dimension": "BC",
+      "detection": "auto",
+      "severity": "minor",
+      "effort": "S",
+      "title": "Default or overused typefaces",
+      "trigger": "The primary heading or body font is one of Inter, Roboto, Open Sans, Lato, Arial, Helvetica, Segoe UI, system-ui, or a generic family.",
+      "escalation": "major when both the heading and body fonts are on the list (no typographic choice was made).",
+      "fix": [
+        "Choose a distinctive pairing that fits the brand (see create-site design-aesthetics: for example Fraunces + Satoshi, or IBM Plex Sans + JetBrains Mono).",
+        "Load it from Google Fonts and apply it via --font-heading and --font-body."
+      ]
+    },
+    {
+      "id": "AES-02",
+      "dimension": "BC",
+      "detection": "auto",
+      "severity": "minor",
+      "effort": "S",
+      "title": "Cliché purple gradient on white",
+      "trigger": "A gradient covering at least 15% of the first viewport uses two or more purple/violet stops (hue 245–295°, saturation 0.3 or higher) on a near-white page background.",
+      "fix": [
+        "Pick a brand-driven palette with one dominant color and a sharp accent instead of the stock AI purple gradient.",
+        "If a gradient is wanted, derive its stops from the brand tokens and layer it subtly."
+      ]
+    },
+    {
+      "id": "AES-03",
+      "dimension": "BC",
+      "detection": "auto",
+      "severity": "minor",
+      "effort": "M",
+      "title": "Flat, atmosphere-free backgrounds",
+      "trigger": "At the desktop viewport, every large section (200px or taller) shares one solid background color and no element uses a background image or gradient.",
+      "fix": [
+        "Create depth: alternate tinted surface sections, layer subtle gradients, or add a pattern or texture to the hero.",
+        "Use background changes to separate content sections."
+      ]
+    },
+    {
+      "id": "AES-04",
+      "dimension": "IM",
+      "detection": "auto",
+      "severity": "minor",
+      "effort": "S",
+      "title": "No motion or micro-interaction at all",
+      "trigger": "No element defines a CSS transition or animation with non-zero duration.",
+      "fix": [
+        "Add one orchestrated page-load reveal (staggered fade-up), plus hover transitions on buttons and cards.",
+        "Wrap them in prefers-reduced-motion guards."
+      ]
+    },
+    {
+      "id": "J-01",
+      "dimension": "AH",
+      "detection": "judgment",
+      "severity": "major",
+      "effort": "M",
+      "title": "No clear focal point in the first viewport",
+      "trigger": "FAIL only if, in the desktop fold screenshot, you cannot name a single dominant element (headline or hero) within 2 seconds: several elements compete at similar size and weight, or the headline is visually weaker than secondary content.",
+      "pass_anchor": "One headline is clearly the largest, highest-contrast text, and the eye lands on it first.",
+      "fix": [
+        "Make one headline dominant through size, weight, and contrast; demote competing elements.",
+        "Reduce the number of items in the first viewport to headline, one supporting line, and one or two actions."
+      ],
+      "gate": "G2",
+      "gateWhen": "Gate G2 always.",
+      "fail_example": "The hero has a large headline, an equally large rotating banner, and three bright buttons of the same size."
+    },
+    {
+      "id": "J-02",
+      "dimension": "FI",
+      "detection": "judgment",
+      "severity": "major",
+      "effort": "S",
+      "title": "No dominant primary call to action",
+      "applies": "Landing, home, and marketing pages whose job is to move a visitor to act. Mark n/a for pages whose main content is a form (the visitor already chose to act, and the form is the next step; see J-25) and for pages with no single primary action.",
+      "trigger": "FAIL only if the desktop or mobile fold screenshot has no visually primary action (a filled, high-contrast button), or several actions have equal visual weight so no primary is distinguishable.",
+      "pass_anchor": "Exactly one filled, accent-colored button stands out, and any secondary actions are visibly quieter (outline or text style).",
+      "fix": [
+        "Style one action as primary (filled accent color) and the others as secondary (outline or ghost).",
+        "Place the primary action in the hero, near the headline."
+      ],
+      "gate": "G1",
+      "gateWhen": "Gate G1 always.",
+      "fail_example": "Two filled accent buttons ('Learn more' and 'Sign up') sit side by side with equal weight."
+    },
+    {
+      "id": "J-03",
+      "dimension": "DF",
+      "detection": "judgment",
+      "severity": "minor",
+      "effort": "M",
+      "title": "Misaligned content edges",
+      "trigger": "FAIL only if, in the desktop full-page screenshot, section content visibly starts at different left edges or container widths with no apparent intent (for example one section is flush-left while the others are inset).",
+      "pass_anchor": "Content snaps to a consistent container and grid. Intentional full-bleed sections are fine.",
+      "fix": [
+        "Use one shared container component (max-width plus horizontal padding) for every section.",
+        "Align grids to the same column structure."
+      ],
+      "fail_example": "The features section is flush to the left edge while every other section is inset in a centered container."
+    },
+    {
+      "id": "J-04",
+      "dimension": "DF",
+      "detection": "judgment",
+      "severity": "minor",
+      "effort": "S",
+      "title": "Inconsistent vertical rhythm",
+      "trigger": "FAIL only if, in the full-page screenshot, the space between sections or between a heading and its content is visibly inconsistent (for example one section is cramped while the others breathe, or there is a large accidental gap).",
+      "pass_anchor": "Sections have consistent padding, and heading-to-content spacing repeats predictably.",
+      "fix": [
+        "Use a single section padding token (for example --space-section: clamp(4rem, 8vw, 8rem)).",
+        "Use a consistent stack spacing for heading → body → actions."
+      ],
+      "fail_example": "One section has 24px of padding and the next has 160px, with no visual reason."
+    },
+    {
+      "id": "J-05",
+      "dimension": "BC",
+      "detection": "judgment",
+      "severity": "major",
+      "effort": "M",
+      "title": "Same component styled inconsistently",
+      "trigger": "FAIL only if components that play the same role look different without a reason: buttons of the same priority with different shapes, sizes, or colors, or cards in the same list with different padding, radius, or heading styles.",
+      "pass_anchor": "Every button of a given priority, and every card in a set, is visually identical apart from content.",
+      "fix": [
+        "Extract shared Button and Card components with variants (primary, secondary, ghost) and use them everywhere.",
+        "Delete one-off styling."
+      ],
+      "fail_example": "Primary buttons are rounded on Home but square on Contact; cards in one grid have different padding."
+    },
+    {
+      "id": "J-06",
+      "dimension": "RA",
+      "detection": "judgment",
+      "severity": "major",
+      "effort": "M",
+      "title": "Mobile layout visibly broken",
+      "trigger": "FAIL only for concrete breakage in the mobile screenshots that auto checks did not already report: content cut off or pushed off-screen; text or elements overlapping; columns so narrow that words break mid-word or run one or two characters per line; the page headline missing from the first mobile screen because of the stacking order; or a navigation that cannot be opened or used. Cramped but readable layouts (cards side by side whose labels wrap, table values that wrap onto two lines, a less-than-ideal section order) are not breakage; judge them with J-26. When in doubt, pass.",
+      "coveredBy": [
+        "RES-01",
+        "RES-03",
+        "RES-04"
+      ],
+      "pass_anchor": "Every element is fully visible and readable without overlap, the headline is on the first mobile screen, and the navigation works, even if some parts look cramped.",
+      "fix": [
+        "Collapse multi-column grids to one column below about 640px.",
+        "Reorder with flex order or grid areas so the headline and primary action come first.",
+        "Use a hamburger or disclosure menu for navigation on mobile."
+      ],
+      "gate": "G5",
+      "gateWhen": "Gate G5 always.",
+      "fail_example": "On mobile, a pricing table's right two columns are cut off at the screen edge, and the price text overlaps the button below it."
+    },
+    {
+      "id": "J-07",
+      "dimension": "DF",
+      "detection": "judgment",
+      "severity": "minor",
+      "effort": "S",
+      "title": "Imagery mismatched or poorly cropped",
+      "trigger": "FAIL only if an image clearly does not relate to the adjacent content, or its crop cuts off the important subject (for example faces or product).",
+      "pass_anchor": "Images support the message and their subjects are framed well.",
+      "fix": [
+        "Choose images that depict the actual service, product, or audience.",
+        "Use object-position to keep the subject in frame, and check every breakpoint."
+      ],
+      "fail_example": "A photo of a laptop illustrates a rowing club's 'Our boats' section; a portrait is cropped through the eyes."
+    },
+    {
+      "id": "J-08",
+      "dimension": "BC",
+      "detection": "judgment",
+      "severity": "major",
+      "effort": "L",
+      "title": "Generic template look",
+      "trigger": "FAIL only if the page is the stock pattern (centered hero with a gradient, a row of 3–4 identical icon cards, a CTA band, then the footer) and has NO distinctive element: no custom layout, imagery, typographic moment, or brand motif.",
+      "pass_anchor": "At least one deliberate, memorable design move (an editorial layout, a strong typographic treatment, custom illustration, or a distinctive color story).",
+      "fix": [
+        "Introduce one signature element: an asymmetric hero, an oversized typographic headline, a brand pattern, or real photography.",
+        "Break the uniform card grid (vary sizes, use a bento layout, or turn the cards into a narrative sequence)."
+      ],
+      "gate": "G7",
+      "gateWhen": "Gate G7 always.",
+      "fail_example": "Centered gradient hero, a row of three icon cards, a CTA band, then the footer, with stock icons and no brand imagery."
+    },
+    {
+      "id": "J-09",
+      "dimension": "BC",
+      "detection": "judgment",
+      "severity": "minor",
+      "effort": "S",
+      "title": "Accent color not reserved for emphasis",
+      "trigger": "FAIL only if the accent or CTA color is used on so many non-interactive elements that actions no longer stand out, or several saturated colors compete with no clear accent.",
+      "pass_anchor": "One accent color marks actions and key highlights, and the rest of the palette is quieter.",
+      "fix": [
+        "Reserve the accent color for primary actions and one or two highlights per screen.",
+        "Move decorative usages to tinted neutrals or the secondary color."
+      ],
+      "fail_example": "The accent orange is used for headings, borders, icons, and backgrounds, so the orange button no longer stands out."
+    },
+    {
+      "id": "J-10",
+      "dimension": "BC",
+      "detection": "judgment",
+      "severity": "minor",
+      "effort": "M",
+      "title": "Mixed visual language",
+      "trigger": "FAIL only if styles visibly clash: mixed icon sets (outline mixed with filled, or emoji used as UI icons), playful rounded elements next to sharp corporate ones, or illustrations in conflicting styles.",
+      "pass_anchor": "Icons, corners, illustrations, and imagery feel like one family.",
+      "fix": [
+        "Use a single icon library and style (for example all outline at a 1.5px stroke).",
+        "Replace emoji used as UI icons with SVG icons.",
+        "Align corner radius and illustration style to the brand tokens."
+      ],
+      "fail_example": "Outline icons in the header, filled icons in the features, and emoji used as bullet icons in the footer."
+    },
+    {
+      "id": "J-11",
+      "dimension": "CV",
+      "detection": "judgment",
+      "severity": "minor",
+      "effort": "S",
+      "title": "Copy quality problems",
+      "trigger": "FAIL only for visible copy defects: obvious typos, the same blurb repeated across cards, sentences cut off mid-way, or filler marketing text that says nothing specific about the organization.",
+      "pass_anchor": "Copy is specific to the site's purpose, varied, and error-free.",
+      "fix": [
+        "Rewrite the card and feature copy so it is specific and distinct.",
+        "Proofread headings and buttons."
+      ],
+      "fail_example": "All three feature cards say 'We deliver high-quality solutions tailored to your needs.'"
+    },
+    {
+      "id": "J-12",
+      "dimension": "RA",
+      "detection": "judgment",
+      "severity": "major",
+      "effort": "S",
+      "title": "Text over imagery is hard to read",
+      "trigger": "FAIL only if text placed over a photo, video, or busy gradient is visibly hard to read in some area (axe cannot measure contrast over images).",
+      "pass_anchor": "Overlay text sits on a scrim, solid panel, or calm image area and reads clearly.",
+      "fix": [
+        "Add a gradient scrim behind the text (for example linear-gradient(to top, rgb(0 0 0 / .65), transparent)), or place the text on a solid panel.",
+        "Choose an image with a calm area where the text sits, and set object-position accordingly."
+      ],
+      "fail_example": "White body text sits directly on a bright, busy photo with no overlay."
+    },
+    {
+      "id": "J-13",
+      "dimension": "UX",
+      "detection": "judgment",
+      "severity": "minor",
+      "effort": "S",
+      "title": "Navigation gives no sense of place",
+      "applies": "Sites with two or more routes. Mark n/a for single-page sites.",
+      "trigger": "FAIL only if the navigation does not indicate the current page, or the navigation items or order differ between pages.",
+      "pass_anchor": "The current page is highlighted (for example aria-current with a visual style), and the navigation is identical on every page.",
+      "fix": [
+        "Style the active link (underline, weight, or accent) and set aria-current=\"page\".",
+        "Render navigation from one shared component."
+      ],
+      "fail_example": "The navigation does not highlight the current page, and the About page shows a different menu order."
+    },
+    {
+      "id": "TYP-09",
+      "dimension": "BC",
+      "detection": "auto",
+      "severity": "major",
+      "effort": "S",
+      "gate": "G6",
+      "gateWhen": "Gate G6 always.",
+      "title": "Headings drawn in a faked weight",
+      "trigger": "A visible heading is rendered at a font weight its loaded font family does not include, so the browser synthesizes (fakes) the bold.",
+      "fix": [
+        "Load the weight the heading uses (add it to the Google Fonts URL or @font-face), or set the heading to a weight the family ships.",
+        "For display families that ship one weight, use that weight and create contrast with size instead."
+      ]
+    },
+    {
+      "id": "J-14",
+      "dimension": "FI",
+      "detection": "judgment",
+      "severity": "major",
+      "effort": "M",
+      "gate": "G1",
+      "gateWhen": "Gate G1 always.",
+      "title": "Fails the five-second test",
+      "trigger": "FAIL only if, from the desktop or mobile first-screen screenshot alone, you cannot write down at least three of: what the site offers, who it is for, why to trust it, and what to do next.",
+      "pass_anchor": "Headline plus one supporting line state the offering and audience, and a visible button says what to do next.",
+      "fail_example": "A large 'Welcome to our site' over a stock photo, with no description and no button on the first screen.",
+      "fix": [
+        "Rewrite the headline to name the offering and audience ('Learn to row in 8 weeks, on the estuary').",
+        "Add one supporting sentence and one primary button on the first screen.",
+        "Move proof (a rating, a member count, a logo row) up next to the action."
+      ]
+    },
+    {
+      "id": "J-15",
+      "dimension": "FI",
+      "detection": "judgment",
+      "severity": "major",
+      "effort": "M",
+      "gate": "G5",
+      "gateWhen": "Gate G5 always.",
+      "title": "Primary action not visible on the mobile first screen",
+      "applies": "Landing, home, and marketing pages with a primary call to action. Mark n/a for pages whose main content is a form (their submit button belongs after the fields; see J-25) and for pages without a primary call to action.",
+      "trigger": "FAIL only if the page's primary call to action is visible on the desktop first screen but not on the mobile first screen.",
+      "pass_anchor": "On the mobile first screen the headline and the primary button are both visible without scrolling.",
+      "fail_example": "On mobile a 600px-tall hero image pushes the headline and button below the fold.",
+      "fix": [
+        "Reduce hero image height on small screens, or place the image after the text.",
+        "Reorder with flex order or grid areas so the headline and primary button come first on mobile."
+      ]
+    },
+    {
+      "id": "J-16",
+      "dimension": "NF",
+      "detection": "judgment",
+      "severity": "minor",
+      "effort": "M",
+      "title": "Sections are in an illogical order",
+      "applies": "Pages with three or more content sections. Mark n/a otherwise.",
+      "trigger": "FAIL only if, in the desktop full-page screenshot, the section order clearly breaks the visitor's logic, for example proof or pricing before the offering is explained, or a form in the middle of unrelated content.",
+      "pass_anchor": "Sections build an argument: what it is, why it matters, proof, how it works, then a call to act.",
+      "fail_example": "Testimonials appear before the page has said what is offered, and the contact form sits between two feature sections.",
+      "fix": [
+        "Reorder sections to: offer, value, proof, how it works, call to action.",
+        "Add a one-line lead-in to each section that connects it to the previous one."
+      ]
+    },
+    {
+      "id": "J-17",
+      "dimension": "NF",
+      "detection": "judgment",
+      "severity": "minor",
+      "effort": "S",
+      "title": "Page ends without a next step",
+      "applies": "Marketing, landing, and content pages. Mark n/a for tools, dashboards, and forms.",
+      "trigger": "FAIL only if the desktop full-page screenshot ends with no closing call to action or next step before the footer.",
+      "pass_anchor": "The last section before the footer repeats the primary action or points to the next logical page.",
+      "fail_example": "The page ends with a feature grid and then the footer; there is nothing to click.",
+      "fix": [
+        "Add a closing section with a short headline and the primary button.",
+        "Or link to the next logical page ('See programs', 'Meet the coaches')."
+      ]
+    },
+    {
+      "id": "J-18",
+      "dimension": "CV",
+      "detection": "judgment",
+      "severity": "minor",
+      "effort": "S",
+      "title": "Inconsistent call-to-action labels",
+      "trigger": "FAIL only if the same destination or action is labeled differently across buttons or pages (for example 'Get started', 'Sign up now', and 'Join' all going to the same form).",
+      "pass_anchor": "Each action has one label used everywhere it appears.",
+      "fail_example": "The hero says 'Book a session', the header says 'Register', and the footer says 'Get started', all opening the same booking form.",
+      "fix": [
+        "Pick one label per action, phrased as the outcome ('Book a taster session'), and use it on every page."
+      ]
+    },
+    {
+      "id": "J-19",
+      "dimension": "TP",
+      "detection": "judgment",
+      "severity": "minor",
+      "effort": "M",
+      "title": "No proof where visitors hesitate",
+      "applies": "Pages that ask the visitor to commit (sign up, buy, contact, apply). Mark n/a otherwise.",
+      "trigger": "FAIL only if the page asks for a commitment but shows no supporting proof (testimonial, rating, member or customer count, logos, credentials, real photos) anywhere near the primary action or the form.",
+      "pass_anchor": "Relevant proof sits next to, or just before, the primary action or form.",
+      "fail_example": "A sign-up form with no testimonial, rating, or indication of who else uses the service.",
+      "fix": [
+        "Place one concrete, verifiable piece of proof beside the primary action (for example '300 members since 2009').",
+        "Use real photos of the organization rather than stock imagery near the action."
+      ]
+    },
+    {
+      "id": "J-20",
+      "dimension": "TP",
+      "detection": "judgment",
+      "severity": "major",
+      "effort": "S",
+      "gate": "G4",
+      "gateWhen": "Gate G4 always.",
+      "title": "Proof looks invented, or the interface misrepresents the site",
+      "trigger": "FAIL only if proof is presented as fact but is clearly generic or fabricated (for example 'Great service! - John D.', '10,000+ happy customers' on a brand-new site, fake partner logos), or the interface promises something the site does not do (a 'Live chat' button that does nothing).",
+      "pass_anchor": "Every claim is specific and plausible for this organization, and every control does what it says.",
+      "fail_example": "Three testimonials with stock headshots and first-name-only quotes like 'Amazing!', on a site launched this week.",
+      "fix": [
+        "Remove fabricated testimonials and statistics; use real ones or none.",
+        "Replace with honest proof you can stand behind (founding year, credentials, real photos).",
+        "Remove or implement controls that promise unavailable features."
+      ]
+    },
+    {
+      "id": "J-21",
+      "dimension": "UX",
+      "detection": "judgment",
+      "severity": "minor",
+      "effort": "M",
+      "title": "Navigation or forms demand unnecessary effort",
+      "trigger": "FAIL only for a visible usability burden: more than about 7 top-level navigation items, vague navigation labels ('Solutions', 'Resources Hub'), forms asking for clearly unnecessary information, or error messages that do not say how to fix the input.",
+      "pass_anchor": "A short navigation with plain labels, forms that ask only what is needed, and errors that explain the fix.",
+      "fail_example": "A 12-item top menu and a contact form that requires a fax number.",
+      "fix": [
+        "Group navigation into 5-7 plainly named items.",
+        "Remove optional form fields or mark them optional; write error messages that say what is expected ('Enter an email like name@example.com')."
+      ]
+    },
+    {
+      "id": "J-22",
+      "dimension": "IM",
+      "detection": "judgment",
+      "severity": "minor",
+      "effort": "M",
+      "title": "Data views lack loading, empty, or error states",
+      "applies": "Pages that show data loaded at runtime (lists, tables, dashboards, search). Mark n/a otherwise.",
+      "trigger": "FAIL only if a data-driven view shows a blank area, a raw error, or nothing at all instead of a designed loading, empty, or error state (from the screenshots, or from the source when available).",
+      "pass_anchor": "Loading shows a skeleton or spinner, empty lists show a helpful message and an action, and errors explain what to do.",
+      "fail_example": "An events page shows a white gap where the list should be when there are no events.",
+      "fix": [
+        "Add a skeleton or spinner while data loads.",
+        "Add an empty state with a short explanation and an action ('No events yet. Check back soon or subscribe').",
+        "Show a friendly error with a retry button."
+      ]
+    },
+    {
+      "id": "J-23",
+      "dimension": "DF",
+      "detection": "judgment",
+      "severity": "minor",
+      "effort": "L",
+      "title": "No memorable signature moment",
+      "trigger": "FAIL only if, across the full-page screenshots, there is no single distinctive design moment: no striking typographic treatment, custom illustration, brand pattern, notable photography, or unusual layout that a visitor would remember.",
+      "pass_anchor": "At least one deliberate, memorable element that is specific to this organization.",
+      "fail_example": "Every section is a centered heading over a three-card grid; nothing stands out.",
+      "fix": [
+        "Introduce one signature element tied to the brand: an oversized headline, a custom illustration, a brand pattern, or real photography used boldly.",
+        "Spend it in one place (usually the hero) rather than spreading small effects everywhere."
+      ]
+    },
+    {
+      "id": "J-24",
+      "dimension": "IM",
+      "detection": "judgment",
+      "severity": "minor",
+      "effort": "S",
+      "title": "Motion distracts from reading",
+      "trigger": "FAIL only if motion visibly competes with content: constantly looping or bouncing elements, auto-advancing carousels, or reveal animations that hide content until it is scrolled past (visible as blank areas in the full-page screenshot).",
+      "pass_anchor": "Motion is brief and purposeful (an entrance, a hover, a state change) and content is readable at all times.",
+      "fail_example": "Hero text cycles every two seconds and feature cards stay invisible in the full-page screenshot because they only fade in on scroll.",
+      "fix": [
+        "Remove looping motion from content areas; keep animation to entrances and state changes.",
+        "Start reveal animations from visible content and add the hidden state only from script, so content is never hidden if scripts or animations do not run."
+      ]
+    },
+    {
+      "id": "J-25",
+      "dimension": "UX",
+      "detection": "judgment",
+      "severity": "minor",
+      "effort": "S",
+      "title": "Form's main action is unclear or misplaced",
+      "applies": "Pages whose main content is a form (submit a case, contact, apply, sign up). Mark n/a otherwise.",
+      "trigger": "FAIL only if, in the full-page screenshots, the page heading does not say what the form is for; or the submit button is not styled as the single primary action (a filled, high-contrast button); or it is not placed directly after the fields it submits; or several buttons at the end of the form look equally important. A submit button below the first screen is not a failure.",
+      "pass_anchor": "The heading names the task, the fields follow in order, and one filled accent button directly after the last field submits the form, with any cancel or back action visibly quieter.",
+      "fail_example": "A 'Submit' outline button and a 'Cancel' filled button sit side by side under the form, so the destructive action looks primary.",
+      "fix": [
+        "Style the submit button as the only filled, accent-colored action and place it directly after the last field.",
+        "Make cancel or back actions quieter (outline or text style) and place them after or beside the submit button.",
+        "Give the page a heading that names the task, such as 'Submit a case'."
+      ]
+    },
+    {
+      "id": "J-26",
+      "dimension": "RA",
+      "detection": "judgment",
+      "severity": "minor",
+      "effort": "S",
+      "title": "Cramped or awkwardly ordered mobile layout",
+      "trigger": "FAIL only if, in the mobile screenshots, content is readable but visibly cramped or out of order: cards or stats stay side by side so short labels wrap one word per line or their values misalign; short table values (dates, scores, amounts) break across lines; or the page's key summary or outcome appears only after long secondary content such as a message thread. Pass when J-06 already fails for the same element on the same page.",
+      "pass_anchor": "On mobile, cards and stats collapse to one or two comfortable columns, short table values stay on one line or rows stack as labeled blocks, and the key summary comes before secondary detail.",
+      "fail_example": "On mobile, three summary cards stay side by side at about 115px wide, so 'Recorded assessments' wraps one word per line, and the scores in the grades table break onto two lines.",
+      "fix": [
+        "Collapse card and stat grids to one or two columns below about 640px.",
+        "Keep short values such as dates and scores on one line (white-space: nowrap), or stack table rows as labeled blocks on mobile.",
+        "Reorder with flex order or grid areas so the key summary comes before long secondary content."
+      ]
+    }
+  ],
+  "gates": {
+    "G1": {
+      "title": "Unclear offering or primary call to action",
+      "definition": "On some page's first screen, a visitor cannot tell what is offered or what to do next."
+    },
+    "G2": {
+      "title": "Competing focal points",
+      "definition": "Two or more elements compete to be the first thing seen on a first screen."
+    },
+    "G3": {
+      "title": "Inaccessible primary flow",
+      "definition": "The main journey fails for keyboard, focus, form-label, or contrast reasons."
+    },
+    "G4": {
+      "title": "Invented proof or misrepresentation",
+      "definition": "Proof presented as fact is invented, or the interface misrepresents what the site does."
+    },
+    "G5": {
+      "title": "Broken mobile layout",
+      "definition": "On phones the page overflows sideways, text overlaps or is clipped, or the primary call to action is pushed off the first screen."
+    },
+    "G6": {
+      "title": "Failed font check",
+      "definition": "A chosen font did not load, or headings are drawn in a weight the font does not ship (faked bold)."
+    },
+    "G7": {
+      "title": "Generic or assembled look",
+      "definition": "The site could belong to any organization, or its pages look assembled from unrelated templates."
+    }
+  }
+}

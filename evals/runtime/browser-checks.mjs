@@ -235,33 +235,40 @@ export async function inspectDocument({ html, workDir, relativeFile, diagram, re
 // Generated sites are single-page apps: a navigation to /book must receive
 // index.html so the client router can render it, while a request for a missing
 // asset (anything with a file extension) must fail rather than fall back.
-export async function inspectSite({ distDir, routes, evidenceDir, signal }) {
-  signal?.throwIfAborted();
+// A browser context that can reach only the built site's files at https://eval.invalid (GET only,
+// no WebSockets or service workers). Reused by the design grade so its probes share the same boundary.
+export async function siteContext({ distDir, viewport = { width: 1440, height: 1000 }, reducedMotion }) {
   const context = await (await getBrowser()).newContext({
-    viewport: { width: 1440, height: 1000 }, bypassCSP: true,
+    viewport, bypassCSP: true, ...(reducedMotion ? { reducedMotion } : {}),
     serviceWorkers: 'block', permissions: [], acceptDownloads: false,
   });
+  await context.routeWebSocket('**/*', route => route.close());
+  await context.route('**/*', async route => {
+    const url = new URL(route.request().url());
+    if (url.origin !== 'https://eval.invalid' || route.request().method() !== 'GET') return route.abort('blockedbyclient');
+    const name = decodeURIComponent(url.pathname.slice(1));
+    const asset = path.extname(name) !== '';
+    if (name.split('/').some(part => part.startsWith('.'))) return route.abort('blockedbyclient');
+    try {
+      const file = asset ? name : 'index.html';
+      return route.fulfill({ contentType: mime(file), body: await readFile(await confinedPath(distDir, file)) });
+    } catch (error) {
+      if (error.code !== 'ENOENT' && !error.message.includes('path') && !error.message.includes('Symbolic')) throw error;
+      return route.abort('blockedbyclient');
+    }
+  });
+  return context;
+}
+
+export async function inspectSite({ distDir, routes, evidenceDir, signal }) {
+  signal?.throwIfAborted();
+  const context = await siteContext({ distDir });
   const abort = () => { void context.close(); };
   signal?.addEventListener('abort', abort, { once: true });
   const checks = [];
   const add = (name, passed) => checks.push({ name, passed: Boolean(passed) });
   const texts = {};
   try {
-    await context.routeWebSocket('**/*', route => route.close());
-    await context.route('**/*', async route => {
-      const url = new URL(route.request().url());
-      if (url.origin !== 'https://eval.invalid' || route.request().method() !== 'GET') return route.abort('blockedbyclient');
-      const name = decodeURIComponent(url.pathname.slice(1));
-      const asset = path.extname(name) !== '';
-      if (name.split('/').some(part => part.startsWith('.'))) return route.abort('blockedbyclient');
-      try {
-        const file = asset ? name : 'index.html';
-        return route.fulfill({ contentType: mime(file), body: await readFile(await confinedPath(distDir, file)) });
-      } catch (error) {
-        if (error.code !== 'ENOENT' && !error.message.includes('path') && !error.message.includes('Symbolic')) throw error;
-        return route.abort('blockedbyclient');
-      }
-    });
     for (const spec of routes) {
       signal?.throwIfAborted();
       const label = `route ${spec.path}`;

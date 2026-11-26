@@ -94,12 +94,28 @@ A route fails if it lacks a device-width viewport or a visible `h1`, scrolls hor
 Screenshots of every route and width are saved as evidence.
 The create-site `repair-site-build` case uses this check, so responsiveness is gated on the site the agent builds, not on its approval plan.
 
+### Design grade
+
+A `site.design` block adds a design grade to the site check, using the plugin's design checklist (`plugins/power-pages/references/design-rubric-catalog.json`).
+The same offline browser measures each route at 1440px and 390px: type, color, spacing, images, overflow, focus, hover, reduced motion, layout shift, and an axe-core accessibility audit, using the runtime's pinned `axe-core`.
+The measured problems become candidates.
+The judge model then receives the first-screen and full-page screenshots as image attachments, together with the candidates and the closed checklist (each item has a trigger, a PASS example, and a FAIL example).
+It confirms or dismisses each candidate and answers every item; it never assigns scores or severities.
+Answers that do not cover every candidate and item are rejected, and the judge gets one correction.
+Scores are then computed from the confirmed issues: per category (Message & Persuasion, Usability & Accessibility, Visual Craft & Brand), `score = 5 - 4 * tanh(0.2 * (majors + 0.25 * minors))`.
+
+The site grade gains `design: evidence complete` and `design: no critical gate fails` checks, plus `design: no major issue` when `"failOn": ["gate", "major"]`.
+The judge session has no tools other than its verdict tool, and requires a vision-capable `--judge-model`; a model without image support fails the grade explicitly.
+Its token usage counts toward the trial's judge usage.
+`design-grade.json`, `design-report.html`, and the screenshots stay in the trial's private evidence; the public summary keeps only the pass/fail checks.
+The create-site `repair-site-build` case gates on critical design gates.
+
 ER checks use Mermaid's parser and renderer.
 They compare entities, required attributes and relationship cardinalities against the case contract, including the diagram the report displays rather than trusting a correct fallback string.
 Rendered SVGs and label checks expose broken syntax and unreadable diagrams.
 
 Vally's text-only rubric grader receives actual artifact evidence for domain correctness and report quality.
-It does not see screenshots or provide a visual-design judgment.
+It does not see screenshots; visual design is judged only by the `site.design` grade above.
 Every required grader must pass; a high prose score cannot compensate for a missing artifact or incorrect ER relationship.
 Errors remain distinct from measured failures.
 

@@ -36,9 +36,9 @@ function validateEnvironment(environment) {
   }
 }
 
-export function createRegistry(llmClient = unavailableJudge) {
+export function createRegistry(llmClient = unavailableJudge, { designJudge } = {}) {
   const registry = createDefaultGraderRegistry(llmClient);
-  registerArtifactGrader(registry);
+  registerArtifactGrader(registry, { designJudge });
   return registry;
 }
 
@@ -134,10 +134,10 @@ export async function loadSuites({ skill } = {}) {
   return suites;
 }
 
-export function trialGraders(stimulus, { suite, variant, evidenceDir }) {
+export function trialGraders(stimulus, { suite, variant, evidenceDir, judgeModel, judgeReasoningEffort }) {
   const graders = structuredClone(stimulus.graders);
   for (const grader of graders) {
-    if (grader.type === 'power-pages-artifacts') grader.config.evidenceDir = evidenceDir;
+    if (grader.type === 'power-pages-artifacts') Object.assign(grader.config, { evidenceDir, judgeModel, judgeReasoningEffort });
     if (grader.type === 'prompt') {
       grader.config.evidence = [
         'trajectory', {

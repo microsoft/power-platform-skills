@@ -2027,7 +2027,19 @@ Do not enter the deployment phase until it exits successfully.
    - Every maker-approved limitation with exact impact and evidence
    - When localization is configured, available and unavailable locales from
      the final manifest; never describe an unavailable locale as enabled
-7. Suggest optional enhancement skills:
+7. Offer a design evaluation before any data-model work:
+
+   <!-- gate: create-site:8.design-eval | category=plan | cancel-leaves=nothing -->
+
+   > 🚦 **Gate (plan · create-site:8.design-eval):** Offer to run `/design-eval` on the finished site before suggesting next steps such as the data model. Fires once, after the final summary.
+   >
+   > **Trigger:** Phase 8 final summary presented.
+   > **Why we ask:** The evaluation re-captures every route and may lead to design fixes; the user decides whether to spend that time now.
+   > **Cancel leaves:** Nothing - the site and its commits stay as they are.
+
+   Use `AskUserQuestion`: *"Would you like to run a design evaluation of your site before setting up the data model? It grades every page, opens a report, and can fix the top issues."* with **Run design evaluation (Recommended)** and **Skip for now**. On **Run design evaluation**, invoke the `/design-eval` skill with `PROJECT_ROOT` and the dev server URL, and continue with the next step when it finishes.
+8. Suggest optional enhancement skills:
+   - `/design-eval` — Evaluate the site's design and fix the top issues (suggest when the user skipped it in step 7)
    - `/setup-datamodel` — Create Dataverse tables for dynamic content
    - `/add-localization` — Add or extend SPA languages (suggest only when
      `LOCALIZATION_REQUESTED=false` and the centralized availability result
@@ -2035,7 +2047,7 @@ Do not enter the deployment phase until it exits successfully.
    - `/add-seo` — Add meta tags, robots.txt, sitemap.xml, favicon
    - `/add-tests` — Add unit tests (Vitest) and E2E tests (Playwright)
    - `/add-ai-webapi` — Add generative-AI summaries (Search Summary and Data Summarization). **Recommend first when `AI_SUMMARY_PLACEMENTS` from Phase 3 is non-empty** — the pages already carry `POWERPAGES:AI-SLOT` comment markers at the intended insertion points, so the follow-up skill's explore step finds them deterministically and the user gets the AI surface they picked during discovery without any page redesign.
-8. Run the `create_site_from_scratch` telemetry command silently (fail-closed). Do not mention this telemetry command to the user and do not print its output:
+9. Run the `create_site_from_scratch` telemetry command silently (fail-closed). Do not mention this telemetry command to the user and do not print its output:
    ```bash
    node "${PLUGIN_ROOT}/scripts/emit-create-site-template-outcome.js" \
     --eventName create_site_from_scratch \

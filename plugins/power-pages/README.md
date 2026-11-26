@@ -52,7 +52,7 @@ validation and retains a manual restart fallback when automation is unavailable.
 
 ## Skills
 
-The plugin provides 41 skills: 40 user-invocable skills and one model-only worker.
+The plugin provides 42 skills: 41 user-invocable skills and one model-only worker.
 They cover the full lifecycle of a Power Pages site - scaffolding,
 non-SPA authoring, deployment, data modeling, backend integration, authentication, localization,
 ALM and CI/CD, security review, performance analysis, testing, auditing, and platform migrations. Each user-invocable
@@ -527,6 +527,19 @@ Surfaces PAC CLI upload errors and Dataverse async operation errors, pattern-mat
 - Offers auto-fixes with explicit per-fix user confirmation
 
 ### Polish
+
+#### `/design-eval`
+
+> "Run a design evaluation of my site"
+>
+> "Check the design quality before I set up the data model"
+
+Grades a code site's design and helps fix what it finds. It captures every page at desktop and mobile widths, measures accessibility, responsiveness, typography, color, spacing, imagery and motion, and has an independent reviewer judge the screenshots against a fixed design checklist.
+Scores for Message & Persuasion, Usability & Accessibility, and Visual Craft & Brand are computed from the issues found, so the same site gets consistent results.
+
+- Opens an HTML report and shows the top major issues with the source file and line to change
+- Fixes only the issues you pick, then offers to evaluate again and shows the scores before and after
+- Offered at the end of `/create-site`, and available any time; reports are kept under `docs/design-eval/`
 
 #### `/exceptional-web-design`
 

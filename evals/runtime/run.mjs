@@ -9,6 +9,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { closeBrowser } from './browser-checks.mjs';
 import { OfflineExecutor } from './offline-executor.mjs';
+import { createDesignJudge } from './design-judge.mjs';
 import { validateModelPair } from './models.mjs';
 import { createRegistry, loadSuites, pluginRoot, repoRoot, trialGraders } from './suites.mjs';
 
@@ -78,9 +79,28 @@ export function outcomeRecord({ stimulus, variant, trial, trajectory, grade, err
   };
 }
 
-function trackJudge(judge) {
+function trackJudge(judge, designJudge) {
   const usage = { calls: 0, reportedCalls: 0, inputTokens: 0, outputTokens: 0 };
+  const count = result => {
+    const input = result?.tokenUsage?.inputTokens;
+    const output = result?.tokenUsage?.outputTokens;
+    if (Number.isSafeInteger(input) && input >= 0 && Number.isSafeInteger(output) && output >= 0 &&
+        Number.isSafeInteger(usage.inputTokens + input) && Number.isSafeInteger(usage.outputTokens + output)) {
+      usage.reportedCalls++;
+      usage.inputTokens += input;
+      usage.outputTokens += output;
+    }
+  };
   return {
+    // The screenshot design judge (site.design) counts toward the same judge usage.
+    designClient: designJudge && {
+      async judge(options) {
+        usage.calls++;
+        const result = await designJudge.judge(options);
+        count(result);
+        return result;
+      },
+    },
     client: {
       supportsWorkspaceDelivery: judge.supportsWorkspaceDelivery,
       async judge(options) {
@@ -131,6 +151,7 @@ export async function evaluate(options, dependencies = {}) {
     judgeModel: options.judgeModel, judgeReasoningEffort: options.judgeReasoningEffort,
   });
   let judge;
+  const designJudge = dependencies.designJudge ?? createDesignJudge({ token, useLoggedInUser: options.localAuth === true });
   const savedJudgeEnv = Object.fromEntries(['COPILOT_HOME', 'COPILOT_CLI_PATH', 'GITHUB_COPILOT_API_TOKEN', 'GITHUB_TOKEN']
     .map(key => [key, process.env[key]]));
   const summary = {
@@ -180,7 +201,7 @@ export async function evaluate(options, dependencies = {}) {
             let record;
             // A timed-out judge can settle after the next trial starts. A
             // per-trial wrapper keeps its late usage from leaking into that trial.
-            const trackedJudge = trackJudge(judge);
+            const trackedJudge = trackJudge(judge, designJudge);
             try {
               result = await (dependencies.runEval ?? runEval)({
                 stimulus, stimulusName: stimulus.name, prompt: stimulus.prompt,
@@ -195,9 +216,11 @@ export async function evaluate(options, dependencies = {}) {
               if (result.trajectory.metadata.model !== options.model) {
                 throw new Error('Model identity changed during the evaluation');
               }
-              const graders = trialGraders(stimulus, { suite, variant, evidenceDir });
+              const graders = trialGraders(stimulus, {
+                suite, variant, evidenceDir, judgeModel: options.judgeModel, judgeReasoningEffort: options.judgeReasoningEffort,
+              });
               const grade = await (dependencies.gradeTrajectory ?? gradeTrajectory)(result.trajectory, graders, {
-                registry: createRegistry(trackedJudge.client), stimulus, judgeModel: options.judgeModel,
+                registry: createRegistry(trackedJudge.client, { designJudge: trackedJudge.designClient }), stimulus, judgeModel: options.judgeModel,
                 judgeReasoningEffort: options.judgeReasoningEffort,
                 judgeTimeoutMs: 180_000, graderTimeoutMs: 300_000,
               });
@@ -237,6 +260,7 @@ export async function evaluate(options, dependencies = {}) {
     finally {
       try { await judge?.shutdown(); }
       finally {
+        await designJudge?.shutdown?.().catch(() => {});
         try { await closeBrowser(); }
         finally {
           for (const [key, value] of Object.entries(savedJudgeEnv)) {

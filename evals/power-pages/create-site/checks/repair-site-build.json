@@ -18,7 +18,8 @@
         "requiredPatterns": ["track", "reference"],
         "forbiddenPatterns": ["__[A-Z][A-Z_]+__", "lorem ipsum"]
       }
-    ]
+    ],
+    "design": { "failOn": ["gate"] }
   },
   "files": [
     {
