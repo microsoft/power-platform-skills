@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { hashFile, hashTree } = require('../../scripts/lib/eval-evidence.js');
 const { DEFAULT_MODELS } = require('../../evals/runtime/models.mjs');
+const { canonicalPlugins } = require('../../scripts/install.js');
 
 const HASH = /^[a-f0-9]{64}$/;
 const NAME = /^[a-z0-9][a-z0-9._-]{0,127}$/;
@@ -147,7 +148,7 @@ function readSummaries(input, { allowEmpty = false } = {}) {
 
 function discoverInventory(repoRoot, catalog) {
   const marketplace = JSON.parse(fs.readFileSync(path.join(repoRoot, 'marketplace.json'), 'utf8'));
-  return marketplace.plugins.map((entry) => {
+  return canonicalPlugins(marketplace.plugins).map((entry) => {
     const plugin = catalog.plugins.find((item) => item.name === entry.name);
     if (typeof entry.source !== 'string') return { name: entry.name, title: plugin.title, external: true, skills: [], docsUrl: plugin.docsUrl };
     const dir = path.resolve(repoRoot, entry.source);

@@ -89,7 +89,7 @@ The app asks you to confirm each step.
 | Power Pages | [Install in Claude Code](https://microsoft.github.io/power-platform-skills/install/?app=claude-code&plugin=power-pages) | [Install in GitHub Copilot app](https://github.com/copilot/app/launch?open=ghapp%3A%2F%2Fplugins%2Finstall%3Fsource%3Dpower-pages%2540power-platform-skills) |
 | Model-driven apps | [Install in Claude Code](https://microsoft.github.io/power-platform-skills/install/?app=claude-code&plugin=model-apps) | [Install in GitHub Copilot app](https://github.com/copilot/app/launch?open=ghapp%3A%2F%2Fplugins%2Finstall%3Fsource%3Dmodel-apps%2540power-platform-skills) |
 | Canvas apps | [Install in Claude Code](https://microsoft.github.io/power-platform-skills/install/?app=claude-code&plugin=canvas-apps) | [Install in GitHub Copilot app](https://github.com/copilot/app/launch?open=ghapp%3A%2F%2Fplugins%2Finstall%3Fsource%3Dcanvas-apps%2540power-platform-skills) |
-| Code apps | [Install in Claude Code](https://microsoft.github.io/power-platform-skills/install/?app=claude-code&plugin=code-apps-preview) | [Install in GitHub Copilot app](https://github.com/copilot/app/launch?open=ghapp%3A%2F%2Fplugins%2Finstall%3Fsource%3Dcode-apps-preview%2540power-platform-skills) |
+| Code apps | [Install in Claude Code](https://microsoft.github.io/power-platform-skills/install/?app=claude-code&plugin=code-apps) | [Install in GitHub Copilot app](https://github.com/copilot/app/launch?open=ghapp%3A%2F%2Fplugins%2Finstall%3Fsource%3Dcode-apps%2540power-platform-skills) |
 | Mobile apps | [Install in Claude Code](https://microsoft.github.io/power-platform-skills/install/?app=claude-code&plugin=mobile-app) | [Install in GitHub Copilot app](https://github.com/copilot/app/launch?open=ghapp%3A%2F%2Fplugins%2Finstall%3Fsource%3Dmobile-app%2540power-platform-skills) |
 | Power Apps Mobile extensions | [Install in Claude Code](https://microsoft.github.io/power-platform-skills/install/?app=claude-code&plugin=power-apps-mobile-extension) | [Install in GitHub Copilot app](https://github.com/copilot/app/launch?open=ghapp%3A%2F%2Fplugins%2Finstall%3Fsource%3Dpower-apps-mobile-extension%2540power-platform-skills) |
 | Power Automate | [Install in Claude Code](https://microsoft.github.io/power-platform-skills/install/?app=claude-code&plugin=power-automate) | [Install in GitHub Copilot app](https://github.com/copilot/app/launch?open=ghapp%3A%2F%2Fplugins%2Finstall%3Fsource%3Dpower-automate%2540power-platform-skills) |
@@ -117,7 +117,7 @@ To install from inside a GitHub Copilot CLI or Claude Code session, run these co
     /plugin install power-pages@power-platform-skills
     /plugin install model-apps@power-platform-skills
     /plugin install canvas-apps@power-platform-skills
-    /plugin install code-apps-preview@power-platform-skills
+    /plugin install code-apps@power-platform-skills
     /plugin install mobile-app@power-platform-skills
     /plugin install power-apps-mobile-extension@power-platform-skills
     /plugin install power-automate@power-platform-skills

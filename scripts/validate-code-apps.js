@@ -24,7 +24,7 @@ function readPackageFile(file) {
 
 function validate() {
   const manifest = JSON.parse(readPackageFile(path.join(PLUGIN, 'plugin.json')));
-  assert.equal(manifest.name, 'code-apps-preview', 'preserve the installed plugin identity');
+  assert.equal(manifest.name, 'code-apps', 'preserve the canonical plugin identity');
   const marketplace = JSON.parse(fs.readFileSync(path.join(ROOT, 'marketplace.json'), 'utf8'));
   const codex = JSON.parse(fs.readFileSync(path.join(ROOT, '.agents', 'plugins', 'marketplace.json'), 'utf8'));
   assert.equal(codex.name, marketplace.name, 'preserve the marketplace identity');

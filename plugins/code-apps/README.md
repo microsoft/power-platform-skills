@@ -23,7 +23,7 @@ Open GitHub Copilot CLI or Claude Code in any folder and run the following comma
 
 2. Install the plugin:
    ```
-   /plugin install code-apps-preview@power-platform-skills
+   /plugin install code-apps@power-platform-skills
    ```
 
 ### Codex
@@ -32,10 +32,10 @@ Use the repository's Codex catalog:
 
 ```text
 codex plugin marketplace add microsoft/power-platform-skills
-codex plugin add code-apps-preview@power-platform-skills
+codex plugin add code-apps@power-platform-skills
 ```
 
-This catalog lists Code Apps only. The existing Copilot and Claude marketplace entries remain unchanged.
+This catalog lists Code Apps only, under its current name `code-apps`.
 
 ### Cursor and Other Agent Plugins Clients
 
@@ -89,6 +89,7 @@ The package registers no tool hooks. It does not include MCP servers.
 Start with `/create-code-app` — it walks you through everything.
 
 Skill invocation syntax depends on the client.
+Claude Code uses the `/code-apps:` prefix, for example `/code-apps:create-code-app`.
 If the client has no skill tool, read the matching `skills/<name>/SKILL.md` and follow its workflow.
 All approval and confirmation requirements still apply.
 
@@ -105,22 +106,47 @@ Projects on an older CLI keep working: the plugin looks up the connection ID fir
 
 ## Update Existing Installations
 
-The plugin identity remains `code-apps-preview`.
-Existing Copilot and Claude installations do not require removal or reinstallation:
+The plugin name changed from `code-apps-preview` to `code-apps` in version 2.0.0.
+The directory stays `plugins/code-apps`, so existing links to its manifest remain valid.
+
+Refresh the marketplace and install the current name in Copilot CLI or Claude Code:
 
 ```text
 /plugin marketplace update power-platform-skills
-/plugin update code-apps-preview@power-platform-skills
+/plugin install code-apps@power-platform-skills
 ```
 
-For Codex, refresh the Git-backed marketplace:
+Claude Code versions that support the marketplace `renames` map migrate old settings to the new name.
+Git-backed and URL-backed installations can still require the install command above to cache the renamed plugin.
+Older Claude Code versions require manual migration.
+See [Claude Code's rename behavior](https://code.claude.com/docs/en/plugins/host-marketplace#rename-or-remove-a-plugin).
+
+The root marketplace retains the old-name entry pointing to the same directory.
+That entry preserves lookup by the old name, not automatic activation of the new name.
+In a Copilot CLI 1.0.114 local-marketplace check, installation by the old name succeeded but left `code-apps` disabled.
+Use the current name when installing or updating.
+
+For Codex, refresh the Git-backed marketplace and install the current name:
 
 ```text
 codex plugin marketplace upgrade power-platform-skills
+codex plugin add code-apps@power-platform-skills
 ```
 
-Start a new client session after updating.
-Use the documented update action for other clients.
+The Codex catalog has no old-name alias because its entry name must match the plugin manifest.
+Start a new client session.
+Confirm that `code-apps` is enabled and its skills are available before removing an old-name installation.
+Use the client's documented removal action if the old installation remains.
+
+Version 1.4.0 can display a migration notice after its agent reads the linked version-check instructions.
+This is a best-effort notice, not an automatic migration.
+Users who skip 1.4.0 do not receive those instructions.
+
+For later updates under the current name:
+
+```text
+/plugin update code-apps@power-platform-skills
+```
 
 ## CLI attribution
 
@@ -142,7 +168,7 @@ See [attribution safety](hooks/README.md) and
 ## Uninstall
 
 ```
-/plugin uninstall code-apps-preview
+/plugin uninstall code-apps
 ```
 
 ## Documentation

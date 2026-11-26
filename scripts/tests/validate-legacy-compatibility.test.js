@@ -115,4 +115,31 @@ test('malformed remote sources are rejected', () => {
 
 test('the committed marketplace files pass', () => {
   assert.deepEqual(validate(), []);
+
+  const root = fixture(OPEN_REMOTE, LEGACY_REMOTE);
+  const current = { name: 'code-apps', source: './plugins/local-plugin' };
+  const alias = { name: 'code-apps-preview', source: current.source };
+  const open = marketplace(OPEN_REMOTE);
+  open.plugins.splice(0, 1, current, alias);
+  const legacy = marketplace(LEGACY_REMOTE);
+  legacy.plugins[0] = current;
+  legacy.renames = { 'code-apps-preview': 'code-apps' };
+  const openPath = path.join(root, 'marketplace.json');
+  const legacyPath = path.join(root, '.claude-plugin', 'marketplace.json');
+  writeJson(openPath, open);
+  writeJson(legacyPath, legacy);
+  for (const directory of ['.plugin', '.claude-plugin']) {
+    writeJson(path.join(root, 'plugins', 'local-plugin', directory, 'plugin.json'),
+      { ...LOCAL_MANIFEST, name: current.name });
+  }
+  assert.deepEqual(validate(root), []);
+
+  alias.source = './plugins/other';
+  writeJson(openPath, open);
+  assert.ok(validate(root).some((error) => /same local source/.test(error)));
+  alias.source = current.source;
+  writeJson(openPath, open);
+  legacy.renames['code-apps-preview'] = 'unrelated-plugin';
+  writeJson(legacyPath, legacy);
+  assert.notDeepEqual(validate(root), []);
 });

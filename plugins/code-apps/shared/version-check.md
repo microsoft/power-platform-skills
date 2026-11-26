@@ -61,7 +61,7 @@ Continue to Step 6 after the notice. Do not display normal update instructions f
 ```
 ╔══════════════════════════════════════════════════════════════╗
 ║  UPDATE AVAILABLE: v{local} → v{remote}                    ║
-║  Update code-apps-preview in your active client.            ║
+║  Update code-apps in your active client.                    ║
 ╚══════════════════════════════════════════════════════════════╝
 ```
 
@@ -69,7 +69,7 @@ Continue to Step 6 after the notice. Do not display normal update instructions f
 
 For a newer version with the same name, use the active client's update command:
 
-- Copilot CLI or Claude Code: `/plugin update code-apps-preview@power-platform-skills`.
+- Copilot CLI or Claude Code: `/plugin update code-apps@power-platform-skills`.
 - Codex: `codex plugin marketplace upgrade power-platform-skills`.
 - Other clients: use that client's documented plugin update action.
 

@@ -23,7 +23,8 @@ const { renderEvaluations } = require('../lib/render-evaluations.js');
 const { hashFile, hashTree } = require('../../scripts/lib/eval-evidence.js');
 
 const MARKETPLACE = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'marketplace.json'), 'utf8'));
-const MARKETPLACE_NAMES = MARKETPLACE.plugins.map((plugin) => plugin.name).sort();
+const CANONICAL_PLUGINS = installer.canonicalPlugins(MARKETPLACE.plugins);
+const MARKETPLACE_NAMES = CANONICAL_PLUGINS.map((plugin) => plugin.name).sort();
 
 // Names that must never reach a prompt, a shell command, or a URL. Mirrors the installer's
 // injection corpus. Prototype keys such as "constructor" are valid names, so the launcher's
@@ -177,7 +178,7 @@ test('evaluation inventory discovers every real skill, not only featured catalog
   const catalog = loadCatalog(REPO_ROOT);
   const data = evaluations.loadEvaluations({ repoRoot: REPO_ROOT, catalog });
   assert.deepEqual(data.plugins.map((plugin) => plugin.name).sort(), MARKETPLACE_NAMES);
-  for (const entry of MARKETPLACE.plugins.filter((plugin) => typeof plugin.source === 'string')) {
+  for (const entry of CANONICAL_PLUGINS.filter((plugin) => typeof plugin.source === 'string')) {
     const skillDir = path.join(REPO_ROOT, entry.source, 'skills');
     const expected = fs.existsSync(skillDir) ? fs.readdirSync(skillDir, { withFileTypes: true })
       .filter((item) => item.isDirectory() && fs.existsSync(path.join(skillDir, item.name, 'SKILL.md'))).map((item) => item.name).sort() : [];
@@ -793,9 +794,11 @@ test('the Dataverse flag reaches the installer, not node or del', () => {
 
 // ── Catalog ─────────────────────────────────────────────────────
 
-test('the real catalog covers exactly the marketplace plugins', () => {
+test('the real catalog covers exactly the canonical marketplace plugins', () => {
   const catalog = loadCatalog(REPO_ROOT);
   assert.deepEqual(catalog.plugins.map((plugin) => plugin.name).sort(), MARKETPLACE_NAMES);
+  assert.ok(catalog.plugins.some((plugin) => plugin.name === 'code-apps'));
+  assert.ok(!catalog.plugins.some((plugin) => plugin.name === 'code-apps-preview'));
   for (const plugin of catalog.plugins) {
     assert.match(plugin.docsUrl, /^https:\/\//, plugin.name);
   }

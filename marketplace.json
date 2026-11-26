@@ -29,6 +29,10 @@
             "source": "./plugins/canvas-apps"
         },
         {
+            "name": "code-apps",
+            "source": "./plugins/code-apps"
+        },
+        {
             "name": "code-apps-preview",
             "source": "./plugins/code-apps"
         },

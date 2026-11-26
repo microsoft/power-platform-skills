@@ -8,6 +8,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { isValidPluginName } = require('./install-links.js');
+const { canonicalPlugins } = require('../../scripts/install.js');
 
 const AUDIENCES = new Set(['makers', 'developers', 'both']);
 const STATUSES = new Set([null, 'preview', 'private-preview']);
@@ -58,7 +59,7 @@ function loadCatalog(repoRoot) {
     goalIds.add(goal.id);
   }
 
-  const marketplaceEntries = new Map(marketplace.plugins.map((entry) => [entry.name, entry]));
+  const marketplaceEntries = new Map(canonicalPlugins(marketplace.plugins).map((entry) => [entry.name, entry]));
   const catalogPlugins = Array.isArray(catalog.plugins) ? catalog.plugins : [];
   const seen = new Set();
   const plugins = [];

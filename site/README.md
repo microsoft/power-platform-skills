@@ -27,14 +27,14 @@ A test fails if a deploy would stop carrying the report.
 
 ## Where the content comes from
 
-- `marketplace.json` decides which plugins appear.
+- `marketplace.json` decides which plugins appear. Known old-name entries do not create duplicate listings.
 - Each plugin's `.plugin/plugin.json` supplies its version.
 - `site/catalog.json` holds the plain-language content that no manifest carries: who a plugin is for, example prompts, what you need, skills to list, notes, and Microsoft Learn links.
 - `site/lib/install-links.js` builds every install command and link. The README's install links come from the same templates, and a test fails if they drift.
 
 ## Evaluation dashboard
 
-The `/evaluations/` page lists every marketplace plugin and every local `skills/<name>/SKILL.md`, including skills that are not featured in the catalog.
+The `/evaluations/` page lists every canonical marketplace plugin and every local `skills/<name>/SKILL.md`, including skills that are not featured in the catalog.
 External plugins stay visible, but their skill inventory is marked unavailable rather than inferred from the catalog.
 Without supplied results, the page shows an honest "Not evaluated" inventory.
 

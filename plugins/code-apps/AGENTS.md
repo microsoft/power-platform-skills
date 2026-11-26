@@ -1,6 +1,6 @@
 # AGENTS.md — Code Apps Plugin
 
-This file provides guidance to AI agents that work on the **code-apps-preview** plugin in `plugins/code-apps`.
+This file provides guidance to AI agents that work on the **code-apps** plugin in `plugins/code-apps`.
 
 ## What This Plugin Is
 
@@ -156,7 +156,9 @@ attribution on Windows and Linux with local CLI stubs. These tests never transmi
 
 ## Portable Package Rules
 
-- Preserve the plugin name `code-apps-preview` and both legacy manifests.
+- Preserve the plugin name `code-apps`, the directory `plugins/code-apps`, and both legacy manifests.
+- Keep the old-name marketplace reference in the root catalog and the rename history in the Claude catalog.
+- Do not add the old-name entry to the Codex catalog. Its entry name must match the installed manifest.
 - Keep root `plugin.json` metadata equal to the legacy metadata, except for its required `$schema`.
 - Keep all 15 skills in one shared set. Preserve their existing tool declarations, model preferences, and invocation settings.
 - Use document-relative links in skills, agents, and shared instructions. Do not depend on `${PLUGIN_ROOT}` expansion in Markdown.
