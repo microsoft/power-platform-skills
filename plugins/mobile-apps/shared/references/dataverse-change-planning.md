@@ -215,6 +215,9 @@ those checks or accept State/Status metadata as a generic choice.
 Computed reuse requires available typed metadata, including the exact source
 type, non-negative integer source-type mask, and formula definition. Use the
 snapshot's `computed` evidence, not an absent mask on the common attribute row.
+Preserve `sourceType` and `sourceTypeMask` from the approved contract without
+numeric coercion; arrays such as `[4]` and numeric strings are not integer
+contract evidence, even when their converted value would match live metadata.
 The normalized derived-metadata verifier rejects undefined, blank, Boolean, and
 array values rather than coercing them to zero. An explicitly reported null
 `SourceType` remains distinct from missing evidence; a null `SourceTypeMask`

@@ -1202,8 +1202,9 @@ function derivedExpected(tableName, column) {
       logicalName: column.logicalName,
       kind: 'computed',
       type: dataverseType(column),
-      sourceType: Number(column.sourceType),
-      sourceTypeMask: Number(column.sourceTypeMask),
+      // Keep contract types intact so coercion cannot bypass the strict comparator.
+      sourceType: column.sourceType,
+      sourceTypeMask: column.sourceTypeMask,
       formulaDefinition: column.formulaDefinition,
     };
   }

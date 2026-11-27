@@ -1477,6 +1477,31 @@ test('computed reuse uses verified typed metadata rather than an absent common m
   }
 });
 
+test('computed reuse rejects malformed expected source types and masks without coercion', async () => {
+  for (const { field, mask, values } of [
+    { field: 'sourceType', mask: 4, values: ['1', [1], true, null, undefined, '', false, [], {}, 1.5] },
+    { field: 'sourceTypeMask', mask: 4, values: [[4], '4'] },
+    { field: 'sourceTypeMask', mask: 0, values: [null, undefined, '', '0', false, [], {}, 0.5, -1] },
+  ]) {
+    const live = await computedColumnDetail({ SourceTypeMask: mask });
+    for (const value of values) {
+      const contract = computedColumnContract(mask);
+      contract.tables[0].columns[0][field] = value;
+      const inputs = buildInputs(contract, snapshot({ tables: [live] }));
+      const manifest = buildManifest(inputs);
+      const label = `${field}=${JSON.stringify(value)}`;
+      assert.equal(manifest.executable, false, label);
+      assert.equal(manifest.summary.metadataOperationCount, 0, label);
+      assert.equal(
+        manifest.decisions.find((decision) => decision.itemType === 'column').verificationStatus,
+        'conflict',
+        label,
+      );
+      assert.equal(validateManifest(manifest, { ...inputs, requireExecutable: true }).valid, false, label);
+    }
+  }
+});
+
 test('computed reuse rejects unavailable or malformed typed evidence after fresh reconciliation', async () => {
   for (const typedEvidence of [
     {},
