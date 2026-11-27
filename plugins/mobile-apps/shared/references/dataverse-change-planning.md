@@ -205,3 +205,20 @@ Keep both upstream publish/cache-invalidation recovery paths intact. Successful
 publication plus failed cache cleanup is unfinished work, not permission to
 replay writes. Preserve pending offline-retirement outcomes independently of
 addition checks; this workflow never authorizes profile deletion.
+
+### Preserve typed compatibility evidence
+
+Use `choice` for Picklist columns. The `picklist` alias follows the same option
+validation, live value/label comparison, and creation payload; it cannot bypass
+those checks or accept State/Status metadata as a generic choice.
+
+Computed reuse requires available typed metadata, including the exact source
+type, non-negative integer source-type mask, and formula definition. Use the
+snapshot's `computed` evidence, not an absent mask on the common attribute row.
+Preserve `sourceType` and `sourceTypeMask` from the approved contract without
+numeric coercion; arrays such as `[4]` and numeric strings are not integer
+contract evidence, even when their converted value would match live metadata.
+The normalized derived-metadata verifier rejects undefined, blank, Boolean, and
+array values rather than coercing them to zero. An explicitly reported null
+`SourceType` remains distinct from missing evidence; a null `SourceTypeMask`
+cannot prove a computed column's mask.
