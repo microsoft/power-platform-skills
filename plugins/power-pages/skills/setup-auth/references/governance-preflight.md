@@ -198,16 +198,19 @@ after final environment selection. Confirm the owning tenant and account/cloud
 alignment, and verify the exact local website record in `pac pages list` for the
 confirmed environment. Missing website records, failed destination verification,
 multiple host matches, unresolved activation history, and known target conflicts
-stop deployment, not local preparation. If the deployment destination and
-activation history are verified but only host inventory remains unavailable,
-retain `HostLookupUnavailable`, `status: "unverified"`, `allowed: false`, and
-`canContinue: true` for this fresh deployment preflight. Replace the local-only
-warning with an explicit warning that deployment is proceeding without verified
-governance and sign-in may not work. Normal deployment consent is still required.
-Do not treat this as environment-level approval or automatically provision an IdP.
+stop deployment, not local preparation.
+
+A previously activated target requires a trusted `portalId` from a matching
+activation receipt or complete matching host inventory before upload. If no
+trusted host can be resolved, keep `HostLookupUnavailable` or
+`HostIdentityUnresolved` local-only and stop upload, even when the deployment
+destination and activation history are verified. Preserve local artifacts and
+defer remote IdP changes; deployment consent does not waive this guard.
 If a host is recovered, run the portal checker; if never-provisioned status is
 confirmed without conflicting evidence, run the environment checker. Apply actual
 checker results unchanged, including all non-continuable errors and restrictions.
+Only the checker's existing policy-read rules may allow warning-and-continue
+after target/host resolution; failed host discovery is not a policy-read failure.
 
 Run from the project's signed-in PAC environment:
 

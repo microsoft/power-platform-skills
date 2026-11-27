@@ -212,8 +212,9 @@ For confirmed never-provisioned targets, run environment-level governance with
 newly activated host and switch to portal scope before upload. Never reuse an
 initial `continuation: "local-only"` as deployment approval. Verify the exact
 website record belongs to the confirmed destination and confirm owning-tenant,
-account, and cloud alignment before applying the reference's fresh
-`HostLookupUnavailable` warning-and-continue path. Stop on unverified destination,
+account, and cloud alignment. Follow the reference's local-only stop for
+activated targets without a trusted `portalId`, even when the destination is
+verified. Stop on unverified destination,
 multiple host matches, unresolved history, known target conflicts, or batch
 `canContinue: false`. Do not substitute environment governance for failed host
 discovery or override a verified restriction. Preserve local

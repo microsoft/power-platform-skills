@@ -992,22 +992,36 @@ test('failed host discovery permits warned local preparation without weakening c
   assert.match(provision, /Defer configure-for-you\s+provisioning until target verification/);
 });
 
-test('deployment never reuses local-only permission and distinguishes unavailable inventory from unresolved destination', () => {
+test('deployment never reuses local-only permission or bypasses destination verification', () => {
   const { reference, deploySkill } = workflowSources();
   const discovery = reference.slice(reference.indexOf('### Discovery unavailable: local preparation only'),
     reference.indexOf("Run from the project's signed-in PAC environment:"));
   assert.match(discovery, /discard the initial local-only continuation and retry discovery\s+after final environment selection/);
   assert.match(discovery, /verify the exact local website record in `pac pages list`/);
   assert.match(discovery, /Missing website records, failed destination verification,\s+multiple host matches, unresolved activation history, and known target conflicts\s+stop deployment, not local preparation/);
-  assert.match(discovery, /deployment destination and\s+activation history are verified but only host inventory remains unavailable/);
-  assert.match(discovery, /`canContinue: true` for this fresh deployment preflight/);
-  assert.match(discovery, /Normal deployment consent is still required/);
+  const deployment = discovery.slice(discovery.indexOf('On deployment,'));
+  assert.doesNotMatch(deployment, /`canContinue: true` for this fresh deployment preflight/);
+  assert.doesNotMatch(deployment, /deployment is proceeding without verified\s+governance/);
   assert.match(discovery, /Apply actual\s+checker results unchanged/);
   const handoff = deploySkill.slice(deploySkill.indexOf('**Conditional setup-auth handoff:**'),
     deploySkill.indexOf('## Phase 4:'));
   assert.match(handoff, /Never reuse an\s+initial `continuation: "local-only"` as deployment approval/);
   assert.match(handoff, /Stop on unverified destination,\s+multiple host matches, unresolved history, known target conflicts/);
   assert.match(handoff, /Do not substitute environment governance for failed host\s+discovery or override a verified restriction/);
+});
+
+test('activated deployments require a trusted host even when the destination is verified', () => {
+  const { reference, deploySkill } = workflowSources();
+  const deployment = reference.slice(reference.indexOf('On deployment,'),
+    reference.indexOf("Run from the project's signed-in PAC environment:"));
+  assert.match(deployment, /previously activated target requires a trusted `portalId` from a matching\s+activation receipt or complete matching host inventory before upload/);
+  assert.match(deployment, /If no\s+trusted host can be resolved, keep `HostLookupUnavailable` or\s+`HostIdentityUnresolved` local-only and stop upload, even when the deployment\s+destination and activation history are verified/);
+  assert.match(deployment, /Preserve local artifacts and\s+defer remote IdP changes; deployment consent does not waive this guard/);
+  assert.match(deployment, /Only the checker's existing policy-read rules may allow warning-and-continue\s+after target\/host resolution; failed host discovery is not a policy-read failure/);
+  const handoff = deploySkill.slice(deploySkill.indexOf('**Conditional setup-auth handoff:**'),
+    deploySkill.indexOf('## Phase 4:'));
+  assert.match(handoff, /Follow the reference's local-only stop for\s+activated targets without a trusted `portalId`, even when the destination is\s+verified/);
+  assert.doesNotMatch(handoff, /`HostLookupUnavailable` warning-and-continue path/);
 });
 
 test('activated target resolution reuses only aligned receipts and falls back for missing host IDs', () => {
