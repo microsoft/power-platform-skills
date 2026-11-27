@@ -26,7 +26,10 @@ function testToken(tenant) {
 }
 
 function requestedPolicy(call) {
-  const prefix = `/websites/${portalId}/governance/`;
+  return policyFromRequest(call, `/websites/${portalId}/governance/`);
+}
+
+function policyFromRequest(call, prefix) {
   assert.equal(call.method, 'GET');
   assert.equal(call.body, undefined);
   assert.ok(call.path.startsWith(prefix), `Expected a policy read for the confirmed host: ${call.path}`);
@@ -35,7 +38,7 @@ function requestedPolicy(call) {
   return policy;
 }
 
-function harness(responses = {}, contextOverrides = {}) {
+function harness(responses = {}, contextOverrides = {}, scope = 'portal') {
   const context = {
     tenantId,
     environmentId: envId,
@@ -54,9 +57,12 @@ function harness(responses = {}, contextOverrides = {}) {
       resolveContext() { resolutions++; return context; },
       async request(args) {
         calls.push(args);
-        const response = responses[requestedPolicy(args)];
+        const policy = scope === 'environment'
+          ? policyFromRequest(args, '/governance/') : requestedPolicy(args);
+        const response = responses[policy];
         if (response instanceof Error) throw response;
-        return response === undefined ? { ok: true, statusCode: 200, body: true } : response;
+        return response === undefined
+          ? { ok: true, statusCode: 200, body: scope === 'environment' ? 'All' : true } : response;
       },
     },
   };
@@ -71,6 +77,106 @@ const providerPolicies = {
   'ws-federation': [ROOT, 'EnableProtocolWsFederation'],
   local: [ROOT, 'EnableAuthenticationLocalLogin'],
 };
+
+const environmentOptions = { ...options, portalId: null, scope: 'environment' };
+
+test('environment scope reads the complete deduplicated provider graph without a host ID', async () => {
+  const h = harness({}, {}, 'environment');
+  const providers = ['entra-id', ...Object.keys(providerPolicies)];
+  const result = await checker.checkAuthGovernance({ ...environmentOptions, providers }, h.dependencies);
+  assert.equal(result.allowed, true);
+  assert.equal(result.scope, 'environment');
+  assert.equal(result.portalId, null);
+  assert.equal(h.resolutions, 1);
+  assert.deepEqual(h.calls.map((call) => policyFromRequest(call, '/governance/')),
+    [...new Set(Object.values(providerPolicies).flat())]);
+  assert.match(result.message, /allowed by environment governance/);
+  assert.deepEqual(result.providers[0].blockedPolicies, []);
+});
+
+test('new-host environment scopes allow All/Exclude and block None/Include, including known aliases', async () => {
+  for (const [body, enabled] of [
+    ['All', true], [' AllSites ', true], ['EXCLUDE', true], ['ExcludeSites', true],
+    ['ExcludedSites', true], ['AllSitesExceptExcluded', true],
+    ['None', false], [' Include ', false], ['IncludeSites', false], ['IncludedSites', false],
+  ]) {
+    for (const policy of providerPolicies.facebook) {
+      const h = harness({ [policy]: { ok: true, statusCode: 200, body } }, {}, 'environment');
+      const result = await checker.checkAuthGovernance(environmentOptions, h.dependencies);
+      assert.equal(result.allowed, enabled, `${policy}: ${body}`);
+      assert.equal(result.canContinue, enabled);
+      assert.equal(result.status, enabled ? 'enabled' : 'blocked');
+      assert.deepEqual(result.providers[0].blockedPolicies.map((item) => item.policy), enabled ? [] : [policy]);
+    }
+  }
+});
+
+test('environment scope never interprets booleans, unknown envelopes, or unset/404 as policy decisions', async () => {
+  for (const response of [
+    ...[true, false, 'true', 'false', '', null, undefined, {}, { value: 'All' }, ['All'], 'future-scope', 1]
+      .map((body) => ({ ok: true, statusCode: 200, body })),
+    { ok: false, statusCode: 404 },
+  ]) {
+    const h = harness({ [FACEBOOK]: response }, {}, 'environment');
+    const result = await checker.checkAuthGovernance(environmentOptions, h.dependencies);
+    assert.equal(result.status, 'unverified');
+    assert.equal(result.allowed, false);
+    assert.equal(result.canContinue, false);
+    assert.deepEqual(result.providers[0].blockedPolicies, []);
+    assert.equal(result.providers[0].verificationErrors.length, 1);
+    assert.match(result.message, /environment governance could not be verified/);
+  }
+});
+
+test('environment scope preserves bounded retries, unavailable warnings, and known-block precedence', async () => {
+  for (const statusCode of [403, 405, 501, 429, 503, 0]) {
+    for (const blocked of [false, true]) {
+      const h = harness({
+        [FACEBOOK]: { ok: false, statusCode },
+        ...(blocked ? { [ROOT]: { ok: true, statusCode: 200, body: 'None' } } : {}),
+      }, {}, 'environment');
+      const result = await checker.checkAuthGovernance(environmentOptions, h.dependencies);
+      assert.equal(result.status, 'unverified');
+      assert.equal(result.allowed, false);
+      assert.equal(result.canContinue, !blocked);
+      assert.equal(h.resolutions, 1);
+      const attempts = h.calls.filter((call) => call.path.endsWith(`/${FACEBOOK}`)).length;
+      assert.equal(attempts, [429, 503, 0].includes(statusCode) ? 3 : 1);
+      assert.match(result.message, blocked ? /^Your administrator has restricted/ : /^Warning:.*environment governance/);
+    }
+  }
+});
+
+test('environment checks retain tenant, token, environment, and cloud guards', async () => {
+  for (const overrides of [
+    { tenantId: portalId }, { token: testToken(portalId) },
+    { environmentId: portalId }, { apiHost: 'https://untrusted.example' },
+  ]) {
+    const h = harness({}, overrides, 'environment');
+    const result = await checker.checkAuthGovernance(environmentOptions, h.dependencies);
+    assert.equal(result.canContinue, false);
+    assert.equal(result.status, 'unverified');
+    assert.equal(h.calls.length, 0);
+  }
+  const h = harness({}, {}, 'environment');
+  const result = await checker.checkAuthGovernance({ ...environmentOptions, tenantId: undefined }, h.dependencies);
+  assert.equal(result.canContinue, false);
+  assert.equal(h.resolutions, 0);
+  assert.equal(h.calls.length, 0);
+});
+
+test('environment mode is explicit and cannot override a supplied host ID', async () => {
+  for (const target of [
+    { ...options, portalId: null },
+    { ...options, scope: 'environment' },
+    { ...environmentOptions, scope: 'invalid' },
+  ]) {
+    const h = harness();
+    await assert.rejects(checker.checkAuthGovernance(target, h.dependencies), TypeError);
+    assert.equal(h.resolutions, 0);
+    assert.equal(h.calls.length, 0);
+  }
+});
 
 test('workforce Entra-only setup needs no governance target, authentication, or policy reads', async () => {
   const h = harness();
@@ -622,6 +728,36 @@ async function invokeCli(h, flags, emit = (result) => JSON.parse(JSON.stringify(
   return { output, stderr, exitCode: sandbox.process.exitCode };
 }
 
+test('environment CLI routes explicit scope without portalId and preserves decision exit codes', async () => {
+  for (const [response, exitCode, canContinue] of [
+    [{ ok: true, statusCode: 200, body: 'Exclude' }, 0, true],
+    [{ ok: true, statusCode: 200, body: 'Include' }, 1, false],
+    [{ ok: false, statusCode: 404 }, 2, false],
+    [{ ok: false, statusCode: 403 }, 2, true],
+  ]) {
+    const h = harness({ [FACEBOOK]: response }, {}, 'environment');
+    const result = await invokeCli(h, [
+      '--scope', 'environment', '--tenantId', tenantId, '--envId', envId, '--providers', 'facebook',
+    ]);
+    assert.equal(result.exitCode, exitCode, result.stderr);
+    assert.equal(result.output.scope, 'environment');
+    assert.equal(result.output.portalId, null);
+    assert.equal(result.output.canContinue, canContinue);
+    assert.equal(h.resolutions, 1);
+    assert.ok(h.calls.every((call) => call.path.startsWith('/governance/')));
+    assert.doesNotMatch(JSON.stringify(result.output), /PRIVATE_TEST_TOKEN/);
+  }
+  const h = harness();
+  const invalid = await invokeCli(h, [
+    '--scope', 'environment', '--tenantId', tenantId, '--envId', envId,
+    '--portalId', portalId, '--providers', 'facebook',
+  ]);
+  assert.equal(invalid.exitCode, 3);
+  assert.match(invalid.stderr, /do not supply portalId/);
+  assert.equal(h.resolutions, 0);
+  assert.equal(h.calls.length, 0);
+});
+
 test('CLI usage errors exit 3 without claiming a governance restriction or sending requests', async () => {
   for (const flags of [
     [], ['--providers', 'unsupported'],
@@ -710,8 +846,8 @@ test('CLI tenant mismatch/unavailability exits 2 with zero governance requests',
   }
 });
 
-test('setup-auth checks before provider walkthroughs and again before deployment', () => {
-  const { skill, reference } = workflowSources();
+test('setup-auth checks activated targets before walkthroughs and after final deployment selection', () => {
+  const { skill, reference, deploySkill } = workflowSources();
   const selection = skill.indexOf('**Before provider-specific follow-ups:**');
   assert.ok(selection > 0 && selection < skill.indexOf('**For "Facebook"**'));
   const initial = skill.slice(selection, skill.indexOf('**Blocked-message presentation:**'));
@@ -719,8 +855,16 @@ test('setup-auth checks before provider walkthroughs and again before deployment
   assert.match(initial, /initial.*check once/);
   assert.match(initial, /reuse an initial result already obtained for the same unchanged context/);
   const deploy = skill.slice(skill.indexOf('#### 8.4 Ask to Deploy'), skill.indexOf('#### 8.5'));
-  assert.match(deploy, /Rerun the governance preflight.*immediately before invoking `\/deploy-site`/);
+  assert.match(deploy, /Invoke `\/deploy-site` with the complete provider selection and retained activation\/target context/);
+  assert.match(deploy, /after final environment confirmation and before upload/);
+  assert.match(deploy, /Rerun the shared preflight there, not against an environment that may change/);
   assert.match(deploy, /Deploy only when batch `canContinue: true`/);
+  const confirm = deploySkill.slice(deploySkill.indexOf('## Phase 3: Confirm Environment'),
+    deploySkill.indexOf('## Phase 4:'));
+  assert.ok(confirm.indexOf('**Conditional setup-auth handoff:**') > confirm.indexOf('Verify the switch'));
+  assert.match(confirm, /after\s+the final environment confirmation and before any upload \(including retries\)/);
+  assert.match(confirm, /never reuse another environment's host ID or\s+initial policy result/);
+  assert.match(confirm, /Workforce Entra-only and unrelated standalone deployments do\s+not acquire this governance gate/);
   assert.match(reference, /Stop the entire selected batch before mutation/);
   assert.match(reference, /does not invoke or re-enable/);
   assert.match(reference, /not a visitor-side runtime filter/);
@@ -780,13 +924,14 @@ test('two-check lifecycle invalidates changed or uncertain context and preserves
   const lifecycle = reference.slice(start, end);
   assert.match(lifecycle, /two check points/);
   assert.match(lifecycle, /Initial check:.*After selecting all providers, before provider-specific/);
-  assert.match(lifecycle, /Deployment check:.*After deployment consent, immediately before invoking/);
+  assert.match(lifecycle, /Deployment check:.*After deployment consent, pass the complete provider/);
+  assert.match(lifecycle, /After its final\s+environment confirmation and before upload, run a fresh preflight/);
   assert.match(lifecycle, /Never reuse the initial result for deployment/);
   assert.match(lifecycle, /If the user does not deploy, no deployment check is needed/);
   assert.match(lifecycle, /smart-inference, keep-only, and normal selection paths share this same initial\s+check/);
   assert.match(lifecycle, /Do not repeat inventory, CLI authentication resolution,\s+or policy reads solely because a phase changes, a consent prompt is answered,\s+or an ordinary pause\/resume occurs/);
   assert.match(lifecycle, /Retain `canContinue`, `allowed`, and the warning/);
-  assert.match(lifecycle, /when the target, owning tenant,\s+account\/cloud context, or selected provider instances change/);
+  assert.match(lifecycle, /when activation status changes or when the target, owning tenant,\s+account\/cloud context, or selected provider instances change/);
   assert.match(lifecycle, /if the result or context is missing or uncertain, recheck instead/);
   assert.match(lifecycle, /Do not persist tokens, create an on-disk cache, or reuse results across\s+independent setup runs/);
   assert.match(lifecycle, /Workforce Entra-only setup remains exempt from both check points/);
@@ -799,24 +944,108 @@ test('two-check lifecycle invalidates changed or uncertain context and preserves
 test('governed-provider target instructions distinguish activation, failed discovery, and sign-in recovery', () => {
   const { skill, reference } = workflowSources();
   const prerequisites = skill.slice(skill.indexOf('> **Prerequisites:**'), skill.indexOf('## Workflow'));
-  assert.match(prerequisites, /governance preflight additionally needs a provisioned host and PAC\/Azure CLI sign-in/);
+  assert.match(prerequisites, /governance preflight needs a confirmed environment and PAC\/Azure CLI sign-in/);
   assert.match(prerequisites, /Deployment alone does not establish activation or a host `portalId`/);
   assert.match(prerequisites, /Workforce Entra-only setup is exempt/);
   const recovery = reference.slice(reference.indexOf('### Governed-provider prerequisites and recovery'),
     reference.indexOf('Run from the project'));
-  assert.match(recovery, /Verify a previously obtained `portalId` \(including one reported during deployment\)/);
+  assert.match(recovery, /Verify a previously obtained `portalId` without a matching activation receipt/);
   assert.match(recovery, /match the project's\s+`websiteRecordId` and deployed URL when available/);
   assert.match(recovery, /Successful, complete inventory has no matching host.*\/activate-site/);
   assert.match(recovery, /after activation, refresh inventory before retrying setup/);
   assert.match(recovery, /Inventory read fails, returns an error, or is partial\/incomplete.*do not claim the site is inactive/);
   assert.match(recovery, /Confirm pagination completed before concluding no host exists/);
-  assert.match(recovery, /Multiple matches, conflicting IDs\/URLs, or failed\/obsolete hosts.*Stop/);
+  assert.match(recovery, /Multiple matching hosts or uncertain activation history.*HostIdentityUnresolved.*local preparation only/);
+  assert.match(recovery, /Conflicting IDs\/URLs\/tenant\/environment\/cloud, or a known failed\/obsolete host.*Stop remote changes/);
   assert.match(recovery, /If PAC is not signed in/);
   assert.match(recovery, /If Azure CLI sign-in is missing/);
   assert.match(recovery, /Never switch accounts or environments automatically/);
   assert.match(recovery, /Workforce Entra-only setup skips this entire governance-specific prerequisite/);
   assert.match(recovery, /Do not\s+activate a site automatically/);
-  assert.match(recovery, /warning-and-continue rule to bypass unresolved identity\s+or inventory failures/);
+  assert.match(recovery, /warning-and-continue rule to bypass an unverified deployment\s+destination or a known target conflict/);
+});
+
+test('failed host discovery permits warned local preparation without weakening checker decisions', () => {
+  const { skill, reference } = workflowSources();
+  const discovery = reference.slice(reference.indexOf('### Discovery unavailable: local preparation only'),
+    reference.indexOf("Run from the project's signed-in PAC environment:"));
+  const outcome = discovery.match(/```json\s+([\s\S]*?)\s+```/);
+  assert.ok(outcome, 'The workflow must retain an explicit discovery outcome');
+  assert.deepEqual(JSON.parse(outcome[1]), {
+    status: 'unverified', allowed: false, canContinue: true,
+    reason: 'HostLookupUnavailable', continuation: 'local-only',
+  });
+  assert.match(discovery, /workflow decisions, not checker responses or a new CLI\s+mode/);
+  assert.match(discovery, /Do not select environment scope merely because\s+discovery failed/);
+  assert.match(discovery, /Use `HostIdentityUnresolved` instead\s+when no unique host or reliable activation history/);
+  assert.match(discovery, /Never\s+trust partial inventory/);
+  assert.match(discovery, /at most three\s+inventory attempts/);
+  assert.match(discovery, /do not retry permissions, invalid pagination, or malformed\s+responses automatically/);
+  assert.match(discovery, /Show this warning once before continuing/);
+  assert.match(discovery, /only local settings\/code\/UI generation\s+and non-mutating guidance/);
+  assert.match(discovery, /not\s+governance approval or permission for remote IdP provisioning, deployment, or\s+activation/);
+  assert.match(discovery, /Never downgrade a verified restriction/);
+  assert.match(discovery, /a checker's `canContinue: false` to this\s+outcome/);
+  assert.match(skill, /Carry its discovery warning through\s+all local generation phases without repeatedly prompting or retrying discovery/);
+  const provision = skill.slice(skill.indexOf('#### 2.1.2'), skill.indexOf('#### 2.2'));
+  assert.match(provision, /An initial `continuation: "local-only"`/);
+  assert.match(provision, /Defer configure-for-you\s+provisioning until target verification/);
+});
+
+test('deployment never reuses local-only permission and distinguishes unavailable inventory from unresolved destination', () => {
+  const { reference, deploySkill } = workflowSources();
+  const discovery = reference.slice(reference.indexOf('### Discovery unavailable: local preparation only'),
+    reference.indexOf("Run from the project's signed-in PAC environment:"));
+  assert.match(discovery, /discard the initial local-only continuation and retry discovery\s+after final environment selection/);
+  assert.match(discovery, /verify the exact local website record in `pac pages list`/);
+  assert.match(discovery, /Missing website records, failed destination verification,\s+multiple host matches, unresolved activation history, and known target conflicts\s+stop deployment, not local preparation/);
+  assert.match(discovery, /deployment destination and\s+activation history are verified but only host inventory remains unavailable/);
+  assert.match(discovery, /`canContinue: true` for this fresh deployment preflight/);
+  assert.match(discovery, /Normal deployment consent is still required/);
+  assert.match(discovery, /Apply actual\s+checker results unchanged/);
+  const handoff = deploySkill.slice(deploySkill.indexOf('**Conditional setup-auth handoff:**'),
+    deploySkill.indexOf('## Phase 4:'));
+  assert.match(handoff, /Never reuse an\s+initial `continuation: "local-only"` as deployment approval/);
+  assert.match(handoff, /Stop on unverified destination,\s+multiple host matches, unresolved history, known target conflicts/);
+  assert.match(handoff, /Do not substitute environment governance for failed host\s+discovery or override a verified restriction/);
+});
+
+test('activated target resolution reuses only aligned receipts and falls back for missing host IDs', () => {
+  const { reference } = workflowSources();
+  const target = reference.slice(reference.indexOf('### Confirm the target'),
+    reference.indexOf('Run from the project'));
+  assert.match(target, /`docs\/alm\/last-activate.json`/);
+  assert.match(target, /`websiteHostId`/);
+  assert.match(target, /website record ID matches the local project, its environment ID\/URL matches\s+the confirmed target/);
+  assert.match(target, /current `pac auth who` context is a connection check, not proof of where the\s+site was deployed/);
+  assert.match(target, /use it as `portalId` without a\s+mandatory inventory read/);
+  assert.match(target, /stale\/deleted host's\s+404 stops verification, not an environment-scope fallback/);
+  assert.match(target, /If no usable host ID is available, confirm the intended environment explicitly/);
+  assert.match(target, /Only a result without `error` establishes a complete inventory/);
+});
+
+test('never-activated targets confirm the PAC environment and use checked environment scope', () => {
+  const { skill, reference, deploySkill } = workflowSources();
+  const skip = reference.slice(reference.indexOf('**Confirmed never activated:**'),
+    reference.indexOf('For both scopes, PAC'));
+  assert.match(skip, /user confirms this project site has never\s+been activated and no conflicting activation evidence exists/);
+  assert.match(skip, /check environment-level governance using\s+`--scope environment` without `--portalId`/);
+  assert.match(skip, /There is no unchecked continuation/);
+  assert.match(skip, /Missing receipts, missing IDs, unreachable URLs, and failed lookups do not prove/);
+  const target = reference.slice(reference.indexOf('### Confirm the target'),
+    reference.indexOf('Run from the project'));
+  assert.match(target, /read `pac auth who` and present its\s+environment name, URL, and ID as a candidate/);
+  assert.match(target, /same confirmation pattern\s+as `\/deploy-site`/);
+  assert.match(target, /`pac org list`/);
+  assert.match(target, /pac org select --environment/);
+  assert.match(target, /Verify the exact\s+local website record ID is present in `pac pages list`/);
+  const lifecycle = reference.slice(reference.indexOf('## Check lifecycle'),
+    reference.indexOf('## Reads and decisions'));
+  assert.match(lifecycle, /If the site has since been\s+activated, resolve its host and run the live portal check before upload/);
+  assert.match(lifecycle, /Never reuse an environment-scope result after activation/);
+  assert.match(skill, /Neither path bypasses governance or the normal consent gates/);
+  assert.match(deploySkill, /For confirmed never-provisioned targets, run environment-level governance/);
+  assert.doesNotMatch(skill, /not-checked|continue normal setup without a governance notice/);
 });
 
 // Keep these IDs aligned with the maker-facing 66-case plan. These cases run
@@ -1058,6 +1287,7 @@ function workflowSources() {
   return {
     skill: fs.readFileSync(path.join(root, 'skills', 'setup-auth', 'SKILL.md'), 'utf8'),
     reference: fs.readFileSync(path.join(root, 'skills', 'setup-auth', 'references', 'governance-preflight.md'), 'utf8'),
+    deploySkill: fs.readFileSync(path.join(root, 'skills', 'deploy-site', 'SKILL.md'), 'utf8'),
   };
 }
 

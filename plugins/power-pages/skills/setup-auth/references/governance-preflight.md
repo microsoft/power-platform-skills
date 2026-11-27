@@ -33,7 +33,23 @@ Initial deployment uploads the site's code/metadata and provides the local
 Activation provisions the runtime host; governance reads target that host's
 `portalId`, not the Dataverse `websiteRecordId`.
 
-For governed providers, PAC must select the target environment and Azure CLI
+First establish activation history with the user and the project's existing
+activation evidence. A matching successful activation receipt or an existing
+runtime host requires the activated-portal path below, even if the host is
+currently stopped or unreachable.
+
+**Confirmed never activated:** If the user confirms this project site has never
+been activated and no conflicting activation evidence exists, do not require a
+host or call the portal checker with missing IDs. Confirm the target environment
+as described below, then check environment-level governance using
+`--scope environment` without `--portalId`. There is no unchecked continuation:
+apply the same batch decision, warning, and consent rules as portal checks.
+Missing receipts, missing IDs, unreachable URLs, and failed lookups do not prove
+the site was never activated. If history is uncertain, use the local-only
+discovery outcome below rather than taking this path. Conflicting target evidence
+requires clarification before remote changes.
+
+For both scopes, PAC must select the target environment and Azure CLI
 must be signed in to its confirmed owning tenant in the matching cloud.
 If PAC is not signed in, direct the user to authenticate with PAC for the target
 environment. If Azure CLI sign-in is missing, direct the user to `az login`
@@ -42,6 +58,10 @@ only for accounts without an associated subscription. If the account or token
 tenant differs from the confirmed owner, stop and explain which sign-in context
 needs correction. Never switch accounts or environments automatically, expose
 tokens, or treat a sign-in failure as an authentication restriction.
+If missing/expired sign-in prevents discovery before a checker call, use the
+local-only discovery outcome below instead of blocking local preparation.
+An observed tenant/environment/cloud mismatch is a target conflict, not an
+unavailable lookup; do not convert it to warning-based approval.
 
 Workforce Entra-only setup skips this entire governance-specific prerequisite
 and recovery section; it still requires the ordinary deployed-site/web-role
@@ -54,11 +74,48 @@ metadata or explicit user input. Do not infer it from the current Azure CLI
 account. Retain this confirmed `TENANT_ID` for every preflight and recheck; if the
 target changes, confirm its owner again. Never switch accounts automatically.
 
-Resolve the project's environment GUID and **Power Platform host ID** from the
-target environment's normalized website inventory (`portals[].portalId`), matching the project's
-Dataverse `websiteRecordId` and deployed URL. Do not select by name alone, use
+Read the project's `.powerpages-site/website.yml` for its Dataverse website record
+ID; this file does not establish an environment or runtime host ID. Inspect
+`docs/alm/last-activate.json` when present. A receipt with successful `Activated`
+or `AlreadyActivated` status can supply `environmentId`, `environmentUrl`,
+`websiteRecordId`, `siteUrl`, and optionally `websiteHostId`. Older receipts may
+omit the host ID; do not require a new receipt or invent missing fields.
+
+Confirm the intended environment with the user. Reuse a receipt only when its
+website record ID matches the local project, its environment ID/URL matches
+the confirmed target, and its site URL agrees with any independently known
+deployed URL. Validate IDs as non-zero GUIDs and keep host and record IDs distinct.
+The current `pac auth who` context is a connection check, not proof of where the
+site was deployed. On a PAC/receipt/target mismatch, stop and explain the mismatch;
+do not switch automatically or reuse the old host in a different environment.
+Confirm the owning tenant separately if the receipt does not establish it.
+
+When no reliable saved environment exists, read `pac auth who` and present its
+environment name, URL, and ID as a candidate, using the same confirmation pattern
+as `/deploy-site`. Ask whether this is the environment for this deployed website.
+If not, let the user select the intended environment using `pac org list` and,
+with their approval, `pac org select --environment "<ID_OR_URL>"`; reread
+`pac auth who` to obtain the final ENV_ID. Never infer the deployed environment
+from the website ID or silently accept the current connection. Verify the exact
+local website record ID is present in `pac pages list` for the confirmed
+environment; a missing record, failed list, or conflict stops target resolution.
+Before local generation, missing/unavailable identity may use the local-only
+discovery outcome below; deployment must wait until the destination is verified.
+The website's presence verifies this target, not a unique last-deployment history.
+Use that confirmed ENV_ID and owning tenant for either governance scope.
+
+When a matching receipt includes `websiteHostId`, use it as `portalId` without a
+mandatory inventory read. The live checker must still run; a stale/deleted host's
+404 stops verification, not an environment-scope fallback. A failed, malformed, or
+conflicting receipt cannot establish a trusted target; clarify it first.
+
+If no usable host ID is available, confirm the intended environment explicitly
+and resolve the **Power Platform host ID** from that environment's normalized
+website inventory (`portals[].portalId`), matching the project's
+Dataverse `websiteRecordId` and deployed URL when available. Do not select by name alone, use
 the Dataverse record ID as `portalId`, or use a failed/obsolete host. If the
-identity is ambiguous, stop and ask the user to confirm the target.
+identity is ambiguous, do not choose a host. Retain the uncertainty for target
+clarification before deployment; local preparation may continue as below.
 
 For inventory reads, reuse `fetchPortalsPaged(context)` exported by
 `skills/manage-governance/scripts/list-portals.js`, passing the normal
@@ -67,8 +124,11 @@ inventory CLI with its implicit TIP configuration or trust partial/error results
 `fetchPortalsPaged(context)` returns `{ portals, error }`; match each entry's
 `portalId`, `websiteRecordId`, and `websiteUrl`. Raw API `id`/`Id` fields are
 normalized by the helper and are not fields on these returned entries.
+An `error` also reports malformed pages/records, invalid or non-advancing
+pagination links, and reaching the page limit while more pages remain.
+Only a result without `error` establishes a complete inventory.
 
-Verify a previously obtained `portalId` (including one reported during deployment)
+Verify a previously obtained `portalId` without a matching activation receipt
 against this inventory before reusing it. The entry must match the project's
 `websiteRecordId` and deployed URL when available, in the confirmed environment.
 An ID printed by an upload is not sufficient evidence that it is the host ID.
@@ -78,16 +138,76 @@ Handle inventory outcomes before invoking the checker:
 | Inventory outcome | Required action |
 |---|---|
 | One matching provisioned host | Use its normalized `portalId`; keep `websiteRecordId` separate |
-| Successful, complete inventory has no matching host | Explain that no provisioned host was found for this target and direct the user to `/activate-site` to verify/complete activation; after activation, refresh inventory before retrying setup |
-| Inventory read fails, returns an error, or is partial/incomplete | Stop target resolution and report the inventory failure with sign-in/permission/network recovery guidance; do not claim the site is inactive |
-| Multiple matches, conflicting IDs/URLs, or failed/obsolete hosts | Stop and obtain target clarification; do not choose by name, substitute the record ID, or reuse a stale host |
+| Successful, complete inventory has no matching host | This alone does not establish activation history. For a confirmed never-provisioned target, check environment-level governance with `--scope environment`. Otherwise retain `HostIdentityUnresolved`, warn, and continue local preparation only. Resolve the target/history before deployment; if the user chooses recovery with `/activate-site`, after activation, refresh inventory before retrying setup |
+| Inventory read fails, returns an error, or is partial/incomplete | Retain `HostLookupUnavailable`, warn, and continue local preparation only, with sign-in/permission/network recovery guidance; do not claim the site is inactive or use partial records |
+| Multiple matching hosts or uncertain activation history | Retain `HostIdentityUnresolved`, warn, and continue local preparation only; resolve identity before deployment, never choose by name |
+| Conflicting IDs/URLs/tenant/environment/cloud, or a known failed/obsolete host | Stop remote changes and obtain target clarification; do not substitute the record ID, reuse a stale host, or classify a target conflict as an unavailable lookup |
 
 Confirm pagination completed before concluding no host exists. An empty or
 partial list from a failed read is not proof of missing activation. Do not
 activate a site automatically, substitute `websiteRecordId` for `portalId`,
-or use the policy-read warning-and-continue rule to bypass unresolved identity
-or inventory failures. These steps document the existing discovery workflow;
+or use the policy-read warning-and-continue rule to bypass an unverified deployment
+destination or a known target conflict. Inventory is a fallback, not mandatory for
+a matching activation receipt. These steps document the discovery workflow;
 the checker still accepts explicit verified target IDs, not `--projectRoot`.
+
+### Discovery unavailable: local preparation only
+
+Discovery outcomes are workflow decisions, not checker responses or a new CLI
+mode. If host discovery cannot finish, do not invoke the checker with a null,
+guessed, or ambiguous host ID. Do not select environment scope merely because
+discovery failed. Retain this initial result in the current run's context:
+
+```json
+{
+  "status": "unverified",
+  "allowed": false,
+  "canContinue": true,
+  "reason": "HostLookupUnavailable",
+  "continuation": "local-only"
+}
+```
+
+Use `HostLookupUnavailable` for expired/missing sign-in, permission/network/service
+errors, or malformed/incomplete inventory. Use `HostIdentityUnresolved` instead
+when no unique host or reliable activation history can be established. Never
+trust partial inventory. Recovery attempts must be bounded: at most three
+inventory attempts for clearly transient network/429/5xx failures, with
+500 ms/1000 ms waits; do not retry permissions, invalid pagination, or malformed
+responses automatically. Stop retries on success or a non-transient failure;
+discard incomplete pages before any retry. Never sign in or switch accounts
+automatically. If the error cannot be classified, do not retry it automatically;
+retain it as unverified, not as evidence of absent activation.
+
+Show this warning once before continuing, with a concise recovery reason and
+without raw API bodies, tokens, or private exception details:
+
+> We couldn't resolve the site's runtime host, so authentication governance could not be verified. Local IdP settings and auth-code generation will continue. Administrator policies may prevent sign-in from working. The target will be checked again before deployment.
+
+This initial `canContinue: true` permits only local settings/code/UI generation
+and non-mutating guidance, under the existing plan/settings consent. It is not
+governance approval or permission for remote IdP provisioning, deployment, or
+activation. Defer real IdP changes until target verification and the applicable
+preflight permit them; do not invent missing provider values to finish generation.
+Never downgrade a verified restriction for the same unchanged target/provider
+selection, a known target conflict, or a checker's `canContinue: false` to this
+outcome. Keep selected providers intact and leave governance policies unchanged.
+
+On deployment, discard the initial local-only continuation and retry discovery
+after final environment selection. Confirm the owning tenant and account/cloud
+alignment, and verify the exact local website record in `pac pages list` for the
+confirmed environment. Missing website records, failed destination verification,
+multiple host matches, unresolved activation history, and known target conflicts
+stop deployment, not local preparation. If the deployment destination and
+activation history are verified but only host inventory remains unavailable,
+retain `HostLookupUnavailable`, `status: "unverified"`, `allowed: false`, and
+`canContinue: true` for this fresh deployment preflight. Replace the local-only
+warning with an explicit warning that deployment is proceeding without verified
+governance and sign-in may not work. Normal deployment consent is still required.
+Do not treat this as environment-level approval or automatically provision an IdP.
+If a host is recovered, run the portal checker; if never-provisioned status is
+confirmed without conflicting evidence, run the environment checker. Apply actual
+checker results unchanged, including all non-continuable errors and restrictions.
 
 Run from the project's signed-in PAC environment:
 
@@ -95,10 +215,22 @@ Run from the project's signed-in PAC environment:
 node "${PLUGIN_ROOT}/scripts/check-auth-governance.js" --tenantId "<TENANT_ID>" --envId "<ENV_ID>" --portalId "<HOST_ID>" --websiteRecordId "<WEBSITE_RECORD_ID>" --providers "facebook,google"
 ```
 
+For a confirmed never-provisioned target, use the same validated environment and
+owning tenant without inventing a host ID:
+
+```text
+node "${PLUGIN_ROOT}/scripts/check-auth-governance.js" --scope environment --tenantId "<TENANT_ID>" --envId "<ENV_ID>" --websiteRecordId "<WEBSITE_RECORD_ID>" --providers "facebook,google"
+```
+
+Environment scope is explicit; omitting a portal ID in the default portal scope
+is an input error, not an automatic fallback. Do not select environment scope for
+an existing but unresolved, stopped, deleted, or unreachable host. Supplying a
+host ID together with environment scope is rejected.
+
 The checker requires the expected owning tenant and verifies GUIDs plus
 tenant/environment/cloud alignment. The optional
 record ID rejects accidentally passing that ID as the host ID; it does not
-replace inventory matching. It resolves the normal PAC/Azure CLI context once,
+replace the receipt or inventory identity checks. It resolves the normal PAC/Azure CLI context once,
 never the governance helper's implicit TIP context.
 
 Before governance reads, the checker compares the confirmed owner with both
@@ -131,14 +263,25 @@ A normal governed-provider setup run has **two check points**:
    walkthroughs, IdP provisioning, or any auth code/UI/settings changes. The
    smart-inference, keep-only, and normal selection paths share this same initial
    check; do not run it twice when they converge.
-2. **Deployment check:** After deployment consent, immediately before invoking
-   `/deploy-site`, run a fresh check against the confirmed deployment target and
-   complete provider selection. Never reuse the initial result for deployment.
+2. **Deployment check:** After deployment consent, pass the complete provider
+   selection and activation/target context to `/deploy-site`. After its final
+   environment confirmation and before upload, run a fresh preflight against
+   that deployment target. Never reuse the initial result for deployment.
    If the user does not deploy, no deployment check is needed.
+
+At both check points, use portal scope when a host is resolved and environment
+scope only for a confirmed never-provisioned target. If the site has since been
+activated, resolve its host and run the live portal check before upload.
+A changed environment or uncertain activation history requires fresh target
+resolution. Never reuse an environment-scope result after activation.
+Activation remains optional.
+When discovery is unavailable, follow the explicit local-only/deployment rules
+above instead of inventing a checker result. A local-only result never authorizes
+IdP provisioning or upload and must not be reused as deployment approval.
 
 Retain the initial result in the current run's conversation context, together
 with its confirmed owning tenant, environment, host/website-record identity,
-account/cloud context, selected provider instances, and normalized checker
+account/cloud context, governance scope and activation history, selected provider instances, and normalized checker
 provider keys. Retain `canContinue`, `allowed`, and the warning as well; a
 warning-based continuation must never become verified approval when reused.
 Do not persist tokens, create an on-disk cache, or reuse results across
@@ -150,8 +293,12 @@ reuse the initial result. Do not repeat inventory, CLI authentication resolution
 or policy reads solely because a phase changes, a consent prompt is answered,
 or an ordinary pause/resume occurs. Existing provisioning and settings consent
 remain mandatory.
+If the initial result has `continuation: "local-only"`, reuse it only for local
+generation and non-mutating guidance; defer remote IdP provisioning. Retain its
+discovery warning just like an unavailable-read warning. Do not repeatedly prompt
+or retry merely because a generation phase changes.
 
-**Invalidate before further affected work** when the target, owning tenant,
+**Invalidate before further affected work** when activation status changes or when the target, owning tenant,
 account/cloud context, or selected provider instances change. Reconfirm the
 target as needed and run a new initial check for the complete revised selection;
 do not apply an earlier provider's approval to a newly added provider. On resume,
@@ -160,7 +307,7 @@ retained; if the result or context is missing or uncertain, recheck instead.
 Do not resolve CLI authentication again just to support normal phase transitions.
 Workforce Entra-only setup remains exempt from both check points.
 
-At either check point or an invalidation recheck, apply the same bounded retries
+For actual checker calls at either check point or an invalidation recheck, apply the same bounded retries
 and batch `canContinue` decision below. If a deployment check stops, preserve all
 earlier local artifacts and report what was already changed, plus any earlier
 IdP provisioning. Do not deploy, automatically roll back, or claim that the
@@ -171,15 +318,29 @@ make the complete setup transactional.
 
 Every unique required policy uses `request()` from
 `scripts/lib/power-platform-api.js` with `method: 'GET'`, an explicit validated
-normal CLI context, and path `/websites/{portalId}/governance/{policy}`.
+normal CLI context, and path `/websites/{portalId}/governance/{policy}` for an
+existing host or `/governance/{policy}` for a confirmed never-provisioned host.
 The shared client adds the API version and authenticates the request:
 
 ```http
 GET {cloudApiHost}/powerpages/environments/{envId}/websites/{portalId}/governance/{policy}?api-version=2022-03-01-preview
 ```
 
-The server resolves portal inclusion/exclusion. Do not call `getEnv`/`getDetails`
-or interpret membership lists. All required reads start in parallel, with shared
+The server resolves portal inclusion/exclusion. For environment scope, the direct
+GET uses the same base URL without `/websites/{portalId}`; do not invoke archived
+`getEnv`/`getDetails` wrappers or fetch membership lists.
+
+| Environment response | Never-provisioned host |
+|---|---|
+| `All` / `AllSites` | Enabled |
+| `Exclude` and supported Exclude aliases | Enabled; the future host is not already excluded |
+| `Include` and supported Include aliases | Disabled; the future host is not already included |
+| `None` | Disabled |
+| Unknown/missing values, unexpected envelopes, or HTTP 404 | Unverified; never infer enabled or disabled |
+
+These membership-free rules apply only to genuinely never-provisioned hosts,
+not existing hosts whose ID was lost or whose lookup failed. Scope strings are
+trimmed and case-insensitive. All required reads start in parallel, with shared
 parents read once per batch and no persistent cache.
 
 | Provider | Required portal policies |
@@ -193,7 +354,7 @@ parents read once per batch and no persistent cache.
 | WS-Federation | External Auth + WS-Federation |
 | Local login | External Auth + Local Login |
 
-Verified approval requires boolean `true` (or text `true`, ignoring case and
+In portal scope, verified approval requires boolean `true` (or text `true`, ignoring case and
 surrounding whitespace) for every requirement. Boolean `false`/text `false`
 (also case-insensitive) is disabled. Other
 response shapes and read failures remain **unverifiable**, never converted to
@@ -240,7 +401,7 @@ policy. Do not retry by switching accounts, using admin credentials, or changing
 the target. A malformed response/envelope or unclassified thrown error is not
 proof of a network outage and does not permit continuation.
 
-At **every preflight and recheck**, when batch `canContinue: true` but
+For **checker responses** at every preflight and recheck, when batch `canContinue: true` but
 `allowed: false`, show its warning before proceeding: governance could not be
 verified, setup is continuing without treating the policies as enabled, and
 Power Pages runtime governance still applies. Configured sign-in methods may
@@ -308,8 +469,11 @@ the check's no-change statement applies only to the read-only checker.
 
 ## Importable function
 
-`scripts/check-auth-governance.js` exports `checkAuthGovernance({ tenantId, envId, portalId,
-websiteRecordId?, providers, context? })` for detailed diagnostics.
+`scripts/check-auth-governance.js` exports `checkAuthGovernance({ tenantId, envId,
+portalId?, scope?, websiteRecordId?, providers, context? })` for detailed diagnostics.
+Scope defaults to `portal` and requires a host ID. `scope: "environment"` requires
+confirmed absence of a provisioned host and no portal ID. Governed results include
+the selected scope and a null `portalId` for environment-level checks.
 Use the batch `canContinue` and `message` to implement warning-and-continue,
 not `allowed` alone: continuable outages remain unverified, not approved.
 No API bodies, tokens, or raw exceptions are included in its output.

@@ -201,6 +201,27 @@ The following phases retain the existing SPA behavior.
 
    5. Verify the switch by running `pac auth who` again.
 
+**Conditional setup-auth handoff:** When invoked by `/setup-auth` with governed
+providers and activation/target context, follow
+`${PLUGIN_ROOT}/skills/setup-auth/references/governance-preflight.md` now, after
+the final environment confirmation and before any upload (including retries).
+Re-resolve changed target identity; never reuse another environment's host ID or
+initial policy result. Run a fresh portal-level check for activated targets.
+For confirmed never-provisioned targets, run environment-level governance with
+`--scope environment` and no portal ID. Resolve a
+newly activated host and switch to portal scope before upload. Never reuse an
+initial `continuation: "local-only"` as deployment approval. Verify the exact
+website record belongs to the confirmed destination and confirm owning-tenant,
+account, and cloud alignment before applying the reference's fresh
+`HostLookupUnavailable` warning-and-continue path. Stop on unverified destination,
+multiple host matches, unresolved history, known target conflicts, or batch
+`canContinue: false`. Do not substitute environment governance for failed host
+discovery or override a verified restriction. Preserve local
+artifacts on a stop. If target/provider/account context changes before upload or
+a retry, invalidate and rerun this handoff. Unchanged retries may reuse this
+deployment check. Workforce Entra-only and unrelated standalone deployments do
+not acquire this governance gate.
+
 **Output**: Confirmed target environment for deployment
 
 ---

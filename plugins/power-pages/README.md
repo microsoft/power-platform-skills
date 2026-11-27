@@ -290,7 +290,7 @@ Generates web role YAML files in your `.powerpages-site` directory for managing 
 Adds login/logout functionality and role-based authorization to your site.
 
 - Auth service with anti-forgery token handling
-- Read-only portal governance checks after provider selection before setup changes, and fresh before deployment; generation reuses the initial result unless its target/provider/account context changes or is uncertain. Confirmed restrictions stop setup; unavailable reads use bounded retries followed by warning-and-continue. Invalid targets and other verification failures still stop setup. Workforce Microsoft Entra ID is exempt; Microsoft Entra External ID remains governed as OIDC. No governance policies are changed.
+- Read-only governance checks before setup and fresh after final deployment-target selection: portal-level for resolved hosts, environment-level for confirmed never-provisioned targets. Unavailable or ambiguous host discovery permits warned local preparation only; deployment requires fresh destination verification. Confirmed restrictions and non-continuable checker errors still block. Workforce Microsoft Entra ID is exempt; Microsoft Entra External ID remains governed as OIDC. No governance policies are changed. See the [governance preflight](skills/setup-auth/references/governance-preflight.md) for target, retry, and continuation rules.
 - Login/logout UI component
 - Role-based UI patterns (show/hide elements by role)
 - Framework-specific implementation (hooks, composables, services)

@@ -33,7 +33,8 @@ Configure authentication (login/logout) and role-based authorization for a Power
 - **Framework-appropriate patterns** — Every auth artifact (hooks, composables, services, directives, guards) must match the detected framework's idioms and conventions.
 - **Development parity** — Include mock data for local development so developers can test auth flows and role-based UI without deploying to Power Pages.
 - **Preserve site integrity** — Before changing navigation, auth pages, dialogs, or role-based UI, read `${PLUGIN_ROOT}/references/site-modification-integrity.md`. Synchronize all visible auth states across configured locale resources and keep them bidirectional and expansion-safe.
-- **Governance before setup** — Follow `${PLUGIN_ROOT}/skills/setup-auth/references/governance-preflight.md`: check once after provider selection before walkthroughs or changes, reuse the initial result during generation, and check fresh immediately before deployment. Invalidate the result when target/provider/account context changes or cannot be reliably retained on resume; do not repeat checks solely for phase transitions or consent prompts. Confirm the portal's owning tenant from the target environment or user input and pass `--tenantId` on every check; never infer the expected owner from the current Azure CLI account. Stop the selected batch when batch `canContinue: false`, including tenant mismatches or any verified disabled requirement. The checker retries transient reads; when only unavailable reads remain (`allowed: false`, `canContinue: true`), display the batch warning and automatically continue setup. Never call this verified approval or bypass existing consent; runtime governance still applies and sign-in may not work. Never switch accounts automatically, enable policies automatically, or invoke the disabled `manage-governance` skill.
+- **Governance before setup** — Follow `${PLUGIN_ROOT}/skills/setup-auth/references/governance-preflight.md`: check once after provider selection before walkthroughs or changes, reuse the initial result during generation, and check fresh after final deployment-target selection before upload. Use portal-level governance when the host ID is resolved. For a confirmed never-activated target, confirm its environment and check environment-level governance using `--scope environment`; do not silently skip governance. Missing identity or lookup failures never qualify for environment fallback. Invalidate the result when activation status or target/provider/account context changes or cannot be reliably retained on resume; do not repeat checks solely for phase transitions or consent prompts. Confirm the target's owning tenant from the environment or user input and pass `--tenantId` on every check; never infer the expected owner from the current Azure CLI account. Stop the selected batch when batch `canContinue: false`, including tenant mismatches or any verified disabled requirement. The checker retries transient reads; when only unavailable reads remain (`allowed: false`, `canContinue: true`), display the batch warning and automatically continue setup. Never call this verified approval or bypass existing consent; runtime governance still applies and sign-in may not work. Never switch accounts automatically, enable policies automatically, or invoke the disabled `manage-governance` skill.
+- **Unavailable host discovery** — Before a checker call, failed or ambiguous host discovery permits warned local settings/code generation under the reference's `HostLookupUnavailable` or `HostIdentityUnresolved` workflow outcome (`status: "unverified"`, `allowed: false`, `canContinue: true`, `continuation: "local-only"`). This does not authorize remote IdP provisioning or upload. Do not select environment scope because discovery failed, rewrite a checker's `canContinue: false`, or override a verified restriction. Retry discovery after final deployment-target selection; apply the reference's separate destination-verification and deployment rules.
 - **Workforce Entra exemption** — Built-in Microsoft Entra ID (`entra-id`, legacy `AzureAD` settings) is independent of authentication governance. Skip all governance preflights/rechecks and their target/tenant/Azure CLI prerequisites for Entra-only setup. In mixed selections, check only the governed providers' policies; retain workforce Entra in the generated auth service/UI and preserve its normal settings behavior. Microsoft Entra External ID is distinct and remains governed as OIDC. This exemption applies to every gate below, including smart-inference, keep-only/keep-and-add, provisioning, code/UI generation, settings, and deployment.
 
 **Initial request:** $ARGUMENTS
@@ -43,7 +44,8 @@ Configure authentication (login/logout) and role-based authorization for a Power
 > - An existing Power Pages SPA site created via `/create-site`
 > - The site must be deployed at least once (`.powerpages-site` folder must exist)
 > - Web roles must be created via `/create-webroles`
-> - For governed providers, the governance preflight additionally needs a provisioned host and PAC/Azure CLI sign-in aligned to the confirmed owning tenant. Deployment alone does not establish activation or a host `portalId`. Follow the target-verification and recovery steps in `${PLUGIN_ROOT}/skills/setup-auth/references/governance-preflight.md` before provider-specific walkthroughs or changes. Workforce Entra-only setup is exempt from these governance-specific prerequisites.
+> - For governed providers, the governance preflight needs a confirmed environment and PAC/Azure CLI sign-in aligned to its owning tenant. Activated portals additionally need a resolved host ID. Deployment alone does not establish activation or a host `portalId`. Confirmed never-activated targets use environment-level governance; activation is not a setup prerequisite. Follow the environment-confirmation, receipt-first target-verification, and recovery steps in `${PLUGIN_ROOT}/skills/setup-auth/references/governance-preflight.md` before provider-specific walkthroughs or changes. Workforce Entra-only setup is exempt from these governance-specific prerequisites.
+> - These governance prerequisites apply to live checks, not local preparation when discovery is unavailable. Follow the explicit local-only warning path; never guess IDs or require activation merely to generate settings/code.
 
 ## Workflow
 
@@ -244,6 +246,16 @@ Use `AskUserQuestion`:
 
 **Goal:** Gather authentication requirements from the user and present the implementation plan for approval.
 
+For every governance gate below, the shared preflight first routes by activation
+history. Its initial result is a live portal-level checker response for an
+existing host or an environment-level response for a confirmed never-provisioned
+target. Reuse either under Check lifecycle, retaining any unavailable-read warning.
+Neither path bypasses governance or the normal consent gates.
+If discovery cannot establish a host/scope, retain the explicit unverified
+local-only workflow outcome instead; it permits local generation and guidance,
+not remote IdP provisioning or deployment. Carry its discovery warning through
+all local generation phases without repeatedly prompting or retrying discovery.
+
 ### Actions
 
 #### 2.0 Smart Auth Inference (Before Asking)
@@ -308,7 +320,7 @@ If the user has NOT specified which provider(s) they want, use `AskUserQuestion`
 |----------|---------|
 | Which identity provider(s) do you want to use? (select all that apply) | Entra External ID (Recommended) — Customer identity with self-service sign-up (CIAM), Microsoft Entra ID — Azure AD / Entra ID for internal/employee sites, OpenID Connect — Okta, Auth0, or any OIDC-compliant provider, SAML2 — SAML 2.0 identity provider (ADFS, Shibboleth, Login.gov, etc.), WS-Federation — WS-Federation identity provider, Microsoft Account — Sign in with Microsoft personal/work account, Facebook — Sign in with Facebook, Google — Sign in with Google |
 
-**Before provider-specific follow-ups:** Read `${PLUGIN_ROOT}/skills/setup-auth/references/governance-preflight.md`. Skip the gate for workforce Entra-only setup. Otherwise run the initial `scripts/check-auth-governance.js` check once with confirmed owning `--tenantId`, exact environment/host, and all providers being configured or surfaced: workforce Entra -> exempt `entra-id`; Entra External ID -> governed `oidc`. This includes smart-inference and `keep-only` paths; reuse an initial result already obtained for the same unchanged context. Inspect batch `canContinue`: stop when false; when true, show any unavailable-read warning and continue without an extra prompt, even on exit 2. Retain the initial result and context per Check lifecycle for later phases. Never override known restrictions.
+**Before provider-specific follow-ups:** Read `${PLUGIN_ROOT}/skills/setup-auth/references/governance-preflight.md`. Skip the gate for workforce Entra-only setup. For governed providers, first attempt target/environment/activation discovery per the reference. Run the initial `scripts/check-auth-governance.js` check once when identity is resolved, with confirmed owning `--tenantId`, exact environment, and all providers being configured or surfaced: workforce Entra -> exempt `entra-id`; Entra External ID -> governed `oidc`. Supply `--portalId` for a resolved host; for a confirmed never-provisioned target, use `--scope environment` without a portal ID. A failed host lookup never permits this fallback: retain the reference's unverified local-only discovery outcome, show its warning once, and continue local preparation without invoking the checker with missing IDs. This includes smart-inference and `keep-only` paths; reuse an initial result already obtained for the same unchanged context. For actual checker responses, inspect batch `canContinue`: stop when false; when true, show any unavailable-read warning and continue without an extra prompt, even on exit 2. Retain the initial result and context per Check lifecycle for later phases. Never override known restrictions.
 
 **Blocked-message presentation:** Use this exact wording, replacing the placeholder with the disabled protocol/provider label(s): "Your administrator has restricted the use of [authentication Protocol/Provider] for this website. Contact your administrator if you need this setting enabled." Do not append policy-state summaries, portal/environment details, admin links, or configuration navigation unless the user explicitly asks for those details. Scope any no-change statement to this run or the read-only check, and disclose any earlier changes. Apply this format at every later preflight gate as well. Do not tell users to enable policies when the result is merely unverifiable.
 
@@ -1016,6 +1028,10 @@ For each setting the user wants to configure, create the site setting using `cre
 Applies to **OIDC providers** (Okta, Auth0, Entra External ID, and other OIDC). For SAML2, WS-Federation, social, or local auth, use the Phase 2.1 walkthroughs.
 
 Reuse the initial governance preflight result for this walkthrough and IdP provisioning, retaining any unavailable-read warning. Do not rerun it solely before configuring a real IdP app; follow Check lifecycle for context invalidation. The preflight does not replace the existing provisioning consent.
+An initial `continuation: "local-only"` permits reading documentation and preparing
+local configuration, not executing real IdP changes. Defer configure-for-you
+provisioning until target verification and the applicable preflight permit it;
+do not fabricate provider values that have not been obtained.
 
 Power Pages needs an OIDC **app registration** at the IDP, wired to this site. **How you set it up depends entirely on the identity provider**, so read the provider's own current documentation first.
 
@@ -3013,7 +3029,10 @@ Use `AskUserQuestion`:
 |----------|---------|
 | Authentication and authorization are configured. To make login work, the site needs to be deployed. Would you like to deploy now? | Yes, deploy now (Recommended), No, I'll deploy later |
 
-**If "Yes, deploy now"**: Rerun the governance preflight against the confirmed deployment environment/host immediately before invoking `/deploy-site`. Deploy only when batch `canContinue: true`, displaying any unavailable-read warning without claiming verified approval. Stop when batch `canContinue: false` and leave earlier local artifacts intact.
+**If "Yes, deploy now"**: Invoke `/deploy-site` with the complete provider selection and retained activation/target context, requesting the setup-auth governance handoff after final environment confirmation and before upload. Rerun the shared preflight there, not against an environment that may change inside `/deploy-site`. Use portal scope for a resolved host and environment scope for a confirmed never-provisioned target; activation or target changes invalidate the earlier scope/result. Deploy only when batch `canContinue: true`, displaying any unavailable-read warning without claiming verified approval. Stop when batch `canContinue: false` and leave earlier local artifacts intact.
+An initial local-only discovery continuation never authorizes upload. The fresh
+handoff must verify the deployment destination and apply the reference's separate
+host-discovery outcome rules; preserve generated files if deployment must stop.
 
 **If "No"**: Remind the user:
 

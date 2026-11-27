@@ -45,10 +45,10 @@ const DISPLAY_LIMIT = 10;
 
 function nextSkipFrom(nextLink) {
   if (typeof nextLink !== 'string') return null;
-  const match = nextLink.match(/[?&]skip=(\d+)/i);
+  const match = nextLink.match(/[?&]skip=(\d+)(?:&|$)/i);
   if (!match) return null;
   const value = Number.parseInt(match[1], 10);
-  return Number.isInteger(value) && value > 0 ? value : null;
+  return Number.isSafeInteger(value) && value > 0 ? value : null;
 }
 
 function normalize(site) {
@@ -114,8 +114,8 @@ async function listViaGateway(args) {
 // (e.g. fetch-env-status.js) can fetch the site list as ONE promise inside a
 // parallel Promise.all batch — sharing the same governance context/token
 // instead of re-resolving it. Returns { portals, error }: a non-null `error`
-// string means a page read failed (the caller decides whether to fail() or
-// tolerate a partial list); `portals` always holds whatever was read so far.
+// string means the inventory is incomplete and must not be used for target
+// resolution; `portals` retains earlier valid pages for diagnostics only.
 async function fetchPortalsPaged(ctx) {
   const portals = [];
   let skip;
@@ -126,16 +126,28 @@ async function fetchPortalsPaged(ctx) {
     if (!res.ok) {
       return { portals, error: `List portals failed (${res.statusCode}): ${res.error?.message || ''}` };
     }
-    const body = res.body && typeof res.body === 'object' ? res.body : {};
-    for (const site of body.value || []) {
-      const n = normalize(site);
-      if (n.portalId) portals.push(n);
+    // GET /websites returns { value: [{ id: "...", ... }], "@odata.nextLink": "..." }.
+    // Missing/malformed records must not look like a complete empty inventory:
+    // callers use absence to recommend activation or disambiguate host identity.
+    const body = res.body;
+    if (!body || typeof body !== 'object' || Array.isArray(body) || !Array.isArray(body.value)) {
+      return { portals, error: 'List portals failed: malformed response; expected a value array. Inventory is incomplete.' };
     }
-    const advance = nextSkipFrom(body['@odata.nextLink'] || body.nextLink);
-    if (advance == null || advance <= (skip ?? 0)) break;
+    const sites = body.value.map((site) =>
+      site && typeof site === 'object' && !Array.isArray(site) ? normalize(site) : null);
+    if (sites.some((site) => !site || typeof site.portalId !== 'string' || !site.portalId.trim())) {
+      return { portals, error: 'List portals failed: malformed portal record; expected a non-empty host ID. Inventory is incomplete.' };
+    }
+    portals.push(...sites);
+    const nextLink = body['@odata.nextLink'] ?? body.nextLink;
+    if (nextLink == null) return { portals };
+    const advance = nextSkipFrom(nextLink);
+    if (advance == null || advance <= (skip ?? 0)) {
+      return { portals, error: 'List portals failed: invalid or non-advancing pagination link. Inventory is incomplete.' };
+    }
     skip = advance;
   }
-  return { portals };
+  return { portals, error: `List portals failed: reached the ${MAX_PAGES}-page limit with more pages remaining. Inventory is incomplete.` };
 }
 
 async function main() {
