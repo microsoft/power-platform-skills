@@ -15,6 +15,10 @@ const {
   dependencySections,
   inspectInstalledPackages,
   isRuntimePackage,
+  safeInstallPath,
+  exactVersion,
+  validHostIntegrity,
+  declarationSpec,
 } = require('./lib/mobile-release');
 
 const HOST = '@microsoft/power-apps-native-host';
@@ -149,29 +153,73 @@ function acquireTemplate(destination, releaseId, options = {}) {
   }
 }
 
+// npm ci accepts the packages inventory from either v2 or v3. Keep its nested
+// versions and hashes, not the v2 compatibility mirror or an embedded registry
+// route: downloads must use the caller's existing npm configuration.
+function registryToolingLock(lock) {
+  const packages = { '': lock.packages[''] };
+  for (const section of Object.values(dependencySections(packages['']))) {
+    if (Object.values(section).some(spec => !declarationSpec(spec) || spec.startsWith('file:'))) {
+      throw new Error('Upgrade tooling needs published registry dependencies; local or external sources are not part of this tooling installation.');
+    }
+  }
+  for (const [location, entry] of Object.entries(lock.packages)) {
+    if (!location) continue;
+    const parent = location.lastIndexOf('/node_modules/');
+    const bundled = entry?.inBundle === true && entry.resolved === undefined
+      && parent > 0 && Object.hasOwn(lock.packages, location.slice(0, parent));
+    if (!safeInstallPath(location) || !entry || entry.link || !exactVersion(entry.version)
+      || (!validHostIntegrity(entry.integrity) && !(bundled && entry.integrity === undefined))
+      || (entry.resolved !== undefined && !/^https:\/\/registry\.npmjs\.org\/[^\\?#\s]+$/.test(entry.resolved))) {
+      throw new Error('Upgrade tooling requires registry packages with exact versions and integrity in the published template lock.');
+    }
+    const { resolved, ...portable } = entry;
+    packages[location] = portable;
+  }
+  return { name: lock.name, version: lock.version, lockfileVersion: 3, requires: true, packages };
+}
+
 function acquireHost(destination, version, options = {}) {
-  const target = path.resolve(destination);
-  assertEmptyDestination(target);
+  const requested = path.resolve(destination);
+  assertEmptyDestination(requested);
   const published = require('./lib/mobile-published-packages');
   const source = published.createSource(options);
   const contract = published.selectPublishedContract(version, {
     ...options, readPackage: source.read, versions: source.versions,
   });
+  const template = source.read(TEMPLATE, contract.template.version);
+  const hostEntry = template.lock.packages[`node_modules/${HOST}`];
+  const usePublishedLock = hostEntry.version === version;
+  if (usePublishedLock && (hostEntry.link || hostEntry.integrity !== contract.host.integrity)) {
+    throw new Error('The Host integrity in the published template lock does not match the selected Host publication.');
+  }
+  const lock = usePublishedLock ? registryToolingLock(template.lock) : null;
   const profile = source.read(HOST, version).profile;
+  const manifest = usePublishedLock ? {
+    name: template.manifest.name, version: template.manifest.version, private: true,
+    ...dependencySections(template.manifest), overrides: template.manifest.overrides,
+  } : {
+    // Same-runtime patches can legitimately predate a matching template lock.
+    // Never install the older locked Host in place of the requested repair.
+    name: 'mobile-upgrade-tooling', private: true,
+    ...contract.managedDependencies,
+    dependencies: { ...contract.managedDependencies.dependencies, [HOST]: version },
+    overrides: profile.managedOverrides,
+  };
   const execute = options.run || run;
-  assertEmptyDestination(target);
-  fs.mkdirSync(target, { recursive: true });
+  assertEmptyDestination(requested);
+  fs.mkdirSync(requested, { recursive: true });
+  const target = fs.realpathSync.native(requested);
   withNpmContext(options.cwd || process.cwd(), target, (env, cwd) => {
-    fs.writeFileSync(path.join(target, 'package.json'), `${JSON.stringify({
-      name: 'mobile-upgrade-tooling', private: true,
-      ...contract.managedDependencies,
-      dependencies: { ...contract.managedDependencies.dependencies, [HOST]: version },
-      ...(profile.managedOverrides ? { overrides: profile.managedOverrides } : {}),
-    }, null, 2)}\n`, { flag: 'wx' });
+    const write = (file, data) => fs.writeFileSync(path.join(target, file), `${JSON.stringify(data, null, 2)}\n`, { flag: 'wx' });
+    write('package.json', manifest);
+    if (lock) write('package-lock.json', lock);
     return execute('npm', [
-      'install', '--ignore-scripts', '--strict-peer-deps', '--no-legacy-peer-deps', '--no-force', '--no-audit', '--no-fund',
+      lock ? 'ci' : 'install', '--include=dev', '--ignore-scripts', '--strict-peer-deps', '--no-legacy-peer-deps', '--no-force', '--no-audit', '--no-fund',
       '--prefix', target,
-    ], cwd, { env });
+    ], cwd, { env, failureMessage: lock
+      ? 'Upgrade tooling npm ci failed for the published template lock. Check registry access and npm diagnostics; no new resolution was attempted.'
+      : 'Upgrade tooling installation failed for the selected Host repair. Check its dependencies and registry access; no other Host was substituted.' });
   });
   const hostRoot = path.join(target, 'node_modules', HOST);
   const installed = readJson(path.join(hostRoot, 'package.json'));
@@ -191,6 +239,7 @@ function acquireHost(destination, version, options = {}) {
   }
   return {
     target: summarizeRelease(contract), installedDependencies: true, lifecycleScriptsExecuted: false,
+    toolingResolution: lock ? 'published-template-lock' : 'compatible-host-repair',
     upgradeCli: `node_modules/${HOST}/${executable.replaceAll('\\', '/')}`,
   };
 }

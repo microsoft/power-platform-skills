@@ -13,14 +13,14 @@ separately from package compatibility.
 
 This plugin uses scope-aware checks based on the mobile workflow:
 
-- **Deploy** = `npm run build` + `pa app push`. No local Xcode / Android Studio involvement.
-- **Local dev** = the user runs `npm run dev` (= `expo start`) directly. Metro starts and prints a QR for native dev clients.
+- **Deploy** = the app's package-owned web/native bundle commands, staging to the configured upload directory, then `pa app push`. Follow [the deployment workflow](../skills/deploy/SKILL.md); no local Xcode / Android Studio involvement.
+- **Local dev** = the user runs the template-owned `npm run dev` directly. Metro starts and prints a QR for native dev clients.
 - **Local native compile** (platform-specific native run commands) is the user's choice and lives **outside** this plugin's skills. Not a prerequisite, not validated, not driven.
 
 Result: the only required tooling is what Node/npm, the Power Apps CLI (`pa`), and the relevant helper scripts need. Xcode/JDK/Android Studio are explicitly out of scope.
 
-These apps use an **immutable, prebuilt native runtime**. `npm run build`
-exports application JavaScript; it does not prebuild or compile new native code.
+These apps use an **immutable, prebuilt native runtime**. Application bundling
+exports JavaScript and native Hermes assets; it does not prebuild or compile new native code.
 Adding a dependency or config plugin cannot add native support to a player/base.
 Use `/add-native` only for packages and versions already verified in that app's
 release. Changing native dependencies requires a maintainer-verified release
@@ -63,12 +63,12 @@ If the user is just editing screens or running web, `az` does not need to be ins
 
 The following are needed **only** if the user manually runs platform-specific native run commands to compile a local native binary. **No skill in this plugin runs those commands or probes for these tools.** Documented here purely as user reference.
 
-| Tool | Min version | Platforms | Why |
+| Tool | Version selection | Platforms | Why |
 |---|---|---|---|
-| JDK | `17` | Android | Gradle 8.x requirement for RN 0.83 |
-| Android Studio + SDK | latest | Android | Emulator + platform tools |
-| Xcode | `15.0` | iOS (macOS only) | iOS 18 SDK |
-| CocoaPods | `1.14.0` | iOS (macOS only) | Pod install for native modules |
+| JDK | Match the selected release's Gradle/Android toolchain | Android | Do not reuse a JDK recommendation from a different React Native release |
+| Android Studio + SDK | Match the selected release's SDK/build-tool requirements | Android | Emulator, platform tools, and native compilation |
+| Xcode | Match the selected Expo/React Native release and native SDK requirements | iOS (macOS only) | An older Xcode/iOS SDK baseline does not qualify a newer release |
+| CocoaPods | Match the selected native release's supported version | iOS (macOS only) | Pod installation for that release's native modules |
 | Watchman | any | macOS / Linux dev | File-watching perf (optional) |
 
 If the user asks how to run on a real device or simulator: point them at the Expo docs (https://docs.expo.dev/get-started/set-up-your-environment/) and let them install whatever they need. Do not gate any plugin skill on these.
@@ -133,7 +133,7 @@ node "${PLUGIN_ROOT}/scripts/resolve-mobile-release.js" --project-root '<working
 | Node 22 | `nvm install 22 && nvm use 22` (https://nvm.sh) |
 | `az` | https://aka.ms/InstallAzureCLI |
 
-*Out-of-scope tools (user-managed if they want local native builds):* JDK 17 (https://adoptium.net), Android Studio (https://developer.android.com/studio), Xcode (Mac App Store), CocoaPods (`brew install cocoapods`).
+*Out-of-scope tools (user-managed if they want local native builds):* JDK (https://adoptium.net), Android Studio (https://developer.android.com/studio), Xcode (https://developer.apple.com/xcode/), CocoaPods (https://guides.cocoapods.org/using/getting-started.html). Select versions from the intended release's build requirements, not an unqualified latest toolchain.
 
 
 ## When to update this file

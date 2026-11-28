@@ -618,6 +618,8 @@ const cliResolution = shellBlocks(read(path.join(pluginRoot, 'shared/cli-binary.
 for (const [shims, kind] of [
   [['pa', 'power-apps'], 'pa'],
   [['pa.cmd', 'power-apps.cmd'], 'pa'],
+  [['pa'], 'pa'],
+  [['pa.cmd'], 'pa'],
   [['power-apps'], 'power-apps'],
   [['power-apps.cmd'], 'power-apps'],
   [[], 'none'],

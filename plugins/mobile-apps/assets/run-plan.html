@@ -258,6 +258,7 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
 .rail-qr-copy{min-width:0;}
 .rail-qr-title{font-size:12.5px;font-weight:650;color:var(--text-bright);}
 .rail-qr-sub{font-size:11.5px;color:var(--text-dim);line-height:1.4;margin-top:2px;}
+.rail-qr-url{font-family:var(--mono);font-size:11px;line-height:1.4;color:var(--accent);overflow-wrap:anywhere;margin-top:4px;}
 .rail-qr-stores{font-size:11.5px;margin-top:4px;color:var(--text-dim);}
 .rail-qr-stores a{color:var(--accent);text-decoration:none;}
 .rail-qr-stores a:hover{text-decoration:underline;}
@@ -814,28 +815,34 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
     // code into the frame once the app needs a signed-in host. Only an inlined PNG is drawn: the
     // page's CSP admits data: images and nothing else.
     var liveQr = live && isQrImage(phone.qrImage);
-    if (liveQr) {
+    var qrUrl = typeof phone.qrUrl === 'string' ? phone.qrUrl.trim() : '';
+    if (liveQr || (live && qrUrl)) {
       var card = el('div', 'rail-qr');
-      var code = document.createElement('img');
-      code.src = phone.qrImage;
-      code.alt = 'Metro QR code';
-      // The code is the full-size link here, so the rail needs no separate link row: on a short
-      // window that row would land behind the footer.
-      if (phone.qrHref) {
-        var full = el('a', 'rail-qr-full');
-        full.setAttribute('href', phone.qrHref);
-        full.setAttribute('target', '_blank');
-        full.setAttribute('rel', 'noopener');
-        full.setAttribute('title', 'Open QR code full size');
-        full.appendChild(code);
-        card.appendChild(full);
-      } else {
-        card.appendChild(code);
+      if (liveQr) {
+        var code = document.createElement('img');
+        code.src = phone.qrImage;
+        code.alt = 'Metro QR code';
+        // The code is the full-size link here, so the rail needs no separate link row: on a short
+        // window that row would land behind the footer.
+        if (phone.qrHref) {
+          var full = el('a', 'rail-qr-full');
+          full.setAttribute('href', phone.qrHref);
+          full.setAttribute('target', '_blank');
+          full.setAttribute('rel', 'noopener');
+          full.setAttribute('title', 'Open QR code full size');
+          full.appendChild(code);
+          card.appendChild(full);
+        } else {
+          card.appendChild(code);
+        }
       }
       var copy = el('div', 'rail-qr-copy');
       copy.appendChild(el('div', 'rail-qr-title', 'Try it on your phone'));
       copy.appendChild(el('div', 'rail-qr-sub',
-        'Scan with Power Apps Mobile Preview, on the same network as this machine.'));
+        liveQr
+          ? 'Scan with Power Apps Mobile Preview, on the same network as this machine.'
+          : 'No QR image is available. In Power Apps Mobile Preview, choose Enter URL and paste this address.'));
+      if (!liveQr) copy.appendChild(el('div', 'rail-qr-url', qrUrl));
       var get = el('div', 'rail-qr-stores');
       STORE_LINKS.forEach(function (store, index) {
         if (index) get.appendChild(document.createTextNode(' \u00b7 '));
@@ -853,7 +860,7 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
     // The QR is already drawn in the phone; this is for scanning it larger, and it links the
     // PNG rather than the inlined data URI because browsers block top-level navigation to a
     // data: URL. It drops away once `.expo/` is cleaned, leaving the inlined copy.
-    if (!liveQr) add(phone.qrHref, 'Open QR code full size \u2197');
+    if (!liveQr && isQrImage(phone.qrImage)) add(phone.qrHref, 'Open QR code full size \u2197');
 
     // The QR stage is the end of the run, and a code is useless without the app that reads it.
     // Only shown here: offering a store download while the app is still being generated would
@@ -1059,18 +1066,26 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
       return;
     }
 
-    if (phone.stage === 'qr' && phone.qrImage) {
+    var qrImage = isQrImage(phone.qrImage);
+    var qrUrl = typeof phone.qrUrl === 'string' ? phone.qrUrl.trim() : '';
+    if (phone.stage === 'qr' && (qrImage || qrUrl)) {
       title.textContent = 'Open it on your phone';
       var qr = el('div', 'qr');
-      var img = document.createElement('img');
-      img.src = phone.qrImage;
-      img.alt = 'Metro QR code';
-      qr.appendChild(img);
-      qr.appendChild(el('div', 'qr-title', 'Scan to run the app'));
-      qr.appendChild(el('div', 'qr-sub', 'Open the Power Apps Mobile Preview app and scan this code. Your phone and this machine need to be on the same network.'));
-      if (phone.qrUrl) qr.appendChild(el('div', 'qr-url', phone.qrUrl));
+      if (qrImage) {
+        var img = document.createElement('img');
+        img.src = phone.qrImage;
+        img.alt = 'Metro QR code';
+        qr.appendChild(img);
+      }
+      qr.appendChild(el('div', 'qr-title', qrImage ? 'Scan to run the app' : 'Use the app URL'));
+      qr.appendChild(el('div', 'qr-sub', qrImage
+        ? 'Open the Power Apps Mobile Preview app and scan this code. Your phone and this machine need to be on the same network.'
+        : 'No QR image is available. Open Power Apps Mobile Preview, choose Enter URL, and paste the address below.'));
+      if (qrUrl) qr.appendChild(el('div', 'qr-url', qrUrl));
       screen.appendChild(qr);
-      caption.textContent = 'Edits hot-reload straight onto the device.';
+      caption.textContent = qrImage
+        ? 'Edits hot-reload straight onto the device.'
+        : 'Keep Metro running while testing on your device.';
       return;
     }
 

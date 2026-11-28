@@ -495,6 +495,56 @@ test('offline verification and recipe callers carry explicit root and tenant on 
     /user separately approves publishing all pending environment customizations/);
 });
 
+test('offline snapshot example uses supported bootstrap settings and refuses to overwrite an existing profile', (t) => {
+  const f = fixture(t);
+  const setup = read('skills/setup-offline-profile/SKILL.md');
+  const persist = section(setup, '### Step 9 — Persist artifacts', '9c — Update');
+  const block = shellBlocks(persist).find(value => value.includes('fs.writeFileSync("offline-profile.json"'));
+  assert.ok(block);
+  const existing = JSON.stringify({
+    profileId: context.profileId,
+    appConfig: { enabled: true, serverRowLimit: 1537, useDda: false },
+    customerSetting: 'preserve',
+  });
+  const profilePath = path.join(f.owner, 'offline-profile.json');
+  const powerConfigPath = path.join(f.owner, 'power.config.json');
+  const powerConfig = fs.readFileSync(powerConfigPath, 'utf8');
+  fs.writeFileSync(profilePath, existing);
+  const execute = () => spawnSync(bash, ['-s'], {
+    cwd: f.caller,
+    input: render(block, f.owner).replaceAll('<guid-from-step-5>', context.profileId),
+    encoding: 'utf8', timeout: 10000,
+  });
+  const rejected = execute();
+  assert.notEqual(rejected.status, 0);
+  assert.match(rejected.stderr, /EEXIST/);
+  assert.equal(fs.readFileSync(profilePath, 'utf8'), existing);
+  fs.unlinkSync(profilePath);
+  const created = execute();
+  assert.equal(created.status, 0, created.stderr);
+  const snapshot = JSON.parse(fs.readFileSync(profilePath, 'utf8'));
+  assert.equal(snapshot.profileId, context.profileId);
+  assert.equal(snapshot.mode, 'create-new');
+  assert.deepEqual(snapshot.appConfig, {
+    enabled: true, serverRowLimit: 2000, instanceUrl: context.environmentUrl,
+  });
+  assert.equal(fs.readFileSync(powerConfigPath, 'utf8'), powerConfig);
+  for (const [name, content] of Object.entries(f.callerFiles)) {
+    assert.equal(fs.readFileSync(path.join(f.caller, name), 'utf8'), content, name);
+  }
+  assert.match(persist, /preserve app-owned settings and unknown keys/);
+  assert.match(persist, /deprecated\s+and ignored/);
+  assert.doesNotMatch(persist, /OFFLINE-CONFIG-WORKAROUND|@microsoft\/react-native-dataverse-offline/);
+  const schema = read('shared/references/offline-profile-schema.md');
+  const example = shellBlocks(schema, 'json').find(value => value.includes('"schemaColumns"'));
+  const parsed = JSON.parse(example);
+  assert.equal(parsed.mode, 'create-new');
+  assert.ok(parsed.tables[0].relationships[0].schemaName);
+  assert.doesNotMatch(setup, /not yet implemented/);
+  assert.match(read('skills/assign-offline-profile/SKILL.md'), /Owner teams[\s\S]*teamtype = 0/);
+  assert.match(read('skills/preview-offline-scope/SKILL.md'), /never substitute `teamroles_association` counts/);
+});
+
 test('offline enablement cannot widen the owner table list or repeat approval in planning mode', () => {
   const enable = documents['enable-tables-offline'];
   const tables = section(enable, '### Step 2', '### Step 3');

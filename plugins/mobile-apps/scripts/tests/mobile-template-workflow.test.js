@@ -145,6 +145,36 @@ test('registry authentication recovery preserves the reviewed feed and interrupt
   assert.match(updates, /project-scoped journal and recovery instructions before resuming/);
 });
 
+test('shared failure guidance cannot override release-owned dependency and Babel recovery', () => {
+  const shared = read('shared/shared-instructions.md');
+  const start = shared.indexOf('### Dependency installation / SDK validation failures');
+  const end = shared.indexOf('### Native run or web run failures', start);
+  assert.ok(start >= 0 && end > start);
+  const failures = shared.slice(start, end);
+  assert.match(failures, /existing configured registry/);
+  assert.match(failures, /Do not switch registries/);
+  assert.match(failures, /never run `expo install --fix`/);
+  assert.match(failures, /approved same-lock recovery/);
+  assert.match(failures, /Do not append `react-native-reanimated\/plugin`/);
+  assert.doesNotMatch(failures, /Run `npx --no-install expo install --fix`|Likely an internal-feed-only package/);
+
+  const customization = read('template/CUSTOMIZATION.md');
+  assert.match(customization, /legacy test fixture/);
+  assert.match(customization, /does not update the dependencies/);
+  assert.match(customization, /Run `\/check-updates`/);
+  assert.doesNotMatch(customization, /host@latest/);
+
+  const quality = read('docs/base-template-quality-fixes.md');
+  assert.match(quality, /telemetry may initialize a missing `expo\.extra\.telemetry\.appInstanceId`/);
+  assert.doesNotMatch(quality, /identity is minted only after `proceed`/);
+
+  const cli = read('shared/cli-binary.md');
+  assert.match(cli, /exposes only `pa`/);
+  assert.match(cli, /approved same-lock restoration/);
+  assert.match(cli, /Re-supply `\$PA` and `PA_KIND` in every fresh shell/);
+  assert.doesNotMatch(cli, /Both are installed together|mobile skills never bootstrap dependencies themselves/);
+});
+
 test('requested Metro smoke tests distinguish bundle compilation from runtime behavior', () => {
   assert.match(updates, /a responding `\/status` endpoint alone does not verify bundling/);
   assert.match(updates, /load the intended route and exercise the customer\s+workflow/);
@@ -238,6 +268,70 @@ npm() {
       assert.equal(fs.readFileSync(path.join(destination, 'customer.txt'), 'utf8'), 'preserve customer content');
     }
   }
+});
+
+test('developer quickstarts select latest or an exact version and keep installation in the created app', t => {
+  const readme = read('README.md');
+  const commands = shellBlocks(readme, 'sh').filter(block => block.startsWith('npx @microsoft/power-apps-native-template@'));
+  assert.equal(commands.length, 2);
+  assert.ok(readme.indexOf(commands[0]) < readme.indexOf('<details>'));
+  assert.ok(readme.indexOf(commands[0]) < readme.indexOf('copilot plugin install'));
+  assert.match(readme, /Agents keep the creation skill's verified release selection and separate/);
+  const bashPaths = process.platform === 'win32'
+    ? (spawnSync('where.exe', ['bash'], { encoding: 'utf8' }).stdout || '').split(/\r?\n/)
+    : [];
+  const bash = bashPaths.find(entry => /[\\/]Git[\\/]/i.test(entry)) || 'bash';
+  const stubs = `
+npx() {
+  [ "$#" -eq 2 ] || return 98
+  printf "%s" "$1" > selected-template.txt
+  [ "$FAILURE_STAGE" != creation ] || return 23
+  "$REAL_NODE" -e 'require("node:fs").mkdirSync(process.argv[1])' "$2"
+}
+npm() {
+  [ "$#" -eq 3 ] && [ "$1" = ci ] && [ "$2" = --prefix ] || return 97
+  "$REAL_NODE" -e 'const fs=require("node:fs"),path=require("node:path"),root=fs.realpathSync.native(process.argv[1]);fs.writeFileSync(path.join(root,"install-ran.txt"),root)' "$3" || return 96
+  [ "$FAILURE_STAGE" != installation ] || return 29
+}
+`;
+  for (const [index, command] of commands.entries()) {
+    for (const failure of ['creation', 'installation', 'none']) {
+      const directory = fs.mkdtempSync(path.join(os.tmpdir(), "mobile quickstart owner's "));
+      t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+      const destination = path.join(directory, 'my-mobile-app');
+      fs.writeFileSync(path.join(directory, 'customer.txt'), 'preserve parent files');
+      const result = spawnSync(bash, ['-s'], {
+        cwd: directory, input: `${stubs}\n${command}`, encoding: 'utf8', timeout: 10000,
+        env: { ...process.env, FAILURE_STAGE: failure, REAL_NODE: process.execPath.replaceAll('\\', '/') },
+      });
+      assert.equal(result.status, failure === 'creation' ? 23 : failure === 'installation' ? 29 : 0, result.stderr);
+      assert.equal(fs.readFileSync(path.join(directory, 'selected-template.txt'), 'utf8'),
+        `@microsoft/power-apps-native-template@${index === 0 ? 'latest' : '0.1.4'}`);
+      assert.equal(fs.existsSync(path.join(directory, 'install-ran.txt')), false);
+      assert.equal(fs.existsSync(path.join(destination, 'install-ran.txt')), failure !== 'creation');
+      if (failure !== 'creation') {
+        assert.equal(fs.readFileSync(path.join(destination, 'install-ran.txt'), 'utf8'), fs.realpathSync.native(destination));
+      }
+      assert.equal(fs.readFileSync(path.join(directory, 'customer.txt'), 'utf8'), 'preserve parent files');
+    }
+  }
+});
+
+test('README uses the documented VS Code plugin install route for this marketplace and plugin', () => {
+  const readme = read('README.md');
+  const match = readme.match(/\[install mobile-app\]\((https:\/\/vscode\.dev\/redirect\?[^)]+)\)/);
+  assert.ok(match, 'Provide an HTTPS install link that works in GitHub-rendered Markdown');
+  const redirect = new URL(match[1]);
+  const install = new URL(redirect.searchParams.get('url'));
+  const { REPO } = require(path.resolve(root, '../../site/lib/install-links.js'));
+  const manifest = JSON.parse(read('.plugin/plugin.json'));
+  assert.equal(install.protocol, 'vscode:');
+  assert.equal(install.hostname, 'chat-plugin');
+  assert.equal(install.pathname, '/install');
+  assert.equal(install.searchParams.get('source'), REPO);
+  assert.equal(install.searchParams.get('plugin'), manifest.name);
+  assert.match(readme, /https:\/\/code\.visualstudio\.com\/docs\/agent-customization\/agent-plugins/);
+  assert.doesNotMatch(readme, /@agentPlugins/);
 });
 
 test('deployment instructions require all three actual selected-base values', () => {

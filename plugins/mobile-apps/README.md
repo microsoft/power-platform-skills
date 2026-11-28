@@ -18,10 +18,44 @@ Start from the Power Platform mobile app template, then use the mobile-app
 skill to generate the app plan, data model, screens, native capabilities, and
 connector wiring.
 
-1. Install the mobile-app plugin before running its helper commands.
+1. **Create your app:**
 
-    In VS Code, open Extensions, search for `@agentPlugins mobile-app`, install
-    **mobile-app**, and reload VS Code. Alternatively, use GitHub Copilot CLI:
+    ```sh
+    npx @microsoft/power-apps-native-template@latest ./my-mobile-app && npm ci --prefix ./my-mobile-app
+    ```
+
+    Replace `my-mobile-app` with your new app folder name. Run this from its
+    parent folder in Bash, Command Prompt, or PowerShell 7+.
+
+    <details>
+    <summary>Use a specific template version</summary>
+
+    Replace `latest` with the version you need, for example:
+
+    ```sh
+    npx @microsoft/power-apps-native-template@0.1.4 ./my-mobile-app && npm ci --prefix ./my-mobile-app
+    ```
+
+    Use this instead of the `@latest` command.
+
+    </details>
+
+2. **Open the app and enable the mobile-app skill:**
+
+    Open **my-mobile-app** in VS Code, then
+    [install mobile-app](https://vscode.dev/redirect?url=vscode%3A%2F%2Fchat-plugin%2Finstall%3Fsource%3Dmicrosoft%252Fpower-platform-skills%26plugin%3Dmobile-app).
+    Confirm the install prompts and start a new Copilot chat. Skip installation
+    if the plugin is already enabled.
+
+    <details>
+    <summary>Other plugin installation options</summary>
+
+    If the VS Code link is unavailable, follow the
+    [VS Code plugin installation guide](https://code.visualstudio.com/docs/agent-customization/agent-plugins#install-a-plugin-from-a-marketplace).
+    It covers **Chat: Open Customizations**, marketplace setup, and the
+    `chat.plugins.enabled` setting.
+
+    For GitHub Copilot CLI:
 
     ```sh
     copilot plugin marketplace add microsoft/power-platform-skills
@@ -35,16 +69,23 @@ connector wiring.
     claude plugin install mobile-app@power-platform-skills --scope user
     ```
 
-    Restart the agent host after installation. Set `PLUGIN_ROOT` to the absolute
-    installed plugin directory reported by that host; do not assume a cache layout:
+    Restart the agent host after installation.
+
+    </details>
+
+    <details>
+    <summary>Advanced: release inspection and agent-managed acquisition</summary>
+
+    Agents keep the creation skill's verified release selection and separate
+    acquisition/installation approval gates; the terminal shortcut is not an
+    instruction to bypass them. Developers do not need to run the helper sequence
+    below for the quickstart.
+
+    Set `PLUGIN_ROOT` to the absolute installed plugin directory reported by the
+    host, without assuming a cache layout. Inspect available channels if needed:
 
     ```sh
     export PLUGIN_ROOT='/absolute/path/to/installed/mobile-app'
-    ```
-
-2. Discover published template versions:
-
-    ```sh
     npm view @microsoft/power-apps-native-template dist-tags --json
     ```
 
@@ -82,11 +123,15 @@ connector wiring.
     with the immutable template lock's integrity. This is not an offline
     synchronization or database-upgrade test.
 
-3. Open the template folder in VS Code and run the skill from Copilot Chat:
+    </details>
+
+3. **Start building in Copilot Chat:**
 
     ```text
     /create-mobile-app
     ```
+
+    Describe the app you want to build; the skill guides you through the setup.
 
     The template includes this host package and the required Expo / React Native
     runtime dependencies. The skill updates the app in place as it designs and
@@ -140,8 +185,11 @@ connector wiring.
 
 5. Start mobile app:
 
-    `/create-mobile-app` starts Metro with `npm run dev`; its `predev` lifecycle
-    runs schema generation and type-checking before Expo starts.
+    `/create-mobile-app` starts Metro with the template-owned `npm run dev`.
+    npm runs the app's declared `predev` command first. The published template's
+    `predev` generates connector schemas; type-checking is a separate
+    `npm run type-check` command. Inspect the app's scripts rather than assuming
+    `predev` performs both checks or rewriting its command.
     The template's Metro config delegates sanitized logging to the native host package, which writes `.powernative/metro-logs/`,
     so `/debug-app` works after switching between VS Code, Copilot CLI, and
     Claude Code without asking for a terminal ID.
@@ -366,7 +414,7 @@ separate approval. Cloud-flow integration is not supported.
 
 ```text
 > /edit-app "Improve the search screen to make it easier to use on mobile"
-> /deploy                        # npm run build + pa app push
+> /deploy                        # build, stage web/native artifacts, then confirm and push
 > /open-wrap-url --app-id <id> --env-id <env-id>   # open make.powerapps.com Wrap page for this app
 > /preview-screens               # browser preview of generated screens (no Metro needed)
 > /list-connections              # diagnostic when a service call returns 401
@@ -468,7 +516,7 @@ metadata alone never means the app is healthy.
 | `/debug-app` | ✅ v0 | Diagnoses install/startup/QR failures before an app is loaded, then monitors live sanitized `.powernative` logs for runtime or silent failures. Same-lock restoration and Metro restart require explicit approval; it does not upgrade dependencies. `startup` returns without the runtime monitor; `--no-fix` stays non-mutating. |
 | `/setup-app-insights` | ✅ v0 | Configure optional customer-owned Application Insights telemetry — discover or accept an existing Azure resource and wire `app.json` → `expo.extra.appInsightsConfig` + `PowerAppsProvider`, change the resource, or disable it. Off by default; invoking it is the opt-in. Also delegated to by `/edit-app`. Never provisions Azure resources or stores the connection string. |
 | `/check-updates` | ✅ v0 | Offers a coordinated verified native release/template upgrade or host repair, then individually approved JS-only updates and direct-advisory auditing. Full-chain preview, explicit application approval, validation, and rollback; never independent native bumps. |
-| `/deploy` | ✅ v0 | Build + push — `npm run build` then `pa app push` to the env in `power.config.json`. **Does not** drive `expo run:ios` or `expo run:android` (out of scope for v0). |
+| `/deploy` | ✅ v0 | Run the app's package-owned web/native bundle commands, stage their complete outputs in the configured upload directory, then confirm `pa app push` to the env in `power.config.json`. **Does not** drive `expo run:ios` or `expo run:android` (out of scope for v0). |
 | `/open-wrap-url` | ✅ v0 | Opens the Wrap URL in browser for an app ID using `https://make.powerapps.com/environments/<envID>/wrap?appID=<appID>`. Requires both `--app-id` and `--env-id`. |
 | `/report-issue` | ✅ v0 | Read-only diagnostic — collects env / Expo / Node versions, project context, recent errors, and renders a copy-paste-ready GitHub issue body. Sanitizes secrets. |
 | `/telemetry` | ✅ v0 | Enable, disable, or show the per-user Mobile Apps telemetry transmission preference. |

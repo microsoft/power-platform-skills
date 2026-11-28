@@ -126,7 +126,7 @@ Read `memory-bank.md` `## Offline profile` block. Decide based on `status`:
 |---|---|
 | (section absent) OR `status: none` | First-time run. Continue to Step 2. |
 | `status: not-applicable` | User previously opted out during `/create-mobile-app` offline-profile setup ("doesn't need offline support"). Re-confirm: "Memory-bank says this app doesn't need offline. Override and proceed? (y/N)". Default N stops here. |
-| `status: done` AND a profile matching `profileId` still exists in env | Already complete. Print summary from the memory-bank block; ask user if they want to `/edit-offline-profile` (v0.2) or just exit. |
+| `status: done` AND a profile matching `profileId` still exists in env | Already complete. Print summary from the memory-bank block; ask user if they want to use `/edit-offline-profile` or just exit. |
 | `status: done` BUT `GET /mobileofflineprofiles(<profileId>)` returns 404 | Profile was deleted externally (maker portal or another env). Treat as `none`; clear the section; continue to Step 2. |
 | `status: in-progress` AND profile exists in env | **Resume flow** — see below. |
 | `status: in-progress` BUT profile doesn't exist in env | Memory-bank stale. Auto-clean: clear the section, log `recovered from stale in-progress state`, continue to Step 2 as a fresh run. |
@@ -629,22 +629,31 @@ After confirmed success, re-GET the profile and check `publishedon` for the arti
 
 > **Important: this skill must NOT modify `power.config.json`.** That file is owned by `pa app init` and its schema is controlled by the upstream tool — adding custom fields there risks being overwritten on re-init and breaks when the upstream schema changes. All app-level offline config goes into `offline-profile.json` (which we own) under an `appConfig` block.
 
-9a — Write `offline-profile.json` to the project root. **Canonical schema** (must match `scripts/verify-offline-profile.js`'s expectations; the script compares associations by `relationshipId`):
+9a — Write `offline-profile.json` to the project root after the approved profile
+changes. For an existing snapshot, preserve app-owned settings and unknown keys
+outside the approved delta; do not reset a customized row limit or remove legacy
+fields merely because the plugin changed.
+
+Read the selected installed Offline SDK's public configuration contract.
+SDK **0.2.2** accepts `profileId` and allowlisted bootstrap settings; native MDL
+owns profile contents. Its `useDda` and `entitiesIncluded` fields are deprecated
+and ignored, so do not add them to new snapshots or claim that they control
+runtime routing/membership. For older SDKs, inspect that exact version and
+preserve existing settings until their removal is separately reviewed.
+
+**Canonical project snapshot** (the verifier compares server profile items and
+associations by `relationshipId`; it does not certify runtime configuration):
 
 ```json
 {
   "profileId": "<guid>",
   "name": "<name>",
   "publishedOn": "<iso8601>",
-  "mode": "create-new | extend",
+  "mode": "create-new",
   "appConfig": {
     "enabled": true,
     "serverRowLimit": 2000,
-    "/* BEGIN OFFLINE-CONFIG-WORKAROUND */": "remove when SDK gaps are fixed upstream — tracked in microsoft/power-platform-skills/plugins/mobile-apps/template#main (instanceUrl) + PowerApps-Client (useDda + entitiesIncluded). Bracket exists so the future cleanup diff is mechanical.",
-    "useDda": false,
-    "entitiesIncluded": ["<logicalName-1>", "<logicalName-2>", "..."],
-    "instanceUrl": "<envUrl>",
-    "/* END OFFLINE-CONFIG-WORKAROUND */": ""
+    "instanceUrl": "<envUrl>"
   },
   "tables": [
     {
@@ -670,34 +679,31 @@ After confirmed success, re-GET the profile and check `publishedon` for the arti
 }
 ```
 
-**Schema invariants** (enforced by the verify script):
+**Snapshot and runtime ownership rules:**
 - `profileId` is the source of truth for the published `mobileofflineprofileid` — runtime + `/edit-offline-profile` + `/assign-offline-profile` read it from here. **Do NOT also write it to `power.config.json`.**
-- `appConfig` carries every app-level offline setting the runtime consumes at boot. The three `OFFLINE-CONFIG-WORKAROUND`-bracketed fields are temporary and tracked for upstream removal — keep them contiguous so a future `git diff` showing the cleanup is scoped to that block.
+- `mode` is `create-new` or `extend`, according to the approved operation.
+- `appConfig` contains settings supported by the selected SDK. `instanceUrl` must be the already verified selected environment URL, not a guessed org or a reason to change the environment.
+- `tables` and their local column/relationship snapshots support planning and verification. They do not replace the published profile that the current SDK obtains from Dataverse.
 - `relationships[]` lives on the **PARENT** table entry (the table on the 1-side of the 1:N relationship). Pure-child tables (e.g. `cr123_orderline`) have empty `relationships: []`.
 - Each `relationships[]` entry has `schemaName` (the relationship's `SchemaName` from EntityDefinitions metadata), `relationshipId` (the relationship's `MetadataId` GUID — **this is the canonical comparison key**, stable across server-side relationshipname formatting), `targetEntity` (child entity logical name), and `associationId` (the created `mobileofflineprofileitemassociationid`).
 - `recordDistributionCriteria=1` (All records) parents always have `relationships: []` — associations would be redundant (see architect Step 5 pruning rule).
 - `schemaColumns[]` is the **schema-reconciliation baseline** — the full set of the table's schema column logical names (from `.datamodel-manifest.json`) that existed when this item was created. It is NOT the same as `selectedColumns` (which is a curated subset the runtime syncs): `schemaColumns` records everything the schema had at reconciliation time, including columns deliberately left out of `selectedColumns`. `scripts/offline-profile-delta.js` compares later manifest columns against this baseline to detect *genuinely new* schema columns (`manifest.columns − schemaColumns`) without false-flagging deliberate exclusions. Populate it from the manifest entry for each table; if the manifest lists no columns for a reused table, write `[]`. See [offline-profile-reconciliation.md](${PLUGIN_ROOT}/shared/references/offline-profile-reconciliation.md).
-- JSON doesn't support comments — the `/* BEGIN/END OFFLINE-CONFIG-WORKAROUND */` keys above are illustrative bracketing for the SKILL author. **Do NOT write those literal keys to `offline-profile.json`.** When the skill actually patches the file, emit only the real fields (`useDda`, `entitiesIncluded`, `instanceUrl`) inside `appConfig` and keep them contiguous.
+- Write ordinary JSON fields only; never add comment-like workaround keys.
 
-Example node script (writes the file in one shot — no read-modify-write against `power.config.json`):
+Example for a **new snapshot only**; it refuses to overwrite an existing file.
+For an approved edit/extension, merge the reviewed delta into the existing
+snapshot while preserving its settings. Neither path modifies `power.config.json`:
 
 ```bash
 cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 node -e '
   const fs = require("fs");
 
-  // Genuine app-level offline config (always written)
   const appConfig = {
     enabled: true,
     serverRowLimit: 2000,
+    instanceUrl: "<envUrl>",
   };
-
-  // BEGIN OFFLINE-CONFIG-WORKAROUND (remove when underlying SDK gaps are fixed
-  // upstream — tracked separately in plugins/mobile-apps/template and PowerApps-Client).
-  appConfig.useDda = false;
-  appConfig.entitiesIncluded = [/* logicalName for each table in the profile */];
-  appConfig.instanceUrl = "<envUrl>";
-  // END OFFLINE-CONFIG-WORKAROUND
 
   const profile = {
     profileId: "<guid-from-step-5>",
@@ -708,20 +714,22 @@ node -e '
     tables: [/* one entry per profile item — see schema above */],
   };
 
-  fs.writeFileSync("offline-profile.json", JSON.stringify(profile, null, 2) + "\n");
+  fs.writeFileSync("offline-profile.json", JSON.stringify(profile, null, 2) + "\n", { flag: "wx" });
 '
 ```
 
 Field rationale:
 
-| Field | Layer | Why |
-|---|---|---|
-| `profileId` | A (genuine) | The published `mobileofflineprofileid` from Dataverse — runtime fetches this profile's manifest. `offline-profile.json` is the single source of truth for this value. |
-| `appConfig.enabled` | A (genuine) | Marks the project as offline-enabled; consumed by runtime at boot. |
-| `appConfig.serverRowLimit` | A (genuine) | Mirrors Image 2's "Data row limit" field (2000 default). For v0 it's a config-only value — runtime enforcement is a Layer B concern. |
-| `appConfig.useDda` | **OFFLINE-CONFIG-WORKAROUND** | Forces the SDK off its broken `shouldUseDda` gate (entity-set vs logical-name mismatch). Remove when that gate is reconciled in `@microsoft/react-native-dataverse-offline` (tracked in PowerApps-Client). |
-| `appConfig.entitiesIncluded` | **OFFLINE-CONFIG-WORKAROUND** | The SDK's offline bootstrap reads this list to know which entity logical names participate in the profile. Currently required because the SDK doesn't derive it from the published profile manifest at runtime. Populate with one logical name per table in the profile (i.e. the `logicalName` field of each `tables[]` entry below). |
-| `appConfig.instanceUrl` | **OFFLINE-CONFIG-WORKAROUND** | Enables offline cold-start by giving the SDK a static org name without needing an `api.powerplatform.com` round-trip while offline. Value is the same `<envUrl>` captured in Step 1 (e.g. `https://orgXXX.crm.dynamics.com`). Was previously written into `power.config.json.databaseReferences[*].databaseDetails.linkedEnvironmentMetadata.instanceUrl`; runtime now reads from `appConfig.instanceUrl` here. Tracked upstream in plugins/mobile-apps/template. |
+| Field | Purpose and limit |
+|---|---|
+| `profileId` | Selects the published Dataverse profile. Keep it in `offline-profile.json`, not a second app configuration location. |
+| `appConfig.enabled` | Opts the app into offline behavior; a flag alone does not prove a successful sync. |
+| `appConfig.serverRowLimit` | App-level delegation setting. Do not interpret it as the number of rows downloaded by native profile sync. |
+| `appConfig.instanceUrl` | Supplies the verified environment URL as a supported bootstrap setting. Authentication, profile membership, local data, and SDK behavior still determine whether disconnected startup works. |
+| `tables` | Local planning/verification snapshot of published profile items; the current SDK owns runtime profile content. |
+
+Configuration and server-profile verification do not certify native startup,
+offline synchronization, database migration, or disconnected cold launch.
 
 > **Do NOT touch `power.config.json` from this skill.** Earlier drafts wrote the same fields into `power.config.json.offline.*` and `databaseReferences[*].databaseDetails.linkedEnvironmentMetadata.instanceUrl`. That was reverted because `power.config.json` is generated by `pa app init`, whose schema we don't control — adding custom fields there means re-init can wipe them and upstream schema changes can break this skill. If you find a code path here that still mutates `power.config.json`, treat it as a bug.
 
@@ -764,7 +772,8 @@ Read the JSON output:
 | `missing` | `offline-profile.json` wasn't written. Step 9a failed silently — STOP and ask user to re-run. |
 | `error` | Auth or network — surface and STOP. |
 
-The verify script is also the canonical implementation behind `/preview-offline-scope` (v0.2) — keeping it as a step here means it's exercised on every fresh creation.
+The verify script is also used by `/preview-offline-scope`; keeping it as a step
+here exercises the same server-snapshot check on fresh creation.
 
 ### Step 10 — Summary
 
@@ -787,9 +796,9 @@ Saved to project:
 Note: power.config.json was NOT modified (owned by pa app init).
 
 Next steps:
-  - /assign-offline-profile        → assign users / teams to this profile (not yet implemented — v0.3)
-  - /preview-offline-scope         → estimate download size before pushing the app (not yet implemented — v0.2)
-  - /edit-offline-profile <table>  → re-scope one table (not yet implemented — v0.2)
+  - Ask to assign the offline profile to selected users or teams (separate approval)
+  - Ask to preview offline scope and estimated download size (read-only)
+  - /edit-offline-profile --table <table>  → review a scoped profile change
 
 Runtime: The template bundles @microsoft/power-apps-native-offline.
 @microsoft/power-apps-native-host consumes the profile and owns local SQLite access,

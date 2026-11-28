@@ -262,7 +262,7 @@ node "${PLUGIN_ROOT}/scripts/check-web-preview.js" --url "http://localhost:<port
 
 - `npm run dev` is the template's own development command, the one the run ends on. Its `predev` regenerates the connector schema map, and `power-apps-dev` starts one Metro server for both targets: the web app at `http://localhost:<port>`, which the build plan's phone frame shows, and the native app at this machine's LAN address, which Power Apps Mobile Preview opens from the QR code at the preview gate. The same server runs to the end of the run, so every edit hot-reloads into the plan and onto a phone, and connecting real data later switches the app in place instead of restarting anything.
 - Before Metro starts it prints `LAN development server: http://<lan-ip>:<port>/`. Keep that address: it is the `<lan-url>` the preview gate turns into a QR code. Like any `npm run dev`, the server answers on the local network; the build plan frames only its loopback address.
-- No `--web`: Metro serves the web app on this port either way, and in Expo SDK 55 the flag only adds opening it in a new browser tab. The preview runs in the build plan's phone frame, so the plan stays the one page the user watches; do not open the preview URL yourself.
+- No `--web`: the existing Metro server already serves the web preview on this port. The preview runs in the build plan's phone frame, so the plan stays the one page the user watches; do not open an additional browser tab.
 - Input from `/dev/null` runs Expo non-interactively with file watching on, so every later edit hot-reloads into the preview. Leave `CI` unset: CI mode turns file watching off.
 - `POWER_APPS_WEB_PREVIEW=1` switches the app to client-rendered web output for this server only (Step 3.2 added the override to `app.config.js`). The host default server-renders every page request in development, and the dev server keeps about 30 MB per render; with the build plan's phone frame reloading when the plan changes, that exhausts the heap over a long run. If `.tmp/prepare.json` reports `webPreviewOutput: unsupported`, the preview still works but grows in memory: restart it if it stops answering.
 - If it exits with `Expo port <port> is already in use` or `EADDRINUSE`, run `find-free-port.js` again and restart once.
@@ -502,6 +502,9 @@ node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' step --i
 
 Put the app on the user's phone too. The dev server from Step 3.5 already serves it there, so this only draws the code; skip it when Step 3.5 fell back to `--localhost`, or when 8.0 left `msal.clientId` empty, because the phone would show only the missing-client-ID screen:
 
+Run this block only when the app has an installed `node_modules/.bin/qrcode` or
+`qrcode.cmd`; not every published template includes it.
+
 ```bash
 cd -- '<working_dir>' || exit 1
 METRO_QR='<working_dir>/.expo/metro-qr.png'
@@ -510,8 +513,16 @@ npx --no-install qrcode -o "$METRO_QR" "<lan-url>" \
 ```
 
 Without `--stage` the phone frame keeps the browser preview, and the plan draws the code under it.
-The template pins `qrcode`, so this never downloads; if it fails, continue without the code and never retry with `--yes` or a bare `npx qrcode`.
-Show the PNG in chat the way the dev server step does: base64-encode it with Node and embed it as a `data:image/png;base64,` markdown image. Where the host cannot render that, point at the plan instead of opening the file.
+If the generator is missing or the command fails, continue with the observed
+LAN URL and explain that no PNG was
+generated. Never install a dependency, retry with `--yes` or a bare `npx qrcode`,
+reuse a stale PNG, or claim the plan contains an image that was not generated.
+Record the URL with `app-docs.js phone --qr-url` without `--qr-image` in that case.
+URL-only updates clear old QR images/links and show the URL below the live preview.
+After successful generation, show the PNG in chat the way the dev server step
+does: base64-encode it with Node and embed it as a `data:image/png;base64,` markdown
+image. Where the host cannot render that, point at the plan instead of opening
+the file.
 
 Print:
 
@@ -521,7 +532,8 @@ Print:
 > 📱 To try it on your phone, scan the QR code (above, and under the plan's phone) with Power Apps Mobile Preview on the same network, and sign in with your work account. Confirmation dialogs and the date picker are native controls, so the browser shows a stand-in and your phone shows the real thing.
 > Device features such as the camera return sample results on both until they are wired after you approve the architecture; then they work on your phone as it reloads."
 
-Leave out the 📱 line when no QR code was drawn.
+Leave out the 📱 line when no QR code was drawn. When a reachable native URL is
+available, show it instead and explain that the optional QR image was not generated.
 
 Under it, list the builders' concerns and any Step 7 repairs, one line each.
 Then ask with `AskUserQuestion`:

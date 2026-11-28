@@ -57,6 +57,7 @@ function fixture(t) {
           '': structuredClone(manifest),
           ...Object.fromEntries(Object.entries(release.nativePackages).map(([name, installedVersion]) => [name, {
             version: name === `node_modules/${HOST}` ? hostVersion : installedVersion,
+            integrity: selectedHost.publication.integrity,
           }])),
         },
       },
@@ -509,7 +510,15 @@ test('selectors reject tags, prereleases, URLs and shell syntax before npm runs'
 
 test('host acquisition is isolated, script-disabled, integrity-bound and cannot overwrite an app', (t) => {
   const f = fixture(t);
-  f.packages.get(`${HOST}@1.0.0`).profile.managedOverrides = { 'fixture-peer': '1.0.0' };
+  const pair = f.packages.get(`${TEMPLATE}@1.0.0`);
+  pair.manifest.overrides = { 'fixture-peer': '1.0.0' };
+  // This optional peer is not a Host-managed direct dependency. A new
+  // resolution can select a different release; acquisition must keep this one.
+  pair.lock.packages['node_modules/fixture-peer'] = {
+    version: '1.0.0', integrity: pair.publication.integrity, optional: true, peer: true,
+  };
+  const portablePackages = structuredClone(pair.lock.packages);
+  pair.lock.packages['node_modules/fixture-peer'].resolved = 'https://registry.npmjs.org/fixture-peer/-/fixture-peer-1.0.0.tgz';
   const before = fs.readFileSync(path.join(f.projectRoot, 'package.json'), 'utf8');
   const destination = path.join(f.directory, 'tooling');
   const options = {
@@ -518,31 +527,91 @@ test('host acquisition is isolated, script-disabled, integrity-bound and cannot 
     run(command, args, cwd, invocation) {
       assert.equal(command, 'npm');
       assert.equal(cwd, fs.realpathSync.native(f.projectRoot));
-      assert.equal(invocation.env.npm_config_prefix, destination);
+      assert.equal(invocation.env.npm_config_prefix, fs.realpathSync.native(destination));
       const tooling = JSON.parse(fs.readFileSync(path.join(destination, 'package.json'), 'utf8'));
-      assert.deepEqual(tooling.dependencies, {
-        ...f.packages.get(`${HOST}@1.0.0`).profile.managedDependencies, [HOST]: '1.0.0',
-      });
-      assert.deepEqual(tooling.overrides, { 'fixture-peer': '1.0.0' });
-      assert.deepEqual(args, ['install', '--ignore-scripts', '--strict-peer-deps', '--no-legacy-peer-deps', '--no-force', '--no-audit', '--no-fund', '--prefix', destination]);
+      assert.deepEqual(tooling.dependencies, pair.manifest.dependencies);
+      assert.deepEqual(tooling.overrides, pair.manifest.overrides);
+      assert.equal(tooling.private, true);
+      assert.deepEqual(readJsonAt(destination, 'package-lock.json').packages, portablePackages);
+      assert.equal(args[0], 'ci');
+      for (const flag of ['--ignore-scripts', '--strict-peer-deps', '--no-legacy-peer-deps', '--no-force']) assert.ok(args.includes(flag));
       const hostRoot = path.join(destination, 'node_modules', HOST);
       writeJson(path.join(hostRoot, 'package.json'), { name: HOST, version: '1.0.0', bin: { 'upgrade-template': 'scripts/upgrade.js' } });
       fs.mkdirSync(path.join(hostRoot, 'scripts'));
       fs.writeFileSync(path.join(hostRoot, 'scripts/upgrade.js'), '// fixture; never executed\n');
-      writeJson(path.join(destination, 'package-lock.json'), { packages: {
-        [`node_modules/${HOST}`]: { version: '1.0.0', integrity: f.packages.get(`${HOST}@1.0.0`).publication.integrity },
-      } });
       return '';
     },
   };
   const result = acquireHost(destination, '1.0.0', options);
   assert.equal(result.lifecycleScriptsExecuted, false);
+  assert.equal(result.toolingResolution, 'published-template-lock');
   assert.equal(result.upgradeCli, `node_modules/${HOST}/scripts/upgrade.js`);
   assert.equal(fs.readFileSync(path.join(f.projectRoot, 'package.json'), 'utf8'), before);
   assert.equal(f.requests.filter(request => request === `${HOST}@1.0.0`).length, 1,
     'Reuse the verified publication rather than fetching a second profile for tooling');
   assert.throws(() => acquireHost(f.projectRoot, '1.0.0', options), /existing apps are never overwritten/);
   assert.throws(() => acquireHost(destination, '1.0.0', options), /existing apps are never overwritten/);
+});
+
+function readJsonAt(directory, name) {
+  return JSON.parse(fs.readFileSync(path.join(directory, name), 'utf8'));
+}
+
+test('a bad exact lock or failed ci never falls back to resolving different packages', t => {
+  const f = fixture(t);
+  const selected = f.packages.get(`${TEMPLATE}@1.0.0`);
+  const lockedHost = selected.lock.packages[`node_modules/${HOST}`];
+  const goodIntegrity = lockedHost.integrity;
+  lockedHost.integrity = `sha512-${Buffer.alloc(64, 9).toString('base64')}`;
+  const target = path.join(f.directory, 'bad-sri');
+  assert.throws(() => acquireHost(target, '1.0.0', {
+    ...f.options, cwd: f.projectRoot, run() { assert.fail('Refuse before starting npm'); },
+  }), /integrity/i);
+  lockedHost.integrity = goodIntegrity;
+  const calls = [];
+  assert.throws(() => acquireHost(path.join(f.directory, 'ci-failed'), '1.0.0', {
+    ...f.options, cwd: f.projectRoot, run(command, args) { calls.push(args[0]); throw new Error('fixture ci failure'); },
+  }), /fixture ci failure/);
+  assert.deepEqual(calls, ['ci']);
+});
+
+test('tooling refuses linked, unhashed and off-registry entries even for non-native transitive packages', t => {
+  const f = fixture(t);
+  const template = f.packages.get(`${TEMPLATE}@1.0.0`);
+  for (const entry of [
+    { version: '1.0.0', link: true, integrity: template.publication.integrity },
+    { version: '1.0.0' },
+    { version: '1.0.0', integrity: template.publication.integrity, resolved: 'https://other.example.invalid/js.tgz' },
+  ]) {
+    template.lock.packages['node_modules/plain-js'] = entry;
+    assert.throws(() => acquireHost(path.join(f.directory, 'refused'), '1.0.0', {
+      ...f.options, run() { assert.fail('Invalid published lock should not reach npm'); },
+    }), /registry packages/);
+  }
+});
+
+test('a same-runtime repair does not install the earlier Host from a compatible template', t => {
+  const f = fixture(t);
+  f.host('1.0.1');
+  const target = path.join(f.directory, 'repair');
+  const calls = [];
+  const result = acquireHost(target, '1.0.1', {
+    ...f.options, cwd: f.projectRoot, run(command, args) {
+      calls.push(args[0]);
+      const pkg = readJsonAt(target, 'package.json');
+      assert.equal(pkg.dependencies[HOST], '1.0.1');
+      assert.ok(args.includes('--strict-peer-deps'));
+      const hostRoot = path.join(target, 'node_modules', HOST);
+      writeJson(path.join(hostRoot, 'package.json'), { name: HOST, version: '1.0.1', bin: { 'upgrade-template': 'upgrade.js' } });
+      fs.writeFileSync(path.join(hostRoot, 'upgrade.js'), '');
+      writeJson(path.join(target, 'package-lock.json'), { packages: {
+        [`node_modules/${HOST}`]: { version: '1.0.1', integrity: f.packages.get(`${HOST}@1.0.1`).publication.integrity },
+      } });
+    },
+  });
+  assert.deepEqual(calls, ['install']);
+  assert.equal(result.toolingResolution, 'compatible-host-repair');
+  assert.equal(result.target.hostVersion, '1.0.1');
 });
 
 test('host acquisition from an empty child cwd captures the parent npm context before creating a manifest', t => {
@@ -561,11 +630,11 @@ test('host acquisition from an empty child cwd captures the parent npm context b
       run(command, args, cwd, invocation) {
         assert.equal(command, 'npm');
         assert.equal(cwd, fs.realpathSync.native(destination));
-        assert.equal(invocation.env.npm_config_prefix, destination);
-        assert.equal(args[args.indexOf('--prefix') + 1], destination);
+        assert.equal(invocation.env.npm_config_prefix, fs.realpathSync.native(destination));
+        assert.equal(args[args.indexOf('--prefix') + 1], fs.realpathSync.native(destination));
         assert.equal(fs.readFileSync(path.join(destination, '.npmrc'), 'utf8'), context,
           'Use the same parent registry/auth context as package inspection');
-        assert.equal(JSON.parse(fs.readFileSync(path.join(destination, 'package.json'), 'utf8')).name, 'mobile-upgrade-tooling');
+        assert.equal(args[0], 'ci');
         if (fail) throw new Error('Synthetic isolated install failure');
         const hostRoot = path.join(destination, 'node_modules', HOST);
         writeJson(path.join(hostRoot, 'package.json'), { name: HOST, version: '1.0.0', bin: { 'upgrade-template': 'scripts/upgrade.js' } });

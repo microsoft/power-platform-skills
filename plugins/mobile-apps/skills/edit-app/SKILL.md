@@ -688,10 +688,11 @@ For Native Capabilities (no separate agent), do it inline: read the current capa
 Read [conditional native controls](../add-native/references/native-controls.md).
 Use `/pdf`, `/pen`, and `/geolocation` only when the resolved release contains
 the aggregate; its root is metadata. Legacy leaves require matching resolved
-inventory. There is no barcode subpath. Controls 0.2.0 uses the Expo 55 /
-React Native 0.83.6 baseline, not Expo 57. Host-owned `enableNativeControls`
-registration requires a verified supporting host release; published host 0.4.0
-lacks it. Never change config to make an unavailable API appear supported.
+inventory. There is no barcode subpath. Use the shared guide's
+[current and historical package examples](../add-native/references/native-controls.md#current-and-historical-package-examples),
+not an old example as the current app's package pin. Host-owned
+`enableNativeControls` registration requires a verified supporting host release.
+Never change config to make an unavailable API appear supported.
 
 Keep package inclusion, OS declarations, runtime grants, and actual use
 separate. Removing controls dependencies does not remove unused default Android
