@@ -89,6 +89,62 @@ test('allows permission-heavy Graph pages within a bounded Azure CLI buffer', ()
   assert.equal(AZURE_CLI_MAX_BUFFER_BYTES, 16 * 1024 * 1024);
 });
 
+test('preserves invalid JSON causes without echoing Azure CLI output', () => {
+  const html = '<html>Authorization: Bearer sensitive-token</html>';
+  assert.throws(
+    () => runAzJson(['account', 'show'], 30000, () => html),
+    (error) => {
+      assert.equal(error.cause?.name, 'SyntaxError');
+      assert.match(error.message, /HTML-like response/);
+      assert.match(error.message, new RegExp(`${Buffer.byteLength(html, 'utf8')} bytes`));
+      assert.doesNotMatch(error.message, /sensitive-token|Authorization|<html>/);
+      return true;
+    }
+  );
+
+  assert.throws(
+    () => runAzJson(['account', 'show'], 30000, () => '{"value":[{"id":"'),
+    (error) => {
+      assert.equal(error.cause?.name, 'SyntaxError');
+      assert.match(error.message, /JSON-like response/);
+      assert.match(error.message, /line 1, column \d+|position \d+/);
+      assert.doesNotMatch(error.message, /\{"value"|"id":/);
+      return true;
+    }
+  );
+
+  for (const malformedJson of [
+    'position 123456789',
+    'line 123456789 column 987654321',
+  ]) {
+    assert.throws(
+      () => runAzJson(['account', 'show'], 30000, () => malformedJson),
+      (error) => {
+        assert.equal(error.cause?.name, 'SyntaxError');
+        assert.doesNotMatch(error.message, /123456789|987654321/);
+        return true;
+      }
+    );
+  }
+  assert.throws(
+    () => runAzJson(['account', 'show'], 30000, () => '{} {}'),
+    (error) => {
+      assert.equal(error.cause?.name, 'SyntaxError');
+      assert.match(error.message, /line 1, column 4|position 3/);
+      return true;
+    }
+  );
+
+  assert.throws(
+    () => runAzJson(['account', 'show'], 30000, () => ''),
+    (error) => {
+      assert.equal(error.cause?.name, 'SyntaxError');
+      assert.match(error.message, /0 bytes; empty response/);
+      return true;
+    }
+  );
+});
+
 test('lists every tenant-visible registration across Graph pages instead of owned apps only', () => {
   const requested = [];
   const pages = [

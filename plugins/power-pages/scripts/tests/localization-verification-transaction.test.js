@@ -8,6 +8,7 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const {
   AUDIT_LEASE_CONFLICT_CODE,
+  TRANSACTION_AUDIT_FILE,
   TRANSACTION_AVAILABILITY_FILE,
   TRANSACTION_FILE,
   TRANSACTION_LOCK_FILE,
@@ -15,6 +16,7 @@ const {
   abandonLocalizationVerificationAudit,
   beginLocalizationVerificationAudit,
   beginLocalizationVerification,
+  endLocalizationVerificationAudit,
   extendLocalizationVerification,
   finalizeLocalizationVerification,
   formatManualAvailabilityRestore,
@@ -615,6 +617,54 @@ test('allows only one rendered audit lease for a transaction', (t) => {
   });
 
   abandonLocalizationVerificationAudit(projectRoot, transaction.runId);
+});
+
+test('preserves audit JSON parse causes and reports only the safe location', (t) => {
+  const projectRoot = createTempProject(t);
+  const auditPath = path.join(projectRoot, TRANSACTION_AUDIT_FILE);
+  writeProjectFile(
+    projectRoot,
+    TRANSACTION_AUDIT_FILE,
+    '{"runId":"sensitive audit content"'
+  );
+
+  assert.throws(
+    () => endLocalizationVerificationAudit(projectRoot, 'run-id'),
+    (error) => {
+      assert.equal(error.cause?.name, 'SyntaxError');
+      assert.match(
+        error.message,
+        /is not valid JSON at (?:line 1, column \d+|position \d+)/
+      );
+      assert.doesNotMatch(error.message, /sensitive audit content/);
+      return true;
+    }
+  );
+
+  for (const malformedJson of [
+    'position 123456789',
+    'line 123456789 column 987654321',
+  ]) {
+    fs.writeFileSync(auditPath, malformedJson);
+    assert.throws(
+      () => endLocalizationVerificationAudit(projectRoot, 'run-id'),
+      (error) => {
+        assert.equal(error.cause?.name, 'SyntaxError');
+        assert.doesNotMatch(error.message, /123456789|987654321/);
+        return true;
+      }
+    );
+  }
+
+  fs.writeFileSync(auditPath, '{} {}');
+  assert.throws(
+    () => endLocalizationVerificationAudit(projectRoot, 'run-id'),
+    (error) => {
+      assert.equal(error.cause?.name, 'SyntaxError');
+      assert.match(error.message, /line 1, column 4|position 3/);
+      return true;
+    }
+  );
 });
 
 test('transaction manager rejects unknown and duplicate arguments', () => {

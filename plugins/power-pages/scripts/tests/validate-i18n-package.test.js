@@ -12,7 +12,9 @@ const {
   evaluatePackage,
   extractEvidenceText,
   fetchText,
+  formatCliFailure,
   isPublicIpAddress,
+  parseJsonWithDiagnostic,
   packageSupportsFramework,
   parseTelemetryErrorContext,
   peerRangeAllowsMajor,
@@ -35,10 +37,17 @@ function sleep(ms) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
-function waitForFile(filePath, timeoutMs) {
+function waitForJsonFile(filePath, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
-  while (!fs.existsSync(filePath) && Date.now() < deadline) sleep(25);
-  return fs.existsSync(filePath);
+  while (Date.now() < deadline) {
+    try {
+      // The detached telemetry dispatcher can create the probe before its write completes.
+      return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    } catch {
+      sleep(25);
+    }
+  }
+  return null;
 }
 
 function writeProvisionedTelemetryConfig(configDir) {
@@ -198,8 +207,9 @@ test('CLI error telemetry uses a stable generic failure code', () => {
   );
 
   assert.equal(result.status, 1);
-  assert.ok(waitForFile(probePath, 5_000), 'error dispatcher should write probe');
-  const envelope = JSON.parse(JSON.parse(fs.readFileSync(probePath, 'utf8')).body);
+  const probe = waitForJsonFile(probePath, 5_000);
+  assert.ok(probe, 'error dispatcher should write a complete probe');
+  const envelope = JSON.parse(probe.body);
   const eventInfo = JSON.parse(envelope.data.eventInfo);
   assert.equal(envelope.data.eventName, 'localization_package_validation');
   assert.equal(eventInfo.validationStatus, 'error');
@@ -906,6 +916,108 @@ test('requires official npm artifact metadata and matching package-lock provenan
       metadataWithProvenance
     ),
     /official npm integrity/
+  );
+});
+
+test('preserves validation causes while reporting only safe diagnostics', (t) => {
+  assert.throws(
+    () => parseJsonWithDiagnostic(
+      '{"secret":"sensitive classification data"',
+      'Mode evidence classification file must contain valid JSON.',
+      'Mode evidence classification file'
+    ),
+    (error) => {
+      assert.equal(error.cause?.name, 'SyntaxError');
+      assert.match(error.cliDiagnostic, /Mode evidence classification file contains invalid JSON/);
+      assert.match(formatCliFailure(error), /line 1, column \d+|position \d+/);
+      assert.doesNotMatch(formatCliFailure(error), /sensitive classification data/);
+      return true;
+    }
+  );
+  for (const malformedJson of [
+    '{"value":"position 123456789" nope}',
+    '{"value":"line 123456789 column 987654321" nope}',
+  ]) {
+    assert.throws(
+      () => parseJsonWithDiagnostic(
+        malformedJson,
+        'Test input must contain valid JSON.',
+        'Test input'
+      ),
+      (error) => {
+        assert.equal(error.cause?.name, 'SyntaxError');
+        assert.doesNotMatch(error.cliDiagnostic, /123456789|987654321/);
+        return true;
+      }
+    );
+  }
+  assert.throws(
+    () => parseJsonWithDiagnostic(
+      '{} {}',
+      'Test input must contain valid JSON.',
+      'Test input'
+    ),
+    (error) => {
+      assert.equal(error.cause?.name, 'SyntaxError');
+      assert.match(error.cliDiagnostic, /line 1, column 4|position 3/);
+      return true;
+    }
+  );
+
+  const projectRoot = createTempProject(t);
+  const metadata = {
+    version: '1.0.0',
+    artifactProvenance: { integrity: 'sha512-dGVzdA==' },
+  };
+  writeProjectFile(
+    projectRoot,
+    'package-lock.json',
+    '{"packages": {"node_modules/example": {"resolved": "sensitive value"'
+  );
+  assert.throws(
+    () => validatePackageLockProvenance(projectRoot, 'example', metadata),
+    (error) => {
+      assert.equal(error.cause?.name, 'SyntaxError');
+      assert.match(error.cliDiagnostic, /package-lock\.json contains invalid JSON/);
+      assert.match(error.cliDiagnostic, /line 1, column \d+|position \d+/);
+      assert.doesNotMatch(error.cliDiagnostic, /sensitive value/);
+      assert.equal(
+        formatCliFailure(error),
+        `Localization package validation failed: ${error.cliDiagnostic}\n`
+      );
+      return true;
+    }
+  );
+
+  assert.throws(
+    () => validateOfficialArtifactMetadata({
+      dist: { integrity: 'sha512-dGVzdA==', tarball: 'not-a-url' },
+    }),
+    (error) => {
+      assert.equal(error.cause?.code, 'ERR_INVALID_URL');
+      assert.match(error.cliDiagnostic, /invalid tarball URL/);
+      assert.doesNotMatch(error.cliDiagnostic, /not-a-url/);
+      return true;
+    }
+  );
+
+  writeProjectFile(projectRoot, 'package-lock.json', JSON.stringify({
+    packages: {
+      'node_modules/example': {
+        version: '1.0.0',
+        resolved: 'http://[invalid',
+        integrity: 'sha512-dGVzdA==',
+      },
+    },
+  }));
+  assert.throws(
+    () => validatePackageLockProvenance(projectRoot, 'example', metadata),
+    (error) => {
+      assert.equal(error.cause?.code, 'ERR_INVALID_URL');
+      assert.match(error.cliDiagnostic, /invalid resolved URL/);
+      assert.doesNotMatch(error.cliDiagnostic, /http:\/\/\[invalid/);
+      return true;
+    }
   );
 });
 

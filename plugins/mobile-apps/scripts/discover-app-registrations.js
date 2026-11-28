@@ -102,9 +102,37 @@ function runAzJson(args, timeout = 30000, exec = runAzureCli) {
 
   try {
     return JSON.parse(stdout);
-  } catch {
-    throw new Error('Azure CLI returned invalid JSON.');
+  } catch (error) {
+    const text = typeof stdout === 'string' ? stdout : '';
+    const trimmed = text.trimStart();
+    const responseShape = !trimmed.trim()
+      ? 'empty response'
+      : trimmed.startsWith('<')
+        ? 'HTML-like response'
+        : /^[\[{]/.test(trimmed)
+          ? 'JSON-like response'
+          : 'non-JSON response';
+    const location = getJsonParseLocation(error);
+    throw new Error(
+      `Azure CLI returned invalid JSON (${Buffer.byteLength(text, 'utf8')} bytes; ` +
+      `${responseShape}${location ? `; parse error at ${location}` : ''}).`,
+      { cause: error }
+    );
   }
+}
+
+function getJsonParseLocation(error) {
+  const message = error && typeof error.message === 'string'
+    ? error.message
+    : '';
+  const lineAndColumn = message.match(
+    /\b(?:in|after) JSON at position \d+ \(line (\d+) column (\d+)\)$/i
+  );
+  if (lineAndColumn) {
+    return `line ${lineAndColumn[1]}, column ${lineAndColumn[2]}`;
+  }
+  const position = message.match(/\b(?:in|after) JSON at position (\d+)$/i);
+  return position ? `position ${position[1]}` : null;
 }
 
 function graphUrl(path, query = {}) {
